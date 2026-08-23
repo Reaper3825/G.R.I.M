@@ -614,7 +614,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.pbm = &pbm;
     request.cublas_handle = training_state.cublas_handle.get();
     request.stream = stream;
-    request.execution_block_enabled = forward_topology.execution_block_enabled;
     request.payload = &payload;
     request.bindings = &bindings;
     request.batch_idx = batch_idx;
@@ -1142,7 +1141,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
         forward_request.pbm = &ctx.pbm_owner.state();
         forward_request.cublas_handle = training_state.cublas_handle.get();
         forward_request.stream = stream;
-        forward_request.execution_block_enabled = forward_topology.execution_block_enabled;
         forward_request.payload = &val_payload;
         forward_request.bindings = &val_bindings;
         forward_request.batch_idx = static_cast<uint64_t>(val_idx);

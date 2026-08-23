@@ -153,21 +153,15 @@ This violation is now fixed. The old `ExecutionBlockLayer` shell and
 
 Current architecture:
 
-- `Layers/ExecutionBlock/execution_block_GPU.hpp` exports free ops plus the
-  explicit `ExecutionBlockDiagnosticsBuffers` runtime workspace.
-- `Forward::ModelForwardExecutionRuntime::execution_diag` owns that workspace;
-  training reaches it through `TrainingState::execution_runtime`, inference
-  through `GenerationState::execution_runtime`.
-- Per-step numeric flags / argmax scratch / packed execution-record scratch are
-  reset and reused through that explicit runtime owner, not a durable layer
-  object.
-- `Forward::provisionExecutionForwardRuntime(...)` owns per-call execution
-  memory / trace-state provisioning, while `ensureDiagnostics(stream)` brings
-  the reusable diagnostics workspace online separately.
+- Shared forward does not invoke ExecutionBlock math.
+- `ModelForwardRequest` carries no ExecutionBlock mode bit.
+- `GenerationState` owns only the inference KV cache and carries no execution
+  memory, trace, selector, or diagnostics state.
+- Inference payload construction rejects the concept of authored execution-slot
+  bindings by materializing an all-`-1` slot map internally.
 
-Result: execution-block forward math now consumes explicit HP + runtime payloads
-and no longer mutates hidden raw device buffers parked on a durable layer
-object.
+Result: ExecutionBlock is absent from inference orchestration and shared-forward
+runtime state.
 
 ### Encoder / attention still mutate process-global forward state
 

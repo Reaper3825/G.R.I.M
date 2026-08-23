@@ -775,12 +775,9 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
     const std::vector<uint32_t>& atom_entry_ids,
-    const std::vector<int32_t>& token_to_slot_index_map,
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,
-    int execution_num_slots,
-    int execution_num_scratch_slots,
     bool,
     int,
     int,
@@ -819,66 +816,6 @@ BatchPayload buildInferenceBatchPayload(
             std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
             std::to_string(seq_len));
     }
-    if (!token_to_slot_index_map.empty() && static_cast<int>(token_to_slot_index_map.size()) != seq_len) {
-        throw std::runtime_error(
-            "buildInferenceBatchPayload: token_to_slot_index_map.size()=" +
-            std::to_string(token_to_slot_index_map.size()) + " != token_ids.size()=" +
-            std::to_string(seq_len));
-    }
-
-    // A full-length all--1 map is the canonical "no authored bindings" form.
-    // Execution geometry is required only when at least one token actually
-    // names a slot; vector presence alone does not make execution active.
-    bool has_slot_bindings = false;
-    for (std::size_t t = 0; t < token_to_slot_index_map.size(); ++t) {
-        const int32_t slot = token_to_slot_index_map[t];
-        if (slot < -1) {
-            throw std::runtime_error(
-                "buildInferenceBatchPayload: token_to_slot_index_map[" +
-                std::to_string(t) + "]=" + std::to_string(slot) +
-                " must be -1 or non-negative");
-        }
-        has_slot_bindings = has_slot_bindings || slot >= 0;
-    }
-
-    // Non-negative entries supply authored ARG bootstrap bindings.
-    if (has_slot_bindings) {
-        if (execution_num_slots <= 0) {
-            throw std::runtime_error(
-                "buildInferenceBatchPayload: execution_num_slots must be > 0 when an authored slot binding exists");
-        }
-        if (execution_num_scratch_slots < 0 ||
-            execution_num_scratch_slots >= execution_num_slots) {
-            throw std::runtime_error(
-                "buildInferenceBatchPayload: execution_num_scratch_slots=" +
-                std::to_string(execution_num_scratch_slots) +
-                " must be in [0, execution_num_slots)");
-        }
-        std::vector<int> slot_token_positions(
-            static_cast<std::size_t>(execution_num_slots), -1);
-        for (int t = 0; t < seq_len; ++t) {
-            const int32_t slot = token_to_slot_index_map[static_cast<size_t>(t)];
-            if (slot != -1) {
-                if (slot < execution_num_scratch_slots || slot >= execution_num_slots) {
-                    throw std::runtime_error(
-                        "buildInferenceBatchPayload: token_to_slot_index_map[" + std::to_string(t) +
-                        "]=" + std::to_string(slot) + " out of value-slot range [" +
-                        std::to_string(execution_num_scratch_slots) + ", " +
-                        std::to_string(execution_num_slots) + ") or -1");
-                }
-                const int prior_token_pos =
-                    slot_token_positions[static_cast<std::size_t>(slot)];
-                if (prior_token_pos >= 0) {
-                    throw std::runtime_error(
-                        "buildInferenceBatchPayload: token positions " +
-                        std::to_string(prior_token_pos) + " and " +
-                        std::to_string(t) + " map to duplicate bootstrap slot " +
-                        std::to_string(slot));
-                }
-                slot_token_positions[static_cast<std::size_t>(slot)] = t;
-            }
-        }
-    }
 
     for (int t = 0; t < seq_len; ++t) {
         const int token_id = token_ids[static_cast<size_t>(t)];
@@ -901,9 +838,6 @@ BatchPayload buildInferenceBatchPayload(
     payload.atom_flags = atom_flags;
     payload.atom_entry_ids = atom_entry_ids;
     payload.token_to_slot_index_map.assign(static_cast<size_t>(seq_len), -1);
-    if (!token_to_slot_index_map.empty()) {
-        payload.token_to_slot_index_map = token_to_slot_index_map;
-    }
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;
 

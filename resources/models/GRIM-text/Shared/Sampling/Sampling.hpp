@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "../HyperParameters/HyperparameterEnums.hpp"
+
 #include <vector>
 #include <string>
 #include <random>
@@ -37,23 +39,11 @@ namespace GRIM {
 namespace Sampling {
 
 //======================================================//
-//  Sampling Strategy Enum
-//======================================================//
-enum class Strategy {
-    GREEDY,         // Argmax - deterministic
-    TOP_K,          // Top-K only
-    TOP_P,          // Top-P (nucleus) only
-    MIN_P,          // Min-P (relative threshold)
-    TYPICAL,        // Locally typical sampling
-    TOP_K_TOP_P,    // Combined: Top-K first, then Top-P within survivors
-};
-
-//======================================================//
 //  SamplingConfig - All parameters for the sampling pipeline
 //======================================================//
 struct SamplingConfig {
     // Core strategy
-    Strategy strategy = Strategy::TOP_P;
+    HyperParameters::SamplingStrategy strategy = HyperParameters::SamplingStrategy::UNSPECIFIED;
     bool do_sample = true;        // false = force greedy regardless of strategy
 
     // Temperature
@@ -197,12 +187,9 @@ private:
 //  Utility: Create SamplingConfig from root-derived generation fields
 //======================================================//
 
-/// Convert a HyperParameters::SamplingStrategy enum value to Sampling::Strategy
-Strategy convertStrategy(int legacy_strategy);
-
 /// Build a SamplingConfig from GenerationHP/root generation fields.
 SamplingConfig buildSamplingConfigFromGenerationFields(
-    int strategy,        // Cast from SamplingStrategy
+    HyperParameters::SamplingStrategy strategy,
     bool do_sample,
     float temperature,
     int top_k,

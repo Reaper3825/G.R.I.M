@@ -11,10 +11,9 @@ UnifiedMemoryObject StockData::toMemoryObject() const {
     UnifiedMemoryObject obj;
     obj.id = UnifiedMemoryObject::generateID();
     obj.timestamp = static_cast<uint64_t>(std::time(nullptr));
-    obj.domain = MemoryDomain::SYSTEM_SW;
-    obj.type = TypeTag::FACT;
-    obj.intent = MemoryIntent::INFORM;
-    obj.context = ContextType::MONITOR;
+    obj.domain = MemoryDomain::FIELD;
+    obj.type = TypeTag::STRING;
+    obj.context = ContextType::CONVERSATION;
     obj.confidence = 1.0f;
 
     obj.raw = "Stock update for " + name;

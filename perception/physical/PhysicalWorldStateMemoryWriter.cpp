@@ -88,15 +88,13 @@ std::string MetricDepthOrEmpty(const PhysicalWorldEntity& e) {
 
 GRIM::UnifiedMemoryObject MakeBaseRecord(
     GRIM::TypeTag type,
-    GRIM::MemoryIntent intent,
     const std::string& normalized,
     float confidence)
 {
     GRIM::UnifiedMemoryObject obj(
-        GRIM::MemoryDomain::SYSTEM_HW,
+        GRIM::MemoryDomain::FIELD,
         type,
-        intent,
-        GRIM::ContextType::MONITOR,
+        GRIM::ContextType::CONVERSATION,
         normalized,
         confidence);
     obj.modality   = GRIM::Modality::VISION;
@@ -116,7 +114,7 @@ uint64_t EmitAppeared(GRIM::MMO::MemoryFacade& facade,
     auto depth = MetricDepthOrEmpty(e);
     if (!depth.empty()) txt << " at " << depth;
 
-    auto rec = MakeBaseRecord(GRIM::TypeTag::EVENT, GRIM::MemoryIntent::INFORM,
+    auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
                               txt.str(), e.confidence);
     rec.tags.push_back("entity_appeared");
     rec.tags.push_back("class:" + e.class_label);
@@ -135,7 +133,7 @@ void EmitOcrFact(GRIM::MMO::MemoryFacade& facade,
         txt << '"' << e.text_on_object[i] << '"';
     }
     txt << ']';
-    auto rec = MakeBaseRecord(GRIM::TypeTag::FACT, GRIM::MemoryIntent::INFORM,
+    auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
                               txt.str(), e.confidence);
     rec.parent_id = parent_id;
     rec.tags.push_back("ocr");
@@ -154,7 +152,7 @@ void EmitSurfaceChange(GRIM::MMO::MemoryFacade& facade,
         << " to "
         << (SurfaceWord(e.support_surface).empty()
                 ? std::string("unknown") : SurfaceWord(e.support_surface));
-    auto rec = MakeBaseRecord(GRIM::TypeTag::EVENT, GRIM::MemoryIntent::STATUS_UPDATE,
+    auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
                               txt.str(), e.support_surface_score);
     rec.parent_id = parent_id;
     rec.tags.push_back("surface_change");
@@ -170,7 +168,7 @@ void EmitPathBlocked(GRIM::MMO::MemoryFacade& facade,
     txt << "path blocked by " << e.class_label << '#' << e.object_id;
     auto depth = MetricDepthOrEmpty(e);
     if (!depth.empty()) txt << " at " << depth;
-    auto rec = MakeBaseRecord(GRIM::TypeTag::EVENT, GRIM::MemoryIntent::STATUS_UPDATE,
+    auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
                               txt.str(), e.path_block_score);
     rec.parent_id = parent_id;
     rec.tags.push_back("path_blocked");
@@ -184,7 +182,7 @@ void EmitLost(GRIM::MMO::MemoryFacade& facade,
               uint64_t object_id) {
     std::ostringstream txt;
     txt << s.class_label << '#' << object_id << " lost";
-    auto rec = MakeBaseRecord(GRIM::TypeTag::EVENT, GRIM::MemoryIntent::INFORM,
+    auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
                               txt.str(), 1.0f);
     rec.parent_id = s.appeared_memory_id;
     rec.tags.push_back("entity_lost");
@@ -214,7 +212,7 @@ void EmitSummary(GRIM::MMO::MemoryFacade& facade,
         }
         txt << ']';
     }
-    auto rec = MakeBaseRecord(GRIM::TypeTag::SUMMARY, GRIM::MemoryIntent::INFORM,
+    auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
                               txt.str(), 1.0f);
     rec.parent_id = s.appeared_memory_id;
     rec.importance = std::min(2.0f, 1.0f + static_cast<float>(dwell_s) / 300.0f);

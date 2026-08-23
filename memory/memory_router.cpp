@@ -5,15 +5,15 @@
 namespace GRIM {
 
 bool MemoryRouter::isFact(const UnifiedMemoryObject& obj) {
-    return obj.type == TypeTag::FACT || obj.intent == MemoryIntent::SET_PREF;
+    return obj.comm_type != CommType::COMMAND;
 }
 
 bool MemoryRouter::isCommand(const UnifiedMemoryObject& obj) {
-    return obj.type == TypeTag::COMMAND || obj.intent == MemoryIntent::QUERY;
+    return obj.comm_type == CommType::COMMAND;
 }
 
 bool MemoryRouter::isEvent(const UnifiedMemoryObject& obj) {
-    return obj.type == TypeTag::EVENT || obj.intent == MemoryIntent::STATUS_UPDATE;
+    return false;
 }
 
 bool MemoryRouter::isLowConfidence(const UnifiedMemoryObject& obj) {

@@ -332,11 +332,6 @@ public:
         const std::string& session_id,
         const std::string& type_tag) const;
 
-    // Recall most recent context object matching an intent string.
-    std::optional<UnifiedMemoryObject> recallContextByIntent(
-        const std::string& session_id,
-        const std::string& intent_tag) const;
-
     // Remove context objects older than `seconds`.
     void decayOldContext(const std::string& session_id, int seconds);
 

@@ -62,8 +62,6 @@ struct ModelForwardRequest {
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;
 
-    bool execution_block_enabled = false;
-
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* bindings = nullptr;
     uint64_t batch_idx = 0;
@@ -73,8 +71,7 @@ struct ModelForwardRequest {
     // KV-cache decode/prefill path over this session cache instead of full
     // self-attention. Requires connect_parameter_graph == false, batch_size == 1,
     // and dropout disabled.
-    // ARG bootstrap seeding may run during InferencePrefill; decode windows do
-    // not rematerialize the authored seeds. Training callers leave this null.
+    // Training callers leave this null.
     KvCacheState* kv_cache = nullptr;
 
     GoalSpanView goalSpansForRow(std::size_t row) const;

@@ -55,12 +55,12 @@ Move inference/session-owned state from `TrainingState` into `GenerationState` o
 - [ ] token id cache
 - [ ] numeric side-channel cache
 - [ ] atom mask / flags
-- [ ] token-to-slot map
+- [x] inference payload slot map fixed to all `-1`; no execution bindings accepted
 - [ ] inference encoder/logit snapshots if only generation consumes them
-- [x] persistent inference execution memory
-- [x] decode-time selector result
-- [x] decode trace state if it is session state
-- [x] single-token scratch tensors
+- [x] retired inference execution memory removed
+- [x] retired decode-time execution selector state removed
+- [x] retired execution trace state removed
+- [x] retired execution scratch state removed
 
 Exit criteria:
 
@@ -72,7 +72,7 @@ Exit criteria:
 Status: implemented for the Phase2 inference entrypoint and trainer-owned inference worker routing.
 
 - [x] `Forward::ModelForwardRequest` no longer exposes `ModelForwardMode::TrainingGraph` / `InferencePrefill`; orchestration authors graph policy before entry.
-- [x] Read-only shared prefill detaches embedding, encoder, ScratchBlock, LM-head, execution-block, and selector parameter views at the boundary.
+- [x] Read-only shared prefill detaches embedding, encoder, ScratchBlock, LM-head, and selector parameter views at the boundary.
 - [x] Add `Phase2_InferenceLoop.*` next to `Phase2_TrainingLoop.*` so `train_gpu --inference` can drive inference orchestration without embedding inference policy inside shared forward or the HTTP bridge.
 - [x] Keep `Phase1_Startup` as the shared train/inference bootstrap path.
 - [x] Move text prompt tokenization, inference `BatchPayload` construction, generation config slicing, and decode into the trainer process (`executePhase2TextInference(...)` plus the train_gpu worker), not `grim_text_server`.

@@ -32,9 +32,6 @@ namespace GRIMText::Training {
 
 namespace {
 
-using GRIM::HyperParameters::GenerationHP;
-using GRIM::HyperParameters::SamplingStrategy;
-
 struct InferenceForwardScope {
     GRIM::Forward::ModelForwardOutputs& forward_outputs;
     ~InferenceForwardScope() {
@@ -239,15 +236,14 @@ GRIM::GeneratedSequence generateOneSequence(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::PBM::PBMState& pbm,
     GRIM::Batching::BatchPayload& prompt_payload,
-    const GenerationHP& cfg,
+    const GRIM::HyperParameters::GenerationHP& cfg,
     GRIM::HyperParameters::GenerationStreamCallback* stream_callback)
 {
     validatePromptPayload(prompt_payload);
 
     const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
     const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
-    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
-    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
+    const int vocab_size = prompt_payload.vocab_size;
     const auto number_encoder_hp =
         GRIM::HyperParameters::numberEncoderConstructionHP(config);
     const auto& prompt_tokens = prompt_payload.input_ids;
@@ -306,12 +302,12 @@ GRIM::GeneratedSequence generateOneSequence(
     if (vocab_size <= 0) {
         throw std::runtime_error("Phase2 payload inference: invalid vocab_size");
     }
-    if (cfg.strategy == SamplingStrategy::BEAM_SEARCH) {
+    if (cfg.strategy == GRIM::HyperParameters::SamplingStrategy::BEAM_SEARCH) {
         throw std::runtime_error("Phase2 payload inference: BEAM_SEARCH is not supported");
     }
 
     GRIM::Sampling::SamplingConfig sampling_cfg = GRIM::Sampling::buildSamplingConfigFromGenerationFields(
-        static_cast<int>(cfg.strategy),
+        cfg.strategy,
         cfg.do_sample,
         cfg.temperature,
         cfg.top_k,
@@ -329,19 +325,6 @@ GRIM::GeneratedSequence generateOneSequence(
         cfg.unk_token_id,
         cfg.bad_words_ids,
         cfg.seed);
-
-    if (execution_hp.enabled) {
-        std::vector<int> numeric_mask = cfg.masked_numeric_literal_ids;
-        if (numeric_mask.empty()) {
-            throw std::runtime_error("Phase2 payload inference: masked_numeric_literal_ids is empty while execution block is enabled");
-        }
-        sampling_cfg.bad_token_ids.insert(sampling_cfg.bad_token_ids.end(),
-                                          numeric_mask.begin(), numeric_mask.end());
-        std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
-        sampling_cfg.bad_token_ids.erase(
-            std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
-            sampling_cfg.bad_token_ids.end());
-    }
 
     generation_state.resetSession();
 
@@ -412,7 +395,6 @@ GRIM::GeneratedSequence generateOneSequence(
         request.gpu_encoder = gpu_encoder;
         request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
-        request.execution_block_enabled = execution_hp.enabled;
         request.cublas_handle = training_state.cublas_handle.get();
         request.stream = stream;
         request.payload = &active_payload;
@@ -496,13 +478,10 @@ GRIM::GeneratedSequence generateOneSequence(
         std::vector<uint32_t> aflags(feed_tokens.size(), 0);
         std::vector<uint32_t> aentry(
             feed_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
-        const std::vector<int32_t> slotmap;  // empty -> no execution-active row
         auto decode_payload = GRIM::Batching::buildInferenceBatchPayload(
-            feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
+            feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry,
             vocab_size, /*batch_capacity=*/1,
             /*max_cached_seq_len=*/feed_tokens.size(),
-            execution_hp.num_slots,
-            execution_hp.num_scratch_slots,
             /*selector_enabled=*/false,
             /*number_encoder_digit_slots=*/0,
             /*number_encoder_max_abs_pow10=*/0,
@@ -529,6 +508,8 @@ GRIM::GeneratedSequence generateOneSequence(
         }
     };
 
+
+    // Atom Content Value Write Call
     auto commitSyntheticToken = [&](int token_id) {
         if (token_id < 0 || token_id >= vocab_size) {
             throw std::runtime_error(
@@ -798,7 +779,7 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
     auto& training_state = ctx.requireTrainingState("generatePayloadSequences");
     auto& generation_state = ctx.requireGenerationState("generatePayloadSequences");
     for (int i = 0; i < generation_hp.num_return_sequences; ++i) {
-        GenerationHP sequence_hp = generation_hp;
+        GRIM::HyperParameters::GenerationHP sequence_hp = generation_hp;
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
@@ -869,7 +850,6 @@ Phase2TextInferenceResult executePhase2TextInference(
 
     result.prompt_token_count = tokens.size();
 
-    std::vector<int32_t> prompt_token_to_slot_index_map(tokens.size(), -1);
     auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
         tokens,
         numeric_values,
@@ -877,12 +857,9 @@ Phase2TextInferenceResult executePhase2TextInference(
         atom_flags,
         prompt_atom_table,
         atom_entry_ids,
-        prompt_token_to_slot_index_map,
         vocab_size,
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),
-        /*num_execution_slots=*/0,
-        /*num_scratch_slots=*/0,
         /*selector_enabled=*/false,
         /*number_encoder_digit_slots=*/0,
         /*number_encoder_max_abs_pow10=*/0);

@@ -52,7 +52,6 @@ std::string UnifiedMemoryObject::toJSON() const {
     j["timestamp"] = timestamp;
     j["domain"] = toString(domain, DomainNames);
     j["type"] = toString(type, TypeNames);
-    j["intent"] = toString(intent, IntentNames);
     j["context"] = toString(context, ContextNames);
     j["comm_type"] = toString(comm_type, CommTypeNames);
     j["modality"] = toString(modality, ModalityNames);
@@ -61,7 +60,6 @@ std::string UnifiedMemoryObject::toJSON() const {
     j["recency_weight"] = recency_weight;
     j["raw"] = raw;
     j["normalized"] = normalized;
-    j["intent_name"] = intent_name;
     j["tags"] = tags;
     j["parent_id"] = parent_id;
     j["related_ids"] = related_ids;
@@ -76,9 +74,8 @@ UnifiedMemoryObject UnifiedMemoryObject::fromJSON(const std::string& jsonStr) {
     obj.id = j.value("id", generateID());
     obj.timestamp = j.value("timestamp", static_cast<uint64_t>(std::time(nullptr)));
     
- obj.domain = fromString(j.value("domain", "grim.internal"), DomainNames, MemoryDomain::GRIM_INTERNAL);
-    obj.type = fromString(j.value("type", "fact"), TypeNames, TypeTag::FACT);
- obj.intent = fromString(j.value("intent", "inform"), IntentNames, MemoryIntent::INFORM);
+ obj.domain = fromString(j.value("domain", "base"), DomainNames, MemoryDomain::BASE);
+    obj.type = fromString(j.value("type", "string"), TypeNames, TypeTag::STRING);
     obj.context = fromString(j.value("context", "conversation"), ContextNames, ContextType::CONVERSATION);
     obj.comm_type = fromString(j.value("comm_type", "unknown"), CommTypeNames, CommType::UNKNOWN);
     obj.modality = fromString(j.value("modality", "text"), ModalityNames, Modality::TEXT);
@@ -88,7 +85,6 @@ UnifiedMemoryObject UnifiedMemoryObject::fromJSON(const std::string& jsonStr) {
     obj.recency_weight = j.value("recency_weight", 1.0f);
     obj.raw = j.value("raw", "");
     obj.normalized = j.value("normalized", "");
-    obj.intent_name = j.value("intent_name", "");
     obj.tags = j.value("tags", std::vector<std::string>{});
     obj.parent_id = j.value("parent_id", 0ULL);
     obj.related_ids = j.value("related_ids", std::vector<uint64_t>{});
@@ -106,7 +102,6 @@ std::vector<uint8_t> UnifiedMemoryObject::toFlatBuffer() const {
     // Convert strings
     auto raw_fb = builder.CreateString(raw);
     auto normalized_fb = builder.CreateString(normalized);
-    auto intent_name_fb = builder.CreateString(intent_name);
     
     // Convert tags
     std::vector<flatbuffers::Offset<flatbuffers::String>> tag_offsets;
@@ -127,13 +122,11 @@ std::vector<uint8_t> UnifiedMemoryObject::toFlatBuffer() const {
         timestamp,
         static_cast<GRIM::Memory::MemoryDomain>(domain),
         static_cast<GRIM::Memory::TypeTag>(type),
-        static_cast<GRIM::Memory::IntentType>(intent),
       static_cast<GRIM::Memory::ContextType>(context),
         static_cast<GRIM::Memory::CommType>(comm_type),
         static_cast<GRIM::Memory::Modality>(modality),
       raw_fb,
         normalized_fb,
-        intent_name_fb,
         tags_fb,
         confidence,
       importance,
@@ -166,14 +159,12 @@ UnifiedMemoryObject UnifiedMemoryObject::fromFlatBuffer(const uint8_t* data, siz
 
     obj.domain = static_cast<MemoryDomain>(record->domain());
     obj.type = static_cast<TypeTag>(record->type());
-    obj.intent = static_cast<MemoryIntent>(record->intent());
     obj.context = static_cast<ContextType>(record->context());
     obj.comm_type = static_cast<CommType>(record->comm_type());
     obj.modality = static_cast<Modality>(record->modality());
 
     obj.raw = record->raw() ? record->raw()->str() : "";
     obj.normalized = record->normalized() ? record->normalized()->str() : "";
-    obj.intent_name = record->intent_name() ? record->intent_name()->str() : "";
 
     if (record->tags()) {
         for (const auto* tag : *record->tags()) {
@@ -313,7 +304,6 @@ void UnifiedMemoryStorage::saveToFlatBuffer() {
     for (const auto& [id, obj] : longTerm) {
      auto raw_fb = builder.CreateString(obj.raw);
    auto normalized_fb = builder.CreateString(obj.normalized);
-        auto intent_name_fb = builder.CreateString(obj.intent_name);
       
       std::vector<flatbuffers::Offset<flatbuffers::String>> tag_offsets;
  for (const auto& tag : obj.tags) {
@@ -328,11 +318,10 @@ void UnifiedMemoryStorage::saveToFlatBuffer() {
        obj.id, obj.timestamp,
             static_cast<GRIM::Memory::MemoryDomain>(obj.domain),
         static_cast<GRIM::Memory::TypeTag>(obj.type),
-        static_cast<GRIM::Memory::IntentType>(obj.intent),
    static_cast<GRIM::Memory::ContextType>(obj.context),
  static_cast<GRIM::Memory::CommType>(obj.comm_type),
       static_cast<GRIM::Memory::Modality>(obj.modality),
-          raw_fb, normalized_fb, intent_name_fb,
+          raw_fb, normalized_fb,
    tags_fb, obj.confidence, obj.importance, obj.recency_weight,
             embedding_fb, obj.parent_id, related_ids_fb
         );
@@ -381,13 +370,11 @@ void UnifiedMemoryStorage::loadFromFlatBuffer() {
      obj.timestamp = record->timestamp();
         obj.domain = static_cast<MemoryDomain>(record->domain());
             obj.type = static_cast<TypeTag>(record->type());
-            obj.intent = static_cast<MemoryIntent>(record->intent());
  obj.context = static_cast<ContextType>(record->context());
          obj.comm_type = static_cast<CommType>(record->comm_type());
             obj.modality = static_cast<Modality>(record->modality());
             obj.raw = record->raw() ? record->raw()->str() : "";
             obj.normalized = record->normalized() ? record->normalized()->str() : "";
-       obj.intent_name = record->intent_name() ? record->intent_name()->str() : "";
    
             if (record->tags()) {
                 for (const auto* tag : *record->tags()) {
@@ -608,7 +595,8 @@ std::optional<UnifiedMemoryObject> UnifiedMemoryStorage::findLearnedCommand(cons
     std::lock_guard<std::mutex> lock(mtx);
     
     auto match = [&](const UnifiedMemoryObject& obj) {
-     if (obj.type != TypeTag::LEARNED_COMMAND) return false;
+     if (std::find(obj.tags.begin(), obj.tags.end(), "learned") == obj.tags.end() ||
+         std::find(obj.tags.begin(), obj.tags.end(), "command") == obj.tags.end()) return false;
         return obj.raw == phrase || obj.normalized == phrase || obj.raw.find(phrase) != std::string::npos;
     };
     
@@ -624,17 +612,16 @@ std::optional<UnifiedMemoryObject> UnifiedMemoryStorage::findLearnedCommand(cons
 }
 
 std::vector<UnifiedMemoryObject> UnifiedMemoryStorage::getAllLearnedCommands() {
-    return getByType(TypeTag::LEARNED_COMMAND);
+    return getByTags({"learned", "command"}, true);
 }
 
 void UnifiedMemoryStorage::storeLearnedCommand(const std::string& phrase, const std::string& action, float confidence) {
     UnifiedMemoryObject obj;
     obj.id = UnifiedMemoryObject::generateID();
   obj.timestamp = std::time(nullptr);
-    obj.domain = MemoryDomain::USER_TEXT;
-    obj.type = TypeTag::LEARNED_COMMAND;
-    obj.intent = MemoryIntent::INFORM;
-    obj.context = ContextType::COMMAND_LEARNING;
+    obj.domain = MemoryDomain::USER;
+    obj.type = TypeTag::STRING;
+    obj.context = ContextType::CONVERSATION;
     obj.raw = phrase;
     obj.normalized = action;
   obj.confidence = confidence;
@@ -693,15 +680,14 @@ UnifiedMemoryStorage::Stats UnifiedMemoryStorage::getStats() const {
     return stats;
 }
 
-std::vector<QueryResult> UnifiedMemoryStorage::semanticSearch(const RetrievalQuery& query) {
+std::vector<MemoryRetrievalHit> UnifiedMemoryStorage::semanticSearch(const RetrievalQuery& query) {
     // TODO: Implement semantic search with embeddings
     // For now, fallback to text search
     auto textResults = search(query.text, query.max_results);
     
-    std::vector<QueryResult> results;
+    std::vector<MemoryRetrievalHit> results;
     for (const auto& obj : textResults) {
-        QueryResult result;
-   result.id = obj.id;
+        MemoryRetrievalHit result;
         result.score = obj.confidence;  // Placeholder
         result.memory = obj;
         results.push_back(result);

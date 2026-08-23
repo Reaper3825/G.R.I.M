@@ -30,6 +30,8 @@
 namespace GRIM {
 namespace Sampling {
 
+using HyperParameters::SamplingStrategy;
+
 //======================================================//
 //  Softmax with Temperature
 //======================================================//
@@ -353,7 +355,7 @@ void applyNoRepeatNgram(std::vector<float>& logits,
 
     // Extract current context (last ctx_len tokens)
     std::vector<int> current_ctx(history.end() - ctx_len, history.end());
-
+ 
     // Scan all possible positions where this context may have appeared before
     for (int pos = 0; pos <= hist_len - ngram_size; ++pos) {
         bool match = true;
@@ -408,27 +410,33 @@ SamplingPipeline::SamplingPipeline(const SamplingConfig& config)
     : config_(config)
 {
     // Validate config up front (Rule 20: crash on bad config)
-    if (config_.do_sample && config_.strategy != Strategy::GREEDY) {
+    if (config_.strategy == SamplingStrategy::UNSPECIFIED) {
+        throw std::runtime_error("SamplingPipeline: strategy is UNSPECIFIED");
+    }
+    if (config_.strategy == SamplingStrategy::BEAM_SEARCH) {
+        throw std::runtime_error("SamplingPipeline: BEAM_SEARCH is not supported");
+    }
+    if (config_.do_sample && config_.strategy != SamplingStrategy::GREEDY) {
         if (config_.temperature <= 0.0f) {
             throw std::runtime_error("SamplingPipeline: temperature must be > 0 for sampling, got " +
                                      std::to_string(config_.temperature));
         }
     }
-    if (config_.strategy == Strategy::TOP_K && config_.top_k <= 0) {
+    if (config_.strategy == SamplingStrategy::TOP_K && config_.top_k <= 0) {
         throw std::runtime_error("SamplingPipeline: TOP_K strategy requires top_k > 0, got " +
                                  std::to_string(config_.top_k));
     }
-    if (config_.strategy == Strategy::TOP_P &&
+    if (config_.strategy == SamplingStrategy::TOP_P &&
         (config_.top_p <= 0.0f || config_.top_p >= 1.0f)) {
         throw std::runtime_error("SamplingPipeline: TOP_P strategy requires top_p in (0,1), got " +
                                  std::to_string(config_.top_p));
     }
-    if (config_.strategy == Strategy::MIN_P &&
+    if (config_.strategy == SamplingStrategy::MIN_P &&
         (config_.min_p <= 0.0f || config_.min_p >= 1.0f)) {
         throw std::runtime_error("SamplingPipeline: MIN_P strategy requires min_p in (0,1), got " +
                                  std::to_string(config_.min_p));
     }
-    if (config_.strategy == Strategy::TYPICAL &&
+    if (config_.strategy == SamplingStrategy::TYPICAL &&
         (config_.typical_p <= 0.0f || config_.typical_p >= 1.0f)) {
         throw std::runtime_error("SamplingPipeline: TYPICAL strategy requires typical_p in (0,1), got " +
                                  std::to_string(config_.typical_p));
@@ -495,7 +503,8 @@ SampleResult SamplingPipeline::selectNextToken(const std::vector<float>& logits,
     //--------------------------------------------------//
     // Step 4+5+6+7: Greedy or sampled
     //--------------------------------------------------//
-    const bool use_sampling = config_.do_sample && config_.strategy != Strategy::GREEDY;
+    const bool use_sampling =
+        config_.do_sample && config_.strategy != SamplingStrategy::GREEDY;
 
     if (!use_sampling) {
         // Greedy: argmax on raw logits (no temperature needed)
@@ -534,40 +543,45 @@ SampleResult SamplingPipeline::selectNextToken(const std::vector<float>& logits,
     // Step 5: Apply filters in order
     //--------------------------------------------------//
     switch (config_.strategy) {
-        case Strategy::TOP_K:
+        case SamplingStrategy::TOP_K:
             filterTopK(probs, config_.top_k);
             break;
 
-        case Strategy::TOP_P:
+        case SamplingStrategy::TOP_P:
             filterTopP(probs, config_.top_p);
             break;
 
-        case Strategy::MIN_P:
+        case SamplingStrategy::MIN_P:
             filterMinP(probs, config_.min_p);
             break;
 
-        case Strategy::TYPICAL:
+        case SamplingStrategy::TYPICAL:
             filterTypical(probs, config_.typical_p);
             break;
 
-        case Strategy::TOP_K_TOP_P:
+        case SamplingStrategy::TOP_K_TOP_P:
             // Combined: top-k first to reduce candidates, then top-p for dynamic cutoff
             filterTopK(probs, config_.top_k);
             filterTopP(probs, config_.top_p);
             break;
 
-        case Strategy::GREEDY:
+        case SamplingStrategy::GREEDY:
             // Already handled above, but just in case
             break;
+
+        case SamplingStrategy::UNSPECIFIED:
+        case SamplingStrategy::BEAM_SEARCH:
+            throw std::runtime_error(
+                "SamplingPipeline: unsupported strategy reached sampling dispatch");
     }
 
     // Apply min-p as an additional global filter (when strategy isn't already MIN_P)
-    if (config_.strategy != Strategy::MIN_P && config_.min_p > 0.0f) {
+    if (config_.strategy != SamplingStrategy::MIN_P && config_.min_p > 0.0f) {
         filterMinP(probs, config_.min_p);
     }
 
     // Apply typical as an additional filter (when strategy isn't already TYPICAL)
-    if (config_.strategy != Strategy::TYPICAL && config_.typical_p < 1.0f) {
+    if (config_.strategy != SamplingStrategy::TYPICAL && config_.typical_p < 1.0f) {
         filterTypical(probs, config_.typical_p);
     }
 
@@ -597,31 +611,10 @@ SampleResult SamplingPipeline::selectNextToken(const std::vector<float>& logits,
 }
 
 //======================================================//
-//  Bridge: Convert legacy SamplingStrategy → Sampling::Strategy
-//======================================================//
-Strategy convertStrategy(int legacy_strategy) {
-    // Maps from SamplingStrategy enum values:
-    //   GREEDY=0, TOP_K=1, TOP_P=2, MIN_P=3, TYPICAL=4, TOP_K_TOP_P=5, BEAM_SEARCH=6
-    switch (legacy_strategy) {
-        case 0: return Strategy::GREEDY;
-        case 1: return Strategy::TOP_K;
-        case 2: return Strategy::TOP_P;
-        case 3: return Strategy::MIN_P;
-        case 4: return Strategy::TYPICAL;
-        case 5: return Strategy::TOP_K_TOP_P;
-        case 6:
-            throw std::runtime_error("convertStrategy: BEAM_SEARCH is not supported");
-        default:
-            throw std::runtime_error("convertStrategy: unknown strategy value " +
-                                     std::to_string(legacy_strategy));
-    }
-}
-
-//======================================================//
 //  Build SamplingConfig from root-derived generation fields
 //======================================================//
 SamplingConfig buildSamplingConfigFromGenerationFields(
-    int strategy,
+    SamplingStrategy strategy,
     bool do_sample,
     float temperature,
     int top_k,
@@ -641,7 +634,7 @@ SamplingConfig buildSamplingConfigFromGenerationFields(
     unsigned int seed)
 {
     SamplingConfig sc;
-    sc.strategy = convertStrategy(strategy);
+    sc.strategy = strategy;
     sc.do_sample = do_sample;
     sc.temperature = temperature;
     sc.top_k = top_k;

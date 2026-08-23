@@ -519,20 +519,6 @@ std::optional<UnifiedMemoryObject> SessionContextManager::recallContextByType(
     return best ? std::optional<UnifiedMemoryObject>(*best) : std::nullopt;
 }
 
-std::optional<UnifiedMemoryObject> SessionContextManager::recallContextByIntent(
-    const std::string& session_id,
-    const std::string& intent_tag) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto* s = get(session_id);
-    if (!s || s->recent_context.empty()) return std::nullopt;
-
-    for (auto it = s->recent_context.rbegin(); it != s->recent_context.rend(); ++it) {
-        if (GRIM::toString(it->intent, GRIM::IntentNames) == intent_tag)
-            return *it;
-    }
-    return std::nullopt;
-}
-
 void SessionContextManager::decayOldContext(
     const std::string& session_id, int seconds) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -623,11 +609,7 @@ GRIM::ContextSnapshot SessionContextManager::legacySnapshot(
     std::time_t most_recent_cmd_time = 0;
 
     for (const auto& obj : s->recent_context) {
-        std::string intent_str = GRIM::toString(obj.intent, GRIM::IntentNames);
-        if (snap.recentIntents.size() < 5) {
-            snap.recentIntents.push_back(intent_str);
-        }
-        if (obj.type == GRIM::TypeTag::COMMAND) {
+        if (obj.comm_type == GRIM::CommType::COMMAND) {
             if (snap.recentCommands.size() < 5) {
                 snap.recentCommands.push_back(obj.raw);
             }
@@ -646,7 +628,7 @@ GRIM::ContextSnapshot SessionContextManager::legacySnapshot(
     // Calculate consecutive commands from tail
     snap.consecutiveCommands = 0;
     for (auto it = s->recent_context.rbegin(); it != s->recent_context.rend(); ++it) {
-        if (it->type == GRIM::TypeTag::COMMAND) {
+        if (it->comm_type == GRIM::CommType::COMMAND) {
             snap.consecutiveCommands++;
         } else {
             break;

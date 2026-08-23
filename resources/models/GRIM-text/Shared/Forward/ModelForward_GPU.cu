@@ -221,14 +221,6 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
     (void)graphPolicyName(graph);
-    const auto execution_hp = HyperParameters::executionBlockConstructionHP(*config);
-    if (execution_hp.enabled) {
-        if (!execution_block_enabled) {
-            throw std::runtime_error(std::string(caller) + ": execution_block_enabled=false while argument bootstrap is configured");
-        }
-    } else if (execution_block_enabled) {
-        throw std::runtime_error(std::string(caller) + ": execution_block_enabled=true while argument bootstrap is not configured");
-    }
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
     if (static_cast<int>(payload->seq_lengths.size()) != payload->batch_size) {

@@ -26,14 +26,15 @@ MemoryRetrievalResult MemoryFacade::retrieveForPrompt(
     std::lock_guard<std::mutex> lock(mutex_);
 
     MemoryRetrievalResult result;
-    result.context = SessionContextManager::instance().legacySnapshot(kDefaultSession);
+    result.context = SessionContextManager::instance().snapshot(kDefaultSession);
 
     // 1. Text search against storage
     {
         auto hits = storage_.search(prompt, max_memories);
         result.breadcrumbs.push_back({prompt, static_cast<int>(hits.size())});
         for (auto& m : hits) {
-            result.memories.push_back(std::move(m));
+            const float score = m.confidence;
+            result.hits.push_back({std::move(m), score});
         }
     }
 
@@ -46,25 +47,26 @@ MemoryRetrievalResult MemoryFacade::retrieveForPrompt(
         for (auto& m : tag_hits) {
             // Deduplicate by ID
             bool dup = false;
-            for (const auto& existing : result.memories) {
-                if (existing.id == m.id) { dup = true; break; }
+            for (const auto& existing : result.hits) {
+                if (existing.memory.id == m.id) { dup = true; break; }
             }
             if (!dup) {
-                result.memories.push_back(std::move(m));
+                const float score = m.confidence;
+                result.hits.push_back({std::move(m), score});
             }
         }
     }
 
     // 3. Truncate to max_memories (keep highest-confidence first)
-    if (static_cast<int>(result.memories.size()) > max_memories) {
+    if (static_cast<int>(result.hits.size()) > max_memories) {
         std::partial_sort(
-            result.memories.begin(),
-            result.memories.begin() + max_memories,
-            result.memories.end(),
-            [](const UnifiedMemoryObject& a, const UnifiedMemoryObject& b) {
-                return a.confidence > b.confidence;
+            result.hits.begin(),
+            result.hits.begin() + max_memories,
+            result.hits.end(),
+            [](const MemoryRetrievalHit& a, const MemoryRetrievalHit& b) {
+                return a.score > b.score;
             });
-        result.memories.resize(max_memories);
+        result.hits.resize(max_memories);
     }
 
     return result;

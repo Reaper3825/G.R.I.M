@@ -9,8 +9,7 @@ namespace GRIM {
 
 // ---------- ENUMS ---------- //
 enum class CommType      : uint8_t { COMMAND, QUESTION, BANTER, UNKNOWN };
-enum class MemoryDomain  : uint8_t { BASE, USER, FIELD, FUSED };
-enum class ImportanceType: uint8_t { LOW, MEDIUM, HIGH };
+enum class MemoryDomain  : uint8_t { BASE, FIELD, USER };
 enum class Modality      : uint8_t { TEXT, AUDIO, VISION, SENSOR };
 
 // ---------- METADATA ---------- //
@@ -67,18 +66,10 @@ struct Context {
     void truncateToTokenBudget(size_t token_limit);
 };
 
-// ---------- RETRIEVAL ---------- //
-struct QueryResult {
-    uint64_t id = 0;
-    uint64_t offset = 0;
-    float score = 0.0f;
-};
-
 struct RetrievalQuery {
     CommType type = CommType::UNKNOWN;
     std::string text;
     std::vector<float> embedding;
-    std::string intent;
     std::vector<std::string> tags;
 };
 

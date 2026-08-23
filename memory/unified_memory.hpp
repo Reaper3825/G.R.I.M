@@ -31,44 +31,22 @@ enum class CommType : uint8_t {
 };
 
 enum class MemoryDomain : uint8_t {
-    USER_VOICE = 0,
-    USER_TEXT = 1,
-  SYSTEM_HW = 2,
-    SYSTEM_SW = 3,
-    NETWORK_API = 4,
-    GRIM_INTERNAL = 5,
-    BASE = 6,
-    FIELD = 7,
-    FUSED = 8
+        BASE = 0,
+        FIELD = 1,
+        USER = 2
 };
 
 enum class TypeTag : uint8_t {
-    FACT = 0,
-    EVENT = 1,
-    COMMAND = 2,
-    STATUS = 3,
-    SUMMARY = 4,
-    LEARNED_COMMAND = 5,
-    UNKNOWN_COMMAND = 6,
-    PREDICTION = 7
-};
-
-enum class MemoryIntent : uint8_t {
-    INFORM = 0,
-    ASK = 1,
-    SET_PREF = 2,
-    CORRECT = 3,
-    STATUS_UPDATE = 4,
-    QUERY = 5
+    INT = 0,
+    FLOAT = 1,
+    STRING = 2,
+    BOOL = 3
 };
 
 enum class ContextType : uint8_t {
     CONVERSATION = 0,
     WAKE = 1,
-    DEV_MODE = 2,
-    MONITOR = 3,
-    SYSTEM_BOOT = 4,
-    COMMAND_LEARNING = 5
+    DEV_MODE = 2
 };
 
 enum class Modality : uint8_t {
@@ -79,85 +57,26 @@ enum class Modality : uint8_t {
 };
 
 // ============================================================================
-// LEGACY COMPATIBILITY (Old enum names mapped to new system)
-// ============================================================================
-
-// Map old DomainTag to new MemoryDomain
-using DomainTag = MemoryDomain;
-namespace DomainTagCompat {
-    constexpr MemoryDomain UserVoice = MemoryDomain::USER_VOICE;
-    constexpr MemoryDomain UserText = MemoryDomain::USER_TEXT;
-    constexpr MemoryDomain SystemHW = MemoryDomain::SYSTEM_HW;
-    constexpr MemoryDomain SystemSW = MemoryDomain::SYSTEM_SW;
-    constexpr MemoryDomain NetworkAPI = MemoryDomain::NETWORK_API;
-    constexpr MemoryDomain GrimInternal = MemoryDomain::GRIM_INTERNAL;
-}
-
-// Map old IntentTag to new MemoryIntent
-using IntentTag = MemoryIntent;
-namespace IntentTagCompat {
-    constexpr MemoryIntent Inform = MemoryIntent::INFORM;
-    constexpr MemoryIntent Ask = MemoryIntent::ASK;
-    constexpr MemoryIntent SetPref = MemoryIntent::SET_PREF;
-    constexpr MemoryIntent Correct = MemoryIntent::CORRECT;
-    constexpr MemoryIntent StatusUpdate = MemoryIntent::STATUS_UPDATE;
-  constexpr MemoryIntent Query = MemoryIntent::QUERY;
-}
-
-// Map old ContextTag to new ContextType
-using ContextTag = ContextType;
-namespace ContextTagCompat {
-    constexpr ContextType Conversation = ContextType::CONVERSATION;
-    constexpr ContextType Wake = ContextType::WAKE;
-constexpr ContextType DevMode = ContextType::DEV_MODE;
-    constexpr ContextType Monitor = ContextType::MONITOR;
-    constexpr ContextType SystemBoot = ContextType::SYSTEM_BOOT;
-    constexpr ContextType CommandLearning = ContextType::COMMAND_LEARNING;
-}
-
-// ============================================================================
 // STRING CONVERSION MAPS
 // ============================================================================
 
 static const std::unordered_map<MemoryDomain, std::string> DomainNames = {
-    {MemoryDomain::USER_VOICE, "user.voice"},
-    {MemoryDomain::USER_TEXT, "user.text"},
-    {MemoryDomain::SYSTEM_HW, "system.hw"},
-    {MemoryDomain::SYSTEM_SW, "system.sw"},
-    {MemoryDomain::NETWORK_API, "network.api"},
-    {MemoryDomain::GRIM_INTERNAL, "grim.internal"},
     {MemoryDomain::BASE, "base"},
     {MemoryDomain::FIELD, "field"},
-    {MemoryDomain::FUSED, "fused"}
+    {MemoryDomain::USER, "user"}
 };
 
 static const std::unordered_map<TypeTag, std::string> TypeNames = {
-    {TypeTag::FACT, "fact"},
-    {TypeTag::EVENT, "event"},
-    {TypeTag::COMMAND, "command"},
-    {TypeTag::STATUS, "status"},
- {TypeTag::SUMMARY, "summary"},
-    {TypeTag::LEARNED_COMMAND, "learnedcommand"},
-    {TypeTag::UNKNOWN_COMMAND, "unknowncommand"},
-    {TypeTag::PREDICTION, "prediction"}
-};
-
-static const std::unordered_map<MemoryIntent, std::string> IntentNames = {
-    {MemoryIntent::INFORM, "inform"},
-    {MemoryIntent::ASK, "ask"},
-    {MemoryIntent::SET_PREF, "set_pref"},
-    {MemoryIntent::CORRECT, "correct"},
-    {MemoryIntent::STATUS_UPDATE, "status_update"},
-    {MemoryIntent::QUERY, "query"}
+    {TypeTag::INT, "int"},
+    {TypeTag::FLOAT, "float"},
+    {TypeTag::STRING, "string"},
+    {TypeTag::BOOL, "bool"}
 };
 
 static const std::unordered_map<ContextType, std::string> ContextNames = {
     {ContextType::CONVERSATION, "conversation"},
     {ContextType::WAKE, "wake"},
-    {ContextType::DEV_MODE, "dev_mode"},
-    {ContextType::MONITOR, "monitor"},
-    {ContextType::SYSTEM_BOOT, "system_boot"},
-    {ContextType::COMMAND_LEARNING, "command_learning"}
+    {ContextType::DEV_MODE, "dev_mode"}
 };
 
 static const std::unordered_map<CommType, std::string> CommTypeNames = {
@@ -201,9 +120,8 @@ public:
     uint64_t timestamp = 0;
     
     // Classification
-    MemoryDomain domain = MemoryDomain::GRIM_INTERNAL;
-    TypeTag type = TypeTag::FACT;
-    MemoryIntent intent = MemoryIntent::INFORM;
+    MemoryDomain domain = MemoryDomain::BASE;
+    TypeTag type = TypeTag::STRING;
     ContextType context = ContextType::CONVERSATION;
     CommType comm_type = CommType::UNKNOWN;
     Modality modality = Modality::TEXT;
@@ -211,7 +129,6 @@ public:
     // Content
     std::string raw;
     std::string normalized;
-    std::string intent_name;
     
     // Metadata
     std::vector<std::string> tags;
@@ -229,9 +146,9 @@ public:
     // Constructors
     UnifiedMemoryObject() = default;
     
-    UnifiedMemoryObject(MemoryDomain domainValue, TypeTag t, MemoryIntent i, ContextType c,
+    UnifiedMemoryObject(MemoryDomain domainValue, TypeTag t, ContextType c,
      const std::string& rawInput, float conf = 1.0f)
-        : domain(domainValue), type(t), intent(i), context(c),
+        : domain(domainValue), type(t), context(c),
           confidence(conf), raw(rawInput), normalized(rawInput) {
           id = generateID();
           timestamp = std::time(nullptr);
@@ -257,17 +174,15 @@ using MemoryObject = UnifiedMemoryObject;
 // QUERY & RETRIEVAL
 // ============================================================================
 
-struct QueryResult {
-    uint64_t id = 0;
-    float score = 0.0f;
+struct MemoryRetrievalHit {
     UnifiedMemoryObject memory;
+    float score = 0.0f;
 };
 
 struct RetrievalQuery {
   CommType type = CommType::UNKNOWN;
     std::string text;
     std::vector<float> embedding;
-std::string intent;
     std::vector<std::string> tags;
   
     // Filters
@@ -301,7 +216,7 @@ public:
     // Retrieval
     std::optional<UnifiedMemoryObject> getById(uint64_t id);
     std::vector<UnifiedMemoryObject> search(const std::string& query, int maxResults = 10);
-    std::vector<QueryResult> semanticSearch(const RetrievalQuery& query);
+    std::vector<MemoryRetrievalHit> semanticSearch(const RetrievalQuery& query);
     
     // Tag-based indexing
     std::vector<UnifiedMemoryObject> getByTag(const std::string& tag);

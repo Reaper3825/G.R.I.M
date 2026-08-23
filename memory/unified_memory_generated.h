@@ -66,184 +66,103 @@ inline const char *EnumNameCommType(CommType e) {
 }
 
 enum MemoryDomain : int8_t {
-  MemoryDomain_USER_VOICE = 0,
-  MemoryDomain_USER_TEXT = 1,
-  MemoryDomain_SYSTEM_HW = 2,
-  MemoryDomain_SYSTEM_SW = 3,
-  MemoryDomain_NETWORK_API = 4,
-  MemoryDomain_GRIM_INTERNAL = 5,
-  MemoryDomain_BASE = 6,
-  MemoryDomain_FIELD = 7,
-  MemoryDomain_FUSED = 8,
-  MemoryDomain_MIN = MemoryDomain_USER_VOICE,
-  MemoryDomain_MAX = MemoryDomain_FUSED
+  MemoryDomain_BASE = 0,
+  MemoryDomain_FIELD = 1,
+  MemoryDomain_USER = 2,
+  MemoryDomain_MIN = MemoryDomain_BASE,
+  MemoryDomain_MAX = MemoryDomain_USER
 };
 
-inline const MemoryDomain (&EnumValuesMemoryDomain())[9] {
+inline const MemoryDomain (&EnumValuesMemoryDomain())[3] {
   static const MemoryDomain values[] = {
-    MemoryDomain_USER_VOICE,
-    MemoryDomain_USER_TEXT,
-    MemoryDomain_SYSTEM_HW,
-    MemoryDomain_SYSTEM_SW,
-    MemoryDomain_NETWORK_API,
-    MemoryDomain_GRIM_INTERNAL,
     MemoryDomain_BASE,
     MemoryDomain_FIELD,
-    MemoryDomain_FUSED
+    MemoryDomain_USER
   };
   return values;
 }
 
 inline const char * const *EnumNamesMemoryDomain() {
-  static const char * const names[10] = {
-    "USER_VOICE",
-    "USER_TEXT",
-    "SYSTEM_HW",
-    "SYSTEM_SW",
-    "NETWORK_API",
-    "GRIM_INTERNAL",
+  static const char * const names[4] = {
     "BASE",
     "FIELD",
-    "FUSED",
+    "USER",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameMemoryDomain(MemoryDomain e) {
-  if (::flatbuffers::IsOutRange(e, MemoryDomain_USER_VOICE, MemoryDomain_FUSED)) return "";
+  if (::flatbuffers::IsOutRange(e, MemoryDomain_BASE, MemoryDomain_USER)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesMemoryDomain()[index];
 }
 
 enum TypeTag : int8_t {
-  TypeTag_FACT = 0,
-  TypeTag_EVENT = 1,
-  TypeTag_COMMAND = 2,
-  TypeTag_STATUS = 3,
-  TypeTag_SUMMARY = 4,
-  TypeTag_LEARNED_COMMAND = 5,
-  TypeTag_UNKNOWN_COMMAND = 6,
-  TypeTag_PREDICTION = 7,
-  TypeTag_MIN = TypeTag_FACT,
-  TypeTag_MAX = TypeTag_PREDICTION
+  TypeTag_INT = 0,
+  TypeTag_FLOAT = 1,
+  TypeTag_STRING = 2,
+  TypeTag_BOOL = 3,
+  TypeTag_MIN = TypeTag_INT,
+  TypeTag_MAX = TypeTag_BOOL
 };
 
-inline const TypeTag (&EnumValuesTypeTag())[8] {
+inline const TypeTag (&EnumValuesTypeTag())[4] {
   static const TypeTag values[] = {
-    TypeTag_FACT,
-    TypeTag_EVENT,
-    TypeTag_COMMAND,
-    TypeTag_STATUS,
-    TypeTag_SUMMARY,
-    TypeTag_LEARNED_COMMAND,
-    TypeTag_UNKNOWN_COMMAND,
-    TypeTag_PREDICTION
+    TypeTag_INT,
+    TypeTag_FLOAT,
+    TypeTag_STRING,
+    TypeTag_BOOL
   };
   return values;
 }
 
 inline const char * const *EnumNamesTypeTag() {
-  static const char * const names[9] = {
-    "FACT",
-    "EVENT",
-    "COMMAND",
-    "STATUS",
-    "SUMMARY",
-    "LEARNED_COMMAND",
-    "UNKNOWN_COMMAND",
-    "PREDICTION",
+  static const char * const names[5] = {
+    "INT",
+    "FLOAT",
+    "STRING",
+    "BOOL",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTypeTag(TypeTag e) {
-  if (::flatbuffers::IsOutRange(e, TypeTag_FACT, TypeTag_PREDICTION)) return "";
+  if (::flatbuffers::IsOutRange(e, TypeTag_INT, TypeTag_BOOL)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTypeTag()[index];
-}
-
-enum IntentType : int8_t {
-  IntentType_INFORM = 0,
-  IntentType_ASK = 1,
-  IntentType_SET_PREF = 2,
-  IntentType_CORRECT = 3,
-  IntentType_STATUS_UPDATE = 4,
-  IntentType_QUERY = 5,
-  IntentType_MIN = IntentType_INFORM,
-  IntentType_MAX = IntentType_QUERY
-};
-
-inline const IntentType (&EnumValuesIntentType())[6] {
-  static const IntentType values[] = {
-    IntentType_INFORM,
-    IntentType_ASK,
-    IntentType_SET_PREF,
-    IntentType_CORRECT,
-    IntentType_STATUS_UPDATE,
-    IntentType_QUERY
-  };
-  return values;
-}
-
-inline const char * const *EnumNamesIntentType() {
-  static const char * const names[7] = {
-    "INFORM",
-    "ASK",
-    "SET_PREF",
-    "CORRECT",
-    "STATUS_UPDATE",
-    "QUERY",
-    nullptr
-  };
-  return names;
-}
-
-inline const char *EnumNameIntentType(IntentType e) {
-  if (::flatbuffers::IsOutRange(e, IntentType_INFORM, IntentType_QUERY)) return "";
-  const size_t index = static_cast<size_t>(e);
-  return EnumNamesIntentType()[index];
 }
 
 enum ContextType : int8_t {
   ContextType_CONVERSATION = 0,
   ContextType_WAKE = 1,
   ContextType_DEV_MODE = 2,
-  ContextType_MONITOR = 3,
-  ContextType_SYSTEM_BOOT = 4,
-  ContextType_COMMAND_LEARNING = 5,
   ContextType_MIN = ContextType_CONVERSATION,
-  ContextType_MAX = ContextType_COMMAND_LEARNING
+  ContextType_MAX = ContextType_DEV_MODE
 };
 
-inline const ContextType (&EnumValuesContextType())[6] {
+inline const ContextType (&EnumValuesContextType())[3] {
   static const ContextType values[] = {
     ContextType_CONVERSATION,
     ContextType_WAKE,
-    ContextType_DEV_MODE,
-    ContextType_MONITOR,
-    ContextType_SYSTEM_BOOT,
-    ContextType_COMMAND_LEARNING
+    ContextType_DEV_MODE
   };
   return values;
 }
 
 inline const char * const *EnumNamesContextType() {
-  static const char * const names[7] = {
+  static const char * const names[4] = {
     "CONVERSATION",
     "WAKE",
     "DEV_MODE",
-    "MONITOR",
-    "SYSTEM_BOOT",
-    "COMMAND_LEARNING",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameContextType(ContextType e) {
-  if (::flatbuffers::IsOutRange(e, ContextType_CONVERSATION, ContextType_COMMAND_LEARNING)) return "";
+  if (::flatbuffers::IsOutRange(e, ContextType_CONVERSATION, ContextType_DEV_MODE)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesContextType()[index];
 }
@@ -291,20 +210,18 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_TIMESTAMP = 6,
     VT_DOMAIN = 8,
     VT_TYPE = 10,
-    VT_INTENT = 12,
-    VT_CONTEXT = 14,
-    VT_COMM_TYPE = 16,
-    VT_MODALITY = 18,
-    VT_RAW = 20,
-    VT_NORMALIZED = 22,
-    VT_INTENT_NAME = 24,
-    VT_TAGS = 26,
-    VT_CONFIDENCE = 28,
-    VT_IMPORTANCE = 30,
-    VT_RECENCY_WEIGHT = 32,
-    VT_EMBEDDING = 34,
-    VT_PARENT_ID = 36,
-    VT_RELATED_IDS = 38
+    VT_CONTEXT = 12,
+    VT_COMM_TYPE = 14,
+    VT_MODALITY = 16,
+    VT_RAW = 18,
+    VT_NORMALIZED = 20,
+    VT_TAGS = 22,
+    VT_CONFIDENCE = 24,
+    VT_IMPORTANCE = 26,
+    VT_RECENCY_WEIGHT = 28,
+    VT_EMBEDDING = 30,
+    VT_PARENT_ID = 32,
+    VT_RELATED_IDS = 34
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -317,9 +234,6 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   GRIM::Memory::TypeTag type() const {
     return static_cast<GRIM::Memory::TypeTag>(GetField<int8_t>(VT_TYPE, 0));
-  }
-  GRIM::Memory::IntentType intent() const {
-    return static_cast<GRIM::Memory::IntentType>(GetField<int8_t>(VT_INTENT, 0));
   }
   GRIM::Memory::ContextType context() const {
     return static_cast<GRIM::Memory::ContextType>(GetField<int8_t>(VT_CONTEXT, 0));
@@ -335,9 +249,6 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const ::flatbuffers::String *normalized() const {
     return GetPointer<const ::flatbuffers::String *>(VT_NORMALIZED);
-  }
-  const ::flatbuffers::String *intent_name() const {
-    return GetPointer<const ::flatbuffers::String *>(VT_INTENT_NAME);
   }
   const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *tags() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_TAGS);
@@ -366,7 +277,6 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_TIMESTAMP, 8) &&
            VerifyField<int8_t>(verifier, VT_DOMAIN, 1) &&
            VerifyField<int8_t>(verifier, VT_TYPE, 1) &&
-           VerifyField<int8_t>(verifier, VT_INTENT, 1) &&
            VerifyField<int8_t>(verifier, VT_CONTEXT, 1) &&
            VerifyField<int8_t>(verifier, VT_COMM_TYPE, 1) &&
            VerifyField<int8_t>(verifier, VT_MODALITY, 1) &&
@@ -374,8 +284,6 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(raw()) &&
            VerifyOffset(verifier, VT_NORMALIZED) &&
            verifier.VerifyString(normalized()) &&
-           VerifyOffset(verifier, VT_INTENT_NAME) &&
-           verifier.VerifyString(intent_name()) &&
            VerifyOffset(verifier, VT_TAGS) &&
            verifier.VerifyVector(tags()) &&
            verifier.VerifyVectorOfStrings(tags()) &&
@@ -407,9 +315,6 @@ struct MemoryRecordBuilder {
   void add_type(GRIM::Memory::TypeTag type) {
     fbb_.AddElement<int8_t>(MemoryRecord::VT_TYPE, static_cast<int8_t>(type), 0);
   }
-  void add_intent(GRIM::Memory::IntentType intent) {
-    fbb_.AddElement<int8_t>(MemoryRecord::VT_INTENT, static_cast<int8_t>(intent), 0);
-  }
   void add_context(GRIM::Memory::ContextType context) {
     fbb_.AddElement<int8_t>(MemoryRecord::VT_CONTEXT, static_cast<int8_t>(context), 0);
   }
@@ -424,9 +329,6 @@ struct MemoryRecordBuilder {
   }
   void add_normalized(::flatbuffers::Offset<::flatbuffers::String> normalized) {
     fbb_.AddOffset(MemoryRecord::VT_NORMALIZED, normalized);
-  }
-  void add_intent_name(::flatbuffers::Offset<::flatbuffers::String> intent_name) {
-    fbb_.AddOffset(MemoryRecord::VT_INTENT_NAME, intent_name);
   }
   void add_tags(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> tags) {
     fbb_.AddOffset(MemoryRecord::VT_TAGS, tags);
@@ -464,15 +366,13 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecord(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t id = 0,
     uint64_t timestamp = 0,
-    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
-    GRIM::Memory::IntentType intent = GRIM::Memory::IntentType_INFORM,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
     GRIM::Memory::ContextType context = GRIM::Memory::ContextType_CONVERSATION,
     GRIM::Memory::CommType comm_type = GRIM::Memory::CommType_COMMAND,
     GRIM::Memory::Modality modality = GRIM::Memory::Modality_TEXT,
     ::flatbuffers::Offset<::flatbuffers::String> raw = 0,
     ::flatbuffers::Offset<::flatbuffers::String> normalized = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> intent_name = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> tags = 0,
     float confidence = 0.0f,
     float importance = 1.0f,
@@ -490,13 +390,11 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecord(
   builder_.add_importance(importance);
   builder_.add_confidence(confidence);
   builder_.add_tags(tags);
-  builder_.add_intent_name(intent_name);
   builder_.add_normalized(normalized);
   builder_.add_raw(raw);
   builder_.add_modality(modality);
   builder_.add_comm_type(comm_type);
   builder_.add_context(context);
-  builder_.add_intent(intent);
   builder_.add_type(type);
   builder_.add_domain(domain);
   return builder_.Finish();
@@ -506,15 +404,13 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecordDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t id = 0,
     uint64_t timestamp = 0,
-    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
-    GRIM::Memory::IntentType intent = GRIM::Memory::IntentType_INFORM,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
     GRIM::Memory::ContextType context = GRIM::Memory::ContextType_CONVERSATION,
     GRIM::Memory::CommType comm_type = GRIM::Memory::CommType_COMMAND,
     GRIM::Memory::Modality modality = GRIM::Memory::Modality_TEXT,
     const char *raw = nullptr,
     const char *normalized = nullptr,
-    const char *intent_name = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *tags = nullptr,
     float confidence = 0.0f,
     float importance = 1.0f,
@@ -524,7 +420,6 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecordDirect(
     const std::vector<uint64_t> *related_ids = nullptr) {
   auto raw__ = raw ? _fbb.CreateString(raw) : 0;
   auto normalized__ = normalized ? _fbb.CreateString(normalized) : 0;
-  auto intent_name__ = intent_name ? _fbb.CreateString(intent_name) : 0;
   auto tags__ = tags ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*tags) : 0;
   auto embedding__ = embedding ? _fbb.CreateVector<float>(*embedding) : 0;
   auto related_ids__ = related_ids ? _fbb.CreateVector<uint64_t>(*related_ids) : 0;
@@ -534,13 +429,11 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecordDirect(
       timestamp,
       domain,
       type,
-      intent,
       context,
       comm_type,
       modality,
       raw__,
       normalized__,
-      intent_name__,
       tags__,
       confidence,
       importance,
@@ -647,8 +540,8 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntry(
     uint64_t id = 0,
     uint64_t offset = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> embedding = 0,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
-    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
     uint64_t timestamp = 0,
     float confidence = 0.0f,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> tags = 0) {
@@ -669,8 +562,8 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntryDirect(
     uint64_t id = 0,
     uint64_t offset = 0,
     const std::vector<float> *embedding = nullptr,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
-    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
     uint64_t timestamp = 0,
     float confidence = 0.0f,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *tags = nullptr) {

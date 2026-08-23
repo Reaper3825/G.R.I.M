@@ -123,8 +123,6 @@ struct GenerationHP {
     int no_repeat_ngram_size = 0;
     bool do_sample = false;
     std::vector<int> bad_words_ids;
-    /// Token IDs to mask at sampling (e.g. byte-level digit tokens); `<NUM>` must remain unmasked.
-    std::vector<int> masked_numeric_literal_ids;
     unsigned int seed = 0;
     bool enable_scratchblock_reasoning = false;
 };
@@ -1560,7 +1558,6 @@ inline GenerationHP generationHP(const LanguageModelConfig& cfg)
     view.no_repeat_ngram_size = cfg.generation_no_repeat_ngram_size;
     view.do_sample = cfg.generation_do_sample;
     view.bad_words_ids = cfg.generation_bad_words_ids;
-    view.masked_numeric_literal_ids = cfg.generation_masked_numeric_literal_ids;
     view.seed = cfg.generation_seed;
     view.enable_scratchblock_reasoning = cfg.generation_enable_scratchblock_reasoning;
     return view;
@@ -1588,7 +1585,6 @@ inline GenerationHP generationHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.unk_token_id = Tokenizer::UNK_TOKEN_ID;
     view.no_repeat_ngram_size = snapshotTrainingConfigField<int>(snapshot, "generation_no_repeat_ngram_size");
     view.do_sample = snapshotTrainingConfigField<bool>(snapshot, "generation_do_sample");
-    view.masked_numeric_literal_ids = snapshotMaskedNumericLiteralIds();
     view.seed = 0;
     view.enable_scratchblock_reasoning =
         snapshotTrainingConfigField<bool>(snapshot, "generation_enable_scratchblock_reasoning");

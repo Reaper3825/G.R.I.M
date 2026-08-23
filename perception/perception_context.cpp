@@ -1318,10 +1318,9 @@ void PerceptionContextManager::storeContextInMemory(const VisualContext& ctx, co
         UnifiedMemoryObject memory;
         memory.id = UnifiedMemoryObject::generateID();
         memory.timestamp = static_cast<uint64_t>(std::time(nullptr));
-        memory.domain = MemoryDomain::GRIM_INTERNAL;
-        memory.intent = MemoryIntent::INFORM;        // ✅ Using Inform instead of Observe
-        memory.context = ContextType::MONITOR;     // ✅ Using Monitor instead of Environment
-        memory.type = TypeTag::EVENT;
+        memory.domain = MemoryDomain::FIELD;
+        memory.context = ContextType::CONVERSATION;
+        memory.type = TypeTag::STRING;
         memory.confidence = 0.8f;
         
         // Build memory content

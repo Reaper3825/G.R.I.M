@@ -33,11 +33,11 @@ namespace GRIM::MMO {
 // and retrieval breadcrumbs (what was searched and why).
 // =========================================================
 struct MemoryRetrievalResult {
-    // Ranked memories relevant to the prompt (most relevant first).
-    std::vector<UnifiedMemoryObject> memories;
+    // Ranked hits relevant to the prompt (most relevant first).
+    std::vector<MemoryRetrievalHit> hits;
 
     // Current session state (mood, recent commands, intents, NLP context).
-    ContextSnapshot context;
+    ContextSnapshotV2 context;
 
     // Retrieval breadcrumbs: what queries were used and how many
     // results each produced. Useful for diagnostics and router
@@ -49,7 +49,7 @@ struct MemoryRetrievalResult {
     std::vector<Breadcrumb> breadcrumbs;
 
     // True if the retrieval produced at least one relevant memory.
-    bool has_memories() const { return !memories.empty(); }
+    bool has_memories() const { return !hits.empty(); }
 };
 
 // =========================================================
@@ -58,7 +58,7 @@ struct MemoryRetrievalResult {
 // Usage:
 //   MemoryFacade facade(storage);
 //   auto retrieval = facade.retrieveForPrompt("explain photosynthesis");
-//   // Build router payload from retrieval.memories + retrieval.context
+//   // Build router payload from retrieval.hits + retrieval.context
 //
 // Thread-safe: internal mutex protects all operations.
 // =========================================================

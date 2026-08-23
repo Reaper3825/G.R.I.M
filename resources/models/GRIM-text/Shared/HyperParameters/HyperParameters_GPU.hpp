@@ -464,8 +464,6 @@ struct LanguageModelConfig {
     int generation_bos_token_id = -1;
     int generation_unk_token_id = -1;
     std::vector<int> generation_bad_words_ids;
-    /// Token IDs to mask at sampling (e.g. byte-level digit tokens); `<NUM>` must remain unmasked.
-    std::vector<int> generation_masked_numeric_literal_ids;
     unsigned int generation_seed = 0;
 
 
@@ -1225,11 +1223,6 @@ inline void deriveTrainingRuntimeConfig(LanguageModelConfig& params) {
     params.generation_pad_token_id = Tokenizer::PAD_TOKEN_ID;
     params.generation_bos_token_id = Tokenizer::BOS_TOKEN_ID;
     params.generation_unk_token_id = Tokenizer::UNK_TOKEN_ID;
-    params.generation_masked_numeric_literal_ids.clear();
-    params.generation_masked_numeric_literal_ids.reserve(10);
-    for (int b = 0x30; b <= 0x39; ++b) {
-        params.generation_masked_numeric_literal_ids.push_back(Tokenizer::BYTE_TOKEN_OFFSET + b);
-    }
 
     if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f) {
         throw std::runtime_error(
@@ -1633,9 +1626,6 @@ inline void validateRootConfigDocument(
     if (params.generation_min_p > 1.0f) {
         throw std::runtime_error(std::string(caller) + ": generation_min_p must be <= 1, got " +
                                  std::to_string(params.generation_min_p));
-    }
-    if (params.generation_masked_numeric_literal_ids.empty()) {
-        throw std::runtime_error(std::string(caller) + ": generation_masked_numeric_literal_ids is empty");
     }
     validatePositiveFields(params, {
         validationField("vocab_size", &LanguageModelConfig::vocab_size),
@@ -2412,16 +2402,6 @@ inline int snapshotTokenizerTargetVocabSize(
     return target_vocab_size;
 }
 
-inline std::vector<int> snapshotMaskedNumericLiteralIds()
-{
-    std::vector<int> ids;
-    ids.reserve(10);
-    for (int byte_value = 0x30; byte_value <= 0x39; ++byte_value) {
-        ids.push_back(Tokenizer::BYTE_TOKEN_OFFSET + byte_value);
-    }
-    return ids;
-}
-
 inline const char* modelExecutionModeToJsonString(ModelExecutionMode mode)
 {
     switch (mode) {
@@ -2598,7 +2578,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_bos_token_id);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_unk_token_id);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_bad_words_ids);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_masked_numeric_literal_ids);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_seed);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_enable_scratchblock_reasoning);
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_model_training);

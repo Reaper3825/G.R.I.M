@@ -893,8 +893,8 @@ BatchPayload buildBatchPayload(
  * Build a validated single-row inference payload. Prefill mode consumes strict
  * tokenizer-authored atom metadata and complete typed spans. Decode mode accepts
  * generated structural atom boundaries with zero metadata because cached windows
- * may contain only one side of a span. Non-negative slot bindings must lie in
- * [execution_num_scratch_slots, execution_num_slots).
+ * may contain only one side of a span. Inference payloads do not carry execution
+ * slot bindings.
  */
 BatchPayload buildInferenceBatchPayload(
     const std::vector<int>& token_ids,
@@ -903,12 +903,9 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
     const std::vector<uint32_t>& atom_entry_ids,
-    const std::vector<int32_t>& token_to_slot_index_map,
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,
-    int execution_num_slots,
-    int execution_num_scratch_slots,
     bool selector_enabled,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10,

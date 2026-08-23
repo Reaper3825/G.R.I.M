@@ -292,13 +292,13 @@ rules.push_back(rule);
 void NLP::loadLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
     auto commands = storage.getAllLearnedCommands();
     for (const auto& obj : commands) {
-        // Each learned command stores: raw = pattern string, intent_name = intent
-        if (obj.raw.empty() || obj.intent_name.empty()) continue;
+        // Each learned command stores raw as the pattern and normalized as the action.
+        if (obj.raw.empty() || obj.normalized.empty()) continue;
 
         // Skip if a rule with this intent+pattern already exists
         bool duplicate = false;
         for (const auto& existing : rules) {
-            if (existing.intent == obj.intent_name && existing.pattern_str == obj.raw) {
+            if (existing.intent == obj.normalized && existing.pattern_str == obj.raw) {
                 duplicate = true;
                 break;
             }
@@ -306,7 +306,7 @@ void NLP::loadLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
         if (duplicate) continue;
 
         Rule rule;
-        rule.intent          = obj.intent_name;
+        rule.intent          = obj.normalized;
         rule.pattern_str     = obj.raw;
         rule.case_insensitive = true;
         rule.learned         = true;

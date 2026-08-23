@@ -140,9 +140,7 @@ QuestionResult QuestionHandler::searchUserMemory(const std::string& question) {
         auto memories = g_memoryStorage.search(keyword, 10);
         
         for (const auto& mem : memories) {
-            // Check if this memory could answer the question
-            // Look for fact-type memories with high confidence
-            if (mem.type == TypeTag::FACT || mem.type == TypeTag::COMMAND) {
+            if (mem.type == TypeTag::STRING) {
                 candidateMemories.push_back(mem);
             }
         }
@@ -152,7 +150,7 @@ QuestionResult QuestionHandler::searchUserMemory(const std::string& question) {
     for (const auto& keyword : keywords) {
         auto tagMemories = g_memoryStorage.getByTag(keyword);
         for (const auto& mem : tagMemories) {
-            if (mem.type == TypeTag::FACT) {
+            if (mem.type == TypeTag::STRING) {
                 candidateMemories.push_back(mem);
             }
         }
@@ -268,9 +266,8 @@ QuestionResult QuestionHandler::searchBaseMemory(const std::string& question) {
     for (const auto& keyword : keywords) {
         auto memories = g_memoryStorage.search(keyword, 10);
         for (const auto& mem : memories) {
-            if (mem.domain != MemoryDomain::GRIM_INTERNAL) continue;
-            if (mem.context == ContextType::MONITOR) continue;
-            if (mem.type == TypeTag::EVENT) continue;
+            if (mem.domain != MemoryDomain::BASE) continue;
+            if (mem.type != TypeTag::STRING) continue;
             if (snippet_count >= MAX_SNIPPETS) break;
             if (context_snippets.size() + mem.raw.size() > MAX_CONTEXT_CHARS) continue;
 
@@ -316,8 +313,7 @@ QuestionResult QuestionHandler::searchFieldMemory(const std::string& question) {
     
     LOG_DEBUG("QuestionHandler", "Searching field memory for: " + question);
     
-    // Search specialized domain knowledge
-    // Search all memories for relevant information from Events and Status
+    // Search specialized domain knowledge.
     auto keywords = extractKeywords(question);
     
     if (keywords.empty()) {
@@ -329,10 +325,7 @@ QuestionResult QuestionHandler::searchFieldMemory(const std::string& question) {
     for (const auto& keyword : keywords) {
         auto memories = g_memoryStorage.search(keyword, 10);
         for (const auto& mem : memories) {
-            // Look for informational memories (events, status updates, etc.)
-            if (mem.type == TypeTag::EVENT || 
-                mem.type == TypeTag::STATUS || 
-                mem.type == TypeTag::SUMMARY) {
+            if (mem.type == TypeTag::STRING) {
                 candidateMemories.push_back(mem);
             }
         }
@@ -355,25 +348,6 @@ QuestionResult QuestionHandler::searchFieldMemory(const std::string& question) {
         result.answer = bestMatch.raw;
         result.references.push_back(std::to_string(bestMatch.id));
         
-        // Add context based on memory type
-        std::string typeContext;
-        switch (bestMatch.type) {
-            case TypeTag::EVENT:
-                typeContext = " (from past events)";
-                break;
-            case TypeTag::STATUS:
-                typeContext = " (from system status)";
-                break;
-            case TypeTag::SUMMARY:
-                typeContext = " (from summaries)";
-                break;
-            default:
-                typeContext = "";
-        }
-        
-        if (!typeContext.empty()) {
-            result.answer += typeContext;
-        }
         
         LOG_DEBUG("QuestionHandler", "Found in field memory: " + std::to_string(bestMatch.id) + 
                   " (type: " + toString(bestMatch.type, TypeNames) + ")");
@@ -1010,8 +984,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
     UnifiedMemoryObject memory;
     memory.id = UnifiedMemoryObject::generateID();
     memory.timestamp = static_cast<uint64_t>(std::time(nullptr));
-    memory.domain = MemoryDomain::GRIM_INTERNAL;  // GRIM learned this
-    memory.intent = MemoryIntent::INFORM;
+    memory.domain = MemoryDomain::BASE;
     memory.context = ContextType::CONVERSATION;
     memory.confidence = result.confidence;
     
@@ -1024,7 +997,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         lowerQ.find("i'm ") != std::string::npos) {
         
         // Personal fact about user
-        memory.type = TypeTag::FACT;
+        memory.type = TypeTag::STRING;
         memory.raw = result.answer;
         memory.normalized = result.answer;
         
@@ -1038,7 +1011,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         
     } else if (result.source == AnswerSource::ExternalKnowledge) {
         // External knowledge learned
-        memory.type = TypeTag::FACT;
+        memory.type = TypeTag::STRING;
         memory.raw = "Q: " + question + "\nA: " + result.answer;
         memory.normalized = result.answer;
         
@@ -1053,7 +1026,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         
     } else if (result.source == AnswerSource::OSINT) {
         // OSINT result
-        memory.type = TypeTag::EVENT;  // OSINT lookups are events
+        memory.type = TypeTag::STRING;
         memory.raw = "OSINT: " + question + " -> " + result.answer;
         memory.normalized = result.answer;
         
@@ -1067,7 +1040,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         
     } else if (result.source == AnswerSource::Vision) {
         // Vision analysis
-        memory.type = TypeTag::EVENT;
+        memory.type = TypeTag::STRING;
         memory.raw = "Vision: " + result.answer;
         memory.normalized = result.answer;
         memory.tags.push_back("vision");

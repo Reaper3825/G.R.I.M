@@ -351,22 +351,28 @@ std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
 
     // Add context snapshot
     nlohmann::json ctx_json;
-    ctx_json["current_mood"]          = retrieval.context.currentMood;
-    ctx_json["conversation_depth"]    = retrieval.context.conversationDepth;
+    ctx_json["session_id"]            = retrieval.context.session_id;
+    ctx_json["turn_id"]               = retrieval.context.turn_id;
+    ctx_json["active_task_id"]        = retrieval.context.active_task_id;
+    ctx_json["current_mood"]          = retrieval.context.current_mood;
+    ctx_json["resource_pressure"]     = retrieval.context.resource_pressure;
+    ctx_json["latest_nlp_summary"]    = retrieval.context.latest_nlp_summary;
+    ctx_json["recent_turn_summaries"] = retrieval.context.recent_turn_summaries;
+    ctx_json["risk_tags"]             = retrieval.context.risk_tags;
     ctx_json["last_nlp_category"]     = retrieval.context.lastNlpCategory;
     ctx_json["consecutive_commands"]  = retrieval.context.consecutiveCommands;
-    ctx_json["recent_intents"]        = retrieval.context.recentIntents;
-    ctx_json["recent_commands"]       = retrieval.context.recentCommands;
     scope["context"] = std::move(ctx_json);
 
     // Add ranked memories
     nlohmann::json mem_array = nlohmann::json::array();
-    for (const auto& m : retrieval.memories) {
+    for (const auto& hit : retrieval.hits) {
+        const auto& m = hit.memory;
         nlohmann::json entry;
         entry["id"]         = m.id;
         entry["raw"]        = m.raw;
         entry["normalized"] = m.normalized;
         entry["confidence"] = m.confidence;
+        entry["score"]      = hit.score;
         entry["tags"]       = m.tags;
         mem_array.push_back(std::move(entry));
     }
