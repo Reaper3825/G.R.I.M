@@ -434,8 +434,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
-    ../../Shared/Forward/NumericAtomForward.cu
-    ../../Shared/Backward/NumericAtomBackward.cu
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
     ../../Shared/InferenceState/KvCacheState_GPU.cu
@@ -463,7 +461,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
     ../../Shared/Loss/ComputeLoss/ArgSelectorLoss.cu
-    ../../Shared/Loss/ComputeLoss/NumericAtomLoss.cu
     ../../Shared/Loss/ComputeLoss/CrossEntropyNLL.cu
     ../../Shared/Loss/LossSignals/LossSignals.cu
 )

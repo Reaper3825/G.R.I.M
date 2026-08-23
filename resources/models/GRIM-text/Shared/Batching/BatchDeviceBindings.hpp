@@ -69,7 +69,7 @@ struct BatchDeviceBindings {
     float*    d_atom_digit_slot_features = nullptr; // [atoms * digit_slots * kNumberSlotFeatureDim]
     float*    d_atom_global_features     = nullptr; // [atoms * kNumberGlobalFeatureDim]
 
-    // NumericAtom supervision, compact and aligned with d_atom_positions.
+    // Numeric auxiliary targets, compact and aligned with d_atom_positions.
     // Borrowed from BatchDeviceStorage and nullable when NumberEncoder is off.
     int*      d_number_aux_target_digits      = nullptr; // [atoms * digit_slots]
     int*      d_number_aux_target_pow10_index = nullptr; // [atoms * digit_slots]

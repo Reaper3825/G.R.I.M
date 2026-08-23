@@ -37,24 +37,8 @@ ExecutionBlock auxiliary losses assembled in `AutogradTraining.cu` must be added
 
 Argument selection is supervised directly from `BatchPayload.transition_targets`. The execution path is deterministic (`argmax`) and does not use a policy-gradient objective, reward baseline, or persistent loss-side state.
 
-Loss decomposition at the training boundary is explicit: `LossResult` / `BatchResult` carry `text_loss`, `selector_loss`, and `execution_loss`. Do not recreate a blended `aux_loss` bucket; it hides the real source of non-text loss and corrupts telemetry semantics. (The old `selector_loss` channel was deleted with the execution-entangled decode-time selector; new numeric supervision heads will add their own explicit channels.)
+Loss decomposition at the training boundary is explicit: `LossResult` / `BatchResult` carry `text_loss`, `selector_loss`, and `execution_loss`. Do not recreate a blended `aux_loss` bucket; it hides the real source of non-text loss and corrupts telemetry semantics.
 
 Why: text CE is already averaged over valid tokens. Raw execution sums make rows with more transition targets exert more loss pressure and make batch composition change the effective execution-loss weight.
-
-## NumericAtom compact supervision
-
-NumericAtom recurrent outputs are indexed by semantic decoder coordinates, never tokenizer rows:
-
-`decoder_row = atom * (digit_slots + 1) + step`
-
-The opening recurrent state `state_0` predicts one binary sign target (`1 = negative`, `0 = non-negative`) before any transition. Steps `[0, digit_count)` predict digit/place pairs and negative STOP targets; step `digit_count` predicts the positive STOP target. Sign is not a recurrent emission and must not be propagated backward through digit transitions. Inference selects sign once from `state_0`, then renders `-` before the canonical magnitude when negative.
-
-For $D$ valid digit steps and $A$ valid numeric atoms, NumericAtom loss normalization is shared by forward loss and backward:
-
-$$
-	ext{scale} = \frac{1}{3D + 2A}
-$$
-
-The three per-digit terms are digit NLL, place NLL, and continue BCE; each atom adds one sign BCE and one final STOP BCE. The extra decoder capacity slot has no recurrent transition cache. Token-span masks may suppress LM targets and determine whether an atom is unmasked in a training window, but tokenizer positions and surface-token counts must never define NumericAtom decoder-step indices.
 
 Execution entropy is monitoring-only, not added to `loss_tensor`. Its row loop must mirror execution supervision masking: skip inactive rows, skip rows with no unmasked real steps, fail loud if `computeEntropyLoss(...)` returns null data, and average by the number of monitored rows rather than `payload.batch_size`.

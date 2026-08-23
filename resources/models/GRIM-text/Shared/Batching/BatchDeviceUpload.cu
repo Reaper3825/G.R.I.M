@@ -304,9 +304,7 @@ BatchDeviceBindings uploadBatchToDevice(
     }
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    // Round 6: NumericAtom supervision. The loss boundary borrows these
-    // uploaded mirrors through BatchDeviceBindings and performs no allocation
-    // or H2D transfer of its own.
+    // Round 6: numeric auxiliary target mirrors.
     if (payload.number_aux_target_digit_slots > 0) {
         BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
             cached_number_target_digits_ptr,

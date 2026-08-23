@@ -18,7 +18,6 @@
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../TokenizerArtifacts/GrmtSequence.hpp"
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
@@ -661,7 +660,7 @@ BatchPayload buildBatchPayload(
                     r.atom_mask->data(),
                     seq_len * sizeof(uint8_t));
 
-        // Copy causal auxiliary-head ownership authored by sliding windows.
+        // Copy auxiliary-target eligibility authored by sliding windows.
         std::memcpy(&payload.atom_aux_target_mask[row_offset],
                     r.atom_aux_target_mask->data(),
                     seq_len * sizeof(uint8_t));
@@ -696,46 +695,8 @@ BatchPayload buildBatchPayload(
         number_aux_target_max_abs_pow10,
         "buildBatchPayload");
 
-    // NumericAtom exclusively owns every target after a typed numeric OPEN,
-    // including the matching typed CLOSE stop target. Token-span ownership is
-    // independent of the decoder's compact atom-step coordinates.
-    if (payload.number_aux_target_digit_slots > 0) {
-        for (int row = 0; row < payload.batch_size; ++row) {
-            bool inside_numeric_atom = false;
-            const int row_offset = row * payload.max_seq_len;
-            const int row_end = row_offset + payload.seq_lengths[static_cast<size_t>(row)];
-            for (int position = row_offset; position < row_end; ++position) {
-                const int token_id = payload.input_ids[static_cast<size_t>(position)];
-                if (Tokenizer::isAtomOpenTokenId(token_id)) {
-                    inside_numeric_atom = Tokenizer::isNumericAtom(
-                        Tokenizer::tokenIdToAtomType(token_id));
-                } else if (Tokenizer::isAtomCloseTokenId(token_id)) {
-                    inside_numeric_atom = false;
-                }
-                if (inside_numeric_atom &&
-                    payload.atom_aux_target_mask[static_cast<size_t>(position)] != 0) {
-                    payload.target_ids[static_cast<size_t>(position)] = -1;
-                }
-            }
-        }
-        payload.valid_tokens = 0;
-        std::fill(payload.valid_target_counts.begin(),
-                  payload.valid_target_counts.end(), 0);
-        for (int row = 0; row < payload.batch_size; ++row) {
-            const int row_offset = row * payload.max_seq_len;
-            const int row_end = row_offset + payload.seq_lengths[static_cast<size_t>(row)];
-            int valid_count = 0;
-            for (int position = row_offset; position < row_end; ++position) {
-                valid_count += payload.target_ids[static_cast<size_t>(position)] >= 0 ? 1 : 0;
-            }
-            payload.valid_target_counts[static_cast<size_t>(row)] = valid_count;
-            payload.valid_tokens += valid_count;
-        }
-    }
-
     // ═════════════════════════════════════════════════════════════════════════
-    // ARG bootstrap metadata does not alter LM target ownership. NumericAtom
-    // ownership was applied explicitly above.
+    // Auxiliary metadata does not alter LM target ownership.
     // ═════════════════════════════════════════════════════════════════════════
     payload.lm_valid_tokens = payload.valid_tokens;
 

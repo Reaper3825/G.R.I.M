@@ -366,7 +366,7 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RHO_NONATOM_ONLY: return "rho_nonatom_only";
         case MetricStream::OPTIMIZER_ITERATION: return "optimizer_iteration";
         case MetricStream::TEXT_LOSS: return "text_loss";
-        case MetricStream::NUMERIC_ATOM_LOSS: return "numeric_atom_loss";
+        case MetricStream::RESERVED_62: return "reserved_62";
         case MetricStream::SELECTOR_LOSS: return "selector_loss";
         case MetricStream::RESERVED_64: return "reserved_64";
         case MetricStream::RESERVED_65: return "reserved_65";

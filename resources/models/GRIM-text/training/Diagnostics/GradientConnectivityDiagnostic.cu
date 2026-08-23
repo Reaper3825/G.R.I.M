@@ -72,7 +72,6 @@ struct GradientSignalExpectation {
 
 struct GradientVerificationActivity {
     bool text_loss_active = false;
-    bool numeric_atom_loss_active = false;
 };
 
 GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
@@ -183,22 +182,7 @@ GradientDeltaProbe probeGradientDelta(
 GradientVerificationActivity detectActivity(const AutogradContext& ctx) {
     GradientVerificationActivity activity{};
     activity.text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
-    activity.numeric_atom_loss_active =
-        ctx.payload && ctx.payload->number_aux_target_valid_count > 0;
     return activity;
-}
-
-bool numericAtomTransitionReceivesSupervisedFutureLoss(
-    const Batching::BatchPayload* payload
-) {
-    if (!payload || payload->number_aux_target_digit_slots <= 0) return false;
-    for (size_t atom = 0; atom < payload->number_aux_target_valid.size(); ++atom) {
-        if (payload->number_aux_target_valid[atom] != 0 &&
-            payload->number_aux_target_digit_count[atom] > 0) {
-            return true;
-        }
-    }
-    return false;
 }
 
 }  // namespace
@@ -250,22 +234,6 @@ GradientVerificationSession::GradientVerificationSession(
                     0, "GradientVerificationSession");
                 capture(ffn.W2, "layer 0 ffnW2 (attn ablated)");
             }
-        }
-    }
-
-    if (activity.numeric_atom_loss_active) {
-        auto& numeric = ctx.parameter_registry->requireNumberEncoderParameters(
-            "GradientVerificationSession.NumericAtom");
-        capture(numeric.digit_emb, "numeric atom digit embedding");
-        capture(numeric.pow10_emb, "numeric atom pow10 embedding");
-        capture(numeric.numeric_atom_stop_classifier, "numeric atom stop classifier");
-        if (numericAtomTransitionReceivesSupervisedFutureLoss(ctx.payload)) {
-            capture(numeric.numeric_atom_Wz, "numeric atom Wz");
-            capture(numeric.numeric_atom_Uz, "numeric atom Uz");
-            capture(numeric.numeric_atom_Wr, "numeric atom Wr");
-            capture(numeric.numeric_atom_Ur, "numeric atom Ur");
-            capture(numeric.numeric_atom_Wh, "numeric atom Wh");
-            capture(numeric.numeric_atom_Uh, "numeric atom Uh");
         }
     }
 
@@ -426,23 +394,6 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
         requireAllocatedFinite(lm_head.final_rms_gamma, "final_rms_gamma");
     }
     if (lm_head.bias.data) requireAllocatedFinite(lm_head.bias, "lm_head_bias");
-
-    if (activity.numeric_atom_loss_active) {
-        auto& numeric = ctx.parameter_registry->requireNumberEncoderParameters(
-            "GradientVerificationSession::verify.NumericAtom");
-        requireReceivedGradient(numeric.digit_emb, "numeric atom digit embedding");
-        requireReceivedGradient(numeric.pow10_emb, "numeric atom pow10 embedding");
-        requireReceivedGradient(
-            numeric.numeric_atom_stop_classifier, "numeric atom stop classifier");
-        if (numericAtomTransitionReceivesSupervisedFutureLoss(ctx.payload)) {
-            requireReceivedGradient(numeric.numeric_atom_Wz, "numeric atom Wz");
-            requireReceivedGradient(numeric.numeric_atom_Uz, "numeric atom Uz");
-            requireReceivedGradient(numeric.numeric_atom_Wr, "numeric atom Wr");
-            requireReceivedGradient(numeric.numeric_atom_Ur, "numeric atom Ur");
-            requireReceivedGradient(numeric.numeric_atom_Wh, "numeric atom Wh");
-            requireReceivedGradient(numeric.numeric_atom_Uh, "numeric atom Uh");
-        }
-    }
 
     const int num_layers = model_hp.encoder_num_layers;
     if (static_cast<int>(ctx.parameter_registry->feedForwardParameterTensors().size()) != num_layers) {

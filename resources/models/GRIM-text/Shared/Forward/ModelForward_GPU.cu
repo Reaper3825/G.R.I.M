@@ -8,7 +8,6 @@
 #endif
 
 #include "ModelForward_GPU.hpp"
-#include "NumericAtomForward.hpp"
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
@@ -169,25 +168,6 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
     return detached;
 }
 
-GRIM::NumberEncoderParameterTensors detachNumericAtomParameters(
-    const GRIM::NumberEncoderParameterTensors& parameters,
-    cudaStream_t stream) {
-    GRIM::NumberEncoderParameterTensors detached{};
-    detached.digit_emb = parameters.digit_emb.detach(stream);
-    detached.pow10_emb = parameters.pow10_emb.detach(stream);
-    detached.numeric_atom_Wz = parameters.numeric_atom_Wz.detach(stream);
-    detached.numeric_atom_Uz = parameters.numeric_atom_Uz.detach(stream);
-    detached.numeric_atom_Wr = parameters.numeric_atom_Wr.detach(stream);
-    detached.numeric_atom_Ur = parameters.numeric_atom_Ur.detach(stream);
-    detached.numeric_atom_Wh = parameters.numeric_atom_Wh.detach(stream);
-    detached.numeric_atom_Uh = parameters.numeric_atom_Uh.detach(stream);
-    detached.numeric_atom_sign_classifier =
-        parameters.numeric_atom_sign_classifier.detach(stream);
-    detached.numeric_atom_stop_classifier =
-        parameters.numeric_atom_stop_classifier.detach(stream);
-    return detached;
-}
-
 }  // namespace
 
 GoalSpanView ModelForwardRequest::goalSpansForRow(std::size_t row) const {
@@ -271,7 +251,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
-    const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
@@ -539,38 +518,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs.encoder_output_tensor.is_leaf = false;
         forward_outputs.encoder_output_tensor.stream = request.stream;
         forward_outputs.encoder_output_tensor.grad_fn = last.grad_fn;
-    }
-
-    // The encoder output is the shared model hidden state. Typed auxiliary
-    // heads branch from it independently of the LM head and consume the
-    // complete BatchPayload semantic contract directly.
-    // The recurrent NumericAtom training forward consumes teacher-forced
-    // digit/pow10 targets. Inference owns a persistent per-open-atom state and
-    // enters through the dedicated NumericAtom inference step boundary.
-    if (number_encoder_hp.enabled && payload.number_aux_target_digit_slots > 0) {
-        const auto& numeric_parameters =
-            request.parameter_registry->requireNumberEncoderParameters(
-                "executeModelForward.NumericAtomForward");
-        const GRIM::NumberEncoderParameterTensors* numeric_parameter_ptr =
-            &numeric_parameters;
-        GRIM::NumberEncoderParameterTensors detached_numeric_parameters{};
-        if (!connect_parameter_graph) {
-            detached_numeric_parameters = detachNumericAtomParameters(
-                numeric_parameters,
-                request.stream);
-            numeric_parameter_ptr = &detached_numeric_parameters;
-        }
-        forward_outputs.numeric_atom = NumericAtomForward(
-            forward_outputs.encoder_output_tensor,
-            *numeric_parameter_ptr,
-            payload,
-            *bindings,
-            request.stream);
-        if (forward_outputs.numeric_atom.atom_count > 0 &&
-            !forward_outputs.numeric_atom.populated()) {
-            throw std::runtime_error(
-                "executeModelForward: NumericAtomForward returned empty logits");
-        }
     }
 
     const GRIM::LMHeadParameterTensors* lm_head_parameter_ptr = &lm_head_parameters;

@@ -535,7 +535,6 @@ void runOptimizerWindowFromEpoch(
         tel_input.optimizer_step    = optimizer_step;
         tel_input.should_step       = true;
         tel_input.text_loss         = result.text_loss;
-        tel_input.numeric_atom_loss = result.numeric_atom_loss;
         tel_input.selector_loss     = result.selector_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
         tel_input.batch_idx         = batch_idx;
@@ -864,7 +863,6 @@ BatchResult processBatch(
 
     result.loss = loss_result.loss_value;
     result.text_loss = loss_result.text_loss;
-    result.numeric_atom_loss = loss_result.numeric_atom_loss;
     result.selector_loss = loss_result.selector_loss;
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));

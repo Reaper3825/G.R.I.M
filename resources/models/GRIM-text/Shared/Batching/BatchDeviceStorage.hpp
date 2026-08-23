@@ -42,9 +42,8 @@ struct BatchDeviceStorage {
     Tensor atom_digit_slot_features_tensor; // float [1, max_tokens * digit_slots * kNumberSlotFeatureDim]
     Tensor atom_global_features_tensor;     // float [1, max_tokens * kNumberGlobalFeatureDim]
 
-    // NumericAtom supervision mirrors. These are populated once at the batch
-    // upload boundary and borrowed through BatchDeviceBindings; NumericAtom
-    // operations do not allocate or upload target data.
+    // Numeric auxiliary target mirrors populated at the batch upload boundary
+    // and exposed through BatchDeviceBindings.
     Tensor number_aux_target_digits_tensor;     // int32 [1, max_tokens * digit_slots]
     Tensor number_aux_target_pow10_index_tensor; // int32 [1, max_tokens * digit_slots]
     Tensor number_aux_target_digit_mask_tensor;  // uint8 [max_tokens * digit_slots]

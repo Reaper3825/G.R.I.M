@@ -10,10 +10,8 @@
 #include "AutogradTraining.hpp"
 
 #include "../Diagnostics/GradientConnectivityDiagnostic.hpp"
-#include "../../Shared/Backward/NumericAtomBackward.hpp"
 #include "../../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
-#include "../../Shared/Loss/ComputeLoss/NumericAtomLoss.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/VerboseLogging.hpp"
 
@@ -85,60 +83,20 @@ LossResult computeAutogradLoss(
         ctx.d_class_weights,
         ctx.stream);
 
-    constexpr float kNumericAtomLossWeight = 0.1f;
-    Tensor numeric_atom_loss;
-    if (payload.number_aux_target_valid_count > 0) {
-        numeric_atom_loss = autograd::NumericAtomLoss(
-            forward_outputs.numeric_atom,
-            payload,
-            *ctx.device_bindings,
-            ctx.stream);
-    }
-    if (numeric_atom_loss.data) {
-        if (loss_state.loss_tensor.requires_grad) {
-            auto& numeric_parameters =
-                ctx.parameter_registry->requireNumberEncoderParameters(
-                    "computeAutogradLoss.NumericAtomBackward");
-            autograd::attachNumericAtomBackward(
-                numeric_atom_loss,
-                forward_outputs.encoder_output_tensor,
-                numeric_parameters,
-                forward_outputs.numeric_atom,
-                ctx.stream);
-        }
-        Tensor weighted_numeric_atom_loss = autograd::scale_scalar(
-            numeric_atom_loss, kNumericAtomLossWeight, ctx.stream);
-        loss_state.loss_tensor = autograd::add(
-            loss_state.loss_tensor, weighted_numeric_atom_loss, ctx.stream);
-    }
-
     float total_loss = 0.0f;
-    float numeric_atom_loss_value = 0.0f;
     CUDA_CHECK(cudaMemcpyAsync(
         &total_loss, loss_state.loss_tensor.data, sizeof(float),
         cudaMemcpyDeviceToHost, ctx.stream));
-    if (numeric_atom_loss.data) {
-        CUDA_CHECK(cudaMemcpyAsync(
-            &numeric_atom_loss_value, numeric_atom_loss.data, sizeof(float),
-            cudaMemcpyDeviceToHost, ctx.stream));
-    }
     CUDA_CHECK(cudaStreamSynchronize(ctx.stream));
 
-    const float text_ce_loss =
-        total_loss - kNumericAtomLossWeight * numeric_atom_loss_value;
+    const float text_ce_loss = total_loss;
     if (!std::isfinite(text_ce_loss)) {
         throw std::runtime_error(
             "computeAutogradLoss: pure text CE is non-finite (" +
             std::to_string(text_ce_loss) + ")");
     }
-    if (!std::isfinite(numeric_atom_loss_value)) {
-        throw std::runtime_error(
-            "computeAutogradLoss: NumericAtom loss is non-finite (" +
-            std::to_string(numeric_atom_loss_value) + ")");
-    }
 
     result.text_loss = text_ce_loss;
-    result.numeric_atom_loss = numeric_atom_loss_value;
     result.valid_tokens = lm_valid_tokens;
     result.loss_value = total_loss;
     result.selector_loss = 0.0f;
@@ -151,7 +109,6 @@ LossResult computeAutogradLoss(
 
     AG_INFO("Loss computed: total=" << total_loss
             << " text_ce=" << text_ce_loss
-            << " numeric_atom=" << result.numeric_atom_loss
             << " selector=" << result.selector_loss
             << " lm_valid=" << lm_valid_tokens);
     result.success = true;
