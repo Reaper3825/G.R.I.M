@@ -138,16 +138,6 @@ std::string tokenTextForDisplay(const GrimTokenizer& tokenizer, int token_id) {
                              " is outside the GRMT/tokenizer vocab layout");
 }
 
-std::string decodeByteIds(const std::vector<int>& byte_ids) {
-    std::string decoded;
-    decoded.reserve(byte_ids.size());
-    for (const int token_id : byte_ids) {
-        decoded.push_back(static_cast<char>(GRIM::Tokenizer::tokenIdToByteOrThrow(
-            token_id, "tokenizer_self_test: byte atom alignment")));
-    }
-    return decoded;
-}
-
 std::string stripTypedAtomBoundaries(std::string text) {
     for (const std::string tag : {"<INT>", "</INT>", "<FLOAT>", "</FLOAT>"}) {
         for (std::size_t pos = text.find(tag);
@@ -398,44 +388,6 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
     
     printSubHeader(results.section_name);
 
-    // Test: byte-level B/E metadata removes authored labels and reuses the
-    // existing AtomTable entries as its only semantic payload references.
-    {
-        TestResult test;
-        test.name = "Byte atom B/E alignment";
-        test.input = "A<INT>42</INT>B<FLOAT>3.5</FLOAT>C";
-        const auto registry = GRIM::Tokenizer::Detector::makeDefaultRawTextDetectorRegistry();
-        const auto detections = registry.scan(
-            test.input,
-            GRIM::Tokenizer::Detector::RawTextDetectorOptions(false, false));
-        auto atom_build = GRIM::Tokenizer::createAtomTableFromRawTextDetections(
-            test.input, detections, "tokenizer_self_test: byte atom alignment");
-        std::vector<GRIM::Tokenizer::StructuralSpan> atoms;
-        atoms.reserve(atom_build.atom_tokens.size());
-        for (const auto& payload : atom_build.atom_tokens) {
-            atoms.push_back(payload.span);
-        }
-        const auto alignment = GRIM::Tokenizer::buildByteAtomAlignment(
-            test.input, atoms, *atom_build.atom_table,
-            "tokenizer_self_test: byte atom alignment");
-        test.output = decodeByteIds(alignment.byte_ids);
-        const std::uint32_t first_id = atoms.at(0).atom_entry_id;
-        const std::uint32_t second_id = atoms.at(1).atom_entry_id;
-        test.passed = test.output == "A42B3.5C" &&
-            alignment.begin_atom_entry_ids.size() == alignment.byte_ids.size() + 1 &&
-            alignment.end_atom_entry_ids.size() == alignment.byte_ids.size() + 1 &&
-            alignment.begin_atom_entry_ids.at(1) == first_id &&
-            alignment.end_atom_entry_ids.at(3) == first_id &&
-            alignment.begin_atom_entry_ids.at(4) == second_id &&
-            alignment.end_atom_entry_ids.at(7) == second_id;
-        test.details = test.passed
-            ? "De-annotated bytes and exclusive B/E slots are aligned"
-            : "Expected de-annotated byte text A42B3.5C with B/E slots [1,3] and [4,7]";
-        if (test.passed) results.passed++; else results.failed++;
-        results.tests.push_back(test);
-        printTestResult(test, verbose);
-    }
-    
     // Test: Empty input
     {
         TestResult test;

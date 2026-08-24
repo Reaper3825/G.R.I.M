@@ -22,7 +22,6 @@
 #pragma once
 
 #include "AtomTable.hpp"
-#include "ByteAtomAlignment.hpp"
 #include "Detectors/DetectorRegistry.hpp"
 #include "Detectors/StructuralSpan.hpp"
 #include "TokenLayout.hpp"
@@ -45,7 +44,6 @@ namespace Tokenizer {
 struct UniByteResult {
     std::vector<int> token_ids;
     std::vector<StructuralSpan> atoms;          // One source span per detected atom occurrence
-    ByteAtomAlignment byte_atom_alignment;      // De-annotated bytes + B/E AtomTable references
     std::vector<bool> is_byte_fallback;         // Per-token: was byte fallback used?
     std::vector<float> token_numeric_values;    // Opening-boundary auxiliary value (0 elsewhere)
     std::vector<uint32_t> token_atom_flags;     // Opening-boundary type flags (0 elsewhere)
@@ -93,11 +91,6 @@ struct UniByteResult {
                 std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
-        if (!atom_table) {
-            throw std::runtime_error(
-                std::string(caller) + ": UniByteResult.atom_table is null");
-        }
-        byte_atom_alignment.validate(atoms, *atom_table, caller);
         if (unigram_tokens + byte_tokens + numeric_tokens + atom_tokens != n) {
             throw std::runtime_error(
                 std::string(caller) + ": UniByteResult token count mismatch: unigram=" +
