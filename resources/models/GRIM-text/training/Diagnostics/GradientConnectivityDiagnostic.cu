@@ -181,7 +181,9 @@ GradientDeltaProbe probeGradientDelta(
 
 GradientVerificationActivity detectActivity(const AutogradContext& ctx) {
     GradientVerificationActivity activity{};
-    activity.text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
+    activity.text_loss_active = ctx.payload &&
+        (ctx.payload->lm_valid_tokens > 0 ||
+         ctx.payload->atom_insertion_valid_gap_count > 0);
     return activity;
 }
 
@@ -219,6 +221,20 @@ GradientVerificationSession::GradientVerificationSession(
         auto& lm_head = ctx.parameter_registry->requireLmHeadParameters(
             "GradientVerificationSession");
         capture(lm_head.weights, "lm_head weights");
+        if (model_hp.atom_insertion_enabled) {
+            auto& atom_boundary =
+                ctx.parameter_registry->requireAtomInsertionBoundaryParameters(
+                    "GradientVerificationSession");
+            capture(
+                atom_boundary.left_projection_weight,
+                "atom insertion left projection weight");
+            capture(
+                atom_boundary.right_projection_weight,
+                "atom insertion right projection weight");
+            capture(
+                atom_boundary.projection_bias,
+                "atom insertion projection bias");
+        }
         if (model_hp.encoder_num_layers > 0) {
             if (Ablation::kAttnDeliversParamGradient) {
                 auto& encoder = ctx.parameter_registry->requireEncodingLayerParameters(
@@ -394,6 +410,28 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
         requireAllocatedFinite(lm_head.final_rms_gamma, "final_rms_gamma");
     }
     if (lm_head.bias.data) requireAllocatedFinite(lm_head.bias, "lm_head_bias");
+
+    if (model_hp.atom_insertion_enabled) {
+        auto& atom_boundary =
+            ctx.parameter_registry->requireAtomInsertionBoundaryParameters(
+                "GradientVerificationSession::verify");
+        auto check_atom_parameter = [&](Tensor& tensor, const std::string& label) {
+            if (activity.text_loss_active) {
+                requireReceivedGradient(tensor, label);
+            } else {
+                requireAllocatedFinite(tensor, label);
+            }
+        };
+        check_atom_parameter(
+            atom_boundary.left_projection_weight,
+            "atom insertion left projection weight");
+        check_atom_parameter(
+            atom_boundary.right_projection_weight,
+            "atom insertion right projection weight");
+        check_atom_parameter(
+            atom_boundary.projection_bias,
+            "atom insertion projection bias");
+    }
 
     const int num_layers = model_hp.encoder_num_layers;
     if (static_cast<int>(ctx.parameter_registry->feedForwardParameterTensors().size()) != num_layers) {

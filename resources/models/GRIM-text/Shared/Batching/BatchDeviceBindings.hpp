@@ -50,7 +50,10 @@ struct BatchPayload;
 //
 struct BatchDeviceBindings {
     int*      d_input_ids       = nullptr;  // [payload.total_tokens]
-    int*      d_target_ids      = nullptr;  // [payload.total_tokens] for training payloads
+    const int* d_sequence_lengths = nullptr; // [payload.batch_size], valid tokens through EOS
+    int*      d_target_ids      = nullptr;  // [payload.total_tokens] for ordinary LM training
+    uint8_t*  d_atom_insertion_gap_targets = nullptr; // [gap_rows, ATOM_VOCAB_SIZE]
+    uint8_t*  d_atom_insertion_valid_gap_mask = nullptr; // [gap_rows]
     float*    d_numeric_values  = nullptr;  // [payload.total_tokens]
     uint8_t*  d_atom_mask       = nullptr;  // [payload.total_tokens] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [payload.total_tokens] (nullable when not allocated)

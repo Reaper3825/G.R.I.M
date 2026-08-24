@@ -84,7 +84,18 @@ void forwardLmHead(
     int rows_per_sequence = 0;
     int total_tokens = 0;
 
-    if (payload.isTraining()) {
+    if (hp.atom_insertion_enabled) {
+        batch_size = payload.batch_size;
+        rows_per_sequence = payload.max_seq_len - 1;
+        if (batch_size <= 0 || rows_per_sequence <= 0) {
+            throw std::runtime_error(
+                "forwardLmHead: non-causal gap rows require batch_size > 0 and "
+                "max_seq_len > 1, got batch_size=" +
+                std::to_string(batch_size) + " max_seq_len=" +
+                std::to_string(payload.max_seq_len));
+        }
+        total_tokens = batch_size * rows_per_sequence;
+    } else if (payload.isTraining()) {
         batch_size = hp.training_batch_size;
         rows_per_sequence = hp.training_rows_per_sequence;
         if (batch_size <= 0 || rows_per_sequence <= 0) {
@@ -98,11 +109,16 @@ void forwardLmHead(
         batch_size = payload.batch_size;
         rows_per_sequence = payload.max_seq_len;
         total_tokens = payload.total_tokens;
-        const int input_rows = input.shape.as_2d().rows;
-        if (input_rows != total_tokens) {
-            throw std::runtime_error("forwardLmHead: input rows (" + std::to_string(input_rows) +
-                                     ") != payload total_tokens (" + std::to_string(total_tokens) + ")");
-        }
+    }
+
+    if (!input.shape.is_2d_layout()) {
+        throw std::runtime_error("forwardLmHead: input must be a 2D tensor");
+    }
+    const int input_rows = input.shape.as_2d().rows;
+    if (input_rows != total_tokens) {
+        throw std::runtime_error(
+            "forwardLmHead: input rows (" + std::to_string(input_rows) +
+            ") != selected row geometry (" + std::to_string(total_tokens) + ")");
     }
 
     if (rows_per_sequence <= 0) {
@@ -273,7 +289,10 @@ void forwardLmHead(
     const Tensor* matmul_input = current_input;
     Tensor centered_hidden_for_pc1;
 
-    if (hp.center_hidden_states) {
+    const bool use_causal_prefix_centering =
+        hp.center_hidden_states && !hp.atom_insertion_enabled;
+
+    if (use_causal_prefix_centering) {
         if (rows_per_sequence <= 1) {
             throw std::runtime_error("forwardLmHead: center_hidden_states requires rows_per_sequence > 1; single-token decode cannot column-center hidden states without erasing the signal");
         }
@@ -295,7 +314,7 @@ void forwardLmHead(
         // Backward: grad_h += (I - gg^T/D) * grad_h̃  (accumulates into input grad)
         forward_outputs.lm_head_input_tensor = autograd::project_out_pc1(*matmul_input, hp.pc1_power_iters, stream);
         matmul_input = &forward_outputs.lm_head_input_tensor;
-    } else if (hp.center_hidden_states) {
+    } else if (use_causal_prefix_centering) {
         // Materialize the causal-prefix centered tensor so it survives this
         // scope (Issue #127) and callers can explicitly keep the live LM-input
         // handle inside the forward boundary.
@@ -363,7 +382,7 @@ void forwardLmHead(
         *matmul_input,
         *effective_weights,
         forward_outputs.logits_tensor,
-        hp.center_hidden_states,
+        use_causal_prefix_centering,
         hp.project_out_pc1,
         use_centered_weights,
         use_token_type_gate,

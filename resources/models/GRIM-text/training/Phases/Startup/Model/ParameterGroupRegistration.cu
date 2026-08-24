@@ -53,6 +53,58 @@ void emitInfo(const std::string& message) {
     GRIM::Logging::EmitModuleInfo(kRegistrationModule, message);
 }
 
+void validateAtomInsertionBoundaryParameterTensors(
+    const GRIM::AtomInsertionBoundaryParameterTensors& parameters,
+    const GRIM::HyperParameters::AtomInsertionBoundaryProjectionHP& hp,
+    const char* caller) {
+    if (!caller || caller[0] == '\0') {
+        throw std::runtime_error(
+            "validateAtomInsertionBoundaryParameterTensors: caller is empty");
+    }
+    if (!hp.enabled) {
+        throw std::runtime_error(
+            std::string(caller) + ": atom insertion is disabled");
+    }
+    if (hp.d_model <= 0) {
+        throw std::runtime_error(
+            std::string(caller) + ": d_model must be positive");
+    }
+    auto require_shape = [&](const Tensor& tensor,
+                             int rows,
+                             int cols,
+                             const char* name) {
+        tensor.require(caller);
+        if (!tensor.shape.is_2d_layout()) {
+            throw std::runtime_error(
+                std::string(caller) + ": " + name + " must be 2D");
+        }
+        const auto shape = tensor.shape.as_2d();
+        if (shape.rows != rows || shape.cols != cols) {
+            throw std::runtime_error(
+                std::string(caller) + ": " + name +
+                " shape mismatch; expected [" + std::to_string(rows) + "," +
+                std::to_string(cols) + "] got [" +
+                std::to_string(shape.rows) + "," +
+                std::to_string(shape.cols) + "]");
+        }
+    };
+    require_shape(
+        parameters.left_projection_weight,
+        hp.d_model,
+        hp.d_model,
+        "left_projection_weight");
+    require_shape(
+        parameters.right_projection_weight,
+        hp.d_model,
+        hp.d_model,
+        "right_projection_weight");
+    require_shape(
+        parameters.projection_bias,
+        1,
+        hp.d_model,
+        "projection_bias");
+}
+
 void validateOutputUnigramPrior(const OutputUnigramPriorView& prior,
                                 int expected_vocab_size,
                                 const char* caller) {
@@ -518,6 +570,29 @@ void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry
     ParameterRegistry::registerNumberEncoderParameters(
         number_encoder_tensor_owner,
         registrar);
+}
+
+void registerAtomInsertionBoundaryParameters(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    Registrar& registrar,
+    const GRIM::Config::AiConfigSnapshot& config) {
+    auto* parameters = parameter_registry.getAtomInsertionBoundaryParameters();
+    const auto atom_hp =
+        GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(config);
+    if (!atom_hp.enabled) {
+        if (parameters) {
+            throw std::runtime_error(
+                "[buildParameterGroups] atom insertion boundary parameter owner exists "
+                "while config.atom_insertion_enabled=false");
+        }
+        return;
+    }
+
+    auto& owner = requireLayer(
+        parameters,
+        "AtomInsertionBoundaryParameterTensors",
+        "registerAtomInsertionBoundaryParameters");
+    ParameterRegistry::registerAtomInsertionBoundaryParameters(owner, registrar);
 }
 
 void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -1201,6 +1276,75 @@ void initializeLmHeadParameterTensors(
              std::string(output_unigram_prior ? " with output unigram bias prior" : ""));
 }
 
+void initializeAtomInsertionBoundaryParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::AtomInsertionBoundaryProjectionHP& atom_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!atom_hp.enabled) {
+        if (parameter_registry.getAtomInsertionBoundaryParameters()) {
+            throw std::runtime_error(
+                "initializeAtomInsertionBoundaryParameterTensors: atom insertion "
+                "is disabled but the registry owner already exists");
+        }
+        return;
+    }
+    if (!init_stream) {
+        throw std::runtime_error(
+            "initializeAtomInsertionBoundaryParameterTensors: init_stream is NULL");
+    }
+    if (atom_hp.d_model <= 0) {
+        throw std::runtime_error(
+            "initializeAtomInsertionBoundaryParameterTensors: d_model must be positive, got " +
+            std::to_string(atom_hp.d_model));
+    }
+    if (parameter_registry.getAtomInsertionBoundaryParameters()) {
+        throw std::runtime_error(
+            "initializeAtomInsertionBoundaryParameterTensors: registry owner is already initialized");
+    }
+
+    auto parameters = std::make_unique<
+        GRIM::AtomInsertionBoundaryParameterTensors>();
+    auto make_xavier = [&](const char* name, std::uint64_t seed) -> GRIM::Tensor {
+        GRIM::Tensor tensor = GRIM::Tensor::zeros(
+            {atom_hp.d_model, atom_hp.d_model}, init_stream, name);
+        tensor.requires_grad_();
+        tensor.alloc_grad();
+        GRIM::Tensor::xavier_uniform_(tensor, seed, init_stream);
+        return tensor;
+    };
+
+    parameters->left_projection_weight = make_xavier(
+        "atom_insertion.left_projection_weight", weight_init_seed);
+    parameters->right_projection_weight = make_xavier(
+        "atom_insertion.right_projection_weight", weight_init_seed + 1);
+    parameters->projection_bias = GRIM::Tensor::zeros(
+        {1, atom_hp.d_model},
+        init_stream,
+        "atom_insertion.projection_bias");
+    parameters->projection_bias.requires_grad_();
+    parameters->projection_bias.alloc_grad();
+
+    validateAtomInsertionBoundaryParameterTensors(
+        *parameters,
+        atom_hp,
+        "initializeAtomInsertionBoundaryParameterTensors");
+
+    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(
+                "initializeAtomInsertionBoundaryParameterTensors: "
+                "cudaStreamSynchronize failed: ") +
+            cudaGetErrorString(sync_err));
+    }
+
+    parameter_registry.atom_insertion_boundary_parameters = std::move(parameters);
+    emitInfo(
+        "[initializeAtomInsertionBoundaryParameterTensors] Initialized registry-owned "
+        "atom boundary tensors (d_model=" + std::to_string(atom_hp.d_model) + ")");
+}
+
 void initializeExecutionBlockParameterTensors(
     ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const ExecutionBlockConstructionHP& execution_hp,
@@ -1585,6 +1729,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
 
     Registrar registrar(rebuilt_groups, config);
     registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
+    registerAtomInsertionBoundaryParameters(parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
     registerNumberEncoderParameters(parameter_registry, registrar, config);

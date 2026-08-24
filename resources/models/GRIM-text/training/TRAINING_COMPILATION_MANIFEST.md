@@ -844,7 +844,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - Backward: ALiBi slope D2H, saved LSE stats, grad_output BF16 sampling, dQ/dK/dV BF16 output sampling — all now gated
   - Issue #84 (preprocessing kernel): `flash_bwd_dot_do_o_kernel` launched before main backward kernel ✓
   - Issue #72 (GQA dK/dV): buffer allocation uses `num_heads` (handled in TensorContract_GPU.cu, not this file)
-  - Causal mask: enforced via `GRIM_FLASHATTN_CAUSAL_ONLY` compile-time define ✓
+  - Causal and non-causal kernels are both compiled; compiled model config selects the runtime mask (the ablation can still force non-causal) ✓
   - KEPT: Validation throws (Rule 20), FlashAttentionLog stride/shape logging (low cost), call counters
   - **Deleted: `Flash_Attention_Kernal_old.cu` (1888 lines) + `_old.hpp` (238 lines)** — confirmed dead (not in CMakeLists.txt, not included anywhere)
 

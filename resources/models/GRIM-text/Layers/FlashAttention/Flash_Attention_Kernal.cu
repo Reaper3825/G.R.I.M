@@ -403,6 +403,7 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
     const int num_m_block = (params.seqlen_q + Kernel_traits::kBlockM - 1) / Kernel_traits::kBlockM;
     dim3 grid(num_m_block, params.b, params.h);
     const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
+                            params.seqused_k == nullptr &&
                             (params.seqlen_k % Kernel_traits::kBlockN == 0) &&
                             (params.seqlen_q % Kernel_traits::kBlockM == 0);
     const bool is_even_K = params.d == Kernel_traits::kHeadDim;
@@ -460,6 +461,7 @@ void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
     dim3 grid_n(num_n_block, params.b, params.h);  // For seqK-parallel main kernel
     
     const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
+                            params.seqused_k == nullptr &&
                             (params.seqlen_q % Kernel_traits::kBlockM == 0) &&
                             (params.seqlen_k % Kernel_traits::kBlockN == 0);
     const bool is_even_K = params.d == Kernel_traits::kHeadDim;
@@ -534,6 +536,7 @@ void run_flash_splitkv_fwd_no_split(Flash_fwd_params& params, cudaStream_t strea
     // num_splits == 1: grid is (m_blocks, batch, heads).
     dim3 grid(num_m_block, params.b, params.h);
     const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
+                            params.seqused_k == nullptr &&
                             (params.seqlen_k % Kernel_traits::kBlockN == 0) &&
                             (params.seqlen_q % Kernel_traits::kBlockM == 0);
     const bool is_even_K = params.d == Kernel_traits::kHeadDim;
@@ -613,7 +616,8 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
                                 const float* alibi_slopes,
                                 int batch, int seqlen, int n_heads, int n_kv_heads, int head_dim,
                                 float softmax_scale, bool is_bf16, bool is_causal,
-                                float attention_dropout_p, uint64_t dropout_seed) {
+                                float attention_dropout_p, uint64_t dropout_seed,
+                                const int* sequence_lengths) {
     params = {};
     params.is_bf16 = is_bf16;
     params.q_ptr = const_cast<void*>(q);
@@ -662,7 +666,7 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
     params.cu_seqlens_q = nullptr;
     params.cu_seqlens_k = nullptr;
     params.leftpad_k = nullptr;
-    params.seqused_k = nullptr;
+    params.seqused_k = const_cast<int*>(sequence_lengths);
     params.blockmask = nullptr;
 
     params.knew_ptr = nullptr;
@@ -942,12 +946,13 @@ void init_bwd_params_contiguous(Flash_bwd_params& params,
                                 void* dq_accum, void* dsoftmax_sum,
                                 int batch, int seqlen, int n_heads, int n_kv_heads, int head_dim,
                                 float softmax_scale, bool is_bf16, bool is_causal,
-                                float attention_dropout_p, uint64_t dropout_seed) {
+                                float attention_dropout_p, uint64_t dropout_seed,
+                                const int* sequence_lengths) {
     init_fwd_params_contiguous(params, q, k, v,
                                const_cast<void*>(out), const_cast<void*>(softmax_lse),
                                alibi_slopes,
                                batch, seqlen, n_heads, n_kv_heads, head_dim, softmax_scale, is_bf16, is_causal,
-                               attention_dropout_p, dropout_seed);
+                               attention_dropout_p, dropout_seed, sequence_lengths);
     params.do_ptr = const_cast<void*>(dout);
     params.dq_ptr = dq;
     params.dk_ptr = dk;
@@ -1017,7 +1022,8 @@ extern "C" void flash_attn_fwd_ex(
     bool is_bf16,
     float attention_dropout_p,
     uint64_t dropout_seed,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    const int* sequence_lengths) {
     if (!q || !k || !v || !out || !softmax_lse) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_fwd received null pointer input");
         throw std::runtime_error("flash_attn_fwd: null pointer input");
@@ -1055,7 +1061,8 @@ extern "C" void flash_attn_fwd_ex(
                                                    alibi_slopes,
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
                                                    softmax_scale, is_bf16, causal,
-                                                   attention_dropout_p, dropout_seed);
+                                                   attention_dropout_p, dropout_seed,
+                                                   sequence_lengths);
 
     // FIX: Allocate rng_state when dropout is enabled.
     // The Dao FA kernel writes seed/offset to rng_state[0]/[1] when Is_dropout=true (flash_fwd_kernel.h:76-77).
@@ -1518,7 +1525,8 @@ extern "C" void flash_attn_bwd_ex(
     bool is_bf16,
     float attention_dropout_p,
     uint64_t dropout_seed,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    const int* sequence_lengths) {
     if (!q || !k || !v || !out || !dout || !softmax_lse || !dq || !dk || !dv) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_bwd received null pointer input");
         throw std::runtime_error("flash_attn_bwd: null pointer input");
@@ -1585,7 +1593,8 @@ extern "C" void flash_attn_bwd_ex(
                                                    dq_accum, dsoftmax_sum,
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
                                                    softmax_scale, is_bf16, causal,
-                                                   attention_dropout_p, dropout_seed);
+                                                   attention_dropout_p, dropout_seed,
+                                                   sequence_lengths);
 
     // FIX: Allocate rng_state when dropout is enabled.
     // The Dao FA backward kernel reads rng_state[0]/[1] to reproduce the dropout mask (flash_bwd_kernel.h:446).

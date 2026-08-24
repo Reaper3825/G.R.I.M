@@ -45,7 +45,7 @@ using ::GRIM::GPUGrimEncoder;
  */
 struct LossResult {
     float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
-    float text_loss = 0.0f;          // Pure next-token CE, before selector additions
+    float text_loss = 0.0f;          // Primary task loss (next-token CE or atom BCE)
     float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE)
     float weight_text = 1.0f;
     int valid_tokens = 0;
@@ -140,7 +140,12 @@ struct AutogradContext {
         if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
         if (!device_bindings) throw std::runtime_error(std::string(caller) + ": device_bindings is NULL");
         payload->validate(caller);
-        if (!device_bindings->d_input_ids || !device_bindings->d_target_ids || !device_bindings->d_token_to_slot_index_map) {
+        const bool supervision_uploaded = payload->EnableAtomIdentification
+            ? device_bindings->d_atom_insertion_gap_targets &&
+                device_bindings->d_atom_insertion_valid_gap_mask
+            : device_bindings->d_target_ids != nullptr;
+        if (!device_bindings->d_input_ids || !supervision_uploaded ||
+            !device_bindings->d_token_to_slot_index_map) {
             throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
         }
     }
@@ -176,7 +181,7 @@ AutogradContext initAutogradContext(
  * the caller-owned AutogradLossState for backward, and returns
  * the host-side LossResult consumed by Phase2.
  * 
- * Computes text CE plus the enabled selector auxiliary term,
+ * Computes the configured primary task loss (text CE or atom insertion BCE),
  * leaves the canonical loss Tensor on AutogradLossState for backward, and
  * returns decomposed host-side scalars to Phase2.
  * 

@@ -60,6 +60,10 @@ enum class BatchPayloadMode {
 struct BatchPayload {
     BatchPayloadMode mode = BatchPayloadMode::Training;
 
+    // Explicit task gate for the separate byte-gap atom-identification model.
+    // This is runtime payload state, not application-config wiring.
+    bool EnableAtomIdentification = false;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // IDENTITY (from BatchAssignment — carried through, not recomputed)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -77,9 +81,9 @@ struct BatchPayload {
     int total_tokens = 0;                    // batch_size * max_seq_len (includes padding)
     int actual_tokens = 0;                   // sum of real sequence lengths (no padding); telemetry/diagnostics token count owner
     int padding_tokens = 0;                  // total_tokens - actual_tokens
-    int valid_tokens = 0;                    // total unmasked targets (for loss mean reduction)
-    // LM-supervised token count. Training payloads keep this aligned with
-    // valid_tokens; inference payloads carry no loss targets.
+    int valid_tokens = 0;                    // active objective's unmasked rows
+    // LM-supervised token count. Ordinary LM training keeps this aligned with
+    // target_ids; atom-identification training keeps it at zero.
     int lm_valid_tokens = 0;
     int vocab_size = 0;                      // vocabulary size (for loss kernels + target validation)
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
@@ -97,6 +101,18 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════════
     std::vector<int> input_ids;              // [total_tokens] padded with Tokenizer::PAD_TOKEN_ID
     std::vector<int> target_ids;             // [total_tokens] padded with -1
+
+    // Atom-identification supervision uses a fixed gap rectangle with
+    // (max_seq_len - 1) rows per sequence. Targets are flattened as
+    // [batch_size * atom_insertion_gap_rows_per_sequence,
+    //  Tokenizer::ATOM_VOCAB_SIZE]. The mask excludes padding gaps and byte
+    // offsets inside UTF-8 code points. These channels are populated only when
+    // EnableAtomIdentification is true.
+    int atom_insertion_gap_rows_per_sequence = 0;
+    int atom_insertion_valid_gap_count = 0;
+    int atom_insertion_positive_label_count = 0;
+    std::vector<uint8_t> atom_insertion_gap_targets;
+    std::vector<uint8_t> atom_insertion_valid_gap_mask;
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = atom opening metadata anchor)
     // Causal prediction-row span mask authored by sliding-window construction.
@@ -194,7 +210,12 @@ struct BatchPayload {
                !atom_entry_ids.empty() ||
                !token_to_slot_index_map.empty();
     }
-    bool hasTrainingTargets() const { return mode == BatchPayloadMode::Training; }
+    bool hasTrainingTargets() const {
+        return mode == BatchPayloadMode::Training && !EnableAtomIdentification;
+    }
+    int atomInsertionGapRowCount() const {
+        return batch_size * atom_insertion_gap_rows_per_sequence;
+    }
 
     const char* modeName() const {
         switch (mode) {
@@ -232,7 +253,7 @@ struct BatchPayload {
                 std::string(caller) + ": BatchPayload.valid_tokens=" +
                 std::to_string(valid_tokens) + " (must be > 0 — batch has no trainable targets)");
         }
-        if (isTraining() && lm_valid_tokens <= 0) {
+        if (isTraining() && !EnableAtomIdentification && lm_valid_tokens <= 0) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.lm_valid_tokens=" +
                 std::to_string(lm_valid_tokens) +
@@ -259,7 +280,7 @@ struct BatchPayload {
                 std::to_string(seq_lengths.size()) + " != batch_size=" +
                 std::to_string(batch_size));
         }
-        if (isTraining() &&
+        if (isTraining() && !EnableAtomIdentification &&
             (static_cast<int>(prompt_lengths.size()) != batch_size ||
              static_cast<int>(prompt_end_positions.size()) != batch_size)) {
             throw std::runtime_error(
@@ -353,6 +374,136 @@ struct BatchPayload {
                         " (must be -1; inference must not smuggle supervision)");
                 }
             }
+        }
+        if (EnableAtomIdentification) {
+            if (max_seq_len < 2) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom identification requires BOS/EOS input rows");
+            }
+            const int expected_gap_rows_per_sequence = max_seq_len - 1;
+            if (atom_insertion_gap_rows_per_sequence !=
+                expected_gap_rows_per_sequence) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom_insertion_gap_rows_per_sequence=" +
+                    std::to_string(atom_insertion_gap_rows_per_sequence) +
+                    " != max_seq_len - 1=" +
+                    std::to_string(expected_gap_rows_per_sequence));
+            }
+            const int gap_row_count = atomInsertionGapRowCount();
+            if (static_cast<int>(atom_insertion_valid_gap_mask.size()) !=
+                gap_row_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom insertion gap-mask size mismatch");
+            }
+            const std::size_t expected_target_count = isTraining()
+                ? static_cast<std::size_t>(gap_row_count) *
+                    GRIM::Tokenizer::ATOM_VOCAB_SIZE
+                : 0;
+            if (atom_insertion_gap_targets.size() != expected_target_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom insertion target size mismatch");
+            }
+
+            int realized_valid_gap_count = 0;
+            int realized_positive_count = 0;
+            for (int row = 0; row < batch_size; ++row) {
+                const int sequence_length =
+                    seq_lengths[static_cast<std::size_t>(row)];
+                if (sequence_length < 2) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": atom insertion sequence lacks BOS/EOS at row=" +
+                        std::to_string(row));
+                }
+                const int real_gap_count = sequence_length - 1;
+                for (int gap = 0;
+                     gap < atom_insertion_gap_rows_per_sequence;
+                     ++gap) {
+                    const int flat_gap =
+                        row * atom_insertion_gap_rows_per_sequence + gap;
+                    const uint8_t mask = atom_insertion_valid_gap_mask[
+                        static_cast<std::size_t>(flat_gap)];
+                    if (mask > 1) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": atom insertion gap mask must be binary");
+                    }
+                    if (gap >= real_gap_count && mask != 0) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": atom insertion mask enables a padding gap");
+                    }
+                    if (mask != 0) {
+                        ++realized_valid_gap_count;
+                    }
+                    if (!isTraining()) {
+                        continue;
+                    }
+                    for (int delimiter_class = 0;
+                         delimiter_class < GRIM::Tokenizer::ATOM_VOCAB_SIZE;
+                         ++delimiter_class) {
+                        const std::size_t target_index =
+                            static_cast<std::size_t>(flat_gap) *
+                                GRIM::Tokenizer::ATOM_VOCAB_SIZE +
+                            delimiter_class;
+                        const uint8_t target =
+                            atom_insertion_gap_targets[target_index];
+                        if (target > 1) {
+                            throw std::runtime_error(
+                                std::string(caller) +
+                                ": atom insertion target must be binary");
+                        }
+                        if (mask == 0 && target != 0) {
+                            throw std::runtime_error(
+                                std::string(caller) +
+                                ": masked atom insertion gap has a target");
+                        }
+                        if (target != 0) {
+                            ++realized_positive_count;
+                        }
+                    }
+                }
+            }
+            if (realized_valid_gap_count != atom_insertion_valid_gap_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom insertion valid-gap count mismatch");
+            }
+            if (isTraining() &&
+                realized_positive_count != atom_insertion_positive_label_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom insertion positive-label count mismatch");
+            }
+            if (isInference() && atom_insertion_positive_label_count != 0) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": inference atom payload must not carry positive-label telemetry");
+            }
+            if (isTraining() &&
+                valid_tokens != atom_insertion_valid_gap_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": valid_tokens must equal atom insertion valid-gap count");
+            }
+            if (lm_valid_tokens != 0) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom identification payload must not carry LM targets");
+            }
+        } else if (atom_insertion_gap_rows_per_sequence != 0 ||
+                   atom_insertion_valid_gap_count != 0 ||
+                   atom_insertion_positive_label_count != 0 ||
+                   !atom_insertion_gap_targets.empty() ||
+                   !atom_insertion_valid_gap_mask.empty()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": atom insertion channels populated while "
+                "EnableAtomIdentification is false");
         }
         // Cross-check: sum of valid_target_counts must equal valid_tokens
         if (isTraining()) {
@@ -626,7 +777,14 @@ struct BatchPayload {
     // GPU TRANSFER GEOMETRY (precomputed byte sizes for cudaMemcpy callers)
     // ═══════════════════════════════════════════════════════════════════════════
     size_t inputIdBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int); }
+    size_t sequenceLengthBytes() const { return seq_lengths.size() * sizeof(int); }
     size_t targetIdBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(int); }
+    size_t atomInsertionGapTargetBytes() const {
+        return atom_insertion_gap_targets.size() * sizeof(uint8_t);
+    }
+    size_t atomInsertionGapMaskBytes() const {
+        return atom_insertion_valid_gap_mask.size() * sizeof(uint8_t);
+    }
     size_t numericValueBytes() const { return static_cast<size_t>(total_tokens) * sizeof(float); }
     size_t atomMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
     size_t atomFlagBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint32_t); }
@@ -635,7 +793,11 @@ struct BatchPayload {
     size_t atomTypeBytes()     const { return atom_types.size() * sizeof(int); }
     int authoredAtomCount() const { return static_cast<int>(atom_positions.size()); }
     size_t totalTransferBytes() const {
-        return inputIdBytes() + targetIdBytes() + numericValueBytes() +
+        return inputIdBytes() +
+               sequenceLengthBytes() +
+               (hasTrainingTargets() ? targetIdBytes() : 0) +
+               atomInsertionGapTargetBytes() +
+               atomInsertionGapMaskBytes() + numericValueBytes() +
                atomMaskBytes() + atomFlagBytes() + slotMapBytes() +
                atomPositionBytes() + atomTypeBytes();
     }

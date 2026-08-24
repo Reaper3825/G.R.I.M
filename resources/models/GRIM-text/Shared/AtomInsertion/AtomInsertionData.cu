@@ -5,12 +5,14 @@
 
 #include "AtomInsertionData.hpp"
 
+#include "../Batching/BatchPayload.hpp"
 #include "../UnigramByte/AtomTable.hpp"
 #include "../UnigramByte/Detectors/DetectorRegistry.hpp"
 #include "../UnigramByte/TextUtils.hpp"
 
 #include <stdexcept>
 #include <string>
+#include <limits>
 
 namespace GRIM::AtomInsertion {
 
@@ -159,12 +161,24 @@ void AtomInsertionExample::validate(const char* caller) const {
     const std::string prefix = requireCaller(caller);
     const std::size_t byte_count = plain_text_bytes.size();
     const std::size_t expected_gap_count = byte_count + 1;
+    const std::size_t expected_input_count = byte_count + 2;
 
-    if (byte_token_ids.size() != byte_count) {
+    if (!EnableAtomIdentification) {
         throw std::runtime_error(
-            prefix + ": byte_token_ids.size()=" +
-            std::to_string(byte_token_ids.size()) +
-            " != plain_text_bytes.size()=" + std::to_string(byte_count));
+            prefix + ": EnableAtomIdentification is false for an "
+            "atom-identification example");
+    }
+    if (transformer_input_ids.size() != expected_input_count) {
+        throw std::runtime_error(
+            prefix + ": transformer_input_ids.size()=" +
+            std::to_string(transformer_input_ids.size()) +
+            " != byte count + BOS + EOS=" +
+            std::to_string(expected_input_count));
+    }
+    if (transformer_input_ids.front() != Tokenizer::BOS_TOKEN_ID ||
+        transformer_input_ids.back() != Tokenizer::EOS_TOKEN_ID) {
+        throw std::runtime_error(
+            prefix + ": transformer input must begin with BOS and end with EOS");
     }
     if (gap_delimiter_targets.size() != expected_gap_count) {
         throw std::runtime_error(
@@ -183,10 +197,12 @@ void AtomInsertionExample::validate(const char* caller) const {
         const auto byte_value = static_cast<std::uint8_t>(
             static_cast<unsigned char>(plain_text_bytes[index]));
         const int expected_id = Tokenizer::byteToTokenId(byte_value);
-        if (byte_token_ids[index] != expected_id) {
+        const int actual_id = transformer_input_ids[index + 1];
+        if (actual_id != expected_id) {
             throw std::runtime_error(
-                prefix + ": byte_token_ids[" + std::to_string(index) +
-                "]=" + std::to_string(byte_token_ids[index]) +
+                prefix + ": transformer_input_ids[" +
+                std::to_string(index + 1) + "]=" +
+                std::to_string(actual_id) +
                 " does not encode source byte=" +
                 std::to_string(static_cast<unsigned int>(byte_value)));
         }
@@ -253,8 +269,14 @@ void AtomInsertionExample::validate(const char* caller) const {
 
 AtomInsertionExample buildAtomInsertionExample(
     std::string_view annotated_source,
+    bool EnableAtomIdentification,
     const char* caller) {
     const std::string prefix = requireCaller(caller);
+    if (!EnableAtomIdentification) {
+        throw std::runtime_error(
+            prefix + ": EnableAtomIdentification is false; the "
+            "atom-identification data path must not run");
+    }
 
     const Tokenizer::Detector::DetectorRegistry registry =
         Tokenizer::Detector::makeDefaultRawTextDetectorRegistry();
@@ -264,6 +286,7 @@ AtomInsertionExample buildAtomInsertionExample(
             Tokenizer::Detector::RawTextDetectorOptions(false, false));
 
     AtomInsertionExample example;
+    example.EnableAtomIdentification = EnableAtomIdentification;
     example.plain_text_bytes.reserve(annotated_source.size());
     example.spans.reserve(detections.size());
 
@@ -310,6 +333,27 @@ AtomInsertionExample buildAtomInsertionExample(
             throw std::runtime_error(
                 prefix + ": atom content is not contained between its delimiters");
         }
+        if (detection.atom_type == Tokenizer::AtomType::ATOM_STRING) {
+            if (content_begin != inner_begin || content_end != inner_end) {
+                throw std::runtime_error(
+                    prefix + ": STRING content must exactly equal its delimiter interior");
+            }
+        } else {
+            for (std::size_t index = inner_begin; index < content_begin; ++index) {
+                if (!Tokenizer::isWhitespaceASCII(
+                        static_cast<unsigned char>(annotated_source[index]))) {
+                    throw std::runtime_error(
+                        prefix + ": non-whitespace bytes precede trimmed atom content");
+                }
+            }
+            for (std::size_t index = content_end; index < inner_end; ++index) {
+                if (!Tokenizer::isWhitespaceASCII(
+                        static_cast<unsigned char>(annotated_source[index]))) {
+                    throw std::runtime_error(
+                        prefix + ": non-whitespace bytes follow trimmed atom content");
+                }
+            }
+        }
         validateSpanContent(annotated_source, detection, prefix);
 
         appendExactBytes(
@@ -343,12 +387,15 @@ AtomInsertionExample buildAtomInsertionExample(
         example.plain_text_bytes,
         prefix);
 
-    example.byte_token_ids.reserve(example.plain_text_bytes.size());
+    example.transformer_input_ids.reserve(example.plain_text_bytes.size() + 2);
+    example.transformer_input_ids.push_back(Tokenizer::BOS_TOKEN_ID);
     for (const char value : example.plain_text_bytes) {
         const auto byte_value = static_cast<std::uint8_t>(
             static_cast<unsigned char>(value));
-        example.byte_token_ids.push_back(Tokenizer::byteToTokenId(byte_value));
+        example.transformer_input_ids.push_back(
+            Tokenizer::byteToTokenId(byte_value));
     }
+    example.transformer_input_ids.push_back(Tokenizer::EOS_TOKEN_ID);
 
     example.gap_delimiter_targets.resize(
         example.plain_text_bytes.size() + 1);
@@ -369,6 +416,237 @@ AtomInsertionExample buildAtomInsertionExample(
         buildValidUtf8GapMask(example.plain_text_bytes, prefix);
     example.validate(caller);
     return example;
+}
+
+Batching::BatchPayload buildAtomInsertionBatchPayload(
+    const std::vector<AtomInsertionExample>& examples,
+    int vocab_size,
+    int max_seq_len,
+    bool EnableAtomIdentification,
+    const char* caller) {
+    const std::string prefix = requireCaller(caller);
+    if (!EnableAtomIdentification) {
+        throw std::runtime_error(
+            prefix + ": EnableAtomIdentification is false; the atom "
+            "batch path must not run");
+    }
+    if (examples.empty()) {
+        throw std::runtime_error(prefix + ": atom batch is empty");
+    }
+    if (examples.size() >
+        static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(prefix + ": atom batch size exceeds int range");
+    }
+    if (max_seq_len < 2) {
+        throw std::runtime_error(
+            prefix + ": max_seq_len must include at least BOS and EOS");
+    }
+    if (vocab_size < Tokenizer::UNIGRAM_VOCAB_OFFSET) {
+        throw std::runtime_error(
+            prefix + ": vocab_size does not contain the atom delimiter range");
+    }
+
+    const int batch_size = static_cast<int>(examples.size());
+    if (batch_size > std::numeric_limits<int>::max() / max_seq_len) {
+        throw std::runtime_error(prefix + ": atom batch token count overflows int");
+    }
+    const int total_tokens = batch_size * max_seq_len;
+    const int gap_rows_per_sequence = max_seq_len - 1;
+    const int total_gap_rows = batch_size * gap_rows_per_sequence;
+
+    Batching::BatchPayload payload;
+    payload.mode = Batching::BatchPayloadMode::Training;
+    payload.EnableAtomIdentification = EnableAtomIdentification;
+    payload.batch_size = batch_size;
+    payload.max_seq_len = max_seq_len;
+    payload.total_tokens = total_tokens;
+    payload.vocab_size = vocab_size;
+    payload.seq_ids.resize(static_cast<std::size_t>(batch_size));
+    payload.seq_lengths.resize(static_cast<std::size_t>(batch_size));
+    payload.valid_target_counts.resize(static_cast<std::size_t>(batch_size));
+    // Prompt coordinates belong to the future gap-aware pooling design and are
+    // intentionally absent for the standalone atom task.
+    payload.prompt_lengths.clear();
+    payload.prompt_end_positions.clear();
+    payload.goals.assign(static_cast<std::size_t>(batch_size), nullptr);
+    payload.seq_atom_tables.assign(static_cast<std::size_t>(batch_size), nullptr);
+
+    payload.input_ids.assign(
+        static_cast<std::size_t>(total_tokens),
+        Tokenizer::PAD_TOKEN_ID);
+    payload.target_ids.clear();
+    payload.numeric_values.assign(static_cast<std::size_t>(total_tokens), 0.0f);
+    payload.atom_mask.assign(static_cast<std::size_t>(total_tokens), 0);
+    payload.atom_aux_target_mask.assign(
+        static_cast<std::size_t>(total_tokens), 0);
+    payload.atom_flags.assign(static_cast<std::size_t>(total_tokens), 0);
+    payload.atom_entry_ids.assign(
+        static_cast<std::size_t>(total_tokens),
+        Tokenizer::kAtomEntryNone);
+    payload.token_to_slot_index_map.assign(
+        static_cast<std::size_t>(total_tokens), -1);
+
+    payload.atom_insertion_gap_rows_per_sequence = gap_rows_per_sequence;
+    payload.atom_insertion_gap_targets.assign(
+        static_cast<std::size_t>(total_gap_rows) * kDelimiterClassCount,
+        0);
+    payload.atom_insertion_valid_gap_mask.assign(
+        static_cast<std::size_t>(total_gap_rows), 0);
+
+    for (int row = 0; row < batch_size; ++row) {
+        const AtomInsertionExample& example =
+            examples[static_cast<std::size_t>(row)];
+        example.validate(caller);
+        if (!example.EnableAtomIdentification) {
+            throw std::runtime_error(
+                prefix + ": disabled atom example at row=" +
+                std::to_string(row));
+        }
+        if (example.transformerInputSize() >
+            static_cast<std::size_t>(max_seq_len)) {
+            throw std::runtime_error(
+                prefix + ": transformer input exceeds max_seq_len at row=" +
+                std::to_string(row));
+        }
+
+        const int sequence_length =
+            static_cast<int>(example.transformerInputSize());
+        const int real_gap_count = static_cast<int>(example.gapSize());
+        if (real_gap_count != sequence_length - 1) {
+            throw std::runtime_error(
+                prefix + ": example input/gap geometry mismatch at row=" +
+                std::to_string(row));
+        }
+
+        payload.seq_ids[static_cast<std::size_t>(row)] =
+            static_cast<std::uint32_t>(row);
+        payload.seq_lengths[static_cast<std::size_t>(row)] = sequence_length;
+        payload.actual_tokens += sequence_length;
+
+        const std::size_t token_row_offset =
+            static_cast<std::size_t>(row) * max_seq_len;
+        for (int token = 0; token < sequence_length; ++token) {
+            payload.input_ids[token_row_offset + token] =
+                example.transformer_input_ids[static_cast<std::size_t>(token)];
+        }
+
+        const std::size_t gap_row_offset =
+            static_cast<std::size_t>(row) * gap_rows_per_sequence;
+        int row_valid_gap_count = 0;
+        for (int gap = 0; gap < real_gap_count; ++gap) {
+            const std::size_t flat_gap = gap_row_offset + gap;
+            const uint8_t valid =
+                example.valid_utf8_gaps[static_cast<std::size_t>(gap)];
+            payload.atom_insertion_valid_gap_mask[flat_gap] = valid;
+            if (valid != 0) {
+                ++row_valid_gap_count;
+                ++payload.atom_insertion_valid_gap_count;
+            }
+            for (std::size_t delimiter_class = 0;
+                 delimiter_class < kDelimiterClassCount;
+                 ++delimiter_class) {
+                const uint8_t target = example.gap_delimiter_targets[
+                    static_cast<std::size_t>(gap)][delimiter_class];
+                payload.atom_insertion_gap_targets[
+                    flat_gap * kDelimiterClassCount + delimiter_class] = target;
+                if (target != 0) {
+                    ++payload.atom_insertion_positive_label_count;
+                }
+            }
+        }
+        payload.valid_target_counts[static_cast<std::size_t>(row)] =
+            row_valid_gap_count;
+    }
+
+    payload.padding_tokens = payload.total_tokens - payload.actual_tokens;
+    payload.valid_tokens = payload.atom_insertion_valid_gap_count;
+    payload.lm_valid_tokens = 0;
+    payload.fits_in_cache = true;
+    payload.validate(caller);
+    return payload;
+}
+
+Batching::BatchPayload buildAtomInsertionInferencePayload(
+    std::string_view plain_text_bytes,
+    int vocab_size,
+    int max_sequence_capacity,
+    const char* caller) {
+    const std::string prefix = requireCaller(caller);
+    if (max_sequence_capacity < 2) {
+        throw std::runtime_error(
+            prefix + ": max_sequence_capacity must include BOS and EOS");
+    }
+    if (vocab_size < Tokenizer::UNIGRAM_VOCAB_OFFSET) {
+        throw std::runtime_error(
+            prefix + ": vocab_size does not contain the atom delimiter range");
+    }
+    if (plain_text_bytes.size() >
+        static_cast<std::size_t>(max_sequence_capacity - 2)) {
+        throw std::runtime_error(
+            prefix + ": input byte count=" +
+            std::to_string(plain_text_bytes.size()) +
+            " exceeds model byte capacity=" +
+            std::to_string(max_sequence_capacity - 2));
+    }
+    if (plain_text_bytes.size() >
+        static_cast<std::size_t>(std::numeric_limits<int>::max() - 2)) {
+        throw std::runtime_error(prefix + ": input byte count exceeds int range");
+    }
+
+    const std::string bytes(plain_text_bytes);
+    const int sequence_length = static_cast<int>(bytes.size()) + 2;
+    const int gap_count = sequence_length - 1;
+
+    Batching::BatchPayload payload;
+    payload.mode = Batching::BatchPayloadMode::InferencePrefill;
+    payload.EnableAtomIdentification = true;
+    payload.batch_size = 1;
+    payload.max_seq_len = sequence_length;
+    payload.total_tokens = sequence_length;
+    payload.actual_tokens = sequence_length;
+    payload.padding_tokens = 0;
+    payload.valid_tokens = 0;
+    payload.lm_valid_tokens = 0;
+    payload.vocab_size = vocab_size;
+    payload.seq_ids.assign(1, 0);
+    payload.seq_lengths.assign(1, sequence_length);
+    payload.valid_target_counts.assign(1, 0);
+    payload.fits_in_cache = true;
+
+    payload.input_ids.reserve(static_cast<std::size_t>(sequence_length));
+    payload.input_ids.push_back(Tokenizer::BOS_TOKEN_ID);
+    for (const char value : bytes) {
+        payload.input_ids.push_back(Tokenizer::byteToTokenId(
+            static_cast<std::uint8_t>(static_cast<unsigned char>(value))));
+    }
+    payload.input_ids.push_back(Tokenizer::EOS_TOKEN_ID);
+
+    payload.numeric_values.assign(
+        static_cast<std::size_t>(sequence_length), 0.0f);
+    payload.atom_mask.assign(
+        static_cast<std::size_t>(sequence_length), 0);
+    payload.atom_flags.assign(
+        static_cast<std::size_t>(sequence_length), 0);
+    payload.atom_entry_ids.assign(
+        static_cast<std::size_t>(sequence_length), Tokenizer::kAtomEntryNone);
+    payload.token_to_slot_index_map.assign(
+        static_cast<std::size_t>(sequence_length), -1);
+    payload.seq_atom_tables.assign(1, nullptr);
+
+    payload.atom_insertion_gap_rows_per_sequence = gap_count;
+    payload.atom_insertion_valid_gap_mask =
+        buildValidUtf8GapMask(bytes, prefix);
+    for (const std::uint8_t valid :
+         payload.atom_insertion_valid_gap_mask) {
+        if (valid != 0) {
+            ++payload.atom_insertion_valid_gap_count;
+        }
+    }
+    payload.atom_insertion_positive_label_count = 0;
+    payload.atom_insertion_gap_targets.clear();
+
+    payload.validate(caller);
+    return payload;
 }
 
 } // namespace GRIM::AtomInsertion

@@ -38,6 +38,10 @@ checkpoint compatibility metadata, represented separately by
 input must be the model object itself; `ai_config.json` and `training.config`
 wrappers are not accepted.
 
+`atom_insertion_enabled` selects the separate full-context byte-gap model. It
+requires `causal_mask=false` and `max_seq_len > 1`; ordinary causal LM presets
+must author it as `false`.
+
 Artifact integrity is source-independent: SHA-256 and model-compatibility
 xxHash64 are computed over the serialized artifact after normalizing all three
 integrity values to zero. A loader can therefore verify a `.grimcfg` without

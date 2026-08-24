@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -86,6 +87,19 @@ BatchDeviceBindings uploadBatchToDevice(
 
     const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
     const BatchDeviceStorage& storage = requireDeviceStorage(payload, "uploadBatchToDevice");
+    if (payload.batch_size > storage.batch_size_capacity) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: payload batch size exceeds sequence-length capacity");
+    }
+
+    const size_t atom_gap_rows = payload.EnableAtomIdentification
+        ? static_cast<size_t>(payload.atomInsertionGapRowCount())
+        : 0;
+    if (atom_gap_rows >
+        static_cast<size_t>(storage.max_atom_insertion_gap_rows_capacity)) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: atom insertion gap rows exceed device capacity");
+    }
 
     if (payload.isTraining()) {
         if (payload.batch_size != cfg_batch_size) {
@@ -138,6 +152,16 @@ BatchDeviceBindings uploadBatchToDevice(
             " exceeds token-id buffer capacity=" + std::to_string(token_capacity));
     }
 
+    const auto& sequence_lengths_shape = storage.sequence_lengths_tensor.shape.require(
+        "uploadBatchToDevice sequence_lengths_tensor");
+    if (!sequence_lengths_shape.is_2d_layout() ||
+        sequence_lengths_shape.as_2d().rows != 1 ||
+        sequence_lengths_shape.as_2d().cols < payload.batch_size) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: BatchDeviceStorage.sequence_lengths_tensor "
+            "must have shape [1, batch_capacity]");
+    }
+
     if (payload.hasTrainingTargets()) {
         const auto& targets_shape = storage.target_ids_tensor.shape.require("uploadBatchToDevice target_ids_tensor");
         if (!targets_shape.is_2d_layout()) {
@@ -155,11 +179,35 @@ BatchDeviceBindings uploadBatchToDevice(
     if (!cached_token_ids_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.input_ids_tensor.data is NULL");
     }
+    int* cached_sequence_lengths_ptr =
+        reinterpret_cast<int*>(storage.sequence_lengths_tensor.data);
+    if (!cached_sequence_lengths_ptr) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: BatchDeviceStorage.sequence_lengths_tensor.data is NULL");
+    }
     int* cached_targets_ptr = nullptr;
     if (payload.hasTrainingTargets()) {
         cached_targets_ptr = reinterpret_cast<int*>(storage.target_ids_tensor.data);
         if (!cached_targets_ptr) {
             throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.target_ids_tensor.data is NULL for training payload");
+        }
+    }
+    uint8_t* cached_atom_gap_targets_ptr = nullptr;
+    uint8_t* cached_atom_gap_mask_ptr = nullptr;
+    if (payload.EnableAtomIdentification) {
+        cached_atom_gap_mask_ptr = reinterpret_cast<uint8_t*>(
+            storage.atom_insertion_valid_gap_mask_tensor.data);
+        if (!cached_atom_gap_mask_ptr) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: atom insertion gap-mask storage is NULL");
+        }
+        if (payload.isTraining()) {
+            cached_atom_gap_targets_ptr = reinterpret_cast<uint8_t*>(
+                storage.atom_insertion_gap_targets_tensor.data);
+            if (!cached_atom_gap_targets_ptr) {
+                throw std::runtime_error(
+                    "uploadBatchToDevice: atom insertion target storage is NULL");
+            }
         }
     }
     float* cached_numeric_values_ptr = storage.numeric_values_tensor.data;
@@ -190,6 +238,7 @@ BatchDeviceBindings uploadBatchToDevice(
     }
 
     const size_t input_ids_bytes   = payload.inputIdBytes();
+    const size_t sequence_length_bytes = payload.sequenceLengthBytes();
     const size_t target_ids_bytes  = payload.targetIdBytes();
     const size_t numeric_val_bytes = payload.numericValueBytes();
     const size_t atom_mask_bytes   = payload.atomMaskBytes();
@@ -203,14 +252,38 @@ BatchDeviceBindings uploadBatchToDevice(
 
     auto copy_start = std::chrono::high_resolution_clock::now();
 
-    // Round 1: input_ids + target_ids. Targets arrive pre-masked from
+    // Round 1: input IDs, row lengths, and the active objective's supervision. LM targets
+    // arrive pre-masked from
     // buildBatchPayload Phase 4; payload.lm_valid_tokens already accounts for
-    // the post-masking LM-supervised count.
+    // the post-masking LM-supervised count. Atom gap labels share this same
+    // authoritative H2D synchronization boundary.
     BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, payload.input_ids.data(),
         input_ids_bytes, cudaMemcpyHostToDevice, stream));
+    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+        cached_sequence_lengths_ptr,
+        payload.seq_lengths.data(),
+        sequence_length_bytes,
+        cudaMemcpyHostToDevice,
+        stream));
     if (payload.hasTrainingTargets()) {
         BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
             target_ids_bytes, cudaMemcpyHostToDevice, stream));
+    }
+    if (payload.EnableAtomIdentification) {
+        if (payload.isTraining()) {
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_atom_gap_targets_ptr,
+                payload.atom_insertion_gap_targets.data(),
+                payload.atomInsertionGapTargetBytes(),
+                cudaMemcpyHostToDevice,
+                stream));
+        }
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_atom_gap_mask_ptr,
+            payload.atom_insertion_valid_gap_mask.data(),
+            payload.atomInsertionGapMaskBytes(),
+            cudaMemcpyHostToDevice,
+            stream));
     }
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -276,7 +349,10 @@ BatchDeviceBindings uploadBatchToDevice(
 
     Batching::BatchDeviceBindings bindings;
     bindings.d_input_ids        = cached_token_ids_ptr;
+    bindings.d_sequence_lengths = cached_sequence_lengths_ptr;
     bindings.d_target_ids       = cached_targets_ptr;
+    bindings.d_atom_insertion_gap_targets = cached_atom_gap_targets_ptr;
+    bindings.d_atom_insertion_valid_gap_mask = cached_atom_gap_mask_ptr;
     bindings.d_numeric_values   = cached_numeric_values_ptr;
     bindings.d_atom_mask        = reinterpret_cast<uint8_t*>(cached_atom_mask_ptr);
     bindings.d_atom_flags       = storage.atom_flags_tensor.data
@@ -308,22 +384,68 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
     const std::size_t token_capacity =
         static_cast<std::size_t>(workspace_hp.max_tokens_per_batch);
     const int max_tokens = static_cast<int>(token_capacity);
+    const int max_cached_seq_len =
+        HyperParameters::snapshotTrainingConfigField<int>(
+            config, "max_cached_seq_len");
+    if (max_cached_seq_len < 2) {
+        throw std::runtime_error(
+            "createBatchDeviceStorage: max_cached_seq_len must be at least 2");
+    }
+    if (workspace_hp.batch_size >
+        std::numeric_limits<int>::max() / (max_cached_seq_len - 1)) {
+        throw std::runtime_error(
+            "createBatchDeviceStorage: atom gap capacity overflows int");
+    }
+    const int max_atom_gap_rows = workspace_hp.batch_size *
+        (max_cached_seq_len - 1);
+    if (max_atom_gap_rows > std::numeric_limits<int>::max() / 2) {
+        throw std::runtime_error(
+            "createBatchDeviceStorage: atom target byte capacity overflows Tensor shape");
+    }
+    static_assert(
+        sizeof(float) == 4,
+        "raw atom upload capacity assumes four-byte Tensor storage elements");
+    const int atom_gap_mask_storage_elements =
+        max_atom_gap_rows / 4 + (max_atom_gap_rows % 4 != 0 ? 1 : 0);
 
     auto storage = std::make_shared<BatchDeviceStorage>();
     storage->batch_size_capacity = workspace_hp.batch_size;
-    storage->max_seq_len_capacity = HyperParameters::snapshotTrainingConfigField<int>(config, "max_cached_seq_len");
+    storage->max_seq_len_capacity = max_cached_seq_len;
     storage->max_tokens_capacity = max_tokens;
+    storage->max_atom_insertion_gap_rows_capacity = max_atom_gap_rows;
 
     storage->target_ids_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_tokens, 1),
         false,
         stream,
         "batch_target_ids");
+    static_assert(sizeof(int) == sizeof(float),
+                  "sequence-length upload capacity assumes four-byte int storage");
+    storage->sequence_lengths_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(1, workspace_hp.batch_size),
+        false,
+        stream,
+        "batch_sequence_lengths");
     storage->input_ids_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,
         stream,
         "batch_input_ids");
+    // Tensor is the canonical owner even though these two buffers are exposed
+    // as uint8 through BatchDeviceBindings. Two float slots per gap provide
+    // exactly eight target bytes; ceil(gap_rows/4) slots own the mask bytes.
+    storage->atom_insertion_gap_targets_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(1, max_atom_gap_rows * 2),
+        false,
+        stream,
+        "batch_atom_insertion_gap_targets");
+    storage->atom_insertion_valid_gap_mask_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(
+            1,
+            atom_gap_mask_storage_elements),
+        false,
+        stream,
+        "batch_atom_insertion_valid_gap_mask");
     storage->numeric_values_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,

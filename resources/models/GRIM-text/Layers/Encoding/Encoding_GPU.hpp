@@ -39,6 +39,7 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/BatchDeviceBindings.hpp"
 
 namespace GRIM {
 
@@ -148,6 +149,7 @@ private:
    * @param ffn_compute FFN compute shell sourced explicitly from the caller
    * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
    * @param payload Host-side batch geometry and sequence lengths
+   * @param bindings Borrowed device view for the active batch upload
    * @param pos_encoding Borrowed Phase1-owned PBM state for the attention sublayer
    * @param stream CUDA stream from the caller's forward payload/request
    * @param cublas_handle cuBLAS handle from the caller's forward payload/request
@@ -158,9 +160,10 @@ private:
    */
   void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
                 FeedForwardLayer& ffn_compute,
-                const Tensor& input,
-                const BatchPayload& payload,
-                const PBM::PBMState& pos_encoding,
+                 const Tensor& input,
+                 const BatchPayload& payload,
+                 const Batching::BatchDeviceBindings& bindings,
+                 const PBM::PBMState& pos_encoding,
                 cudaStream_t stream,
                 cublasHandle_t cublas_handle,
                 Forward::ModelForwardOutputs& forward_outputs,

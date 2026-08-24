@@ -10,6 +10,9 @@
 #include "../../../../Shared/Batching/EpochBatching.hpp"      // buildEpochBatches
 #include "../../../../Shared/Batching/PackerPolicy.hpp"
 #include "../../../../Shared/Batching/Batching_GPU.hpp"       // buildBatches
+#include "../../../../Shared/AtomInsertion/AtomInsertionData.hpp"
+#include "../../../../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
+#include "../../../../Shared/UnigramByte/UniByte.hpp"
 #include "../../../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
@@ -18,6 +21,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <memory>
+#include <limits>
+#include <vector>
 
 namespace GRIMText::Training {
 
@@ -64,6 +70,209 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
         static_cast<std::size_t>(fixed_shape.batch_size),
         static_cast<std::size_t>(fixed_shape.max_seq_len),
         /*selector_enabled=*/false);
+}
+
+std::vector<GRIM::AtomInsertion::AtomInsertionExample>
+splitAtomInsertionExample(
+    const GRIM::AtomInsertion::AtomInsertionExample& source,
+    int max_seq_len,
+    const char* caller) {
+    const std::size_t max_bytes = static_cast<std::size_t>(max_seq_len - 2);
+    if (source.transformerInputSize() <=
+        static_cast<std::size_t>(max_seq_len)) {
+        return {source};
+    }
+    if (max_bytes == 0) {
+        throw std::runtime_error(
+            std::string(caller) + ": atom byte window has zero content capacity");
+    }
+
+    auto cut_is_valid = [&](std::size_t gap) {
+        if (gap >= source.valid_utf8_gaps.size() ||
+            source.valid_utf8_gaps[gap] == 0) {
+            return false;
+        }
+        for (const auto& span : source.spans) {
+            if (span.begin_gap < gap && gap < span.end_gap) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    std::vector<GRIM::AtomInsertion::AtomInsertionExample> windows;
+    std::size_t begin = 0;
+    const std::size_t byte_count = source.byteSize();
+    while (begin < byte_count) {
+        std::size_t end = std::min(begin + max_bytes, byte_count);
+        while (end > begin && !cut_is_valid(end)) {
+            --end;
+        }
+        if (end == begin) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": an atom span or UTF-8 code point exceeds the configured byte window");
+        }
+
+        std::vector<GRIM::AtomInsertion::AtomInsertionSpanLabel> window_spans;
+        for (const auto& span : source.spans) {
+            const bool owns_start = span.begin_gap >= begin &&
+                (span.begin_gap < end || end == byte_count);
+            if (!owns_start) continue;
+            if (span.end_gap > end) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": selected byte window splits an atom span");
+            }
+            window_spans.push_back(
+                GRIM::AtomInsertion::AtomInsertionSpanLabel{
+                    span.begin_gap - begin,
+                    span.end_gap - begin,
+                    span.type});
+        }
+
+        std::string annotated_window;
+        const std::string plain_window =
+            source.plain_text_bytes.substr(begin, end - begin);
+        annotated_window.reserve(plain_window.size() + window_spans.size() * 16);
+        for (std::size_t gap = 0; gap <= plain_window.size(); ++gap) {
+            for (const auto& span : window_spans) {
+                if (span.begin_gap < span.end_gap && span.end_gap == gap) {
+                    annotated_window += GRIM::Tokenizer::atomTokenText(
+                        GRIM::Tokenizer::atomTypeToCloseTokenId(span.type));
+                }
+            }
+            for (const auto& span : window_spans) {
+                if (span.begin_gap == gap) {
+                    annotated_window += GRIM::Tokenizer::atomTokenText(
+                        GRIM::Tokenizer::atomTypeToOpenTokenId(span.type));
+                    if (span.end_gap == gap) {
+                        annotated_window += GRIM::Tokenizer::atomTokenText(
+                            GRIM::Tokenizer::atomTypeToCloseTokenId(span.type));
+                    }
+                }
+            }
+            if (gap < plain_window.size()) {
+                annotated_window.push_back(plain_window[gap]);
+            }
+        }
+
+        auto window = GRIM::AtomInsertion::buildAtomInsertionExample(
+            annotated_window,
+            true,
+            caller);
+        if (window.plain_text_bytes != plain_window ||
+            window.transformerInputSize() >
+                static_cast<std::size_t>(max_seq_len)) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": atom byte-window reconstruction changed source geometry");
+        }
+        windows.push_back(std::move(window));
+        begin = end;
+    }
+    return windows;
+}
+
+std::vector<GRIM::AtomInsertion::AtomInsertionExample>
+buildAtomInsertionExamples(
+    const TrainingContext& ctx,
+    const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views,
+    int max_seq_len,
+    const char* caller) {
+    const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
+    GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
+    const std::uint32_t loaded_vocab_size =
+        GRIM::TokenizerArtifacts::loadSharedTokenizerVocabulary(
+            tokenizer_hp,
+            tokenizer);
+    if (loaded_vocab_size != ctx.data.vocab_size) {
+        throw std::runtime_error(
+            std::string(caller) + ": shared tokenizer vocab size=" +
+            std::to_string(loaded_vocab_size) +
+            " does not match GRMT vocab size=" +
+            std::to_string(ctx.data.vocab_size));
+    }
+
+    std::vector<GRIM::AtomInsertion::AtomInsertionExample> examples;
+    examples.reserve(views.size());
+    for (std::size_t index = 0; index < views.size(); ++index) {
+        const auto* sequence = views[index];
+        if (!sequence) {
+            throw std::runtime_error(
+                std::string(caller) + ": NULL GRMT sequence view at index=" +
+                std::to_string(index));
+        }
+        std::size_t begin = 0;
+        std::size_t end = sequence->token_ids.size();
+        if (begin < end &&
+            sequence->token_ids[begin] == GRIM::Tokenizer::BOS_TOKEN_ID) {
+            ++begin;
+        }
+        if (begin < end &&
+            sequence->token_ids[end - 1] == GRIM::Tokenizer::EOS_TOKEN_ID) {
+            --end;
+        }
+        std::vector<int> annotated_token_ids(
+            sequence->token_ids.begin() + static_cast<std::ptrdiff_t>(begin),
+            sequence->token_ids.begin() + static_cast<std::ptrdiff_t>(end));
+        const GRIM::Tokenizer::DecodeRequest decode_request(annotated_token_ids);
+        const std::string annotated_source = tokenizer.decode(decode_request);
+        auto example = GRIM::AtomInsertion::buildAtomInsertionExample(
+            annotated_source,
+            true,
+            caller);
+        auto windows = splitAtomInsertionExample(
+            example,
+            max_seq_len,
+            caller);
+        for (auto& window : windows) {
+            examples.push_back(std::move(window));
+        }
+    }
+    return examples;
+}
+
+std::vector<std::uint32_t> atomInsertionSequenceLengths(
+    const std::vector<GRIM::AtomInsertion::AtomInsertionExample>& examples) {
+    std::vector<std::uint32_t> lengths;
+    lengths.reserve(examples.size());
+    for (const auto& example : examples) {
+        if (example.transformerInputSize() >
+            static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+            throw std::runtime_error(
+                "atomInsertionSequenceLengths: sequence length exceeds uint32_t");
+        }
+        lengths.push_back(
+            static_cast<std::uint32_t>(example.transformerInputSize()));
+    }
+    return lengths;
+}
+
+GRIM::Batching::BatchPayload buildAtomPayloadFromAssignment(
+    const GRIM::Batching::BatchAssignment& assignment,
+    const std::vector<GRIM::AtomInsertion::AtomInsertionExample>& all_examples,
+    int vocab_size,
+    int max_seq_len,
+    const char* caller) {
+    std::vector<GRIM::AtomInsertion::AtomInsertionExample> batch_examples;
+    batch_examples.reserve(assignment.seq_ids.size());
+    for (const std::uint32_t sequence_id : assignment.seq_ids) {
+        if (sequence_id >= all_examples.size()) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom assignment sequence id is out of range");
+        }
+        batch_examples.push_back(all_examples[sequence_id]);
+    }
+    auto payload = GRIM::AtomInsertion::buildAtomInsertionBatchPayload(
+        batch_examples,
+        vocab_size,
+        max_seq_len,
+        true,
+        caller);
+    payload.seq_ids = assignment.seq_ids;
+    payload.validate(caller);
+    return payload;
 }
 
 //======================================================//
@@ -126,6 +335,12 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         "PlannedBatchesReady");
     const int fixed_batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size");
     const int fixed_max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len");
+    const int vocab_size =
+        GRIM::HyperParameters::snapshotTrainingConfigField<int>(
+            ctx.config, "vocab_size");
+    const bool atom_insertion_enabled =
+        GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config)
+            .enabled;
     if (fixed_batch_size <= 0 || fixed_max_seq_len <= 0) {
         std::ostringstream oss;
         oss << "FATAL: PlannedBatchesReady requires configured batching hyperparameters "
@@ -151,6 +366,28 @@ void PlannedBatchesReady(TrainingContext& ctx) {
 
     auto log = [&](const std::string& msg) { log_fn_to(ctx, msg); };
 
+    std::vector<GRIM::AtomInsertion::AtomInsertionExample> train_atom_examples;
+    std::vector<GRIM::AtomInsertion::AtomInsertionExample> val_atom_examples;
+    std::vector<std::uint32_t> train_atom_lengths;
+    std::vector<std::uint32_t> val_atom_lengths;
+    if (atom_insertion_enabled) {
+        train_atom_examples = buildAtomInsertionExamples(
+            ctx,
+            ctx.data.train_views,
+            fixed_max_seq_len,
+            "PlannedBatchesReady(train atom examples)");
+        train_atom_lengths = atomInsertionSequenceLengths(train_atom_examples);
+        if (!ctx.data.val_views.empty()) {
+            val_atom_examples = buildAtomInsertionExamples(
+                ctx,
+                ctx.data.val_views,
+                fixed_max_seq_len,
+                "PlannedBatchesReady(val atom examples)");
+            val_atom_lengths = atomInsertionSequenceLengths(val_atom_examples);
+        }
+        log("[PlannedBatches] Atom insertion mode: authored byte-gap examples");
+    }
+
     //======================================================//
     // Train: build ONE fixed BatchSchedule.
     //
@@ -164,7 +401,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         std::to_string(num_epochs) + ")");
 
     ctx.fixed_train_schedule = GRIM::Batching::buildEpochBatches(
-        ctx.data.train_seq_lengths,
+        atom_insertion_enabled ? train_atom_lengths : ctx.data.train_seq_lengths,
         static_cast<uint32_t>(fixed_max_seq_len),
         static_cast<uint32_t>(fixed_batch_size),
         /*global_step=*/0,
@@ -192,7 +429,14 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     ctx.train_payloads.clear();
     ctx.train_payloads.reserve(num_train_batches);
     for (int i = 0; i < num_train_batches; ++i) {
-        auto payload = buildTrainPayload(ctx, ctx.fixed_train_schedule.batches[i]);
+        auto payload = atom_insertion_enabled
+            ? buildAtomPayloadFromAssignment(
+                ctx.fixed_train_schedule.batches[i],
+                train_atom_examples,
+                vocab_size,
+                fixed_max_seq_len,
+                "PlannedBatchesReady(train atom payload)")
+            : buildTrainPayload(ctx, ctx.fixed_train_schedule.batches[i]);
         GRIM::Batching::attachBatchDeviceStorage(
             payload,
             shared_device_storage,
@@ -213,7 +457,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         GRIM::Batching::PackerPolicy val_policy;
 
         ctx.fixed_val_schedule = GRIM::Batching::buildBatches(
-            ctx.data.val_seq_lengths,
+            atom_insertion_enabled ? val_atom_lengths : ctx.data.val_seq_lengths,
             static_cast<uint32_t>(fixed_max_seq_len),
             static_cast<uint32_t>(fixed_batch_size),
             val_policy);
@@ -231,7 +475,14 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         ctx.val_payloads.clear();
         ctx.val_payloads.reserve(num_val_batches);
         for (int i = 0; i < num_val_batches; ++i) {
-            auto payload = buildValPayload(ctx, ctx.fixed_val_schedule.batches[i]);
+            auto payload = atom_insertion_enabled
+                ? buildAtomPayloadFromAssignment(
+                    ctx.fixed_val_schedule.batches[i],
+                    val_atom_examples,
+                    vocab_size,
+                    fixed_max_seq_len,
+                    "PlannedBatchesReady(val atom payload)")
+                : buildValPayload(ctx, ctx.fixed_val_schedule.batches[i]);
             GRIM::Batching::attachBatchDeviceStorage(
                 payload,
                 shared_device_storage,

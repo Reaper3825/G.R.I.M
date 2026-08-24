@@ -382,6 +382,8 @@ struct LMHeadLayerConstructionHP {
     int vocab_size = 0;
     int training_batch_size = 0;
     int training_rows_per_sequence = 0;
+    // Compiled task-mode semantic selecting B*(S-1) byte-gap rows.
+    bool atom_insertion_enabled = false;
     bool bias_enabled = false;
     bool unigram_bias = false;
     bool tie_embeddings = false;
@@ -395,6 +397,11 @@ struct LMHeadLayerConstructionHP {
     bool mlp_enabled = false;
     int mlp_d_ff = 0;
     float mlp_alpha = 0.0f;
+};
+
+struct AtomInsertionBoundaryProjectionHP {
+    bool enabled = false;
+    int d_model = 0;
 };
 
 struct ExecutionBlockConstructionHP {
@@ -517,6 +524,7 @@ struct ModelHP {
     int lm_head_mlp_d_ff = 0;
     float lm_head_mlp_alpha = 0.0f;
 
+    bool atom_insertion_enabled = false;
     int atom_embedding_dim = 0;
 
     bool execution_block_enabled = false;
@@ -1278,7 +1286,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.encoder_qkv_dim = qkv_dim;
     view.encoder_d_ff = d_ff;
     view.encoder_rms_epsilon = EPSILON_RMSNORM;
-    view.encoder_causal_mask = true;
+    view.encoder_causal_mask = requireBool("causal_mask");
     view.encoder_use_flash_attention = requireBool("use_flash_attention");
     view.encoder_min_seq_len_for_flash = min_seq_len_for_flash;
     view.encoder_use_layer_scale = requireBool("use_layer_scale");
@@ -1311,6 +1319,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.lm_head_mlp_d_ff = requireInt("lm_head_mlp_d_ff");
     view.lm_head_mlp_alpha = requireFloat("lm_head_mlp_alpha");
 
+    view.atom_insertion_enabled = requireBool("atom_insertion_enabled");
     view.atom_embedding_dim = requireInt("atom_embedding_dim");
 
     view.execution_block_enabled = requireBool("execution_block_enabled");
@@ -1439,6 +1448,7 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.vocab_size = model.lm_head_vocab_size;
     view.training_batch_size = model.lm_head_training_batch_size;
     view.training_rows_per_sequence = model.lm_head_training_rows_per_sequence;
+    view.atom_insertion_enabled = model.atom_insertion_enabled;
     view.bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "lm_head_bias_enabled");
     view.unigram_bias = model.lm_head_unigram_bias;
     view.tie_embeddings = model.lm_head_tie_embeddings;
@@ -1451,6 +1461,17 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.mlp_enabled = model.lm_head_mlp_enabled;
     view.mlp_d_ff = model.lm_head_mlp_d_ff;
     view.mlp_alpha = model.lm_head_mlp_alpha;
+    return view;
+}
+
+inline AtomInsertionBoundaryProjectionHP atomInsertionBoundaryProjectionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    AtomInsertionBoundaryProjectionHP view;
+    view.enabled = model.atom_insertion_enabled;
+    view.d_model = model.encoder_d_model;
     return view;
 }
 

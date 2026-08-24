@@ -249,7 +249,8 @@ void encoderSelfAttentionForward(
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);
     attn_out_bhsd = autograd::scaled_dot_product_attention(
         Q_bhsd, K_bhsd, V_bhsd,
-        pbm.alibi_slopes, request.hp, attention_softmax_scale, request.stream,
+        pbm.alibi_slopes, request.hp, request.bindings,
+        attention_softmax_scale, request.stream,
         attention_dropout_p, dropout_seed);
     attn_out_bhsd.shape.require("encoderSelfAttentionForward attn_out_bhsd");
     if (attn_out_bhsd.shape.layout != TensorContract::Layout::BHSD) {

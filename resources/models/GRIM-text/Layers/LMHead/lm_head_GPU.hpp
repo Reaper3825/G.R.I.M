@@ -57,6 +57,10 @@ inline constexpr bool kEnableLmHeadTokenTypeGateExperiment = false;
 ///   3.   logits = input @ weights^T  (autograd::matmul, transpose_b=true)
 ///   4.   Optional: center_rows on logits (numerical stability)
 ///   5.   Optional: logits += bias  (autograd::broadcast_add)
+///
+/// hp.atom_insertion_enabled selects the row contract. Token-LM rows use the
+/// existing token geometry; atom-insertion rows use B*(S-1) gap geometry and
+/// do not apply causal-prefix hidden-state centering.
 void forwardLmHead(
     const HyperParameters::LMHeadLayerConstructionHP& hp,
     const LMHeadParameterTensors& parameter_tensors,

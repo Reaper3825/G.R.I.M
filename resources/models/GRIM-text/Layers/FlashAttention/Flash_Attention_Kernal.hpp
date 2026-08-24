@@ -30,7 +30,9 @@ std::size_t flash_attn_dsoftmax_sum_bytes(int batch,
 // Q:  [batch, seqlen, n_heads, head_dim]    (FP16 or BF16)
 // K,V:[batch, seqlen, n_kv_heads, head_dim] (FP16 or BF16)
 // O:  [batch, seqlen, n_heads, head_dim]    (FP16 or BF16)
-// LSE:[batch, n_heads, seqlen]              (FP32, dense, no padding)
+// LSE:[batch, n_heads, seqlen]              (FP32, dense query rows)
+// sequence_lengths: optional device int[batch] key bounds for right-padded
+//                    fixed rectangles; nullptr means every row has seqlen keys.
 // softmax_scale must be finite and > 0 and must match the caller's attention equation.
 void flash_attn_fwd_ex(const void* q,
                        const void* k,
@@ -48,7 +50,8 @@ void flash_attn_fwd_ex(const void* q,
                        bool is_bf16,
                        float attention_dropout_p,
                        uint64_t dropout_seed,
-                       cudaStream_t stream);
+                       cudaStream_t stream,
+                       const int* sequence_lengths = nullptr);
 
 // FlashAttention v2 forward with KV cache (inference-only, no backward).
 //
@@ -126,7 +129,7 @@ void flash_attn_fwd_kvcache_rotary(const void* q,
                                    cudaStream_t stream);
 
 // FlashAttention v2 backward.
-// Requires softmax_lse from the matching forward pass.
+// Requires softmax_lse and sequence_lengths from the matching forward pass.
 // softmax_scale must match the forward pass and must be finite and > 0.
 void flash_attn_bwd_ex(const void* q,
                        const void* k,
@@ -150,7 +153,8 @@ void flash_attn_bwd_ex(const void* q,
                        bool is_bf16,
                        float attention_dropout_p,
                        uint64_t dropout_seed,
-                       cudaStream_t stream);
+                       cudaStream_t stream,
+                       const int* sequence_lengths = nullptr);
 
 #ifdef __cplusplus
 }  // extern "C"

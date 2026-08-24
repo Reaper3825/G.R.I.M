@@ -47,21 +47,32 @@ void runLossStatsDiagnostic(
     // EQUATION LOGGING: Per-batch loss computation trace (Issue #120 debug)
     // ========================================================================
     {
-        const int valid_tokens_eq = payload.lm_valid_tokens;
-        const float expected_random_loss = std::log(static_cast<float>(payload.vocab_size));
+        const bool atom_mode = payload.EnableAtomIdentification;
+        const int valid_tokens_eq = atom_mode
+            ? payload.atom_insertion_valid_gap_count
+            : payload.lm_valid_tokens;
+        const float expected_random_loss = atom_mode
+            ? std::log(2.0f)
+            : std::log(static_cast<float>(payload.vocab_size));
 
         std::ostringstream eq;
-        eq << "[BATCH_LOSS] total = text_ce\n";
+        eq << "[BATCH_LOSS] total = "
+           << (atom_mode ? "atom_bce" : "text_ce") << "\n";
         eq << "  valid_tokens=" << valid_tokens_eq << " vocab_size=" << payload.vocab_size << "\n";
-        eq << "  EXPECTED text_ce (random) = ln(" << payload.vocab_size << ") = " << expected_random_loss << "\n";
+        eq << "  EXPECTED random = " << expected_random_loss << "\n";
         eq << "  ACTUAL total = " << result.loss << "\n";
-        eq << "  ACTUAL text_ce = " << result.text_loss << "\n";
+        eq << "  ACTUAL primary = " << result.text_loss << "\n";
         EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_COMPUTATION, -1, "BATCH_LOSS", eq.str().c_str());
     }
 
     {
-        const int valid_tokens = payload.lm_valid_tokens;
-        const int total_tokens = payload.total_tokens;
+        const bool atom_mode = payload.EnableAtomIdentification;
+        const int valid_tokens = atom_mode
+            ? payload.atom_insertion_valid_gap_count
+            : payload.lm_valid_tokens;
+        const int total_tokens = atom_mode
+            ? payload.atomInsertionGapRowCount()
+            : payload.total_tokens;
         const int masked_tokens = std::max(total_tokens - valid_tokens, 0);
         const float text_loss_sum = (valid_tokens > 0)
             ? result.text_loss * static_cast<float>(valid_tokens)
@@ -70,7 +81,8 @@ void runLossStatsDiagnostic(
         loss_stats << "[LossStats] batch=" << (batch_idx + 1)
                    << " loss_mean=" << formatScalar(result.loss, 4)
                    << " text_loss_sum=" << formatScalar(text_loss_sum, 4)
-                   << " text_ce=" << formatScalar(result.text_loss, 4)
+                   << " primary_loss=" << formatScalar(result.text_loss, 4)
+                   << " task=" << (atom_mode ? "atom_insertion" : "language_model")
                    << " selector=" << formatScalar(result.selector_loss, 4)
                    << " valid_tokens=" << valid_tokens
                    << " masked_tokens=" << masked_tokens

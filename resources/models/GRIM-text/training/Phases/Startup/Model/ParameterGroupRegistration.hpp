@@ -23,6 +23,7 @@ struct EmbeddingLayerConstructionHP;
 struct EncoderLayerConstructionHP;
 struct ExecutionBlockConstructionHP;
 struct LMHeadLayerConstructionHP;
+struct AtomInsertionBoundaryProjectionHP;
 struct NumberEncoderConstructionHP;
 struct SlotSeedEncoderConstructionHP;
 }
@@ -83,6 +84,12 @@ void initializeLmHeadParameterTensors(
     cudaStream_t init_stream,
     GRIM::Tensor* tied_embedding_weights,
     const OutputUnigramPriorView* output_unigram_prior);
+
+void initializeAtomInsertionBoundaryParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::AtomInsertionBoundaryProjectionHP& atom_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream);
 
 void initializeExecutionBlockParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,

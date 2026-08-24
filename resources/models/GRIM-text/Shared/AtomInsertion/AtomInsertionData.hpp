@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "../Batching/BatchPayload.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
 #include <array>
@@ -34,13 +35,19 @@ struct AtomInsertionSpanLabel {
 };
 
 struct AtomInsertionExample {
+    // Explicit task gate copied from the public builder invocation. An enabled
+    // example requires the future transformer forward to use full-context
+    // (non-causal) attention before adjacent states are projected into gaps.
+    bool EnableAtomIdentification = false;
+
     // Exact source bytes presented to the insertion model. Only authored atom
     // delimiter bytes are removed; whitespace and atom content are preserved.
     std::string plain_text_bytes;
 
-    // One existing byte-token ID per byte in plain_text_bytes. No normalization,
-    // unigram segmentation, BOS, EOS, or numeric-token encoding occurs here.
-    std::vector<int> byte_token_ids;
+    // Exact transformer input [BOS, byte0, ..., byteN-1, EOS]. Interior rows
+    // use only the existing byte-token range. BOS/EOS provide contextual edge
+    // states so adjacent-state projection produces exactly N + 1 gaps.
+    std::vector<int> transformer_input_ids;
 
     // Dense multi-label supervision over the N + 1 byte gaps. Columns map to
     // [ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET), allowing a gap to contain both
@@ -57,9 +64,12 @@ struct AtomInsertionExample {
     // participate in insertion-model supervision.
     std::vector<AtomInsertionSpanLabel> spans;
 
-    std::size_t byteSize() const noexcept { return byte_token_ids.size(); }
+    std::size_t byteSize() const noexcept { return plain_text_bytes.size(); }
+    std::size_t transformerInputSize() const noexcept {
+        return transformer_input_ids.size();
+    }
     std::size_t gapSize() const noexcept { return gap_delimiter_targets.size(); }
-    bool empty() const noexcept { return byte_token_ids.empty(); }
+    bool empty() const noexcept { return plain_text_bytes.empty(); }
 
     bool hasDelimiterTarget(std::size_t gap, int delimiter_token_id) const;
     void validate(const char* caller) const;
@@ -83,9 +93,36 @@ int delimiterTokenIdForClassOrThrow(std::size_t delimiter_class,
 // whitespace inside authored delimiters remains in plain_text_bytes but stays
 // outside the labeled atom span, matching the tokenizer's trimmed content
 // contract without deleting source bytes.
+//
+// EnableAtomIdentification is the explicit task gate and must be true. The
+// shared model entry validates it against the compiled full-context model
+// semantic before running the encoder and gap head.
 AtomInsertionExample buildAtomInsertionExample(
     std::string_view annotated_source,
+    bool EnableAtomIdentification,
+    const char* caller);
+
+// Materializes a fixed rectangular training payload for the separate atom
+// model. Examples become [BOS, bytes, EOS, PAD...] input rows and their N+1
+// targets become the first N+1 rows of each (max_seq_len - 1) gap rectangle.
+// Device ownership is intentionally not created here; the caller attaches the
+// normal BatchDeviceStorage owner and enters through uploadBatchToDevice().
+Batching::BatchPayload buildAtomInsertionBatchPayload(
+    const std::vector<AtomInsertionExample>& examples,
+    int vocab_size,
+    int max_seq_len,
+    bool EnableAtomIdentification,
+    const char* caller);
+
+// Builds a single-row, inference-only byte-gap payload from unannotated UTF-8
+// text. The input is [BOS, byte0, ..., byteN-1, EOS], the gap mask enables only
+// UTF-8 code-point boundaries, and no supervision targets are materialized.
+// max_sequence_capacity is the compiled model's row capacity, not padding
+// geometry; inference uses the exact N + 2 rows required by this request.
+Batching::BatchPayload buildAtomInsertionInferencePayload(
+    std::string_view plain_text_bytes,
+    int vocab_size,
+    int max_sequence_capacity,
     const char* caller);
 
 } // namespace GRIM::AtomInsertion
-

@@ -162,7 +162,6 @@ struct ProcessBatchStepStateClearScope {
 
     ~ProcessBatchStepStateClearScope() {
         forward_outputs.clear();
-        loss_state.clear();
     }
 
     ProcessBatchStepStateClearScope(const ProcessBatchStepStateClearScope&) = delete;
@@ -570,7 +569,9 @@ void configureAutogradLossInputs(
     const GRIM::HyperParameters::LossConfigHP& loss_config,
     bool skip_equation_logging)
 {
-    if (loss_config.class_balanced_enabled) {
+    if (payload.EnableAtomIdentification) {
+        autograd_ctx.d_class_weights = nullptr;
+    } else if (loss_config.class_balanced_enabled) {
         if (!training_state.class_weights_tensor.data) {
             throw std::runtime_error(
                 "configureAutogradLossInputs: class_balanced_enabled=true but class_weights_tensor is NULL");
@@ -693,7 +694,9 @@ BatchResult processBatch(
     ++forward_call_count;
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
-    GRIM::Diagnostics::runTargetDistributionLog(ctx, payload, batch_idx);
+    if (!payload.EnableAtomIdentification) {
+        GRIM::Diagnostics::runTargetDistributionLog(ctx, payload, batch_idx);
+    }
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to run explicit shared forward + autograd loss/backward...\n");
     // First-batch CUDA check: surface any error before explicit forward/loss/bwd.
@@ -828,6 +831,7 @@ BatchResult processBatch(
     }
 
     if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_LOGS) {
+        if (!payload.EnableAtomIdentification) {
         const GRIM::Diagnostics::RhoDiagnosticOptions rho_pre_backward_options{
             GRIM::Diagnostics::RhoDiagnosticPhase::PostForwardPreBackward,
             false,
@@ -838,6 +842,7 @@ BatchResult processBatch(
             forward_outputs,
             batch_idx,
             rho_pre_backward_options);
+        }
     }
 
     auto backward_result = GRIM::Autograd::executeAutogradBackward(
@@ -888,12 +893,14 @@ BatchResult processBatch(
     }
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
     // (extracted to Diagnostics/PredictionDistributionDiagnostic.cu)
-    GRIM::Diagnostics::runPredictionDistributionAndLogitTrace(
-        ctx,
-        payload,
-        forward_outputs.logits_tensor,
-        result.loss,
-        batch_idx);
+    if (!payload.EnableAtomIdentification) {
+        GRIM::Diagnostics::runPredictionDistributionAndLogitTrace(
+            ctx,
+            payload,
+            forward_outputs.logits_tensor,
+            result.loss,
+            batch_idx);
+    }
     // NOTE: Loss variance computation removed (was causing 5-second GPU sync bottleneck).
     // Variance is now tracked on GPU by TelemetryLattice (σ_tilde, v_σ fields).
     // Use computeTelemetryFeedback() to access grad_norm variance for adaptive decisions.
@@ -909,6 +916,7 @@ BatchResult processBatch(
     // (extracted to Diagnostics/LogitScaleDiagnostic.cu)
     // ========================================================================
     if constexpr (GRIM::VerboseLogging::ENABLE_LOGIT_SCALE_DIAGNOSTICS) {
+        if (!payload.EnableAtomIdentification) {
         const GRIM::Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
         if (!live_lm_head_input || !live_lm_head_input->data) {
             throw std::runtime_error(
@@ -921,9 +929,11 @@ BatchResult processBatch(
             forward_outputs.logits_tensor,
             *live_lm_head_input,
             batch_idx);
+        }
     }
     if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_LOGS ||
                   GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_TELEMETRY) {
+        if (!payload.EnableAtomIdentification) {
         const GRIM::Diagnostics::RhoDiagnosticOptions rho_post_backward_options{
             GRIM::Diagnostics::RhoDiagnosticPhase::PostBackward,
             GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_TELEMETRY,
@@ -934,6 +944,7 @@ BatchResult processBatch(
             forward_outputs,
             batch_idx,
             rho_post_backward_options);
+        }
     }
     if (!std::isfinite(result.loss)) {
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));

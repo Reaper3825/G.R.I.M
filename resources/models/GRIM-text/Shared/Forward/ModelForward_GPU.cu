@@ -13,6 +13,7 @@
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
+#include "../AtomInsertion/AtomInsertionForward.hpp"
 #include "../InferenceState/KvCacheState_GPU.hpp"
 #include "../CudaAllocUtils.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
@@ -168,6 +169,19 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
     return detached;
 }
 
+GRIM::AtomInsertionBoundaryParameterTensors
+detachAtomInsertionBoundaryParameters(
+    const GRIM::AtomInsertionBoundaryParameterTensors& parameters,
+    cudaStream_t stream) {
+    GRIM::AtomInsertionBoundaryParameterTensors detached{};
+    detached.left_projection_weight =
+        parameters.left_projection_weight.detach(stream);
+    detached.right_projection_weight =
+        parameters.right_projection_weight.detach(stream);
+    detached.projection_bias = parameters.projection_bias.detach(stream);
+    return detached;
+}
+
 }  // namespace
 
 GoalSpanView ModelForwardRequest::goalSpansForRow(std::size_t row) const {
@@ -184,6 +198,30 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!parameter_registry) throw std::runtime_error(std::string(caller) + ": parameter_registry is NULL");
     (void)parameter_registry->requireEmbeddingParameters(caller);
     (void)parameter_registry->requireLmHeadParameters(caller);
+    const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*config);
+    const auto atom_boundary_hp =
+        HyperParameters::atomInsertionBoundaryProjectionHP(*config);
+    if (lm_head_hp.atom_insertion_enabled != atom_boundary_hp.enabled) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": LM-head and atom boundary groupings disagree on task mode");
+    }
+    if (payload && payload->EnableAtomIdentification !=
+                       atom_boundary_hp.enabled) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": BatchPayload.EnableAtomIdentification does not match the compiled "
+            "atom_insertion_enabled model semantic");
+    }
+    if (atom_boundary_hp.enabled) {
+        (void)parameter_registry->requireAtomInsertionBoundaryParameters(caller);
+        const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*config);
+        if (encoder_hp.causal_mask) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": atom insertion requires non-causal encoder attention");
+        }
+    }
     const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*config, "num_layers");
     if (static_cast<int>(parameter_registry->encodingLayerParameterTensors().size()) != num_layers) {
         throw std::runtime_error(std::string(caller) + ": parameter_registry encoder tensor count mismatch. size=" +
@@ -217,6 +255,11 @@ void ModelForwardRequest::validate(const char* caller) const {
         }
     }
     if (kv_cache) {
+        if (atom_boundary_hp.enabled) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": atom insertion full-context forward is incompatible with kv_cache");
+        }
         if (graph.connect_parameter_graph) {
             throw std::runtime_error(std::string(caller) + ": kv_cache requires connect_parameter_graph == false");
         }
@@ -251,6 +294,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
+    const auto atom_boundary_hp =
+        HyperParameters::atomInsertionBoundaryProjectionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
@@ -404,6 +449,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 enc_layer->requireFeedForwardCompute("executeModelForward(no_grad)"),
                 *layer_input,
                 payload,
+                *bindings,
                 *request.pbm,
                 request.stream,
                 request.cublas_handle,
@@ -489,6 +535,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 enc_layer->requireFeedForwardCompute("executeModelForward(retained_graph)"),
                 *layer_input,
                 payload,
+                *bindings,
                 *request.pbm,
                 request.stream,
                 request.cublas_handle,
@@ -527,14 +574,41 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         lm_head_parameter_ptr = &detached_lm_head_parameters;
     }
 
-    forwardLmHead(
-        lm_head_hp,
-        *lm_head_parameter_ptr,
-        forward_outputs.encoder_output_tensor,
-        payload,
-        request.stream,
-        request.cublas_handle,
-        forward_outputs);
+    if (atom_boundary_hp.enabled) {
+        const auto& boundary_parameters =
+            request.parameter_registry->requireAtomInsertionBoundaryParameters(
+                "executeModelForward");
+        const GRIM::AtomInsertionBoundaryParameterTensors*
+            boundary_parameter_ptr = &boundary_parameters;
+        GRIM::AtomInsertionBoundaryParameterTensors
+            detached_boundary_parameters{};
+        if (!connect_parameter_graph) {
+            detached_boundary_parameters = detachAtomInsertionBoundaryParameters(
+                boundary_parameters,
+                request.stream);
+            boundary_parameter_ptr = &detached_boundary_parameters;
+        }
+        GRIM::AtomInsertion::forwardAtomInsertion(
+            atom_boundary_hp,
+            *boundary_parameter_ptr,
+            lm_head_hp,
+            *lm_head_parameter_ptr,
+            forward_outputs.encoder_output_tensor,
+            payload,
+            payload.EnableAtomIdentification,
+            request.stream,
+            request.cublas_handle,
+            forward_outputs);
+    } else {
+        forwardLmHead(
+            lm_head_hp,
+            *lm_head_parameter_ptr,
+            forward_outputs.encoder_output_tensor,
+            payload,
+            request.stream,
+            request.cublas_handle,
+            forward_outputs);
+    }
     if (!forward_outputs.logits_tensor.data) {
         throw std::runtime_error("ModelForward: LMHeadLayer::forward returned logits tensor with NULL data");
     }
@@ -544,7 +618,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         throw std::runtime_error("ModelForward: LM-head input snapshot is NULL after LMHeadLayer::forward");
     }
 
-    MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << payload.vocab_size << "]");
+    const int logit_rows = atom_boundary_hp.enabled
+        ? payload.atomInsertionGapRowCount()
+        : total_tokens;
+    MFWD_INFO("Forward complete: logits shape=[" << logit_rows << ", " << payload.vocab_size << "]");
 
     return forward_outputs;
 }

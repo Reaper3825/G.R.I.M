@@ -808,6 +808,8 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     float softmax_scale = 0.0f;
     bool causal = true;
     bool is_bf16 = false;
+    // Resolved from scheduler-provided backward bindings; never owned here.
+    bool uses_sequence_lengths = false;
     
     // ALiBi slopes (pointer to device memory, not owned - do NOT free)
     const float* alibi_slopes = nullptr;
@@ -855,8 +857,6 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
                     cudaStream_t stream,
                     const Batching::BatchPayload* backward_payload,
                     const Batching::BatchDeviceBindings* backward_bindings) override {
-        (void)backward_payload;
-        (void)backward_bindings;
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("scaled_dot_product_attention", this);
         
@@ -872,6 +872,26 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (!saved_out_bf16) throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: saved_out_bf16 is NULL - save() must store output for backward");
         if (heads_per_kv_group <= 0) {
             throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: heads_per_kv_group must be > 0");
+        }
+        const int* sequence_lengths = nullptr;
+        if (uses_sequence_lengths) {
+            if (!backward_payload || !backward_bindings) {
+                throw std::runtime_error(
+                    "ScaledDotProductAttentionGradFn::apply: scheduler must provide "
+                    "BatchPayload and BatchDeviceBindings for non-causal padding bounds");
+            }
+            if (backward_payload->batch_size != batch_size ||
+                backward_payload->max_seq_len != seq_len) {
+                throw std::runtime_error(
+                    "ScaledDotProductAttentionGradFn::apply: backward batch geometry "
+                    "differs from forward");
+            }
+            if (!backward_bindings->d_sequence_lengths) {
+                throw std::runtime_error(
+                    "ScaledDotProductAttentionGradFn::apply: sequence lengths were not "
+                    "uploaded for this step");
+            }
+            sequence_lengths = backward_bindings->d_sequence_lengths;
         }
         
         const size_t q_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;
@@ -921,7 +941,8 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             is_bf16,
             attention_dropout_p,  // Same dropout rate as forward
             dropout_seed,         // Same seed as forward (reproduces identical mask)
-            stream
+            stream,
+            sequence_lengths      // Same non-causal key bounds as forward
         );
         logGradFlowBf16TensorStats("SDPA.apply dq_bf16_post_bwd", dq_bf16, q_elems, stream);
         logGradFlowBf16TensorStats("SDPA.apply dk_bf16_post_bwd", dk_bf16, dk_dv_alloc_elems, stream);
@@ -1063,6 +1084,7 @@ Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes,
     const GRIM::HyperParameters::EncoderSelfAttentionHP& attention_hp,
+    const Batching::BatchDeviceBindings& bindings,
     float scale, cudaStream_t stream,
     float attention_dropout_p, uint64_t dropout_seed
 ) {
@@ -1167,12 +1189,21 @@ Tensor scaled_dot_product_attention(
 
     // Ablation (AblationFlags.hpp): kDisableCausalMask drops the causal mask so
     // the kernel runs full (bidirectional) self-attention. This requires a build
-    // with -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=ON, which drops GRIM_FLASHATTN_CAUSAL_ONLY
+    // with -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=ON, which forces non-causal behavior
     // (compiling the non-causal kernel templates and removing the runtime guard)
     // and defines the macro that flips the constexpr in lockstep. The forward and
     // saved-for-backward causal flags must match.
     const bool effective_causal =
         attention_hp.causal_mask && !GRIM::Ablation::kDisableCausalMask;
+    const int* sequence_lengths = nullptr;
+    if (!effective_causal) {
+        if (!bindings.d_sequence_lengths) {
+            throw std::invalid_argument(
+                "autograd::scaled_dot_product_attention: non-causal padded attention "
+                "requires uploaded sequence lengths");
+        }
+        sequence_lengths = bindings.d_sequence_lengths;
+    }
 
     // Forward pass with FlashAttention. The resolved scale is passed explicitly;
     // ignoring it silently changes the attention equation.
@@ -1193,7 +1224,8 @@ Tensor scaled_dot_product_attention(
         true,
         attention_dropout_p, // Attention dropout rate (0.0 = disabled)
         dropout_seed,        // Per-step Philox seed for reproducible masks
-        stream
+        stream,
+        sequence_lengths     // Per-row key bounds for non-causal fixed rectangles
     );
     
     // Attention off-by-one (softmax1 / zero-value sink): guarded exact post-process
@@ -1233,6 +1265,7 @@ Tensor scaled_dot_product_attention(
         grad_fn->softmax_scale = scale;
         grad_fn->causal = effective_causal;
         grad_fn->is_bf16 = true;
+        grad_fn->uses_sequence_lengths = sequence_lengths != nullptr;
         grad_fn->alibi_slopes = effective_alibi_slopes;  // Save for backward pass (not owned); NULL when kZeroAlibiBias
         grad_fn->attention_dropout_p = attention_dropout_p;  // Same dropout for backward mask reproduction
         grad_fn->dropout_seed = dropout_seed;                // Same seed reproduces identical Philox mask

@@ -34,6 +34,11 @@ struct Phase2TextInferenceResult {
  * on TrainingContext. HTTP/front-end bridge code must send text/options to
  * train_gpu instead of touching TrainingContext, tokenizer artifacts, model
  * config, or Phase1 startup directly.
+ *
+ * A compiled atom-insertion model uses this same entrypoint as a full-context
+ * byte-gap classifier. In that mode the returned text is the original prompt
+ * with structurally valid predicted typed delimiters inserted; autoregressive
+ * generation fields are not applied.
  */
 Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,

@@ -12,6 +12,7 @@
 #include "../Diagnostics/GradientConnectivityDiagnostic.hpp"
 #include "../../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
+#include "../../Shared/Loss/ComputeLoss/AtomInsertionLoss.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/VerboseLogging.hpp"
 
@@ -44,8 +45,12 @@ void validateLossBoundaryInputs(
     if (!ctx.device_bindings) throw std::runtime_error(std::string(caller) + ": ctx.device_bindings is NULL");
 
     payload.validate(caller);
+    const bool supervision_uploaded = payload.EnableAtomIdentification
+        ? ctx.device_bindings->d_atom_insertion_gap_targets &&
+            ctx.device_bindings->d_atom_insertion_valid_gap_mask
+        : ctx.device_bindings->d_target_ids != nullptr;
     if (!ctx.device_bindings->d_input_ids ||
-        !ctx.device_bindings->d_target_ids ||
+        !supervision_uploaded ||
         !ctx.device_bindings->d_token_to_slot_index_map) {
         throw std::runtime_error(
             std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
@@ -70,18 +75,39 @@ LossResult computeAutogradLoss(
             "computeAutogradLoss: Logits tensor not initialized - caller must run shared forward before loss");
     }
 
-    const int lm_valid_tokens = payload.lm_valid_tokens;
+    const bool atom_insertion_enabled = payload.EnableAtomIdentification;
+    const int valid_rows = atom_insertion_enabled
+        ? payload.atom_insertion_valid_gap_count
+        : payload.lm_valid_tokens;
     AG_INFO("Computing loss: tokens=" << payload.total_tokens
             << " vocab=" << payload.vocab_size
-            << " lm_valid=" << lm_valid_tokens);
+            << " valid_rows=" << valid_rows
+            << " atom_insertion=" << atom_insertion_enabled);
 
-    loss_state.loss_tensor = autograd::unified_loss(
-        forward_outputs.logits_tensor,
-        payload,
-        *ctx.device_bindings,
-        loss_config,
-        ctx.d_class_weights,
-        ctx.stream);
+    if (atom_insertion_enabled) {
+        AtomInsertion::AtomInsertionLossStats atom_stats{};
+        loss_state.loss_tensor = AtomInsertion::atomInsertionLoss(
+            forward_outputs.logits_tensor,
+            forward_outputs,
+            payload,
+            *ctx.device_bindings,
+            true,
+            AtomInsertion::AtomInsertionLossConfig{},
+            &atom_stats,
+            ctx.stream);
+        if (atom_stats.valid_gap_count != valid_rows) {
+            throw std::runtime_error(
+                "computeAutogradLoss: atom loss valid-gap count mismatch");
+        }
+    } else {
+        loss_state.loss_tensor = autograd::unified_loss(
+            forward_outputs.logits_tensor,
+            payload,
+            *ctx.device_bindings,
+            loss_config,
+            ctx.d_class_weights,
+            ctx.stream);
+    }
 
     float total_loss = 0.0f;
     CUDA_CHECK(cudaMemcpyAsync(
@@ -89,28 +115,31 @@ LossResult computeAutogradLoss(
         cudaMemcpyDeviceToHost, ctx.stream));
     CUDA_CHECK(cudaStreamSynchronize(ctx.stream));
 
-    const float text_ce_loss = total_loss;
-    if (!std::isfinite(text_ce_loss)) {
+    const float primary_loss = total_loss;
+    if (!std::isfinite(primary_loss)) {
         throw std::runtime_error(
-            "computeAutogradLoss: pure text CE is non-finite (" +
-            std::to_string(text_ce_loss) + ")");
+            std::string("computeAutogradLoss: ") +
+            (atom_insertion_enabled ? "atom BCE" : "pure text CE") +
+            " is non-finite (" + std::to_string(primary_loss) + ")");
     }
 
-    result.text_loss = text_ce_loss;
-    result.valid_tokens = lm_valid_tokens;
+    // Phase2's historical primary-loss channel is named text_loss. Atom mode
+    // uses the same scalar channel so telemetry/validation remain task-neutral.
+    result.text_loss = primary_loss;
+    result.valid_tokens = valid_rows;
     result.loss_value = total_loss;
     result.selector_loss = 0.0f;
     result.weight_text = 1.0f;
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error(
-            "computeAutogradLoss: loss is non-finite (text_ce=" +
-            std::to_string(text_ce_loss) + ")");
+            "computeAutogradLoss: loss is non-finite (primary=" +
+            std::to_string(primary_loss) + ")");
     }
 
     AG_INFO("Loss computed: total=" << total_loss
-            << " text_ce=" << text_ce_loss
+            << " primary=" << primary_loss
             << " selector=" << result.selector_loss
-            << " lm_valid=" << lm_valid_tokens);
+            << " valid_rows=" << valid_rows);
     result.success = true;
     return result;
 }

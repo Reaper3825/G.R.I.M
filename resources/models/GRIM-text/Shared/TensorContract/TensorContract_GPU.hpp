@@ -1456,6 +1456,8 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
  * 
  * @param attention_hp Grouped encoder-attention contract. Validates build/runtime head_dim,
  *        causal mask, grouped-head geometry, and ALiBi requirements before launch.
+ * @param bindings Active batch device view. Non-causal attention reads its
+ *        per-sequence key bounds from d_sequence_lengths.
  * @param scale Explicit precomputed softmax scale from the hyperparameter/config boundary.
  * @param attention_dropout_p Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% drop rate).
  *        Converted internally to keep probability for FlashAttention (keep_p = 1.0 - attention_dropout_p).
@@ -1466,6 +1468,7 @@ Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes,
     const ::GRIM::HyperParameters::EncoderSelfAttentionHP& attention_hp,
+    const Batching::BatchDeviceBindings& bindings,
     float scale,
     cudaStream_t stream = nullptr,
     float attention_dropout_p = 0.0f, uint64_t dropout_seed = 0);
@@ -1568,6 +1571,24 @@ Tensor concat(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
  * Creates SliceColumnsGradFn if input requires_grad
  */
 Tensor slice_columns(const Tensor& x, int col_offset, int out_cols, cudaStream_t stream = nullptr);
+
+/**
+ * Select the same contiguous row window from every group in a fixed rectangle.
+ * Input:  x [group_count * rows_per_group, D]
+ * Output: [group_count * selected_rows_per_group, D]
+ *
+ * Output row (group, r) maps to input row
+ * group * rows_per_group + row_offset + r. Backward scatters through the same
+ * mapping and lets the autograd scheduler perform fan-in when multiple row
+ * selections consume the same producer.
+ */
+Tensor select_fixed_group_rows(
+    const Tensor& input,
+    int group_count,
+    int rows_per_group,
+    int row_offset,
+    int selected_rows_per_group,
+    cudaStream_t stream = nullptr);
 
 /**
  * Cross-entropy loss from logits (stable log-sum-exp formulation).

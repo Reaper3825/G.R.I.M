@@ -24,7 +24,14 @@ struct BatchPayload;
 
 struct BatchDeviceStorage {
     Tensor input_ids_tensor;
+    // Per-row valid token extents [batch_size]. The attention kernels consume
+    // these as read-only key bounds for padded non-causal batches.
+    Tensor sequence_lengths_tensor;
     Tensor target_ids_tensor;
+    // Raw uint8 atom-identification channels. Tensor owns the byte capacity;
+    // BatchDeviceBindings exposes typed borrowed pointers for the active step.
+    Tensor atom_insertion_gap_targets_tensor;
+    Tensor atom_insertion_valid_gap_mask_tensor;
     Tensor numeric_values_tensor;
     Tensor atom_mask_tensor;
     Tensor atom_flags_tensor;
@@ -47,6 +54,7 @@ struct BatchDeviceStorage {
     int batch_size_capacity = 0;
     int max_seq_len_capacity = 0;
     int max_tokens_capacity = 0;
+    int max_atom_insertion_gap_rows_capacity = 0;
 };
 
 std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(

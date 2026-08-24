@@ -365,6 +365,10 @@ struct LanguageModelConfig {
     ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_execution_block = ParameterGroupPrecision::UNSPECIFIED;
 
+    // Separate full-context byte-gap atom-insertion model. This compiled model
+    // semantic is distinct from use_atom_data, which feeds ExecutionBlock.
+    bool atom_insertion_enabled = false;
+
     // Atom-data pipeline config (consumed by ExecutionBlock)
     bool use_atom_data = false;
     int atom_embedding_dim = 0;
@@ -1405,6 +1409,16 @@ inline void validateRootConfigDocument(
             validationField("lm_head_mlp_alpha", &LanguageModelConfig::lm_head_mlp_alpha)
         }, caller);
     }
+    if (params.atom_insertion_enabled) {
+        if (params.causal_mask) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom_insertion_enabled=true requires causal_mask=false");
+        }
+        if (params.max_seq_len <= 1) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom_insertion_enabled=true requires max_seq_len > 1");
+        }
+    }
     validateParameterGroupPrecision(params.parameter_precision_embedding, "parameter_precision_embedding", caller);
     validateParameterGroupPrecision(params.parameter_precision_lm_head, "parameter_precision_lm_head", caller);
     validateParameterGroupPrecision(params.parameter_precision_attention, "parameter_precision_attention", caller);
@@ -1812,6 +1826,7 @@ inline void applyCompiledModelConfig(
     params.lm_head_mlp_d_ff = compiledU32ToInt(lm.mlp_d_ff, "lm_head.mlp_d_ff");
     params.lm_head_mlp_alpha = lm.mlp_alpha;
 
+    params.atom_insertion_enabled = f.atom_insertion_enabled;
     params.use_atom_data = f.use_atom_data;
     params.atom_embedding_dim = compiledU32ToInt(f.atom_embedding_dim, "features.atom_embedding_dim");
     params.execution_block_enabled = f.execution_block.has_value();
@@ -2500,6 +2515,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_ffn);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(atom_insertion_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_embedding_dim);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);

@@ -15,6 +15,7 @@
 #include <cublas_v2.h>
 
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/BatchDeviceBindings.hpp"
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/InferenceState/KvCacheState_GPU.hpp"
@@ -25,6 +26,7 @@ namespace GRIM::Attention {
 
 struct EncoderSelfAttentionForwardRequest {
     const Batching::BatchPayload& payload;
+    const Batching::BatchDeviceBindings& bindings;
     const HyperParameters::EncoderSelfAttentionHP& hp;
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;

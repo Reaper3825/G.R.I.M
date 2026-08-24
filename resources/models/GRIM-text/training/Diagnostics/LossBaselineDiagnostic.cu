@@ -50,7 +50,9 @@ void runLossBaselineAndTokenValidation(
         // Record the actual initialization source selected during Phase1. Do not
         // infer checkpoint loading from loss magnitude: focal scaling and an
         // LM-head unigram prior can both put a fresh model well below ln(V).
-        const float plain_ce_random_reference = std::log(static_cast<float>(payload.vocab_size));
+        const float plain_ce_random_reference = payload.EnableAtomIdentification
+            ? std::log(2.0f)
+            : std::log(static_cast<float>(payload.vocab_size));
         const bool checkpoint_loaded = !ctx.loaded_checkpoint_path.empty();
         const std::string source_note = checkpoint_loaded
             ? "model_source=checkpoint checkpoint_path=\"" + ctx.loaded_checkpoint_path + "\""
@@ -86,15 +88,17 @@ void runLossBaselineAndTokenValidation(
             }
         }
     }
-    for (int s = 0; s < payload.batch_size && !has_invalid_tokens; ++s) {
-        const int flat_start = s * payload.max_seq_len;
-        const int len = payload.seq_lengths[s];
-        for (int t = 0; t < len; ++t) {
-            const int tid = payload.target_ids[flat_start + t];
-            // targets can be -1 for masked positions, but not other negatives or OOB
-            if (tid < -1 || tid >= payload.vocab_size) {
-                has_invalid_tokens = true;
-                break;
+    if (!payload.EnableAtomIdentification) {
+        for (int s = 0; s < payload.batch_size && !has_invalid_tokens; ++s) {
+            const int flat_start = s * payload.max_seq_len;
+            const int len = payload.seq_lengths[s];
+            for (int t = 0; t < len; ++t) {
+                const int tid = payload.target_ids[flat_start + t];
+                // targets can be -1 for masked positions, but not other negatives or OOB
+                if (tid < -1 || tid >= payload.vocab_size) {
+                    has_invalid_tokens = true;
+                    break;
+                }
             }
         }
     }

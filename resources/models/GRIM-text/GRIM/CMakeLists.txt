@@ -21,18 +21,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Disable Windows min/max macros
 add_compile_definitions(NOMINMAX)
 
-# Ablation: disable the causal mask (full bidirectional self-attention). Mirrors
-# the TrainingLoop option. DEFAULT IS ON (causal mask disabled). ON drops
-# GRIM_FLASHATTN_CAUSAL_ONLY (compiling the non-causal kernels) and defines
-# GRIM_ABLATE_DISABLE_CAUSAL_MASK so Ablation::kDisableCausalMask is true in
-# lockstep. To restore the causal mask, configure with -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF.
+# Ablation: disable the causal mask (full bidirectional self-attention). Both
+# attention directions are compiled; with the default OFF, compiled model config
+# controls the runtime direction. ON forces Ablation::kDisableCausalMask.
 option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" OFF)
 if(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     add_compile_definitions(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
-    message(WARNING "[GRIM] Causal-mask ablation ENABLED: building NON-causal FlashAttention kernels (GRIM_FLASHATTN_CAUSAL_ONLY dropped). Do NOT ship this binary for production.")
+    message(WARNING "[GRIM] Causal-mask ablation ENABLED: runtime attention is forced non-causal. Do NOT ship this binary for production.")
     message(STATUS  "[GRIM] Compiled causal mask = DISABLED (bidirectional self-attention; kDisableCausalMask=true). effective_causal = causal_mask && !kDisableCausalMask resolves to FALSE regardless of the runtime `causal_mask` HP.")
 else()
-    message(STATUS  "[GRIM] Compiled causal mask = ENABLED (autoregressive; kDisableCausalMask=false, GRIM_FLASHATTN_CAUSAL_ONLY defined).")
+    message(STATUS  "[GRIM] Causal-mask ablation disabled; compiled model config selects causal or non-causal attention.")
 endif()
 
 # Find required packages
@@ -148,9 +146,7 @@ target_compile_options(grim_server_flash_attention PRIVATE
 target_compile_definitions(grim_server_flash_attention PRIVATE
     GRIM_FLASHATTN_BF16_ONLY
     GRIM_FLASHATTN_HDIM64_ONLY
-    # Causal-only unless the causal-mask ablation is enabled (then the non-causal
-    # kernel templates must be compiled in so a non-causal call is valid).
-    $<$<NOT:$<BOOL:${GRIM_ABLATE_DISABLE_CAUSAL_MASK}>>:GRIM_FLASHATTN_CAUSAL_ONLY>
+    # Compile both causal and non-causal templates so model config can select.
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
 target_include_directories(grim_server_flash_attention PRIVATE ${GRIM_INCLUDE_DIRS})

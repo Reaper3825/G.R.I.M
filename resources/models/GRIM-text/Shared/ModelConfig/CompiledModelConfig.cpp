@@ -20,8 +20,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 4;
-constexpr std::uint32_t kSupportedSemanticVersion = 3;
+constexpr std::uint32_t kSupportedSchemaVersion = 5;
+constexpr std::uint32_t kSupportedSemanticVersion = 4;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -330,6 +330,11 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     if (f.lm_head.unigram_bias_enabled && !f.bias.lm_head) {
         throw std::runtime_error("compiled lm-head unigram bias requires lm-head bias");
     }
+    if (f.atom_insertion_enabled &&
+        (f.attention.causal_mask || a.max_seq_len <= 1u)) {
+        throw std::runtime_error(
+            "compiled atom-insertion model requires non-causal attention and max_seq_len > 1");
+    }
     if (f.execution_block) {
         const auto& e = *f.execution_block;
         requireBiasParent(e.decode_bias_enabled, "execution_block.decode_bias");
@@ -387,6 +392,7 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     add(f.slot_seed_encoder.has_value(), CompiledModelCapability::SlotSeedEncoder);
     add(f.lm_head.mlp_enabled, CompiledModelCapability::LmHeadMlp);
     add(f.use_atom_data, CompiledModelCapability::AtomData);
+    add(f.atom_insertion_enabled, CompiledModelCapability::AtomInsertion);
     if (expected != c.required_capabilities) {
         throw std::runtime_error("compiled required-capability vector does not match model features");
     }
@@ -499,7 +505,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     std::vector<std::uint8_t> capability_bytes;
     capability_bytes.reserve(capabilities->size() * 2u);
     for (const auto raw : *capabilities) {
-        if (raw == 0 || raw > static_cast<std::uint16_t>(CompiledModelCapability::AtomData)) {
+        if (raw == 0 || raw > static_cast<std::uint16_t>(CompiledModelCapability::AtomInsertion)) {
             throw std::runtime_error("model config contains an unknown required capability");
         }
         result.required_capabilities.push_back(static_cast<CompiledModelCapability>(raw));
@@ -529,6 +535,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         d->residual_projection_init_gain(), copyFloats(d->pbm_alibi_slopes()),
         copyFloats(d->pbm_rope_inv_freq())};
 
+    result.features.atom_insertion_enabled = f->atom_insertion_enabled();
     result.features.use_atom_data = f->use_atom_data();
     result.features.atom_embedding_dim = f->atom_embedding_dim();
     result.features.bias = {f->bias()->use_bias(), f->bias()->attention_qkv(),

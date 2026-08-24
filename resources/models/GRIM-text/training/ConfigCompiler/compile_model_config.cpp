@@ -26,8 +26,8 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 4;
-constexpr std::uint32_t kSemanticVersion = 3;
+constexpr std::uint32_t kSchemaVersion = 5;
+constexpr std::uint32_t kSemanticVersion = 4;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -93,6 +93,7 @@ struct EffectiveConfig {
     std::uint32_t lm_head_mlp_d_ff = 0;
     float lm_head_mlp_alpha = 0.0f;
 
+    bool atom_insertion_enabled = false;
     bool use_atom_data = false;
     std::uint32_t atom_embedding_dim = 0;
     bool execution_block_enabled = false;
@@ -514,6 +515,17 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     c.lm_head_mlp_alpha = requiredFinite(j, "lm_head_mlp_alpha");
     if (c.lm_head_mlp_enabled) requirePositive(c.lm_head_mlp_alpha, "lm_head_mlp_alpha");
 
+    c.atom_insertion_enabled = required<bool>(j, "atom_insertion_enabled");
+    if (c.atom_insertion_enabled) {
+        if (c.causal_mask) {
+            throw std::runtime_error(
+                "atom_insertion_enabled=true requires causal_mask=false");
+        }
+        if (c.max_seq_len <= 1u) {
+            throw std::runtime_error(
+                "atom_insertion_enabled=true requires max_seq_len > 1");
+        }
+    }
     c.use_atom_data = required<bool>(j, "use_atom_data");
     c.atom_embedding_dim = requiredU32(j, "atom_embedding_dim", !c.use_atom_data);
     c.execution_block_enabled = required<bool>(j, "execution_block_enabled");
@@ -633,6 +645,7 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     addCapability(c.slot_seed_encoder_enabled, GRIMConfig::ModelCapability_SlotSeedEncoder);
     addCapability(c.lm_head_mlp_enabled, GRIMConfig::ModelCapability_LmHeadMlp);
     addCapability(c.use_atom_data, GRIMConfig::ModelCapability_AtomData);
+    addCapability(c.atom_insertion_enabled, GRIMConfig::ModelCapability_AtomInsertion);
     std::sort(c.capabilities.begin(), c.capabilities.end(), [](auto a, auto b) {
         return static_cast<std::uint16_t>(a) < static_cast<std::uint16_t>(b);
     });
@@ -721,7 +734,8 @@ std::vector<std::uint8_t> buildArtifact(
     }
     const auto features = GRIMConfig::CreateModelFeatures(
         builder, c.use_atom_data, c.atom_embedding_dim, bias, attention, positional,
-        encoder, lm_head, execution, number_encoder, c.arg_selector_enabled, slot_seed);
+        encoder, lm_head, execution, number_encoder, c.arg_selector_enabled,
+        slot_seed, c.atom_insertion_enabled);
 
     const auto model_type = builder.CreateString(c.tokenizer_model_type);
     std::vector<flatbuffers::Offset<flatbuffers::String>> special_strings;

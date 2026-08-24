@@ -16,20 +16,19 @@ option(GRIM_TRAINING_ENABLE_VCPKG_FALLBACK "Allow fallback to vendored vcpkg whe
 option(GRIM_TRAINING_BUILD_TEST_EXECUTABLES "Build GRIM-text TrainingLoop test executables" OFF)
 
 # Ablation: disable the causal mask (full bidirectional self-attention).
-# DEFAULT IS ON (causal mask disabled) for the current collapse investigation.
-# This is NOT a header-only toggle: the causal-mask behavior is baked into which
-# FlashAttention kernel templates compile. When ON, this drops GRIM_FLASHATTN_CAUSAL_ONLY
-# (so the non-causal kernels are compiled) AND defines GRIM_ABLATE_DISABLE_CAUSAL_MASK
-# directory-wide so Ablation::kDisableCausalMask is true in lockstep.
+# Default is OFF; compiled model config controls attention direction.
+# Both causal and non-causal FlashAttention templates are compiled so the
+# compiled model config can select either behavior. This option only forces the
+# non-causal ablation directory-wide through Ablation::kDisableCausalMask.
 # To restore the causal (autoregressive) mask, configure with
-# -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF (re-adds CAUSAL_ONLY, flag back to false).
+# -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF.
 option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" OFF)
 if(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     add_compile_definitions(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
-    message(WARNING "[GRIM] Causal-mask ablation ENABLED: building NON-causal FlashAttention kernels (GRIM_FLASHATTN_CAUSAL_ONLY dropped). Do NOT ship this binary for production training.")
+    message(WARNING "[GRIM] Causal-mask ablation ENABLED: runtime attention is forced non-causal. Do NOT ship this binary for production training.")
     message(STATUS  "[GRIM] Compiled causal mask = DISABLED (bidirectional self-attention; kDisableCausalMask=true). effective_causal = causal_mask && !kDisableCausalMask resolves to FALSE regardless of the runtime `causal_mask` HP.")
 else()
-    message(STATUS  "[GRIM] Compiled causal mask = ENABLED (autoregressive; kDisableCausalMask=false, GRIM_FLASHATTN_CAUSAL_ONLY defined).")
+    message(STATUS  "[GRIM] Causal-mask ablation disabled; compiled model config selects causal or non-causal attention.")
 endif()
 
 set(GRIM_TRAINING_MANUAL_DEPS_READY OFF)
@@ -363,9 +362,8 @@ target_compile_options(grim_flash_attention PRIVATE
 target_compile_definitions(grim_flash_attention PRIVATE
     GRIM_FLASHATTN_BF16_ONLY
     GRIM_FLASHATTN_HDIM64_ONLY
-    # Causal-only unless the causal-mask ablation is enabled (then the non-causal
-    # kernel templates must be compiled in so a non-causal call is valid).
-    $<$<NOT:$<BOOL:${GRIM_ABLATE_DISABLE_CAUSAL_MASK}>>:GRIM_FLASHATTN_CAUSAL_ONLY>
+    # Compile both causal and non-causal templates; atom insertion requires the
+    # latter while ordinary language models may still select the former.
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
 target_include_directories(grim_flash_attention PRIVATE
@@ -434,6 +432,9 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
+    ../../Shared/AtomInsertion/AtomInsertionData.cu
+    ../../Shared/AtomInsertion/AtomInsertionBoundaryProjection.cu
+    ../../Shared/AtomInsertion/AtomInsertionForward.cu
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
     ../../Shared/InferenceState/KvCacheState_GPU.cu
@@ -460,6 +461,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
+    ../../Shared/Loss/ComputeLoss/AtomInsertionLoss.cu
     ../../Shared/Loss/ComputeLoss/ArgSelectorLoss.cu
     ../../Shared/Loss/ComputeLoss/CrossEntropyNLL.cu
     ../../Shared/Loss/LossSignals/LossSignals.cu

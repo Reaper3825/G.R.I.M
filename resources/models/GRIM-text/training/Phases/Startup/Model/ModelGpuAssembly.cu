@@ -184,6 +184,26 @@ void initializeNumberEncoderSubsystem(
     }
 }
 
+void initializeAtomInsertionSubsystem(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::Config::AiConfigSnapshot& model_cfg,
+    uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    const auto atom_hp =
+        GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(model_cfg);
+    GRIMText::Training::Startup::ModelRegistration::
+        initializeAtomInsertionBoundaryParameterTensors(
+            parameter_registry,
+            atom_hp,
+            weight_init_seed + 60,
+            init_stream);
+    if (atom_hp.enabled) {
+        (void)parameter_registry.requireAtomInsertionBoundaryParameters(
+            "Startup::assembleGpuModel.AtomInsertion");
+        std::cout << "Atom insertion boundary parameters created\n";
+    }
+}
+
 const GRIM::LMHeadParameterTensors& requireLmHeadParametersReady(
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const char* caller) {
@@ -359,6 +379,15 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
             std::string("[") + caller +
             "] NumberEncoder parameters not assembled by Startup::assembleGpuModel() while number_encoder is enabled.");
     }
+    const auto atom_hp =
+        GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(model_cfg);
+    if (atom_hp.enabled &&
+        !parameter_registry.getAtomInsertionBoundaryParameters()) {
+        throw std::runtime_error(
+            std::string("[") + caller +
+            "] Atom insertion boundary parameters not assembled by "
+            "Startup::assembleGpuModel() while atom insertion is enabled.");
+    }
 
     cublasSetStream(training_state.cublas_handle.get(), primary_stream);
     std::cout << "  ✓ Using pre-initialized StreamController and cuBLAS handle" << std::endl;
@@ -522,6 +551,12 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             (void)requireLmHeadParametersReady(parameter_registry, "Startup::assembleGpuModel");
             std::cout << "✓ LM head parameters created\n";
         }
+
+        initializeAtomInsertionSubsystem(
+            parameter_registry,
+            model_cfg,
+            weight_init_seed,
+            init_stream);
 
         initializeNumberEncoderSubsystem(
             parameter_registry,

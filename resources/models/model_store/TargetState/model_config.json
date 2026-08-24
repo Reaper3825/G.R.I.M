@@ -37,6 +37,7 @@
     "lm_head_mlp_enabled": false,
     "lm_head_mlp_d_ff": 1024,
     "lm_head_mlp_alpha": 0.1,
+    "atom_insertion_enabled": false,
     "use_atom_data": true,
     "atom_embedding_dim": 96,
     "selector_enabled": false,

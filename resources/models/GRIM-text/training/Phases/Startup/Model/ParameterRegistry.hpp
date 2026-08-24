@@ -8,6 +8,7 @@
 //  Current migrated surface:
 //    - Embedding durable tensor owner
 //    - LM head durable tensor owner
+//    - Optional atom insertion boundary-projection tensor owner
 //    - Encoder durable per-layer parameter tensor owner
 //    - NumberEncoder durable tensor owner
 //    - NumberEncoder parameter-group inventory
@@ -29,6 +30,7 @@
 #include <string>
 #include <vector>
 
+#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
@@ -58,6 +60,14 @@ struct LMHeadParameterTensors {
     Tensor mlp_W_up;
     Tensor mlp_W_down;
     bool owns_weights = true;
+};
+
+// Atom-insertion boundary projection durable tensor owner. The registry owns
+// this optional bundle; atom-insertion compute paths only borrow it.
+struct AtomInsertionBoundaryParameterTensors {
+    Tensor left_projection_weight;   // [d_model, d_model]
+    Tensor right_projection_weight;  // [d_model, d_model]
+    Tensor projection_bias;          // [1, d_model]
 };
 
 // NumericAtom decoder parameters. The decoder reuses digit_emb/pow10_emb as
@@ -163,6 +173,8 @@ namespace ParameterRegistry {
 struct StartupParameterRegistry {
     std::unique_ptr<GRIM::EmbeddingParameterTensors> embedding_parameters;
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
+    std::unique_ptr<GRIM::AtomInsertionBoundaryParameterTensors>
+        atom_insertion_boundary_parameters;
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
     std::unique_ptr<GRIM::NumberEncoderParameterTensors> number_encoder_parameters;
     std::unique_ptr<GRIM::SelectorParameterTensors> selector_parameters;
@@ -217,6 +229,36 @@ struct StartupParameterRegistry {
             throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.lm_head_parameters is NULL");
         }
         return *lm_head_parameters;
+    }
+
+    GRIM::AtomInsertionBoundaryParameterTensors*
+    getAtomInsertionBoundaryParameters() {
+        return atom_insertion_boundary_parameters.get();
+    }
+
+    const GRIM::AtomInsertionBoundaryParameterTensors*
+    getAtomInsertionBoundaryParameters() const {
+        return atom_insertion_boundary_parameters.get();
+    }
+
+    GRIM::AtomInsertionBoundaryParameterTensors&
+    requireAtomInsertionBoundaryParameters(const char* caller) {
+        if (!atom_insertion_boundary_parameters) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": StartupParameterRegistry.atom_insertion_boundary_parameters is NULL");
+        }
+        return *atom_insertion_boundary_parameters;
+    }
+
+    const GRIM::AtomInsertionBoundaryParameterTensors&
+    requireAtomInsertionBoundaryParameters(const char* caller) const {
+        if (!atom_insertion_boundary_parameters) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": StartupParameterRegistry.atom_insertion_boundary_parameters is NULL");
+        }
+        return *atom_insertion_boundary_parameters;
     }
 
     std::vector<GRIM::EncodingLayerParameterTensors>& encodingLayerParameterTensors() {
@@ -460,10 +502,26 @@ using FeedForwardTensorParameterSpec =
 using EmbeddingTensorParameterSpec =
     TensorParameterSpec<GRIM::EmbeddingParameterTensors>;
 
+using AtomInsertionBoundaryTensorParameterSpec =
+    TensorParameterSpec<GRIM::AtomInsertionBoundaryParameterTensors>;
+
 inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
     kEmbeddingTensorParameters = {{
         {"embedding", &GRIM::EmbeddingParameterTensors::token_weights,
          GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
+    }};
+
+inline constexpr std::array<AtomInsertionBoundaryTensorParameterSpec, 3>
+    kAtomInsertionBoundaryTensorParameters = {{
+        {"atom_insertion_left_projection_weight",
+         &GRIM::AtomInsertionBoundaryParameterTensors::left_projection_weight,
+         GRIM::ParamGroupType::LM_HEAD, GRIM::ParamStatsBucket::LM_HEAD},
+        {"atom_insertion_right_projection_weight",
+         &GRIM::AtomInsertionBoundaryParameterTensors::right_projection_weight,
+         GRIM::ParamGroupType::LM_HEAD, GRIM::ParamStatsBucket::LM_HEAD},
+        {"atom_insertion_projection_bias",
+         &GRIM::AtomInsertionBoundaryParameterTensors::projection_bias,
+         GRIM::ParamGroupType::LM_HEAD, GRIM::ParamStatsBucket::LM_HEAD},
     }};
 
 inline constexpr std::array<NumberEncoderTensorParameterSpec, 10>
@@ -636,6 +694,19 @@ inline void registerEmbeddingParameters(
     for (const auto& spec : kEmbeddingTensorParameters) {
         registrar.addTensor(spec.name,
                             embedding_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            spec.layer);
+    }
+}
+
+template <typename RegistrarT>
+inline void registerAtomInsertionBoundaryParameters(
+    GRIM::AtomInsertionBoundaryParameterTensors& parameters,
+    RegistrarT& registrar) {
+    for (const auto& spec : kAtomInsertionBoundaryTensorParameters) {
+        registrar.addTensor(spec.name,
+                            parameters.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);
