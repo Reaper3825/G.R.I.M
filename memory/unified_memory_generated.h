@@ -8,7 +8,9 @@
 
 // Ensure the included flatbuffers.h is the same version as when this file was
 // generated, otherwise it may not be compatible.
-static_assert(FLATBUFFERS_VERSION_MAJOR == 25,
+static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
+              FLATBUFFERS_VERSION_MINOR == 2 &&
+              FLATBUFFERS_VERSION_REVISION == 10,
              "Non-compatible flatbuffers version included");
 
 namespace GRIM {
@@ -367,7 +369,7 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecord(
     uint64_t id = 0,
     uint64_t timestamp = 0,
     GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_INT,
     GRIM::Memory::ContextType context = GRIM::Memory::ContextType_CONVERSATION,
     GRIM::Memory::CommType comm_type = GRIM::Memory::CommType_COMMAND,
     GRIM::Memory::Modality modality = GRIM::Memory::Modality_TEXT,
@@ -405,7 +407,7 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecordDirect(
     uint64_t id = 0,
     uint64_t timestamp = 0,
     GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_INT,
     GRIM::Memory::ContextType context = GRIM::Memory::ContextType_CONVERSATION,
     GRIM::Memory::CommType comm_type = GRIM::Memory::CommType_COMMAND,
     GRIM::Memory::Modality modality = GRIM::Memory::Modality_TEXT,
@@ -540,7 +542,7 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntry(
     uint64_t id = 0,
     uint64_t offset = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> embedding = 0,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_INT,
     GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
     uint64_t timestamp = 0,
     float confidence = 0.0f,
@@ -562,7 +564,7 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntryDirect(
     uint64_t id = 0,
     uint64_t offset = 0,
     const std::vector<float> *embedding = nullptr,
-    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_STRING,
+    GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_INT,
     GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_BASE,
     uint64_t timestamp = 0,
     float confidence = 0.0f,

@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <stdexcept>
 #include <nlohmann/json.hpp>
 
 namespace GRIM {
@@ -350,18 +351,38 @@ void UnifiedMemoryStorage::saveToFlatBuffer() {
 
 void UnifiedMemoryStorage::loadFromFlatBuffer() {
     std::ifstream ifs(fbPath, std::ios::binary);
-    if (!ifs.is_open()) return;
+    if (!ifs.is_open()) {
+        throw std::runtime_error("Failed to open UnifiedMemory FlatBuffer: " + fbPath);
+    }
   
     // Read entire file
     ifs.seekg(0, std::ios::end);
-    size_t fileSize = ifs.tellg();
+    const std::streamoff fileSize = ifs.tellg();
+    if (fileSize <= 0) {
+        throw std::runtime_error("UnifiedMemory FlatBuffer is empty or unreadable: " + fbPath);
+    }
     ifs.seekg(0, std::ios::beg);
     
-    flatBufferData.resize(fileSize);
-    ifs.read(reinterpret_cast<char*>(flatBufferData.data()), fileSize);
+    flatBufferData.resize(static_cast<size_t>(fileSize));
+    if (!ifs.read(reinterpret_cast<char*>(flatBufferData.data()), fileSize)) {
+        throw std::runtime_error("Failed to read complete UnifiedMemory FlatBuffer: " + fbPath);
+    }
+
+    flatbuffers::Verifier verifier(flatBufferData.data(), flatBufferData.size());
+    if (!GRIM::Memory::VerifyMemoryStoreBuffer(verifier)) {
+        throw std::runtime_error("Invalid UnifiedMemory FlatBuffer: " + fbPath);
+    }
     
     // Parse FlatBuffer
-    auto store = GRIM::Memory::GetMemoryStore(flatBufferData.data());
+    const auto* store = GRIM::Memory::GetMemoryStore(flatBufferData.data());
+    if (!store->metadata()) {
+        throw std::runtime_error("UnifiedMemory FlatBuffer is missing metadata: " + fbPath);
+    }
+    if (store->metadata()->schema_version() != 1) {
+        throw std::runtime_error(
+            "Unsupported UnifiedMemory FlatBuffer schema version " +
+            std::to_string(store->metadata()->schema_version()) + ": " + fbPath);
+    }
     
     if (store->records()) {
         for (const auto* record : *store->records()) {

@@ -219,6 +219,9 @@ UniByteResult UniByte::tokenizeWithMetadata(
         // Keep the contract uniform: every result carries an allocated (possibly
         // empty) per-sequence AtomTable, never a null pointer.
         result.atom_table = std::make_shared<AtomTable>();
+        result.byte_atom_alignment = buildByteAtomAlignment(
+            std::string_view{}, result.atoms, *result.atom_table,
+            "UniByte::tokenizeWithMetadata");
         recordBoundary(0);
         result.validate("UniByte::tokenizeWithMetadata");
         return result;
@@ -422,6 +425,12 @@ UniByteResult UniByte::tokenizeWithMetadata(
         throw std::runtime_error(
             "UniByte::tokenizeWithMetadata: failed to materialize all forced segment boundaries");
     }
+
+    result.byte_atom_alignment = buildByteAtomAlignment(
+        std::string_view(text.data(), text.size()),
+        result.atoms,
+        *result.atom_table,
+        "UniByte::tokenizeWithMetadata");
     
     // Pipeline contract: validate all per-token arrays are consistent
     // before this result can enter BatchPayload / GPU tensor pipeline.
