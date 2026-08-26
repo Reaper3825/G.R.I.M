@@ -155,6 +155,8 @@ public:
     GRIM::ConceptBlock getConceptBlockById(const std::string& cb_id) const;
 
     bool addConceptBlock(const GRIM::ConceptBlock& cb);
+    bool addConceptBlocks(const std::vector<GRIM::ConceptBlock>& blocks,
+                          size_t& added);
     bool updateConceptBlock(const std::string& cb_id, const GRIM::ConceptBlock& cb);
     bool removeConceptBlock(const std::string& cb_id);
 

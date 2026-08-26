@@ -32,6 +32,11 @@ UIDataHubPanel::UIDataHubPanel()
     });
     tabStructBtn_->setSize(100.0f, 28.0f);
 
+    tabGeneratorBtn_ = std::make_shared<UIButton>("Generator", [this]() {
+        setView(DataHubView::Generator);
+    });
+    tabGeneratorBtn_->setSize(100.0f, 28.0f);
+
     tabCurriculumBtn_ = std::make_shared<UIButton>("Curriculum", [this]() {
         setView(DataHubView::Curriculum);
     });
@@ -436,6 +441,46 @@ UIDataHubPanel::UIDataHubPanel()
         subjectFilterDropdown_, qualityFilterDropdown_, poolSearchInput_,
         btnAssignSelected_, currListActionMenu_,
         detailContentArea_, detailStructuredArea_, btnDetailSave_
+    };
+
+    // ── Generator tab widgets ───────────────────────────
+
+    genFrameDropdown_ = std::make_shared<UIDropdown>(
+        "", std::vector<std::string>{"Document Response"}, 0,
+        [this](int, const std::string&) {});
+    genRunModeDropdown_ = std::make_shared<UIDropdown>(
+        "", std::vector<std::string>{"Single", "Batch", "Continuous"}, 0,
+        [this](int, const std::string&) {});
+    genSeedPolicyDropdown_ = std::make_shared<UIDropdown>(
+        "", std::vector<std::string>{"Auto Seed", "Fixed Seed"}, 0,
+        [this](int, const std::string&) {});
+    genTraversalDropdown_ = std::make_shared<UIDropdown>(
+        "", std::vector<std::string>{"Seeded Random", "Round Robin"}, 0,
+        [this](int, const std::string&) {});
+
+    genSeedInput_ = std::make_shared<UIInputBox>();
+    genSeedInput_->setPlaceholder("Seed");
+    genSeedInput_->setText("1337");
+    genCountInput_ = std::make_shared<UIInputBox>();
+    genCountInput_->setPlaceholder("Count");
+    genCountInput_->setText("25");
+
+    btnGenRun_ = std::make_shared<UIButton>("Run", [this]() { startGeneratorRun(); });
+    btnGenPause_ = std::make_shared<UIButton>("Pause", [this]() { pauseGeneratorRun(); });
+    btnGenNext_ = std::make_shared<UIButton>("Next", [this]() { generateNextFrame(); });
+    btnGenSaveQueue_ = std::make_shared<UIButton>(
+        "Save Queue", [this]() { saveGeneratorQueue(); });
+    genDocumentArea_ = std::make_shared<UITextArea>(
+        "Document Input", "", [](const std::string&) {});
+    genPreviewArea_ = std::make_shared<UITextArea>(
+        "Generated ConceptBlock", "Paste a document or load document records, then press Run.",
+        [](const std::string&) {});
+
+    generatorWidgets_ = {
+        genFrameDropdown_, genRunModeDropdown_, genSeedPolicyDropdown_,
+        genTraversalDropdown_, genSeedInput_, genCountInput_,
+        btnGenRun_, btnGenPause_, btnGenNext_, btnGenSaveQueue_,
+        genDocumentArea_, genPreviewArea_
     };
 
     // ── Curriculum tab widgets ────────────────────────────
@@ -849,12 +894,14 @@ UIDataHubPanel::UIDataHubPanel()
     for (auto& w : sourcesWidgets_)    w->setVisible(false);
     for (auto& w : hfWidgets_)         w->setVisible(false);
     for (auto& w : structWidgets_)     w->setVisible(false);
+    for (auto& w : generatorWidgets_)  w->setVisible(false);
     for (auto& w : curriculumWidgets_) w->setVisible(false);
 
     // ── Backend services ────────────────────────────────
 
     pipelineOrchestrator_ = std::make_unique<GRIM::Pipeline::PipelineOrchestrator>();
     hfWebhook_            = std::make_unique<GRIM::DataCollection::HuggingFaceWebhook>();
+    conceptGenerator_     = std::make_unique<GRIM::DataCollection::ConceptGenerator>();
 
     {
         namespace fs = std::filesystem;
@@ -876,6 +923,18 @@ UIDataHubPanel::UIDataHubPanel()
         }
         if (structCfg.ollama_model.empty()) structCfg.ollama_model = "llama3.1:8b";
         structurer_ = std::make_unique<GRIM::DataCollection::DataStructurer>(structCfg);
+
+        GRIM::DataCollection::OllamaConceptBindingConfig adapterCfg;
+        adapterCfg.url = aiConfig.value("ollama_url", std::string("http://127.0.0.1:11434"));
+        adapterCfg.model = structCfg.ollama_model;
+        adapterCfg.maxInputChars = structCfg.max_input_chars;
+        try {
+            generatorAdapter_ = std::make_shared<GRIM::DataCollection::OllamaConceptBindingAdapter>(
+                std::move(adapterCfg));
+            generatorAdapterStatus_ = generatorAdapter_->adapterId();
+        } catch (const std::exception& error) {
+            generatorAdapterStatus_ = error.what();
+        }
     }
 
     // ── Load persisted state ────────────────────────────
@@ -888,12 +947,13 @@ UIDataHubPanel::UIDataHubPanel()
     updateDatasetStats();
     populateModelDropdown();
     refreshStructurerState();
+    refreshGeneratorState();
 
     if (datasetTarget_) datasetTarget_->loadConceptBlocks();
     if (datasetTarget_) datasetTarget_->loadCurriculumRegistry();
 
     addLog("DataHub initialized", 0);
-    LOG_DEBUG("DataHub", "Panel initialized — 5 tabs ready");
+    LOG_DEBUG("DataHub", "Panel initialized — 6 tabs ready");
 }
 
 // =========================================================
@@ -930,6 +990,7 @@ void UIDataHubPanel::setView(DataHubView view) {
         case DataHubView::Sources:     hideGroup(sourcesWidgets_);    break;
         case DataHubView::HuggingFace: hideGroup(hfWidgets_);         break;
         case DataHubView::Structurer:  hideGroup(structWidgets_);     break;
+        case DataHubView::Generator:   hideGroup(generatorWidgets_);  break;
         case DataHubView::Curriculum:  hideGroup(curriculumWidgets_); break;
     }
 
@@ -940,11 +1001,14 @@ void UIDataHubPanel::setView(DataHubView view) {
         case DataHubView::Sources:     showGroup(sourcesWidgets_);    break;
         case DataHubView::HuggingFace: showGroup(hfWidgets_);         break;
         case DataHubView::Structurer:  showGroup(structWidgets_);     break;
+        case DataHubView::Generator:   showGroup(generatorWidgets_);  break;
         case DataHubView::Curriculum:  showGroup(curriculumWidgets_); break;
     }
 
     if (activeView_ == DataHubView::Structurer)
         refreshStructurerState();
+    if (activeView_ == DataHubView::Generator)
+        refreshGeneratorState();
     if (activeView_ == DataHubView::Curriculum)
         refreshCurriculumTabState();
 
@@ -975,12 +1039,14 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
     tabSourcesBtn_->setPosition(tabX + 95.0f, position.y + kTabBarY);
     tabHFBtn_->setPosition(tabX + 190.0f, position.y + kTabBarY);
     tabStructBtn_->setPosition(tabX + 305.0f, position.y + kTabBarY);
-    tabCurriculumBtn_->setPosition(tabX + 410.0f, position.y + kTabBarY);
+    tabGeneratorBtn_->setPosition(tabX + 410.0f, position.y + kTabBarY);
+    tabCurriculumBtn_->setPosition(tabX + 515.0f, position.y + kTabBarY);
 
     tabHomeBtn_->update(input, dt);
     tabSourcesBtn_->update(input, dt);
     tabHFBtn_->update(input, dt);
     tabStructBtn_->update(input, dt);
+    tabGeneratorBtn_->update(input, dt);
     tabCurriculumBtn_->update(input, dt);
 
     // Background timers (run regardless of active tab)
@@ -1266,6 +1332,36 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             }
             break;
 
+        case DataHubView::Generator: {
+            for (auto& w : generatorWidgets_) w->update(input, dt);
+
+            PanelRect content = getContentRect();
+            content.origin.y += (kContentTopY - kTabBarY);
+            content.size.y   -= (kContentTopY - kTabBarY);
+            const float x = content.origin.x + 15.0f;
+            const float fullW = content.size.x - 30.0f;
+            const float leftW = fullW * 0.28f;
+            const float middleW = fullW * 0.30f;
+            const float lexiconX = x + leftW + 10.0f;
+            const float lexiconY = content.origin.y + 92.0f;
+            const float lexiconH = content.size.y - 125.0f;
+            const Vec2 mouse = input.mousePos;
+            if (mouse.x >= lexiconX && mouse.x <= lexiconX + middleW &&
+                mouse.y >= lexiconY && mouse.y <= lexiconY + lexiconH &&
+                input.mouseWheelDelta != 0.0f) {
+                const float wheelSteps = std::fabs(input.mouseWheelDelta) >= 120.0f
+                    ? input.mouseWheelDelta / 120.0f
+                    : input.mouseWheelDelta;
+                generatorLexiconScroll_ -= wheelSteps * 42.0f;
+                const float maxScroll = std::max(
+                    0.0f, generatorLexiconContentH_ - lexiconH + 12.0f);
+                generatorLexiconScroll_ = std::clamp(
+                    generatorLexiconScroll_, 0.0f, maxScroll);
+            }
+            updateGeneratorLoop(dt);
+            break;
+        }
+
         case DataHubView::Curriculum: {
                 PanelRect content = getContentRect();
                 content.origin.y += (kContentTopY - kTabBarY);
@@ -1392,12 +1488,14 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
     tabSourcesBtn_->setPosition(tabX + 95.0f, position.y + kTabBarY);
     tabHFBtn_->setPosition(tabX + 190.0f, position.y + kTabBarY);
     tabStructBtn_->setPosition(tabX + 305.0f, position.y + kTabBarY);
-    tabCurriculumBtn_->setPosition(tabX + 410.0f, position.y + kTabBarY);
+    tabGeneratorBtn_->setPosition(tabX + 410.0f, position.y + kTabBarY);
+    tabCurriculumBtn_->setPosition(tabX + 515.0f, position.y + kTabBarY);
 
     tabHomeBtn_->drawOverlay(renderer, position);
     tabSourcesBtn_->drawOverlay(renderer, position);
     tabHFBtn_->drawOverlay(renderer, position);
     tabStructBtn_->drawOverlay(renderer, position);
+    tabGeneratorBtn_->drawOverlay(renderer, position);
     tabCurriculumBtn_->drawOverlay(renderer, position);
 
     // Active tab indicator (2px underline)
@@ -1408,7 +1506,8 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         case DataHubView::Sources:     indicatorX = tabX + 95.0f;   indicatorW = 90.0f;  break;
         case DataHubView::HuggingFace: indicatorX = tabX + 190.0f;  indicatorW = 110.0f; break;
         case DataHubView::Structurer:  indicatorX = tabX + 305.0f;  indicatorW = 100.0f; break;
-        case DataHubView::Curriculum:  indicatorX = tabX + 410.0f;  indicatorW = 100.0f; break;
+        case DataHubView::Generator:   indicatorX = tabX + 410.0f;  indicatorW = 100.0f; break;
+        case DataHubView::Curriculum:  indicatorX = tabX + 515.0f;  indicatorW = 100.0f; break;
     }
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {indicatorW, 2.0f},
                       UITheme::Colors::Primary);
@@ -1423,6 +1522,7 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         case DataHubView::Sources:     drawSourcesTab(renderer, content);     break;
         case DataHubView::HuggingFace: drawHuggingFaceTab(renderer, content); break;
         case DataHubView::Structurer:  drawStructurerTab(renderer, content);  break;
+        case DataHubView::Generator:   drawGeneratorTab(renderer, content);   break;
         case DataHubView::Curriculum:  drawCurriculumTab(renderer, content);  break;
     }
 
@@ -1435,6 +1535,14 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         formatDropdown_->drawExpandedList(renderer, position);
     if (viewModeDropdown_ && viewModeDropdown_->isExpanded())
         viewModeDropdown_->drawExpandedList(renderer, position);
+    if (genFrameDropdown_ && genFrameDropdown_->isExpanded())
+        genFrameDropdown_->drawExpandedList(renderer, position);
+    if (genRunModeDropdown_ && genRunModeDropdown_->isExpanded())
+        genRunModeDropdown_->drawExpandedList(renderer, position);
+    if (genSeedPolicyDropdown_ && genSeedPolicyDropdown_->isExpanded())
+        genSeedPolicyDropdown_->drawExpandedList(renderer, position);
+    if (genTraversalDropdown_ && genTraversalDropdown_->isExpanded())
+        genTraversalDropdown_->drawExpandedList(renderer, position);
     for (const auto& card : sequenceCards_) {
         if (card.formatDropdown && card.formatDropdown->isExpanded())
             card.formatDropdown->drawExpandedList(renderer, position);
@@ -1499,6 +1607,21 @@ void UIDataHubPanel::loadUIConfig() {
         if (cfg.contains("fetchLimit"))             { fetchLimit_ = cfg["fetchLimit"]; }
         if (cfg.contains("verificationThreshold"))  { verificationThreshold_ = cfg["verificationThreshold"]; }
         if (cfg.contains("maxHFResults"))            { maxHFResults_ = cfg["maxHFResults"]; if (sliderMaxHFResults_) sliderMaxHFResults_->setValue(static_cast<float>(maxHFResults_)); }
+        if (cfg.contains("generatorSeed")) {
+            generatorBaseSeed_ = cfg["generatorSeed"].get<uint64_t>();
+            if (genSeedInput_) genSeedInput_->setText(std::to_string(generatorBaseSeed_));
+        }
+        if (cfg.contains("generatorCount")) {
+            generatorBatchCount_ = std::clamp<uint64_t>(
+                cfg["generatorCount"].get<uint64_t>(), 1, 100000);
+            if (genCountInput_) genCountInput_->setText(std::to_string(generatorBatchCount_));
+        }
+        if (cfg.contains("generatorRunMode") && genRunModeDropdown_)
+            genRunModeDropdown_->setSelectedIndex(cfg["generatorRunMode"].get<int>());
+        if (cfg.contains("generatorSeedPolicy") && genSeedPolicyDropdown_)
+            genSeedPolicyDropdown_->setSelectedIndex(cfg["generatorSeedPolicy"].get<int>());
+        if (cfg.contains("generatorTraversal") && genTraversalDropdown_)
+            genTraversalDropdown_->setSelectedIndex(cfg["generatorTraversal"].get<int>());
 
         addLog("UI config loaded", 0);
     } catch (const std::exception& e) {
@@ -1515,6 +1638,11 @@ void UIDataHubPanel::saveUIConfig() {
         cfg["fetchLimit"]             = fetchLimit_;
         cfg["verificationThreshold"]  = verificationThreshold_;
         cfg["maxHFResults"]           = maxHFResults_;
+        cfg["generatorSeed"]          = generatorBaseSeed_;
+        cfg["generatorCount"]         = generatorBatchCount_;
+        cfg["generatorRunMode"]       = genRunModeDropdown_ ? genRunModeDropdown_->getSelectedIndex() : 0;
+        cfg["generatorSeedPolicy"]    = genSeedPolicyDropdown_ ? genSeedPolicyDropdown_->getSelectedIndex() : 0;
+        cfg["generatorTraversal"]     = genTraversalDropdown_ ? genTraversalDropdown_->getSelectedIndex() : 0;
         std::ofstream f(path);
         f << std::setw(2) << cfg << std::endl;
     } catch (const std::exception& e) {

@@ -37,6 +37,7 @@ struct GenerationOptions {
     float       temperature          = 0.0f; // 0 = use model default
     float       top_p                = 0.0f; // 0 = use model default
     int         top_k                = 0;
+    int64_t     seed                 = -1;  // -1 = backend default/random
 
     // Body-built structured metadata (JSON).
     // Router calls include the full precomposed metadata.

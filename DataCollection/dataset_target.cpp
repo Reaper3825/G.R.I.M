@@ -709,6 +709,25 @@ bool DatasetTarget::addConceptBlock(const GRIM::ConceptBlock& cb) {
     return saveConceptBlocks();
 }
 
+bool DatasetTarget::addConceptBlocks(const std::vector<GRIM::ConceptBlock>& blocks,
+                                     size_t& added) {
+    const size_t originalSize = conceptBlocks_.size();
+    added = 0;
+    for (const auto& cb : blocks) {
+        if (cb.id.empty() || cbIdIndex_.count(cb.id)) continue;
+        conceptBlocks_.push_back(cb);
+        cbIdIndex_[cb.id] = conceptBlocks_.size() - 1;
+        ++added;
+    }
+    if (added == 0) return true;
+    if (saveConceptBlocks()) return true;
+
+    conceptBlocks_.resize(originalSize);
+    rebuildCBIndex();
+    added = 0;
+    return false;
+}
+
 bool DatasetTarget::updateConceptBlock(const std::string& cb_id,
                                        const GRIM::ConceptBlock& cb) {
     auto it = cbIdIndex_.find(cb_id);

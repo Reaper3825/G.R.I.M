@@ -227,6 +227,10 @@ plugins/
 plugins/*
 data/
 data/*
+!resources/models/GRIM-text/training/data/
+resources/models/GRIM-text/training/data/*
+!resources/models/GRIM-text/training/data/LexiconPieces.json
+!resources/models/GRIM-text/training/data/GeneratorDataSource.json
 !resources/models/GRIM-text/training/Phases/Startup/Data/
 !resources/models/GRIM-text/training/Phases/Startup/Data/**
 .venv310/

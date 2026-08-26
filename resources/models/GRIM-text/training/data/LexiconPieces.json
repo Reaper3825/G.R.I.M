@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "frames": [
+    {
+      "id": "document_concept.v1",
+      "label": "Document Concept",
+      "format_type": "chain_of_thought",
+      "slots": [
+        {
+          "id": "question",
+          "type": "text",
+          "description": "A focused question answerable from the document.",
+          "required": true,
+          "grounded": true
+        },
+        {
+          "id": "target_state",
+          "type": "text",
+          "description": "The knowledge state reached after answering the question.",
+          "required": true
+        },
+        {
+          "id": "reasoning_steps",
+          "type": "text_array",
+          "description": "Ordered reasoning steps derived from the document.",
+          "required": true,
+          "min_items": 2,
+          "max_items": 5
+        },
+        {
+          "id": "answer",
+          "type": "text",
+          "description": "A concise answer supported by the document.",
+          "required": true,
+          "grounded": true
+        },
+        {
+          "id": "evidence",
+          "type": "evidence_array",
+          "description": "Success criteria paired with exact quotes from the document.",
+          "required": true,
+          "grounded": true,
+          "min_items": 1
+        },
+        {
+          "id": "atoms",
+          "type": "typed_atom_array",
+          "description": "Typed values found in or deterministically derived from the document. Use an empty array when none apply.",
+          "required": false
+        }
+      ],
+      "render": {
+        "prompt": [
+          { "kind": "lexicon", "key": "transition", "suffix": ", " },
+          { "kind": "binding", "key": "question" }
+        ],
+        "answer": [
+          { "kind": "lexicon", "key": "opening", "suffix": ", ", "optional": true },
+          { "kind": "lexicon", "key": "response_frame", "suffix": " " },
+          { "kind": "binding", "key": "answer" },
+          { "kind": "lexicon", "key": "afterthought", "prefix": " ", "suffix": ".", "optional": true }
+        ]
+      }
+    }
+  ],
+  "groups": [
+    {
+      "id": "opening",
+      "label": "Opening",
+      "type": "text",
+      "values": ["sure", "okay", "alright", "well", "yes", "so"]
+    },
+    {
+      "id": "address",
+      "label": "Address",
+      "type": "string",
+      "values": ["sir", "ma'am", "Austin", "my friend"]
+    },
+    {
+      "id": "transition",
+      "label": "Transition",
+      "type": "text",
+      "required": true,
+      "values": [
+        "in this case",
+        "for this one",
+        "looking at the problem",
+        "from what you've given me",
+        "based on that",
+        "with that in mind"
+      ]
+    },
+    {
+      "id": "reasoning_bridge",
+      "label": "Reasoning Bridge",
+      "type": "text",
+      "values": [
+        "after working that out",
+        "after simplifying it",
+        "using those values",
+        "based on the calculation",
+        "once we put that together",
+        "following from that"
+      ]
+    },
+    {
+      "id": "response_frame",
+      "label": "Response Frame",
+      "type": "text",
+      "values": [
+        "what we get is",
+        "what that tells us is",
+        "the result here is",
+        "this means that",
+        "that leaves us with",
+        "we end up with"
+      ]
+    },
+    {
+      "id": "answer_leadin",
+      "label": "Answer Lead-in",
+      "type": "text",
+      "values": [
+        "the answer is",
+        "your answer would be",
+        "that comes out to",
+        "you get",
+        "the final value is"
+      ]
+    },
+    {
+      "id": "qualifier",
+      "label": "Qualifier",
+      "type": "text",
+      "values": ["in total", "altogether", "approximately", "for this problem", "at the end", "overall"]
+    },
+    {
+      "id": "afterthought",
+      "label": "Afterthought",
+      "type": "text",
+      "values": [
+        "if that helps",
+        "if that's what you were asking",
+        "assuming those numbers are correct",
+        "given the information provided"
+      ]
+    },
+    {
+      "id": "closing",
+      "label": "Closing",
+      "type": "text",
+      "values": ["hope that helps", "there you go", "that's the result", "and that's it"]
+    }
+  ]
+}

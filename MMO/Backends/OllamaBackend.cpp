@@ -79,6 +79,7 @@ GenerationResult OllamaBackend::generateWithHistory(
     if (options.temperature > 0.0f) ollama_options["temperature"]  = options.temperature;
     if (options.top_p > 0.0f)       ollama_options["top_p"]        = options.top_p;
     if (options.top_k > 0)          ollama_options["top_k"]        = options.top_k;
+    if (options.seed >= 0)           ollama_options["seed"]         = options.seed;
 
     nlohmann::json body;
     body["model"]      = ollama_model_;

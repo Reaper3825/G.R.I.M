@@ -1,7 +1,7 @@
 //======================================================//
 //  UIDataHubPanel — Tabbed data collection + structuring
 //
-//  Five tabs: Home | Sources | HuggingFace | Structurer | Curriculum
+//  Six tabs: Home | Sources | HuggingFace | Structurer | Generator | Curriculum
 //
 //  Each tab is a widget group. setView() hides the
 //  current group and shows the next. Implementation
@@ -15,6 +15,7 @@
 #pragma once
 
 #include <atomic>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,6 +41,8 @@ struct InputState;
 
 #include "DataCollection/dataset_target.hpp"
 #include "DataCollection/data_structurer.hpp"
+#include "DataCollection/concept_generator.hpp"
+#include "DataCollection/concept_binding_adapter.hpp"
 
 // ─────────────────────────────────────────────────────────
 //  View enum
@@ -50,7 +53,8 @@ enum class DataHubView : uint8_t {
     Sources     = 1,
     HuggingFace = 2,
     Structurer  = 3,
-    Curriculum  = 4
+    Generator   = 4,
+    Curriculum  = 5
 };
 
 // ─────────────────────────────────────────────────────────
@@ -79,6 +83,7 @@ private:
     std::vector<std::shared_ptr<Widget>> sourcesWidgets_;
     std::vector<std::shared_ptr<Widget>> hfWidgets_;
     std::vector<std::shared_ptr<Widget>> structWidgets_;
+    std::vector<std::shared_ptr<Widget>> generatorWidgets_;
     std::vector<std::shared_ptr<Widget>> curriculumWidgets_;
 
     // ═════════════════════════════════════════════════════
@@ -89,6 +94,7 @@ private:
     std::shared_ptr<UIButton> tabSourcesBtn_;
     std::shared_ptr<UIButton> tabHFBtn_;
     std::shared_ptr<UIButton> tabStructBtn_;
+    std::shared_ptr<UIButton> tabGeneratorBtn_;
     std::shared_ptr<UIButton> tabCurriculumBtn_;
 
     // ═════════════════════════════════════════════════════
@@ -154,6 +160,23 @@ private:
     std::shared_ptr<UISlider>    sliderParallel_;
 
     // ═════════════════════════════════════════════════════
+    //  Generator tab widgets
+    // ═════════════════════════════════════════════════════
+
+    std::shared_ptr<UIDropdown> genFrameDropdown_;
+    std::shared_ptr<UIDropdown> genRunModeDropdown_;
+    std::shared_ptr<UIDropdown> genSeedPolicyDropdown_;
+    std::shared_ptr<UIDropdown> genTraversalDropdown_;
+    std::shared_ptr<UIInputBox> genSeedInput_;
+    std::shared_ptr<UIInputBox> genCountInput_;
+    std::shared_ptr<UIButton>   btnGenRun_;
+    std::shared_ptr<UIButton>   btnGenPause_;
+    std::shared_ptr<UIButton>   btnGenNext_;
+    std::shared_ptr<UIButton>   btnGenSaveQueue_;
+    std::shared_ptr<UITextArea> genDocumentArea_;
+    std::shared_ptr<UITextArea> genPreviewArea_;
+
+    // ═════════════════════════════════════════════════════
     //  Backend services
     // ═════════════════════════════════════════════════════
 
@@ -161,6 +184,8 @@ private:
     std::unique_ptr<GRIM::DataCollection::HuggingFaceWebhook>    hfWebhook_;
     std::unique_ptr<DatasetTarget>                               datasetTarget_;
     std::unique_ptr<GRIM::DataCollection::DataStructurer>        structurer_;
+    std::unique_ptr<GRIM::DataCollection::ConceptGenerator>      conceptGenerator_;
+    std::shared_ptr<GRIM::DataCollection::IConceptBindingAdapter> generatorAdapter_;
 
     // ═════════════════════════════════════════════════════
     //  Tab draw methods
@@ -170,6 +195,7 @@ private:
     void drawSourcesTab(OverlayRenderer& renderer, const PanelRect& content);
     void drawHuggingFaceTab(OverlayRenderer& renderer, const PanelRect& content);
     void drawStructurerTab(OverlayRenderer& renderer, const PanelRect& content);
+    void drawGeneratorTab(OverlayRenderer& renderer, const PanelRect& content);
     void drawCurriculumTab(OverlayRenderer& renderer, const PanelRect& content);
     void drawQueueSection(OverlayRenderer& renderer, float x, float& y, float width);
 
@@ -327,6 +353,39 @@ private:
     float  seqScrollOffset_  = 0.0f;
     float  seqCardAreaTop_   = 0.0f;
     float  seqCardAreaH_     = 0.0f;
+
+    // ═════════════════════════════════════════════════════
+    //  Generator tab state
+    // ═════════════════════════════════════════════════════
+
+    struct GeneratorGroupView {
+        bool                      expanded = false;
+        std::shared_ptr<UIButton> toggleButton;
+    };
+    std::vector<GeneratorGroupView> generatorGroupViews_;
+
+    bool        generatorRunning_        = false;
+    bool        generatorPaused_         = false;
+    uint64_t    generatorBaseSeed_       = 1337;
+    uint64_t    generatorIteration_      = 0;
+    uint64_t    generatorGeneratedCount_ = 0;
+    uint64_t    generatorAttemptCount_   = 0;
+    uint64_t    generatorFailedCount_    = 0;
+    uint64_t    generatorBatchCount_     = 25;
+    float       generatorLoopTimer_      = 0.0f;
+    float       generatorLexiconScroll_  = 0.0f;
+    float       generatorLexiconContentH_ = 0.0f;
+    GRIM::DataCollection::GeneratedConceptFrame generatorLastFrame_;
+    std::vector<GRIM::ConceptBlock> generatorQueuedBlocks_;
+    GRIM::DataCollection::GeneratorBindingSet generatorLastBindings_;
+    GRIM::DataCollection::GeneratorDocument generatorPendingDocument_;
+    size_t      generatorPendingFrame_ = 0;
+    uint64_t    generatorPendingIteration_ = 0;
+    std::future<GRIM::DataCollection::GeneratorBindingSet> generatorFillFuture_;
+    bool        generatorFillActive_ = false;
+    std::string generatorCatalogStatus_;
+    std::string generatorSourceStatus_;
+    std::string generatorAdapterStatus_;
 
     // ═════════════════════════════════════════════════════
     //  Curriculum view state
@@ -488,6 +547,17 @@ private:
     void generateForCard(size_t cardId);
     void saveSequenceCard(size_t cardId);
     float sequenceCardHeight(const SequenceCard& card) const;
+
+    // ── Generator tab methods ───────────────────────────
+    void refreshGeneratorState();
+    void rebuildGeneratorGroupViews();
+    void startGeneratorRun();
+    void pauseGeneratorRun();
+    void generateNextFrame();
+    void saveGeneratorQueue();
+    void requestGeneratorFill();
+    void completeGeneratorFill();
+    void updateGeneratorLoop(float dt);
 
     // ── Curriculum view methods (Structurer sub-view) ───
     void drawCurriculumView(OverlayRenderer& renderer, const PanelRect& content,

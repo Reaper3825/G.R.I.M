@@ -51,7 +51,9 @@ x86/
 # ============================================
 # Training data (large files - NOT for repo)
 # ============================================
-training/data/
+training/data/*
+!training/data/LexiconPieces.json
+!training/data/GeneratorDataSource.json
 data/collected/
 data/verified/
 
