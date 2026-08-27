@@ -71,7 +71,7 @@ public:
         entries_.reserve(config.initial_capacity);
     }
 
-    ~BatchLogTape() = default;
+    ~BatchLogTape();
 
     // Non-copyable, non-movable (contains mutex)
     BatchLogTape(const BatchLogTape&) = delete;

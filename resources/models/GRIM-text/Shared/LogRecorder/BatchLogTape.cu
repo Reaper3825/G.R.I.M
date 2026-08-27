@@ -1,10 +1,9 @@
 /**
  * BatchLogTape.cu — Compilation unit for BatchLogTape
  *
- * BatchLogTape is header-only (all methods are inline in BatchLogTape.hpp).
- * This .cu file exists as a compilation unit for the static library target
- * so CMake has a source file to compile. It also provides the config
- * parsing helper that depends on <string> operations.
+ * Most BatchLogTape methods are inline in BatchLogTape.hpp. This compilation
+ * unit owns the global registration lifetime and the config parsing helper
+ * that depends on <string> operations.
  */
 
 #include "BatchLogTape.hpp"
@@ -81,6 +80,12 @@ std::string dumpTapeConfig(const TapeConfig& config) {
 //======================================================//
 
 static BatchLogTape* g_global_tape = nullptr;
+
+BatchLogTape::~BatchLogTape() {
+    if (g_global_tape == this) {
+        g_global_tape = nullptr;
+    }
+}
 
 void setGlobalTape(BatchLogTape* tape) {
     g_global_tape = tape;

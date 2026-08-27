@@ -7,7 +7,8 @@
 #   - Allocation: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. abc1234p)
 #   - Path: Set GRIM_BRIDGES2_DIR to your repo path, e.g. /ocean/projects/<alloc_id>/<username>/G.R.I.M (default: cis250124p/uwadkins)
 #   - Remote git: Each run still git fetch + reset on Bridges-2 unless GRIM_BRIDGES2_SKIP_PULL is set (unrelated to MCS/CBS/FAS).
-#   - Data: By default does NOT push merged_verified_cache.jsonl, concept_blocks.jsonl, or curriculum_registry.json,
+#   - Data: By default does NOT push merged_verified_cache.jsonl, concept_blocks.jsonl,
+#     concept_blocks.fb, or curriculum_registry.json,
 #     and does NOT run the flash-attention submodule step on --build. Opt in with --sync-all or
 #     --sync-mcs|--sync-cbs|--sync-crs|--sync-fas, or env GRIM_BRIDGES2_SYNC_ALL=1 / GRIM_BRIDGES2_SYNC_MCS|CBS|CRS|FAS=1.
 #   - Large transfers: default auto mode uses rsync --compress when available on both ends, then zstd, then gzip.
@@ -44,7 +45,7 @@
 #   --account A      Override GRIM_BRIDGES2_ACCOUNT.
 #   --sync-all       Enable MCS + CBS + CRS + FAS (push caches + flash-attention submodule on --build).
 #   --sync-mcs       Push merged_verified_cache.jsonl.
-#   --sync-cbs       Push concept_blocks.jsonl (if present locally).
+#   --sync-cbs       Push concept_blocks.jsonl and concept_blocks.fb (when present locally).
 #   --sync-crs       Push curriculum_registry.json (if present locally).
 #   --sync-gmc PATH  Push a local per-model model.grimcfg to the matching model-store directory on Bridges-2.
 #                    Equivalent grouped form: --sync gmc PATH
@@ -79,6 +80,7 @@ TRAINING_LOGS_DIR="$REPO_ROOT/resources/models/GRIM-text/training/logs"
 LOCAL_MODEL_STORE_DIR="$REPO_ROOT/resources/models/model_store"
 CACHE_PATH="$TRAINING_DATA_DIR/merged_verified_cache.jsonl"
 CONCEPT_BLOCKS_PATH="$TRAINING_DATA_DIR/concept_blocks.jsonl"
+CONCEPT_BLOCKS_FB_PATH="$TRAINING_DATA_DIR/concept_blocks.fb"
 CURRICULUM_REGISTRY_PATH="$TRAINING_DATA_DIR/curriculum_registry.json"
 LOCAL_VOCAB_PATH="$TRAINING_DATA_DIR/vocab.bin"
 LOCAL_VOCAB_TXT_PATH="$TRAINING_DATA_DIR/vocab.txt"
@@ -316,12 +318,14 @@ REMOTE_DATA="$REMOTE_TRAINING/data"
 REMOTE_TRAINING_LOGS="$REMOTE_TRAINING/logs"
 REMOTE_CACHE="$REMOTE_DATA/merged_verified_cache.jsonl"
 REMOTE_CONCEPT_BLOCKS="$REMOTE_DATA/concept_blocks.jsonl"
+REMOTE_CONCEPT_BLOCKS_FB="$REMOTE_DATA/concept_blocks.fb"
 REMOTE_CURRICULUM_REGISTRY="$REMOTE_DATA/curriculum_registry.json"
 REMOTE_VOCAB="$REMOTE_DATA/vocab.bin"
 REMOTE_VOCAB_TXT="$REMOTE_DATA/vocab.txt"
 REMOTE_GRMT="$REMOTE_DATA/training_data.grmt"
 CACHE_PATH_EXPANDED="${CACHE_PATH/#\~/$HOME}"
 CONCEPT_BLOCKS_PATH_EXPANDED="${CONCEPT_BLOCKS_PATH/#\~/$HOME}"
+CONCEPT_BLOCKS_FB_PATH_EXPANDED="${CONCEPT_BLOCKS_FB_PATH/#\~/$HOME}"
 CURRICULUM_REGISTRY_PATH_EXPANDED="${CURRICULUM_REGISTRY_PATH/#\~/$HOME}"
 LOCAL_VOCAB_PATH_EXPANDED="${LOCAL_VOCAB_PATH/#\~/$HOME}"
 LOCAL_VOCAB_TXT_PATH_EXPANDED="${LOCAL_VOCAB_TXT_PATH/#\~/$HOME}"
@@ -1546,11 +1550,19 @@ fi
 
 if [[ "$SKIP_CBS" == "1" ]]; then
   :
-elif [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
-  transfer_training_file "concept_blocks.jsonl" "$CONCEPT_BLOCKS_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS"
 else
-  echo "Skipping concept_blocks.jsonl (not found at $CONCEPT_BLOCKS_PATH_EXPANDED)."
-  echo "  DataLoader will use cache-only curriculum; add the file locally to ship UltraChat/stem blocks."
+  if [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
+    transfer_training_file "concept_blocks.jsonl" "$CONCEPT_BLOCKS_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS"
+  else
+    echo "Skipping concept_blocks.jsonl (not found at $CONCEPT_BLOCKS_PATH_EXPANDED)."
+  fi
+
+  if [[ -f "$CONCEPT_BLOCKS_FB_PATH_EXPANDED" ]]; then
+    transfer_training_file "concept_blocks.fb" "$CONCEPT_BLOCKS_FB_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS_FB"
+  else
+    echo "Skipping concept_blocks.fb (not found at $CONCEPT_BLOCKS_FB_PATH_EXPANDED)."
+    echo "  DataLoader will fall back to concept_blocks.jsonl when no remote FlatBuffer exists."
+  fi
 fi
 
 if [[ "$SKIP_CRS" == "1" ]]; then

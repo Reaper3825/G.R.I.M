@@ -32,13 +32,8 @@ namespace autograd {
 struct BiasAddGradFn : public GradFn {
     bool input_requires_grad = false;
     bool bias_requires_grad = false;
-    float* grad_input = nullptr;
-    float* grad_bias = nullptr;
-    std::shared_ptr<float> owned_grad_input;
-    std::shared_ptr<float> owned_grad_bias;
-    TensorContract::TensorShape input_shape;
-    TensorContract::TensorShape bias_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<Tensor> input_gradient;
+    std::shared_ptr<Tensor> bias_gradient;
     std::size_t total_tokens = 0;
     std::size_t features = 0;
 

@@ -21,7 +21,6 @@
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../../HyperParameters/HyperParameters_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -110,8 +109,6 @@ void launchBiasBackward(const float* grad_output, float* grad_bias,
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
-
 namespace autograd {
 
 BiasAddGradFn::BiasAddGradFn() {
@@ -123,47 +120,21 @@ void BiasAddGradFn::capture_inputs(Tensor& input, Tensor& bias,
                                    cudaStream_t stream) {
     input_requires_grad = input.requires_grad;
     bias_requires_grad = bias.requires_grad;
-    input_shape = input.shape;
-    bias_shape = bias.shape;
     total_tokens = static_cast<size_t>(num_tokens);
     features = static_cast<size_t>(num_features);
 
-    input_grad_fn = input.grad_fn;
-    register_input(input.grad_fn);
-
     if (input_requires_grad) {
-        if (input.is_leaf) {
-            input.ensure_grad();
-            grad_input = input.grad_data();
-            AG_TRACE("[BiasAddGradFn] Using persistent grad_input buffer (leaf): %p\n", (void*)grad_input);
-        } else {
-            const size_t input_numel = input.numel();
-            float* buffer_input = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_input), input_numel * sizeof(float), "BiasAddGradFn_grad_input");
-            cudaMemsetAsync(buffer_input, 0, input_numel * sizeof(float), stream);
-            owned_grad_input = std::shared_ptr<float>(buffer_input, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            grad_input = owned_grad_input.get();
-            AG_TRACE("[BiasAddGradFn] Allocated owned grad_input buffer (non-leaf): %zu floats at %p\n", input_numel, (void*)grad_input);
-        }
+        input_gradient = capture_input_gradient(
+            input, stream, "BiasAddGradFn::capture_inputs input");
+        AG_TRACE("[BiasAddGradFn] Captured input gradient Tensor data: %p\n",
+                 static_cast<void*>(input_gradient->data));
     }
 
     if (bias_requires_grad) {
-        if (bias.is_leaf) {
-            bias.ensure_grad();
-            grad_bias = bias.grad_data();
-            AG_TRACE("[BiasAddGradFn] Using persistent grad_bias buffer (leaf): %p\n", (void*)grad_bias);
-        } else {
-            float* buffer_bias = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_bias), features * sizeof(float), "BiasAddGradFn_grad_bias");
-            cudaMemsetAsync(buffer_bias, 0, features * sizeof(float), stream);
-            owned_grad_bias = std::shared_ptr<float>(buffer_bias, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            grad_bias = owned_grad_bias.get();
-            AG_TRACE("[BiasAddGradFn] Allocated owned grad_bias buffer (non-leaf): %zu floats at %p\n", features, (void*)grad_bias);
-        }
+        bias_gradient = capture_input_gradient(
+            bias, stream, "BiasAddGradFn::capture_inputs bias");
+        AG_TRACE("[BiasAddGradFn] Captured bias gradient Tensor data: %p\n",
+                 static_cast<void*>(bias_gradient->data));
     }
 }
 
@@ -186,34 +157,58 @@ void BiasAddGradFn::apply_impl(const Tensor& grad_output,
     logGradFlowTensorStats("BiasAdd.apply grad_output", grad_output.data, count, stream);
 
     // Backward for input: grad_input = grad_output (pass-through, no shape change)
-    if (input_requires_grad && grad_input) {
-        accumulate_grad(grad_input, grad_output.data, count, 1.0f, stream, "BiasAddGradFn::apply grad_input");
-        logGradFlowTensorStats("BiasAdd.apply grad_input_accum", grad_input, count, stream);
+    if (input_requires_grad) {
+        if (!input_gradient) {
+            throw std::runtime_error(
+                "BiasAddGradFn::apply: input gradient Tensor is NULL");
+        }
+        accumulate_grad(
+            input_gradient->data,
+            grad_output.data,
+            count,
+            1.0f,
+            stream,
+            "BiasAddGradFn::apply grad_input");
+        logGradFlowTensorStats(
+            "BiasAdd.apply grad_input_accum", input_gradient->data, count, stream);
     }
 
     // Backward for bias: grad_bias[j] += sum_i(grad_output[i,j])
-    if (bias_requires_grad && grad_bias) {
-        launchBiasBackward(grad_output.data, grad_bias,
+    if (bias_requires_grad) {
+        if (!bias_gradient) {
+            throw std::runtime_error(
+                "BiasAddGradFn::apply: bias gradient Tensor is NULL");
+        }
+        launchBiasBackward(grad_output.data, bias_gradient->data,
                            static_cast<int>(total_tokens), static_cast<int>(features), stream);
-        logGradFlowTensorStats("BiasAdd.apply grad_bias_accum", grad_bias, features, stream);
+        logGradFlowTensorStats(
+            "BiasAdd.apply grad_bias_accum", bias_gradient->data, features, stream);
     }
 
-    // CONTINUE AUTOGRAD CHAIN for input
-    if (input_requires_grad && input_grad_fn && input_grad_fn->op_name) {
-        Tensor view;
-        view.data = grad_output.data;  // ISSUE #58: Pass incoming gradient
-        view.shape = input_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+    if (input_requires_grad) {
+        propagate_input_gradient(
+            input_gradient,
+            stream,
+            backward_payload,
+            backward_bindings,
+            "BiasAddGradFn::apply input");
+    }
+    if (bias_requires_grad &&
+        (bias_gradient->is_leaf || !input_requires_grad ||
+         bias_gradient->grad_fn != input_gradient->grad_fn)) {
+        propagate_input_gradient(
+            bias_gradient,
+            stream,
+            backward_payload,
+            backward_bindings,
+            "BiasAddGradFn::apply bias");
     }
 }
 
 void BiasAddGradFn::release_saved() {
     GradFn::release_saved();
-    grad_input = nullptr;
-    grad_bias = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
+    bias_gradient.reset();
 }
 
 Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t stream) {

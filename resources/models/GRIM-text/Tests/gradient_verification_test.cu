@@ -31,6 +31,7 @@
 
 // Include the ACTUAL kernel headers (same as training uses)
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"  // autograd::rms_norm (production path)
+#include "../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Layers/FeedForward/Feed_Forward_GPU.hpp"
 #include "../Shared/TensorConversion/TensorConversion.hpp"
@@ -698,6 +699,111 @@ bool testFanInAccumulation() {
 }
 
 //==============================================================================
+// Test: Broadcast-add leaf gradient delivery
+//==============================================================================
+
+bool testBroadcastAddLeafDelivery() {
+    printf("\n");
+    printf("################################################################\n");
+    printf("#  TEST: Broadcast-add leaf gradient delivery                  #\n");
+    printf("################################################################\n");
+
+    cudaStream_t stream;
+    CUDA_CHECK(cudaStreamCreate(&stream));
+
+    constexpr int ROWS = 3;
+    constexpr int COLS = 4;
+    constexpr int COUNT = ROWS * COLS;
+    std::vector<float> h_input(COUNT);
+    std::iota(h_input.begin(), h_input.end(), 0.0f);
+    std::vector<float> h_bias(COLS, 0.5f);
+    std::vector<float> h_seed(COUNT, 1.0f);
+
+    float* d_input = nullptr;
+    float* d_bias = nullptr;
+    float* d_seed = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_input, COUNT * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_bias, COLS * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_seed, COUNT * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_input, h_input.data(), COUNT * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_bias, h_bias.data(), COLS * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_seed, h_seed.data(), COUNT * sizeof(float), cudaMemcpyHostToDevice));
+
+    Tensor input = Tensor::from_ptr(
+        d_input, TensorContract::TensorShape::make_BSM(ROWS, COLS), false, true);
+    Tensor bias = Tensor::from_ptr(
+        d_bias, TensorContract::TensorShape::make_BSM(1, COLS), false, true);
+    Tensor seed = Tensor::from_ptr(
+        d_seed, TensorContract::TensorShape::make_BSM(ROWS, COLS), false, false);
+    input.stream = stream;
+    bias.stream = stream;
+    seed.stream = stream;
+    input.alloc_grad();
+    bias.alloc_grad();
+
+    GRIM::setUseEngineBackward(true);
+    Tensor output = autograd::broadcast_add(input, bias, stream);
+    output.backward(&seed);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    std::vector<float> h_input_grad(COUNT);
+    std::vector<float> h_bias_grad(COLS);
+    CUDA_CHECK(cudaMemcpy(
+        h_input_grad.data(), input.grad_data(), COUNT * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(
+        h_bias_grad.data(), bias.grad_data(), COLS * sizeof(float), cudaMemcpyDeviceToHost));
+
+    const bool input_values_ok = std::all_of(
+        h_input_grad.begin(), h_input_grad.end(),
+        [](float value) { return fabsf(value - 1.0f) < 1e-6f; });
+    const bool bias_values_ok = std::all_of(
+        h_bias_grad.begin(), h_bias_grad.end(),
+        [=](float value) { return fabsf(value - static_cast<float>(ROWS)) < 1e-6f; });
+    const bool input_delivery_ok = input.gradient_delivery_count() == 1;
+    const bool bias_delivery_ok = bias.gradient_delivery_count() == 1;
+    const bool pass = input_values_ok && bias_values_ok &&
+        input_delivery_ok && bias_delivery_ok;
+
+    printf("  input gradient values: %s\n", input_values_ok ? "PASS" : "FAIL");
+    printf("  bias gradient values:  %s\n", bias_values_ok ? "PASS" : "FAIL");
+    printf("  input delivery count:  %llu (%s)\n",
+           static_cast<unsigned long long>(input.gradient_delivery_count()),
+           input_delivery_ok ? "PASS" : "FAIL");
+    printf("  bias delivery count:   %llu (%s)\n",
+           static_cast<unsigned long long>(bias.gradient_delivery_count()),
+           bias_delivery_ok ? "PASS" : "FAIL");
+    printf("  >>> Broadcast-add delivery test: %s <<<\n", pass ? "PASS" : "FAIL");
+
+    cudaFree(d_input);
+    cudaFree(d_bias);
+    cudaFree(d_seed);
+    cudaStreamDestroy(stream);
+    return pass;
+}
+
+bool testGlobalTapeLifetime() {
+    printf("\n");
+    printf("################################################################\n");
+    printf("#  TEST: Global tape lifetime                                  #\n");
+    printf("################################################################\n");
+
+    bool registered = false;
+    {
+        GRIM::Logging::TapeConfig config;
+        GRIM::Logging::BatchLogTape tape(config);
+        GRIM::Logging::setGlobalTape(&tape);
+        registered = GRIM::Logging::getGlobalTape() == &tape;
+    }
+    const bool cleared = GRIM::Logging::getGlobalTape() == nullptr;
+    const bool pass = registered && cleared;
+
+    printf("  tape registration: %s\n", registered ? "PASS" : "FAIL");
+    printf("  destruction clears global pointer: %s\n", cleared ? "PASS" : "FAIL");
+    printf("  >>> Global tape lifetime test: %s <<<\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+//==============================================================================
 // Main
 //==============================================================================
 
@@ -732,11 +838,13 @@ int main() {
 
     // Autograd worklist engine: fan-in accumulation must not collapse.
     const bool fanin_ok = testFanInAccumulation();
+    const bool bias_add_ok = testBroadcastAddLeafDelivery();
+    const bool tape_lifetime_ok = testGlobalTapeLifetime();
 
     printf("\n");
     printf("****************************************************************\n");
     printf("*                    TEST COMPLETE                             *\n");
     printf("****************************************************************\n");
 
-    return fanin_ok ? 0 : 1;
+    return fanin_ok && bias_add_ok && tape_lifetime_ok ? 0 : 1;
 }
