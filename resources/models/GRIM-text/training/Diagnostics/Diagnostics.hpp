@@ -12,6 +12,7 @@
 #include "BoundaryDiagnostic.hpp"
 #include "SpecialTokenDiagnostic.hpp"
 #include "AtomStatsDiagnostic.hpp"
+#include "AtomIdentifierDiagnostic.hpp"
 #include "LossBaselineDiagnostic.hpp"
 #include "LossStatsDiagnostic.hpp"
 #include "GradientNormDiagnostic.hpp"

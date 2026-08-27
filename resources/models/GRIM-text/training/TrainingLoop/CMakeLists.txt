@@ -618,6 +618,8 @@ add_executable(train_gpu
     ../Diagnostics/SpecialTokenDiagnostic.hpp
     ../Diagnostics/AtomStatsDiagnostic.cu
     ../Diagnostics/AtomStatsDiagnostic.hpp
+    ../Diagnostics/AtomIdentifierDiagnostic.cu
+    ../Diagnostics/AtomIdentifierDiagnostic.hpp
     ../Diagnostics/LossBaselineDiagnostic.cu
     ../Diagnostics/LossBaselineDiagnostic.hpp
     ../Diagnostics/LossStatsDiagnostic.cu

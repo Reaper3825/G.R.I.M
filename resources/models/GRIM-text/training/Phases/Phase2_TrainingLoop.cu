@@ -684,7 +684,9 @@ BatchResult processBatch(
     GRIM::GradStats::beginBatch();
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After BATCH_INFO log, checking shouldLogAtomStats...\n");
-    GRIM::Diagnostics::runAtomStatsDiagnostic(ctx, payload, batch_idx);
+    if (!payload.EnableAtomIdentification) {
+        GRIM::Diagnostics::runAtomStatsDiagnostic(ctx, payload, batch_idx);
+    }
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After atom stats, entering boundary diagnostic...\n");
     GRIM::Diagnostics::runBoundaryDiagnostic(ctx, payload, batch_idx);
@@ -828,6 +830,19 @@ BatchResult processBatch(
     }
     if (!std::isfinite(loss_result.loss_value)) {
         throw std::runtime_error("Non-finite loss: " + std::to_string(loss_result.loss_value));
+    }
+
+    // Atom insertion uses the shared diagnostic-sync cadence documented for
+    // Rho diagnostics. Inspect the live gap logits before backward so this log
+    // reports target balance and actual thresholded delimiter predictions.
+    if (payload.EnableAtomIdentification &&
+        GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx)) {
+        GRIM::Diagnostics::runAtomIdentifierDiagnostic(
+            payload,
+            forward_outputs.logits_tensor,
+            stream,
+            batch_idx,
+            ctx.global_step);
     }
 
     if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_LOGS) {
