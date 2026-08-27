@@ -323,11 +323,11 @@ public:
     Tensor atom_insertion_right_projected;
     Tensor atom_insertion_projection_sum;
     Tensor atom_insertion_gap_states;
-    // Contiguous atom-column logits materialized by loss assembly from the
-    // full-vocabulary gap logits. BCE-with-logits saves its own sigmoid
-    // probabilities for backward; this remains the ordinary graph input that
-    // connects the loss to the full-vocabulary logits.
-    Tensor atom_insertion_delimiter_logits;
+    // Contiguous atom decision logits (typed OPEN classes + type-free EXIT)
+    // materialized by loss assembly from the full-vocabulary gap logits.
+    // BCE-with-logits saves its own sigmoid probabilities for backward; this
+    // remains the ordinary graph input connecting loss to full-vocabulary logits.
+    Tensor atom_insertion_decision_logits;
     // Candidate keys supplied by the independent selector pipeline. Core model
     // forward does not derive these from NumberEncoder.
     Tensor selector_candidate_keys; // [num_pool_atoms, d_model]
@@ -407,7 +407,7 @@ public:
         lm_head_mlp_residual_out = Tensor();
         // Clear in reverse graph order so borrowed primitive inputs remain live
         // until their downstream result tensors have released their GradFns.
-        atom_insertion_delimiter_logits = Tensor();
+        atom_insertion_decision_logits = Tensor();
         logits_tensor = Tensor();
         atom_insertion_gap_states = Tensor();
         atom_insertion_projection_sum = Tensor();
@@ -522,8 +522,8 @@ public:
             atom_insertion_projection_sum);
         reportTensor("atom_insertion_gap_states", atom_insertion_gap_states);
         reportTensor(
-            "atom_insertion_delimiter_logits",
-            atom_insertion_delimiter_logits);
+            "atom_insertion_decision_logits",
+            atom_insertion_decision_logits);
         reportTensor("selector_candidate_keys", selector_candidate_keys);
         reportTensor("selector_logits", selector_logits);
         reportTensor("slot_seed_contextual_input", slot_seed_contextual_input);

@@ -63,26 +63,26 @@ void appendExactBytes(std::string_view source,
     destination.append(source.data() + begin, end - begin);
 }
 
-void setDelimiterTarget(std::vector<GapDelimiterTargets>& targets,
-                        std::size_t gap,
-                        int delimiter_token_id,
-                        const std::string& prefix) {
+void setDecisionTarget(std::vector<GapAtomDecisionTargets>& targets,
+                       std::size_t gap,
+                       int decision_class,
+                       const std::string& prefix) {
     if (gap >= targets.size()) {
         throw std::runtime_error(
-            prefix + ": delimiter target gap=" + std::to_string(gap) +
+            prefix + ": atom decision target gap=" + std::to_string(gap) +
             " is outside gap count=" + std::to_string(targets.size()));
     }
-    if (!Tokenizer::isAtomTokenId(delimiter_token_id)) {
+    if (decision_class < 0 || decision_class >= kAtomDecisionClassCount) {
         throw std::runtime_error(
-            prefix + ": token_id=" + std::to_string(delimiter_token_id) +
-            " is not an atom delimiter token");
+            prefix + ": atom decision class=" +
+            std::to_string(decision_class) + " is outside [0," +
+            std::to_string(kAtomDecisionClassCount) + ")");
     }
-    const std::size_t column = static_cast<std::size_t>(
-        delimiter_token_id - Tokenizer::ATOM_TOKEN_OFFSET);
+    const std::size_t column = static_cast<std::size_t>(decision_class);
     if (targets[gap][column] != 0) {
         throw std::runtime_error(
-            prefix + ": duplicate delimiter target token_id=" +
-            std::to_string(delimiter_token_id) + " at gap=" +
+            prefix + ": duplicate atom decision class=" +
+            std::to_string(decision_class) + " at gap=" +
             std::to_string(gap));
     }
     targets[gap][column] = 1;
@@ -117,44 +117,19 @@ void validateSpanContent(std::string_view annotated_source,
 
 } // namespace
 
-std::size_t delimiterClassIndexOrThrow(int delimiter_token_id,
-                                       const char* caller) {
-    const std::string prefix = requireCaller(caller);
-    if (!Tokenizer::isAtomTokenId(delimiter_token_id)) {
-        throw std::runtime_error(
-            prefix + ": token_id=" + std::to_string(delimiter_token_id) +
-            " is not an atom delimiter token");
-    }
-    return static_cast<std::size_t>(
-        delimiter_token_id - Tokenizer::ATOM_TOKEN_OFFSET);
-}
-
-int delimiterTokenIdForClassOrThrow(std::size_t delimiter_class,
-                                    const char* caller) {
-    const std::string prefix = requireCaller(caller);
-    if (delimiter_class >= kDelimiterClassCount) {
-        throw std::runtime_error(
-            prefix + ": delimiter_class=" +
-            std::to_string(delimiter_class) + " is outside [0," +
-            std::to_string(kDelimiterClassCount) + ")");
-    }
-    return Tokenizer::ATOM_TOKEN_OFFSET +
-        static_cast<int>(delimiter_class);
-}
-
-bool AtomInsertionExample::hasDelimiterTarget(
+bool AtomInsertionExample::hasDecisionTarget(
     std::size_t gap,
-    int delimiter_token_id) const {
-    if (gap >= gap_delimiter_targets.size()) {
+    int decision_class) const {
+    if (gap >= gap_decision_targets.size()) {
         throw std::runtime_error(
-            "AtomInsertionExample::hasDelimiterTarget: gap=" +
+            "AtomInsertionExample::hasDecisionTarget: gap=" +
             std::to_string(gap) + " is outside gap count=" +
-            std::to_string(gap_delimiter_targets.size()));
+            std::to_string(gap_decision_targets.size()));
     }
-    const std::size_t column = delimiterClassIndexOrThrow(
-        delimiter_token_id,
-        "AtomInsertionExample::hasDelimiterTarget");
-    return gap_delimiter_targets[gap][column] != 0;
+    (void)decisionVocabColumnOrThrow(
+        decision_class, "AtomInsertionExample::hasDecisionTarget");
+    return gap_decision_targets[gap][
+        static_cast<std::size_t>(decision_class)] != 0;
 }
 
 void AtomInsertionExample::validate(const char* caller) const {
@@ -180,10 +155,10 @@ void AtomInsertionExample::validate(const char* caller) const {
         throw std::runtime_error(
             prefix + ": transformer input must begin with BOS and end with EOS");
     }
-    if (gap_delimiter_targets.size() != expected_gap_count) {
+    if (gap_decision_targets.size() != expected_gap_count) {
         throw std::runtime_error(
-            prefix + ": gap_delimiter_targets.size()=" +
-            std::to_string(gap_delimiter_targets.size()) +
+            prefix + ": gap_decision_targets.size()=" +
+            std::to_string(gap_decision_targets.size()) +
             " != byte count + 1=" + std::to_string(expected_gap_count));
     }
     if (valid_utf8_gaps.size() != expected_gap_count) {
@@ -216,17 +191,20 @@ void AtomInsertionExample::validate(const char* caller) const {
     }
 
     for (std::size_t gap = 0; gap < expected_gap_count; ++gap) {
-        for (std::size_t column = 0; column < kDelimiterClassCount; ++column) {
-            if (gap_delimiter_targets[gap][column] > 1) {
+        for (int decision_class = 0;
+             decision_class < kAtomDecisionClassCount;
+             ++decision_class) {
+            if (gap_decision_targets[gap][
+                    static_cast<std::size_t>(decision_class)] > 1) {
                 throw std::runtime_error(
                     prefix + ": gap target must be binary at gap=" +
                     std::to_string(gap) + " column=" +
-                    std::to_string(column));
+                    std::to_string(decision_class));
             }
         }
     }
 
-    std::vector<GapDelimiterTargets> expected_targets(expected_gap_count);
+    std::vector<GapAtomDecisionTargets> expected_targets(expected_gap_count);
     std::size_t previous_end = 0;
     for (std::size_t occurrence = 0; occurrence < spans.size(); ++occurrence) {
         const AtomInsertionSpanLabel& span = spans[occurrence];
@@ -250,20 +228,22 @@ void AtomInsertionExample::validate(const char* caller) const {
                 std::to_string(occurrence));
         }
 
-        const int open_token_id =
-            Tokenizer::atomTypeToOpenTokenId(span.type);
-        const int close_token_id =
-            Tokenizer::atomTypeToCloseTokenId(span.type);
-        setDelimiterTarget(
-            expected_targets, span.begin_gap, open_token_id, prefix);
-        setDelimiterTarget(
-            expected_targets, span.end_gap, close_token_id, prefix);
+        setDecisionTarget(
+            expected_targets,
+            span.begin_gap,
+            openDecisionClassIndexOrThrow(span.type, caller),
+            prefix);
+        setDecisionTarget(
+            expected_targets,
+            span.end_gap,
+            kExitDecisionClassIndex,
+            prefix);
         previous_end = span.end_gap;
     }
 
-    if (gap_delimiter_targets != expected_targets) {
+    if (gap_decision_targets != expected_targets) {
         throw std::runtime_error(
-            prefix + ": dense delimiter targets do not exactly match span labels");
+            prefix + ": dense decision targets do not exactly match span labels");
     }
 }
 
@@ -397,18 +377,18 @@ AtomInsertionExample buildAtomInsertionExample(
     }
     example.transformer_input_ids.push_back(Tokenizer::EOS_TOKEN_ID);
 
-    example.gap_delimiter_targets.resize(
+    example.gap_decision_targets.resize(
         example.plain_text_bytes.size() + 1);
     for (const AtomInsertionSpanLabel& span : example.spans) {
-        setDelimiterTarget(
-            example.gap_delimiter_targets,
+        setDecisionTarget(
+            example.gap_decision_targets,
             span.begin_gap,
-            Tokenizer::atomTypeToOpenTokenId(span.type),
+            openDecisionClassIndexOrThrow(span.type, caller),
             prefix);
-        setDelimiterTarget(
-            example.gap_delimiter_targets,
+        setDecisionTarget(
+            example.gap_decision_targets,
             span.end_gap,
-            Tokenizer::atomTypeToCloseTokenId(span.type),
+            kExitDecisionClassIndex,
             prefix);
     }
 
@@ -488,7 +468,7 @@ Batching::BatchPayload buildAtomInsertionBatchPayload(
 
     payload.atom_insertion_gap_rows_per_sequence = gap_rows_per_sequence;
     payload.atom_insertion_gap_targets.assign(
-        static_cast<std::size_t>(total_gap_rows) * kDelimiterClassCount,
+        static_cast<std::size_t>(total_gap_rows) * kAtomDecisionClassCount,
         0);
     payload.atom_insertion_valid_gap_mask.assign(
         static_cast<std::size_t>(total_gap_rows), 0);
@@ -542,13 +522,15 @@ Batching::BatchPayload buildAtomInsertionBatchPayload(
                 ++row_valid_gap_count;
                 ++payload.atom_insertion_valid_gap_count;
             }
-            for (std::size_t delimiter_class = 0;
-                 delimiter_class < kDelimiterClassCount;
-                 ++delimiter_class) {
-                const uint8_t target = example.gap_delimiter_targets[
-                    static_cast<std::size_t>(gap)][delimiter_class];
+            for (int decision_class = 0;
+                 decision_class < kAtomDecisionClassCount;
+                 ++decision_class) {
+                const uint8_t target = example.gap_decision_targets[
+                    static_cast<std::size_t>(gap)][
+                    static_cast<std::size_t>(decision_class)];
                 payload.atom_insertion_gap_targets[
-                    flat_gap * kDelimiterClassCount + delimiter_class] = target;
+                    flat_gap * kAtomDecisionClassCount +
+                    static_cast<std::size_t>(decision_class)] = target;
                 if (target != 0) {
                     ++payload.atom_insertion_positive_label_count;
                 }

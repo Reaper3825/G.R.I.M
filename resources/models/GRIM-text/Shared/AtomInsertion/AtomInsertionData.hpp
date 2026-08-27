@@ -5,8 +5,8 @@
 
 #pragma once
 
+#include "AtomInsertionDecisionLayout.hpp"
 #include "../Batching/BatchPayload.hpp"
-#include "../UnigramByte/TokenLayout.hpp"
 
 #include <array>
 #include <cstddef>
@@ -17,13 +17,9 @@
 
 namespace GRIM::AtomInsertion {
 
-// The insertion task reuses the existing opening/closing atom token IDs as
-// output classes. This is a task-head dimension, not a new tokenizer vocab.
-inline constexpr std::size_t kDelimiterClassCount =
-    static_cast<std::size_t>(Tokenizer::ATOM_VOCAB_SIZE);
-
-using GapDelimiterTargets =
-    std::array<std::uint8_t, kDelimiterClassCount>;
+using GapAtomDecisionTargets =
+    std::array<std::uint8_t,
+               static_cast<std::size_t>(kAtomDecisionClassCount)>;
 
 // Coordinates address gaps around the exact de-annotated source bytes. For N
 // bytes, both begin_gap and end_gap are in [0, N]. End is exclusive, so an
@@ -49,10 +45,10 @@ struct AtomInsertionExample {
     // states so adjacent-state projection produces exactly N + 1 gaps.
     std::vector<int> transformer_input_ids;
 
-    // Dense multi-label supervision over the N + 1 byte gaps. Columns map to
-    // [ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET), allowing a gap to contain both
-    // a close and an open event for adjacent spans.
-    std::vector<GapDelimiterTargets> gap_delimiter_targets;
+    // Dense multi-label supervision over the N + 1 byte gaps. The first
+    // kAtomTypeCount columns are typed OPEN decisions and the final column is
+    // type-free EXIT. A gap may contain both EXIT and OPEN for adjacent spans.
+    std::vector<GapAtomDecisionTargets> gap_decision_targets;
 
     // One value per gap. A value of 1 means inserting ASCII delimiter bytes at
     // this gap preserves well-formed UTF-8; 0 marks a gap inside a multibyte
@@ -68,21 +64,12 @@ struct AtomInsertionExample {
     std::size_t transformerInputSize() const noexcept {
         return transformer_input_ids.size();
     }
-    std::size_t gapSize() const noexcept { return gap_delimiter_targets.size(); }
+    std::size_t gapSize() const noexcept { return gap_decision_targets.size(); }
     bool empty() const noexcept { return plain_text_bytes.empty(); }
 
-    bool hasDelimiterTarget(std::size_t gap, int delimiter_token_id) const;
+    bool hasDecisionTarget(std::size_t gap, int decision_class) const;
     void validate(const char* caller) const;
 };
-
-// Converts an existing atom delimiter token ID into its dense task-head column.
-// Throws for non-atom IDs.
-std::size_t delimiterClassIndexOrThrow(int delimiter_token_id,
-                                       const char* caller);
-
-// Inverse mapping for diagnostics and loss-head slicing.
-int delimiterTokenIdForClassOrThrow(std::size_t delimiter_class,
-                                    const char* caller);
 
 // Builds insertion supervision from authored text such as:
 //

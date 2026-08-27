@@ -1,11 +1,11 @@
 //======================================================//
 //  AtomInsertionLoss.cu
-//  Typed delimiter loss assembled from autograd primitives
+//  OPEN-type + EXIT loss assembled from autograd primitives
 //======================================================//
 
 #include "AtomInsertionLoss.hpp"
 
-#include "../../UnigramByte/TokenLayout.hpp"
+#include "../../AtomInsertion/AtomInsertionDecisionLayout.hpp"
 
 #include <cmath>
 #include <limits>
@@ -248,17 +248,18 @@ Tensor maskedBinaryCrossEntropyWithLogits(
     }
     const auto shape = logits.shape.as_2d();
     const int gap_rows = payload.atomInsertionGapRowCount();
-    if (gap_rows >
-        std::numeric_limits<int>::max() / Tokenizer::ATOM_VOCAB_SIZE) {
+    if (gap_rows > std::numeric_limits<int>::max() /
+            GRIM::AtomInsertion::kAtomDecisionClassCount) {
         throw std::runtime_error(
             "maskedBinaryCrossEntropyWithLogits: label count overflows int");
     }
     if (shape.rows != gap_rows ||
-        shape.cols != Tokenizer::ATOM_VOCAB_SIZE) {
+        shape.cols != GRIM::AtomInsertion::kAtomDecisionClassCount) {
         throw std::runtime_error(
             "maskedBinaryCrossEntropyWithLogits: expected logits shape [" +
             std::to_string(gap_rows) + "," +
-            std::to_string(Tokenizer::ATOM_VOCAB_SIZE) + "] got [" +
+            std::to_string(GRIM::AtomInsertion::kAtomDecisionClassCount) +
+            "] got [" +
             std::to_string(shape.rows) + "," +
             std::to_string(shape.cols) + "]");
     }
@@ -289,7 +290,8 @@ Tensor maskedBinaryCrossEntropyWithLogits(
             "masked_bce_saved_probabilities");
     }
 
-    const int label_count = gap_rows * Tokenizer::ATOM_VOCAB_SIZE;
+    const int label_count =
+        gap_rows * GRIM::AtomInsertion::kAtomDecisionClassCount;
     const int blocks = 1 + (label_count - 1) / kBlockSize;
     const float inverse_normalization = 1.0f / normalization_weight;
     kernelMaskedBinaryCrossEntropyWithLogitsForward<<<
@@ -300,7 +302,7 @@ Tensor maskedBinaryCrossEntropyWithLogits(
         result.data,
         saved_probabilities.data,
         gap_rows,
-        Tokenizer::ATOM_VOCAB_SIZE,
+        GRIM::AtomInsertion::kAtomDecisionClassCount,
         config.positive_label_weight,
         config.negative_label_weight,
         inverse_normalization);
@@ -313,7 +315,8 @@ Tensor maskedBinaryCrossEntropyWithLogits(
         grad_fn->capture_input(logits, stream);
         grad_fn->saved_probabilities = std::move(saved_probabilities);
         grad_fn->gap_rows = gap_rows;
-        grad_fn->labels_per_gap = Tokenizer::ATOM_VOCAB_SIZE;
+        grad_fn->labels_per_gap =
+            GRIM::AtomInsertion::kAtomDecisionClassCount;
         grad_fn->positive_label_weight = config.positive_label_weight;
         grad_fn->negative_label_weight = config.negative_label_weight;
         grad_fn->inverse_normalization = inverse_normalization;
@@ -381,7 +384,7 @@ Tensor atomInsertionLoss(
 
     const int positive_count = payload.atom_insertion_positive_label_count;
     const int total_valid_labels =
-        payload.atom_insertion_valid_gap_count * Tokenizer::ATOM_VOCAB_SIZE;
+        payload.atom_insertion_valid_gap_count * kAtomDecisionClassCount;
     const int negative_count = total_valid_labels - positive_count;
     if (positive_count < 0 || negative_count < 0) {
         throw std::runtime_error(
@@ -399,10 +402,10 @@ Tensor atomInsertionLoss(
     // The slice's GradFn connects backward to the full-vocabulary head and lets
     // the scheduler accumulate any other users. The BCE primitive owns its
     // saved sigmoid probabilities; it does not borrow this slice's value buffer.
-    forward_outputs.atom_insertion_delimiter_logits = autograd::slice_columns(
+    forward_outputs.atom_insertion_decision_logits = autograd::slice_columns(
         full_gap_vocab_logits,
-        Tokenizer::ATOM_TOKEN_OFFSET,
-        Tokenizer::ATOM_VOCAB_SIZE,
+        kAtomDecisionVocabColumnOffset,
+        kAtomDecisionClassCount,
         stream);
 
     if (out_stats) {
@@ -413,7 +416,7 @@ Tensor atomInsertionLoss(
     }
 
     return autograd::maskedBinaryCrossEntropyWithLogits(
-        forward_outputs.atom_insertion_delimiter_logits,
+        forward_outputs.atom_insertion_decision_logits,
         payload,
         bindings,
         config,

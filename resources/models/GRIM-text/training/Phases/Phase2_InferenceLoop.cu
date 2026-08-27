@@ -6,6 +6,8 @@
 #include "Phase2_InferenceLoop.hpp"
 
 #include "../../Shared/AtomInsertion/AtomInsertionData.hpp"
+#include "../../Shared/AtomInsertion/AtomInsertionDecode.hpp"
+#include "../../Shared/AtomInsertion/AtomInsertionDecisionLayout.hpp"
 #include "../../Shared/Batching/BatchDeviceUpload.hpp"
 #include "Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
@@ -80,153 +82,6 @@ void validateInferenceForwardPayload(
     const GRIM::Batching::BatchPayload& active_payload,
     const char* caller);
 
-struct DecodedAtomSpan {
-    std::size_t begin_gap = 0;
-    std::size_t end_gap = 0;
-    GRIM::Tokenizer::AtomType type = GRIM::Tokenizer::AtomType::ATOM_INT;
-};
-
-std::string decodeAtomDelimiterPredictions(
-    const std::string& plain_text,
-    const std::vector<std::uint8_t>& valid_gap_mask,
-    const std::vector<float>& delimiter_logits,
-    float decision_logit) {
-    constexpr int type_count = GRIM::Tokenizer::kAtomTypeCount;
-    constexpr int delimiter_count = GRIM::Tokenizer::ATOM_VOCAB_SIZE;
-    const std::size_t gap_count = plain_text.size() + 1;
-    if (valid_gap_mask.size() != gap_count) {
-        throw std::runtime_error(
-            "decodeAtomDelimiterPredictions: valid-gap mask size mismatch");
-    }
-    if (delimiter_logits.size() != gap_count * delimiter_count) {
-        throw std::runtime_error(
-            "decodeAtomDelimiterPredictions: delimiter-logit shape mismatch");
-    }
-    if (!std::isfinite(decision_logit)) {
-        throw std::runtime_error(
-            "decodeAtomDelimiterPredictions: decision logit is not finite");
-    }
-
-    std::vector<DecodedAtomSpan> spans;
-    bool has_active_span = false;
-    GRIM::Tokenizer::AtomType active_type =
-        GRIM::Tokenizer::AtomType::ATOM_INT;
-    std::size_t active_begin_gap = 0;
-
-    for (std::size_t gap = 0; gap < gap_count; ++gap) {
-        const float* row = delimiter_logits.data() + gap * delimiter_count;
-        for (int delimiter = 0; delimiter < delimiter_count; ++delimiter) {
-            if (!std::isfinite(row[delimiter])) {
-                throw std::runtime_error(
-                    "decodeAtomDelimiterPredictions: non-finite delimiter logit at gap=" +
-                    std::to_string(gap) + " class=" +
-                    std::to_string(delimiter));
-            }
-        }
-        if (valid_gap_mask[gap] == 0) {
-            continue;
-        }
-
-        bool consumed_close_at_gap = false;
-        if (has_active_span) {
-            const int type_index = static_cast<int>(active_type);
-            if (row[type_count + type_index] >= decision_logit) {
-                const auto parsed = GRIM::Tokenizer::AtomTable::parseAtom(
-                    active_type,
-                    std::string_view(
-                        plain_text.data() + active_begin_gap,
-                        gap - active_begin_gap));
-                if (parsed.success) {
-                    spans.push_back(
-                        DecodedAtomSpan{active_begin_gap, gap, active_type});
-                }
-                has_active_span = false;
-                consumed_close_at_gap = true;
-            }
-        }
-
-        if (!has_active_span) {
-            int selected_type_index = -1;
-            float selected_logit = decision_logit;
-            for (int type_index = 0; type_index < type_count; ++type_index) {
-                const float open_logit = row[type_index];
-                if (open_logit >= decision_logit &&
-                    (selected_type_index < 0 || open_logit > selected_logit)) {
-                    selected_type_index = type_index;
-                    selected_logit = open_logit;
-                }
-            }
-            if (selected_type_index >= 0) {
-                const auto selected_type =
-                    static_cast<GRIM::Tokenizer::AtomType>(selected_type_index);
-                const bool predicts_same_gap_close =
-                    !consumed_close_at_gap &&
-                    row[type_count + selected_type_index] >= decision_logit;
-                if (predicts_same_gap_close) {
-                    const auto parsed = GRIM::Tokenizer::AtomTable::parseAtom(
-                        selected_type, std::string_view{});
-                    if (parsed.success) {
-                        spans.push_back(
-                            DecodedAtomSpan{gap, gap, selected_type});
-                    }
-                } else {
-                    has_active_span = true;
-                    active_type = selected_type;
-                    active_begin_gap = gap;
-                }
-            }
-        }
-    }
-
-    std::vector<int> close_at(gap_count, -1);
-    std::vector<int> empty_at(gap_count, -1);
-    std::vector<int> open_at(gap_count, -1);
-    for (const DecodedAtomSpan& span : spans) {
-        const int type_index = static_cast<int>(span.type);
-        if (span.begin_gap == span.end_gap) {
-            if (empty_at[span.begin_gap] >= 0) {
-                throw std::runtime_error(
-                    "decodeAtomDelimiterPredictions: duplicate empty span event");
-            }
-            empty_at[span.begin_gap] = type_index;
-            continue;
-        }
-        if (open_at[span.begin_gap] >= 0 || close_at[span.end_gap] >= 0) {
-            throw std::runtime_error(
-                "decodeAtomDelimiterPredictions: overlapping span events");
-        }
-        open_at[span.begin_gap] = type_index;
-        close_at[span.end_gap] = type_index;
-    }
-
-    std::string annotated;
-    annotated.reserve(plain_text.size() + spans.size() * 18);
-    for (std::size_t gap = 0; gap < gap_count; ++gap) {
-        if (close_at[gap] >= 0) {
-            annotated += GRIM::Tokenizer::atomTokenText(
-                GRIM::Tokenizer::atomTypeToCloseTokenId(
-                    static_cast<GRIM::Tokenizer::AtomType>(close_at[gap])));
-        }
-        if (empty_at[gap] >= 0) {
-            const auto type =
-                static_cast<GRIM::Tokenizer::AtomType>(empty_at[gap]);
-            annotated += GRIM::Tokenizer::atomTokenText(
-                GRIM::Tokenizer::atomTypeToOpenTokenId(type));
-            annotated += GRIM::Tokenizer::atomTokenText(
-                GRIM::Tokenizer::atomTypeToCloseTokenId(type));
-        }
-        if (open_at[gap] >= 0) {
-            annotated += GRIM::Tokenizer::atomTokenText(
-                GRIM::Tokenizer::atomTypeToOpenTokenId(
-                    static_cast<GRIM::Tokenizer::AtomType>(open_at[gap])));
-        }
-        if (gap < plain_text.size()) {
-            annotated.push_back(plain_text[gap]);
-        }
-    }
-    return annotated;
-}
-
 std::vector<float> runAtomInsertionForward(
     TrainingContext& ctx,
     GRIM::Batching::BatchPayload& payload) {
@@ -292,17 +147,17 @@ std::vector<float> runAtomInsertionForward(
             "runAtomInsertionForward: gap-logit shape mismatch");
     }
 
-    constexpr std::size_t delimiter_count =
-        static_cast<std::size_t>(GRIM::Tokenizer::ATOM_VOCAB_SIZE);
-    const std::size_t destination_pitch = delimiter_count * sizeof(float);
+    constexpr std::size_t decision_count = static_cast<std::size_t>(
+        GRIM::AtomInsertion::kAtomDecisionClassCount);
+    const std::size_t destination_pitch = decision_count * sizeof(float);
     const std::size_t source_pitch =
         static_cast<std::size_t>(payload.vocab_size) * sizeof(float);
-    std::vector<float> delimiter_logits(
-        static_cast<std::size_t>(gap_rows) * delimiter_count);
+    std::vector<float> decision_logits(
+        static_cast<std::size_t>(gap_rows) * decision_count);
     const cudaError_t copy_error = cudaMemcpy2DAsync(
-        delimiter_logits.data(),
+        decision_logits.data(),
         destination_pitch,
-        logits.data + GRIM::Tokenizer::ATOM_TOKEN_OFFSET,
+        logits.data + GRIM::AtomInsertion::kAtomDecisionVocabColumnOffset,
         source_pitch,
         destination_pitch,
         static_cast<std::size_t>(gap_rows),
@@ -319,7 +174,7 @@ std::vector<float> runAtomInsertionForward(
             "runAtomInsertionForward: stream synchronization failed: " +
             std::string(cudaGetErrorString(sync_error)));
     }
-    return delimiter_logits;
+    return decision_logits;
 }
 
 Phase2TextInferenceResult executeAtomInsertionTextInference(
@@ -343,7 +198,7 @@ Phase2TextInferenceResult executeAtomInsertionTextInference(
         static_cast<std::size_t>(payload.total_tokens);
 
     const auto start_generation = std::chrono::high_resolution_clock::now();
-    const std::vector<float> delimiter_logits =
+    const std::vector<float> decision_logits =
         runAtomInsertionForward(ctx, payload);
     const auto end_generation = std::chrono::high_resolution_clock::now();
     result.generation_ms =
@@ -351,10 +206,10 @@ Phase2TextInferenceResult executeAtomInsertionTextInference(
             end_generation - start_generation).count();
 
     const auto start_decode = std::chrono::high_resolution_clock::now();
-    result.text = decodeAtomDelimiterPredictions(
+    result.text = GRIM::AtomInsertion::decodeAtomDecisionPredictions(
         prompt,
         payload.atom_insertion_valid_gap_mask,
-        delimiter_logits,
+        decision_logits,
         decision_logit);
     const auto end_decode = std::chrono::high_resolution_clock::now();
     result.decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

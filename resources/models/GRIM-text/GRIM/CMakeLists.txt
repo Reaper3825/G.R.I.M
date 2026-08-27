@@ -99,12 +99,15 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Diagnostics/GradientConnectivityDiagnostic.cu
 )
 
-# Combine all .cu files
+# Combine GPU sources plus the host-only atom decision decoder used by the
+# inference loop. Keep the decoder as C++ because it owns request-local state
+# and performs no device work.
 set(ALL_GPU_SOURCES
     ${LAYERS_CU_FILES}
     ${SHARED_CU_FILES}
     ${COMMON_CU_FILES}
     ${TRAINING_CU_FILES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Shared/AtomInsertion/AtomInsertionDecode.cpp
 )
 
 # Remove Flash Attention from main list (needs special handling for sm_80+)

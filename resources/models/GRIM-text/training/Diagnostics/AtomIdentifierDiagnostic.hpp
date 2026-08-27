@@ -1,12 +1,12 @@
 //======================================================//
 //  AtomIdentifierDiagnostic.hpp
-//  Per-batch atom delimiter classification diagnostic.
+//  Per-batch atom OPEN-type + EXIT diagnostic.
 //======================================================//
 
 #pragma once
 
+#include "../../Shared/AtomInsertion/AtomInsertionDecisionLayout.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
-#include "../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <array>
 #include <cstdint>
@@ -58,7 +58,7 @@ struct AtomIdentifierBatchDiagnostic {
     std::uint64_t sequences_without_positive_targets = 0;
     float decision_logit = 0.0f;
     std::array<AtomIdentifierClassDiagnostic,
-               GRIM::Tokenizer::ATOM_VOCAB_SIZE> by_delimiter{};
+               GRIM::AtomInsertion::kAtomDecisionClassCount> by_decision{};
 
     double positive_fraction() const noexcept;
     double negatives_per_positive() const noexcept;
@@ -69,18 +69,18 @@ struct AtomIdentifierBatchDiagnostic {
 };
 
 // Pure host-side reducer used by the live diagnostic and focused tests.
-// delimiter_logits must use the compact layout
-// [payload.atomInsertionGapRowCount(), ATOM_VOCAB_SIZE].
+// decision_logits must use the compact OPEN-type + EXIT layout
+// [payload.atomInsertionGapRowCount(), kAtomDecisionClassCount].
 AtomIdentifierBatchDiagnostic computeAtomIdentifierBatchDiagnostic(
     const GRIM::Batching::BatchPayload& payload,
-    const std::vector<float>& delimiter_logits,
+    const std::vector<float>& decision_logits,
     int batch_idx,
     float decision_logit = 0.0f);
 
 // Per-batch live entry point. The caller owns cadence and supplies the active
-// CUDA stream and global step explicitly. It copies only the eight atom
-// delimiter columns to the host, computes target/prediction confusion metrics,
-// and emits one aggregate plus one per-type module log line.
+// CUDA stream and global step explicitly. It copies only the five atom
+// decision columns to the host, computes target/prediction confusion metrics,
+// and emits aggregate, per-open-type, and EXIT module log lines.
 void runAtomIdentifierDiagnostic(
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Tensor& full_gap_vocab_logits,

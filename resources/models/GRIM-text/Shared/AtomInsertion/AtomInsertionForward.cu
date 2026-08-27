@@ -51,7 +51,7 @@ void requireFreshAtomOutputs(
         outputs.atom_insertion_right_projected.data ||
         outputs.atom_insertion_projection_sum.data ||
         outputs.atom_insertion_gap_states.data ||
-        outputs.atom_insertion_delimiter_logits.data ||
+        outputs.atom_insertion_decision_logits.data ||
         outputs.logits_tensor.data) {
         throw std::runtime_error(
             prefix + ": atom/logit outputs are already populated; caller must "
@@ -127,7 +127,7 @@ void forwardAtomInsertion(
         forward_outputs);
 
     // Reuse the complete existing LM head and its registry-owned parameter
-    // bundle. The atom loss later selects only the eight delimiter columns.
+    // bundle. The atom loss later selects the compact OPEN-type + EXIT window.
     forwardLmHead(
         lm_head_hp,
         lm_head_parameters,

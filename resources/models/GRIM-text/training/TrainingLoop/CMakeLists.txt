@@ -433,6 +433,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
     ../../Shared/AtomInsertion/AtomInsertionData.cu
+    ../../Shared/AtomInsertion/AtomInsertionDecode.cpp
     ../../Shared/AtomInsertion/AtomInsertionBoundaryProjection.cu
     ../../Shared/AtomInsertion/AtomInsertionForward.cu
     ../../Shared/Goal/MeanPool_GPU.cu
@@ -793,6 +794,31 @@ target_include_directories(tokenizer_self_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared             # Shared/ folder for TrainingState, etc.
 )
 
+# Atom-identification OPEN-type + EXIT state-machine regression test.
+add_executable(atom_insertion_state_machine_test
+    ../../Tests/atom_insertion_state_machine_test.cu
+    ../../Shared/AtomInsertion/AtomInsertionData.cu
+    ../../Shared/AtomInsertion/AtomInsertionDecode.cpp
+)
+
+set_target_properties(atom_insertion_state_machine_test PROPERTIES
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
+    CUDA_RUNTIME_LIBRARY Shared
+)
+
+target_link_libraries(atom_insertion_state_machine_test PRIVATE
+    CUDA::cudart
+    grim_unigrambyte_tokenizer
+)
+
+target_include_directories(atom_insertion_state_machine_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
+)
+
 # UnigramByte tokenizer test executable
 add_executable(unigrambyte_self_test
     ../../Tests/unigrambyte_self_test.cu
@@ -998,6 +1024,7 @@ message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + byte-layout fallbac
 message(STATUS "  - train_tokenizer: standalone tokenizer training subprocess")
 if(GRIM_TRAINING_BUILD_TEST_EXECUTABLES)
     message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suite (BPE)")
+    message(STATUS "  - atom_insertion_state_machine_test: OPEN-type + EXIT atom span regression suite")
     message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
     message(STATUS "  - grmt_vocab_metrics_test: GRMT corpus + vocabulary metrics diagnostics")
     message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")

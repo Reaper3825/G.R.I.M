@@ -1,6 +1,6 @@
 //======================================================//
 //  AtomInsertionLoss.hpp
-//  Typed delimiter loss assembled from autograd primitives
+//  OPEN-type + EXIT loss assembled from autograd primitives
 //======================================================//
 
 #pragma once
@@ -35,14 +35,15 @@ struct AtomInsertionLossStats {
 
 // full_gap_vocab_logits is [B * (S - 1), vocab_size]. This wrapper composes:
 //
-//   slice_columns(full logits, ATOM_TOKEN_OFFSET, ATOM_VOCAB_SIZE)
+//   slice_columns(full logits, decision_vocab_offset, decision_class_count)
 //       -> masked_binary_cross_entropy_with_logits(...)
 //
-// The delimiter slice is retained by ModelForwardOutputs as the ordinary
-// autograd input. The BCE GradFn owns saved sigmoid probabilities for backward;
-// it does not borrow the slice's value buffer. Supervision is resolved from the
-// scheduler-provided payload/bindings during backward. The returned scalar
-// belongs at the caller's ordinary loss-state lifetime boundary.
+// The compact OPEN-type + EXIT decision slice is retained by
+// ModelForwardOutputs as the ordinary autograd input. The BCE GradFn owns saved
+// sigmoid probabilities for backward; it does not borrow the slice's value
+// buffer. Supervision is resolved from the scheduler-provided payload/bindings
+// during backward. The returned scalar belongs at the caller's ordinary
+// loss-state lifetime boundary.
 Tensor atomInsertionLoss(
     Tensor& full_gap_vocab_logits,
     Forward::ModelForwardOutputs& forward_outputs,

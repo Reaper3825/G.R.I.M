@@ -3,6 +3,7 @@
 #include "BatchDeviceStorage.hpp"
 #include "BatchDeviceUpload.hpp"
 
+#include "../AtomInsertion/AtomInsertionDecisionLayout.hpp"
 #include "../HyperParameters/HyperParameters_GPU.hpp"
 #include "../VerboseLogging.hpp"
 
@@ -398,15 +399,22 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
     }
     const int max_atom_gap_rows = workspace_hp.batch_size *
         (max_cached_seq_len - 1);
-    if (max_atom_gap_rows > std::numeric_limits<int>::max() / 2) {
+    if (max_atom_gap_rows > std::numeric_limits<int>::max() /
+            AtomInsertion::kAtomDecisionClassCount) {
         throw std::runtime_error(
             "createBatchDeviceStorage: atom target byte capacity overflows Tensor shape");
     }
     static_assert(
         sizeof(float) == 4,
         "raw atom upload capacity assumes four-byte Tensor storage elements");
+    const int atom_target_bytes =
+        max_atom_gap_rows * AtomInsertion::kAtomDecisionClassCount;
+    const int atom_target_storage_elements =
+        atom_target_bytes / static_cast<int>(sizeof(float)) +
+        (atom_target_bytes % static_cast<int>(sizeof(float)) != 0 ? 1 : 0);
     const int atom_gap_mask_storage_elements =
-        max_atom_gap_rows / 4 + (max_atom_gap_rows % 4 != 0 ? 1 : 0);
+        max_atom_gap_rows / static_cast<int>(sizeof(float)) +
+        (max_atom_gap_rows % static_cast<int>(sizeof(float)) != 0 ? 1 : 0);
 
     auto storage = std::make_shared<BatchDeviceStorage>();
     storage->batch_size_capacity = workspace_hp.batch_size;
@@ -432,10 +440,10 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         stream,
         "batch_input_ids");
     // Tensor is the canonical owner even though these two buffers are exposed
-    // as uint8 through BatchDeviceBindings. Two float slots per gap provide
-    // exactly eight target bytes; ceil(gap_rows/4) slots own the mask bytes.
+    // as uint8 through BatchDeviceBindings. Float-backed capacities round each
+    // raw byte channel up independently to a complete storage element.
     storage->atom_insertion_gap_targets_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(1, max_atom_gap_rows * 2),
+        TensorContract::TensorShape::make_BSM(1, atom_target_storage_elements),
         false,
         stream,
         "batch_atom_insertion_gap_targets");

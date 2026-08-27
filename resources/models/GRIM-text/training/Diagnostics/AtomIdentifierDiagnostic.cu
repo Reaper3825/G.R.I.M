@@ -1,6 +1,6 @@
 //======================================================//
 //  AtomIdentifierDiagnostic.cu
-//  Per-batch atom delimiter classification diagnostic.
+//  Per-batch atom OPEN-type + EXIT diagnostic.
 //======================================================//
 
 #include "AtomIdentifierDiagnostic.hpp"
@@ -22,10 +22,8 @@ namespace GRIM::Diagnostics {
 namespace {
 
 constexpr int kTypeCount = GRIM::Tokenizer::kAtomTypeCount;
-constexpr int kDelimiterCount = GRIM::Tokenizer::ATOM_VOCAB_SIZE;
-
-static_assert(kDelimiterCount == kTypeCount * 2,
-              "atom delimiter layout must contain one open and close class per type");
+constexpr int kDecisionCount =
+    GRIM::AtomInsertion::kAtomDecisionClassCount;
 
 double safeRatio(std::uint64_t numerator, std::uint64_t denominator) noexcept {
     return denominator == 0
@@ -51,9 +49,13 @@ void finalizeLogitRanges(AtomIdentifierClassDiagnostic& stats) {
     }
 }
 
-std::string delimiterName(int delimiter_class) {
+std::string decisionName(int decision_class) {
+    if (decision_class == GRIM::AtomInsertion::kExitDecisionClassIndex) {
+        return "EXIT";
+    }
+    const auto type = static_cast<GRIM::Tokenizer::AtomType>(decision_class);
     return GRIM::Tokenizer::atomTokenText(
-        GRIM::Tokenizer::ATOM_TOKEN_OFFSET + delimiter_class);
+        GRIM::Tokenizer::atomTypeToOpenTokenId(type));
 }
 
 void checkCuda(cudaError_t error, const char* caller) {
@@ -64,10 +66,10 @@ void checkCuda(cudaError_t error, const char* caller) {
 }
 
 void appendClassMetrics(std::ostringstream& line,
-                        const char* boundary_name,
-                        int class_index,
-                        const AtomIdentifierClassDiagnostic& stats) {
-    line << " " << boundary_name << "=" << delimiterName(class_index)
+                         const char* field_name,
+                         int class_index,
+                         const AtomIdentifierClassDiagnostic& stats) {
+    line << " " << field_name << "=" << decisionName(class_index)
          << "{target=" << stats.target_positive
          << ",pred=" << stats.predicted_positive
          << ",TP=" << stats.true_positive
@@ -139,7 +141,7 @@ double AtomIdentifierBatchDiagnostic::f1() const noexcept {
 double AtomIdentifierBatchDiagnostic::macro_f1() const noexcept {
     double total = 0.0;
     int supported_classes = 0;
-    for (const auto& stats : by_delimiter) {
+    for (const auto& stats : by_decision) {
         if (stats.target_positive == 0) {
             continue;
         }
@@ -153,7 +155,7 @@ double AtomIdentifierBatchDiagnostic::macro_f1() const noexcept {
 
 AtomIdentifierBatchDiagnostic computeAtomIdentifierBatchDiagnostic(
     const GRIM::Batching::BatchPayload& payload,
-    const std::vector<float>& delimiter_logits,
+    const std::vector<float>& decision_logits,
     int batch_idx,
     float decision_logit) {
     constexpr const char* caller = "computeAtomIdentifierBatchDiagnostic";
@@ -170,11 +172,11 @@ AtomIdentifierBatchDiagnostic computeAtomIdentifierBatchDiagnostic(
     const std::size_t gap_rows = static_cast<std::size_t>(
         payload.atomInsertionGapRowCount());
     const std::size_t expected_logits =
-        gap_rows * static_cast<std::size_t>(kDelimiterCount);
-    if (delimiter_logits.size() != expected_logits) {
+        gap_rows * static_cast<std::size_t>(kDecisionCount);
+    if (decision_logits.size() != expected_logits) {
         throw std::invalid_argument(
-            "computeAtomIdentifierBatchDiagnostic: compact delimiter-logit size=" +
-            std::to_string(delimiter_logits.size()) +
+            "computeAtomIdentifierBatchDiagnostic: compact decision-logit size=" +
+            std::to_string(decision_logits.size()) +
             " expected=" + std::to_string(expected_logits));
     }
 
@@ -182,7 +184,7 @@ AtomIdentifierBatchDiagnostic computeAtomIdentifierBatchDiagnostic(
     result.batch_number = batch_idx + 1;
     result.sequence_count = payload.batch_size;
     result.decision_logit = decision_logit;
-    for (auto& stats : result.by_delimiter) {
+    for (auto& stats : result.by_decision) {
         initializeLogitRanges(stats);
     }
 
@@ -198,22 +200,22 @@ AtomIdentifierBatchDiagnostic computeAtomIdentifierBatchDiagnostic(
             }
             ++result.valid_gap_count;
 
-            for (int delimiter_class = 0;
-                 delimiter_class < kDelimiterCount;
-                 ++delimiter_class) {
+            for (int decision_class = 0;
+                 decision_class < kDecisionCount;
+                 ++decision_class) {
                 const std::size_t compact_index =
-                    flat_gap * kDelimiterCount + delimiter_class;
+                    flat_gap * kDecisionCount + decision_class;
                 const bool target_positive =
                     payload.atom_insertion_gap_targets[compact_index] != 0;
-                const float logit = delimiter_logits[compact_index];
+                const float logit = decision_logits[compact_index];
                 if (!std::isfinite(logit)) {
                     throw std::runtime_error(
                         "computeAtomIdentifierBatchDiagnostic: non-finite logit at gap=" +
                         std::to_string(flat_gap) + " class=" +
-                        std::to_string(delimiter_class));
+                        std::to_string(decision_class));
                 }
                 const bool predicted_positive = logit >= decision_logit;
-                auto& stats = result.by_delimiter[delimiter_class];
+                auto& stats = result.by_decision[decision_class];
 
                 if (target_positive) {
                     ++sequence_positive_targets;
@@ -255,8 +257,8 @@ AtomIdentifierBatchDiagnostic computeAtomIdentifierBatchDiagnostic(
     }
 
     result.valid_label_count =
-        result.valid_gap_count * static_cast<std::uint64_t>(kDelimiterCount);
-    for (auto& stats : result.by_delimiter) {
+        result.valid_gap_count * static_cast<std::uint64_t>(kDecisionCount);
+    for (auto& stats : result.by_decision) {
         finalizeLogitRanges(stats);
         result.target_positive += stats.target_positive;
         result.target_negative += stats.target_negative;
@@ -309,7 +311,7 @@ void runAtomIdentifierDiagnostic(
     }
 
     std::vector<float> compact_logits(
-        static_cast<std::size_t>(gap_rows) * kDelimiterCount);
+        static_cast<std::size_t>(gap_rows) * kDecisionCount);
     if (!stream) {
         throw std::invalid_argument(
             "runAtomIdentifierDiagnostic: CUDA stream is NULL");
@@ -317,10 +319,11 @@ void runAtomIdentifierDiagnostic(
     checkCuda(
         cudaMemcpy2DAsync(
             compact_logits.data(),
-            static_cast<std::size_t>(kDelimiterCount) * sizeof(float),
-            full_gap_vocab_logits.data + GRIM::Tokenizer::ATOM_TOKEN_OFFSET,
+            static_cast<std::size_t>(kDecisionCount) * sizeof(float),
+            full_gap_vocab_logits.data +
+                GRIM::AtomInsertion::kAtomDecisionVocabColumnOffset,
             static_cast<std::size_t>(payload.vocab_size) * sizeof(float),
-            static_cast<std::size_t>(kDelimiterCount) * sizeof(float),
+            static_cast<std::size_t>(kDecisionCount) * sizeof(float),
             static_cast<std::size_t>(gap_rows),
             cudaMemcpyDeviceToHost,
             stream),
@@ -366,22 +369,31 @@ void runAtomIdentifierDiagnostic(
         global_step);
 
     for (int type_index = 0; type_index < kTypeCount; ++type_index) {
-        const int open_index = type_index;
-        const int close_index = kTypeCount + type_index;
         std::ostringstream type_line;
         type_line << std::fixed << std::setprecision(6)
                   << "[AtomIdentifierDiagnostic] batch=" << report.batch_number
                   << " type=" << GRIM::Tokenizer::atomTypeName(
                          static_cast<GRIM::Tokenizer::AtomType>(type_index));
         appendClassMetrics(
-            type_line, "open", open_index, report.by_delimiter[open_index]);
-        appendClassMetrics(
-            type_line, "close", close_index, report.by_delimiter[close_index]);
+            type_line, "open", type_index, report.by_decision[type_index]);
         GRIM::Logging::EmitModuleInfo(
             GRIM::Logging::ModuleId::ForwardPass,
             type_line.str(),
             global_step);
     }
+
+    std::ostringstream exit_line;
+    exit_line << std::fixed << std::setprecision(6)
+              << "[AtomIdentifierDiagnostic] batch=" << report.batch_number;
+    appendClassMetrics(
+        exit_line,
+        "exit",
+        GRIM::AtomInsertion::kExitDecisionClassIndex,
+        report.by_decision[GRIM::AtomInsertion::kExitDecisionClassIndex]);
+    GRIM::Logging::EmitModuleInfo(
+        GRIM::Logging::ModuleId::ForwardPass,
+        exit_line.str(),
+        global_step);
 }
 
 } // namespace GRIM::Diagnostics

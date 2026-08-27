@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "../AtomInsertion/AtomInsertionDecisionLayout.hpp"
 #include "../Goal/GoalSpanView.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
@@ -105,9 +106,10 @@ struct BatchPayload {
     // Atom-identification supervision uses a fixed gap rectangle with
     // (max_seq_len - 1) rows per sequence. Targets are flattened as
     // [batch_size * atom_insertion_gap_rows_per_sequence,
-    //  Tokenizer::ATOM_VOCAB_SIZE]. The mask excludes padding gaps and byte
-    // offsets inside UTF-8 code points. These channels are populated only when
-    // EnableAtomIdentification is true.
+    //  AtomInsertion::kAtomDecisionClassCount]. The decision columns are typed
+    // OPEN classes followed by type-free EXIT. The mask excludes padding gaps
+    // and byte offsets inside UTF-8 code points. These channels are populated
+    // only when EnableAtomIdentification is true.
     int atom_insertion_gap_rows_per_sequence = 0;
     int atom_insertion_valid_gap_count = 0;
     int atom_insertion_positive_label_count = 0;
@@ -400,7 +402,7 @@ struct BatchPayload {
             }
             const std::size_t expected_target_count = isTraining()
                 ? static_cast<std::size_t>(gap_row_count) *
-                    GRIM::Tokenizer::ATOM_VOCAB_SIZE
+                    GRIM::AtomInsertion::kAtomDecisionClassCount
                 : 0;
             if (atom_insertion_gap_targets.size() != expected_target_count) {
                 throw std::runtime_error(
@@ -443,13 +445,14 @@ struct BatchPayload {
                     if (!isTraining()) {
                         continue;
                     }
-                    for (int delimiter_class = 0;
-                         delimiter_class < GRIM::Tokenizer::ATOM_VOCAB_SIZE;
-                         ++delimiter_class) {
+                    for (int decision_class = 0;
+                         decision_class <
+                             GRIM::AtomInsertion::kAtomDecisionClassCount;
+                         ++decision_class) {
                         const std::size_t target_index =
                             static_cast<std::size_t>(flat_gap) *
-                                GRIM::Tokenizer::ATOM_VOCAB_SIZE +
-                            delimiter_class;
+                                GRIM::AtomInsertion::kAtomDecisionClassCount +
+                            decision_class;
                         const uint8_t target =
                             atom_insertion_gap_targets[target_index];
                         if (target > 1) {
