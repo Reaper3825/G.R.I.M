@@ -243,7 +243,8 @@ bool stringRefInBounds(const StringRef& ref, size_t pool_size) {
 
 bool atomTypeIsPersistable(AtomType type) {
     return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT ||
-           type == AtomType::ATOM_STRING || type == AtomType::ATOM_BOOL;
+           type == AtomType::ATOM_STRING || type == AtomType::ATOM_BOOL ||
+           type == AtomType::ATOM_ENTITY;
 }
 
 bool atomEntryIdInRange(uint32_t id, size_t entry_count) {
@@ -359,7 +360,8 @@ void validatePersistedAtomEntryOrThrow(
     if (entry.raw_text_ref.length == 0 && entry.type != AtomType::ATOM_STRING) {
         failValidation("entry.raw_text_ref.length", "raw text length is zero");
     }
-    const AtomCategory expected_category = entry.type == AtomType::ATOM_STRING
+    const AtomCategory expected_category =
+        entry.type == AtomType::ATOM_STRING || entry.type == AtomType::ATOM_ENTITY
         ? AtomCategory::TEXT
         : entry.type == AtomType::ATOM_BOOL
             ? AtomCategory::LOGICAL
@@ -1297,16 +1299,26 @@ ParseResult AtomTable::parseAtom(AtomType type, std::string_view text) {
     if (type == AtomType::ATOM_BOOL) {
         return parseBoolean(text);
     }
+    if (type == AtomType::ATOM_ENTITY) {
+        return parseEntity(text);
+    }
     return ParseResult{
         false,
         AtomInteger{},
         "Unsupported AtomTable atom type " + std::to_string(static_cast<int>(type)) +
-            "; supported types are ATOM_INT, ATOM_FLOAT, ATOM_STRING, and ATOM_BOOL"
+            "; supported types are ATOM_INT, ATOM_FLOAT, ATOM_STRING, ATOM_BOOL, and ATOM_ENTITY"
     };
 }
 
 ParseResult AtomTable::parseString(std::string_view) {
     return ParseResult{true, AtomString{}, {}};
+}
+
+ParseResult AtomTable::parseEntity(std::string_view text) {
+    if (text.empty()) {
+        return ParseResult{false, AtomEntity{}, "Entity content must not be empty"};
+    }
+    return ParseResult{true, AtomEntity{}, {}};
 }
 
 ParseResult AtomTable::parseBoolean(std::string_view text) {
@@ -1528,7 +1540,9 @@ bool AtomTable::hasNumericValue(AtomType type) {
 
 AtomCategory AtomTable::getCategoryForType(AtomType type) {
     if (isNumericAtom(type)) return AtomCategory::NUMERIC;
-    if (type == AtomType::ATOM_STRING) return AtomCategory::TEXT;
+    if (type == AtomType::ATOM_STRING || type == AtomType::ATOM_ENTITY) {
+        return AtomCategory::TEXT;
+    }
     if (type == AtomType::ATOM_BOOL) return AtomCategory::LOGICAL;
     throw std::runtime_error("AtomTable::getCategoryForType unsupported atom type " +
                              std::to_string(static_cast<int>(type)));

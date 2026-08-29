@@ -45,38 +45,51 @@ constexpr std::string_view kCurriculumName = "Atom Identification v1";
 constexpr int kSinglePerType = 6000;
 constexpr int kMixedPairPerCombination = 400;
 constexpr int kMixedTriplePerCombination = 600;
-constexpr int kMixedAllFour = 1200;
-constexpr int kExpectedBlockCount = 30000;
-constexpr int kExpectedOccurrencesPerType = 10200;
+constexpr int kMixedAllTypes = 1200;
+constexpr int kExpectedBlockCount = 41200;
+constexpr int kExpectedOccurrencesPerType = 12400;
+constexpr int kExpectedEntityStringSameSurfaceContrasts = 850;
 
 enum class ValueType : std::size_t {
     Int = 0,
     Float = 1,
     String = 2,
     Bool = 3,
+    Entity = 4,
 };
 
-constexpr std::array<ValueType, 4> kTypes{
+constexpr std::array<ValueType, 5> kTypes{
     ValueType::Int,
     ValueType::Float,
     ValueType::String,
     ValueType::Bool,
+    ValueType::Entity,
 };
 
-constexpr std::array<std::array<ValueType, 2>, 6> kPairs{{
+constexpr std::array<std::array<ValueType, 2>, 10> kPairs{{
     {ValueType::Int, ValueType::Float},
     {ValueType::Int, ValueType::String},
     {ValueType::Int, ValueType::Bool},
     {ValueType::Float, ValueType::String},
     {ValueType::Float, ValueType::Bool},
     {ValueType::String, ValueType::Bool},
+    {ValueType::Int, ValueType::Entity},
+    {ValueType::Float, ValueType::Entity},
+    {ValueType::String, ValueType::Entity},
+    {ValueType::Bool, ValueType::Entity},
 }};
 
-constexpr std::array<std::array<ValueType, 3>, 4> kTriples{{
+constexpr std::array<std::array<ValueType, 3>, 10> kTriples{{
     {ValueType::Int, ValueType::Float, ValueType::String},
     {ValueType::Int, ValueType::Float, ValueType::Bool},
     {ValueType::Int, ValueType::String, ValueType::Bool},
     {ValueType::Float, ValueType::String, ValueType::Bool},
+    {ValueType::Int, ValueType::Float, ValueType::Entity},
+    {ValueType::Int, ValueType::String, ValueType::Entity},
+    {ValueType::Int, ValueType::Bool, ValueType::Entity},
+    {ValueType::Float, ValueType::String, ValueType::Entity},
+    {ValueType::Float, ValueType::Bool, ValueType::Entity},
+    {ValueType::String, ValueType::Bool, ValueType::Entity},
 }};
 
 const char* typeName(ValueType type) {
@@ -85,6 +98,7 @@ const char* typeName(ValueType type) {
         case ValueType::Float: return "FLOAT";
         case ValueType::String: return "STRING";
         case ValueType::Bool: return "BOOL";
+        case ValueType::Entity: return "ENTITY";
     }
     throw std::runtime_error("unknown ValueType");
 }
@@ -95,6 +109,7 @@ const char* typeSlug(ValueType type) {
         case ValueType::Float: return "float";
         case ValueType::String: return "string";
         case ValueType::Bool: return "bool";
+        case ValueType::Entity: return "entity";
     }
     throw std::runtime_error("unknown ValueType");
 }
@@ -114,6 +129,14 @@ std::string base36(std::uint64_t value) {
     } while (value != 0);
     std::reverse(result.begin(), result.end());
     return result;
+}
+
+std::uint64_t mixIndex(std::size_t index, std::uint64_t salt) {
+    std::uint64_t value = static_cast<std::uint64_t>(index) + salt +
+        0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
 }
 
 template <std::size_t N>
@@ -173,12 +196,20 @@ const std::array<std::string, 16> kBoolFields{
     "auto_retry", "require_review", "stream_results", "lock_record",
 };
 
+const std::array<std::string, 16> kEntityFields{
+    "owner", "assignee", "organization", "contact_name",
+    "office", "project", "customer", "reviewer",
+    "vendor", "team", "location", "account",
+    "service", "repository", "document", "workspace",
+};
+
 const std::string& fieldFor(ValueType type, std::size_t index) {
     switch (type) {
         case ValueType::Int: return choose(kIntFields, index);
         case ValueType::Float: return choose(kFloatFields, index);
         case ValueType::String: return choose(kStringFields, index);
         case ValueType::Bool: return choose(kBoolFields, index);
+        case ValueType::Entity: return choose(kEntityFields, index);
     }
     throw std::runtime_error("unknown ValueType");
 }
@@ -245,12 +276,126 @@ std::string stringValue(std::size_t index) {
         "-" + base36(index + 1000);
 }
 
+std::size_t entityCategory(std::size_t index) {
+    return static_cast<std::size_t>(
+        mixIndex(index, 0x454e544954595f31ULL) % 6ULL);
+}
+
+std::string entityValue(std::size_t index) {
+    // These are literal entity surface forms only. Role/category words belong
+    // to the surrounding field (for example, project=<ENTITY>Atlas</ENTITY>)
+    // unless they are genuinely part of the entity's proper name.
+    static const std::array<std::string, 16> given_names{
+        "Ada", "Grace", "Maya", "Amélie", "Ren", "Sofia", "Amina", "Luca",
+        "Noor", "Diego", "Imani", "Hiro", "Léa", "Nia", "Pavel", "Samira",
+    };
+    static const std::array<std::string, 16> family_names{
+        "Lovelace", "Hopper", "Chen", "O'Connor-Smith", "Tanaka", "Rossi",
+        "Okafor", "Müller", "Dubois", "García", "Patel", "Kim", "Silva",
+        "Kowalski", "Hassan", "Wang",
+    };
+    static const std::array<std::string, 16> organization_stems{
+        "Northwind", "Acme", "Lumen", "Cedar", "Bluebird", "Nimbus",
+        "Solstice", "Orion", "Aurora", "Meridian", "Harbor", "Atlas",
+        "Juniper", "Mosaic", "Lantern", "Élan",
+    };
+    static const std::array<std::string, 16> organization_names{
+        "Labs", "Systems", "Works", "Analytics", "Dynamics", "Studio",
+        "Collective", "Network", "Research", "Technologies", "Partners",
+        "Foundation", "Digital", "Industries", "Ventures", "AI",
+    };
+    static const std::array<std::string, 16> place_roots{
+        "München", "Québec", "東京", "São Paulo", "Nairobi", "Reykjavík",
+        "Zürich", "Seoul", "Lisboa", "Montréal", "Kraków", "Dublin",
+        "Kyoto", "Oslo", "València", "Lima",
+    };
+    static const std::array<std::string, 16> place_names{
+        "Central", "North", "South", "East", "West", "Harbor", "Heights",
+        "Old Town", "Riverside", "Market", "Garden", "Station", "Quarter",
+        "Park", "Point", "Crossing",
+    };
+    static const std::array<std::string, 16> named_roots{
+        "Atlas", "Aurora", "Orion", "Cedar", "Nimbus", "Solstice", "Delta",
+        "Lumen", "Mosaic", "Juniper", "Lantern", "Harbor", "Meridian",
+        "Bluebird", "Northstar", "Élan",
+    };
+    static const std::array<std::string, 16> named_variants{
+        "Prime", "Nova", "One", "Blue", "Green", "Gold", "Silver", "Dawn",
+        "Echo", "Pulse", "Wave", "Core", "Edge", "Light", "Field", "Bridge",
+    };
+    static const std::array<std::string, 16> compact_names{
+        "OpenAI", "NASA", "CERN", "IBM", "GitHub", "GRIM-text", "R2-D2",
+        "B-612", "ACME-7", "NVIDIA", "UNESCO", "DeepMind", "SpaceX",
+        "Q4-Atlas", "K-2", "X.Org",
+    };
+    static const std::array<std::string, 16> non_latin_names{
+        "東京", "京都", "서울", "北京", "القاهرة", "دبي", "Αθήνα", "Москва",
+        "दिल्ली", "मुंबई", "กรุงเทพ", "台北", "香港", "Zürich", "Reykjavík",
+        "Český Krumlov",
+    };
+
+    const std::uint64_t mixed = mixIndex(index, 0x454e544954595f31ULL);
+    const std::size_t category = entityCategory(index);
+    const std::size_t first = static_cast<std::size_t>((mixed >> 8) % 16ULL);
+    const std::size_t second = static_cast<std::size_t>((mixed >> 24) % 16ULL);
+    const bool compact = ((mixed >> 40) & 1ULL) != 0;
+    switch (category) {
+        case 0:
+            if (!compact && ((mixed >> 41) & 1ULL) != 0) {
+                const char middle_initial = static_cast<char>('A' + ((mixed >> 42) % 26ULL));
+                return given_names[first] + " " + middle_initial + ". " + family_names[second];
+            }
+            return given_names[first] + " " + family_names[second];
+        case 1: return organization_stems[first] + " " + organization_names[second];
+        case 2:
+            return compact ? place_roots[first]
+                           : place_roots[first] + " " + place_names[second];
+        case 3:
+            return compact ? named_roots[first]
+                           : named_roots[first] + " " + named_variants[second];
+        case 4: return compact_names[first];
+        default: return non_latin_names[first];
+    }
+}
+
+const std::string& entityFieldFor(std::size_t entity_index,
+                                  std::size_t variation_index) {
+    static const std::array<std::string, 4> person_fields{
+        "owner", "assignee", "contact_name", "reviewer",
+    };
+    static const std::array<std::string, 4> organization_fields{
+        "organization", "customer", "vendor", "account",
+    };
+    static const std::array<std::string, 4> place_fields{
+        "office", "location", "destination", "workspace",
+    };
+    static const std::array<std::string, 5> named_fields{
+        "project", "service", "repository", "document", "workspace",
+    };
+    static const std::array<std::string, 5> compact_fields{
+        "organization", "project", "service", "repository", "account",
+    };
+
+    const std::uint64_t mixed = mixIndex(
+        variation_index,
+        0x454e544954595f46ULL + static_cast<std::uint64_t>(entity_index));
+    switch (entityCategory(entity_index)) {
+        case 0: return choose(person_fields, mixed);
+        case 1: return choose(organization_fields, mixed);
+        case 2: return choose(place_fields, mixed);
+        case 3: return choose(named_fields, mixed);
+        case 4: return choose(compact_fields, mixed);
+        default: return choose(place_fields, mixed);
+    }
+}
+
 std::string rawValue(ValueType type, std::size_t index) {
     switch (type) {
         case ValueType::Int: return integerValue(index);
         case ValueType::Float: return floatValue(index);
         case ValueType::String: return stringValue(index);
         case ValueType::Bool: return index % 2 == 0 ? "true" : "false";
+        case ValueType::Entity: return entityValue(index);
     }
     throw std::runtime_error("unknown ValueType");
 }
@@ -258,6 +403,57 @@ std::string rawValue(ValueType type, std::size_t index) {
 std::string taggedValue(ValueType type, std::size_t index) {
     const std::string tag = typeName(type);
     return "<" + tag + ">" + rawValue(type, index) + "</" + tag + ">";
+}
+
+std::string makeEntitySingleRaw(std::size_t index) {
+    const std::uint64_t mixed = mixIndex(index, 0x454e544954595f32ULL);
+    const std::size_t pattern = index % 32;
+    const std::size_t context_index = index / 32;
+    const std::string& field = entityFieldFor(index, context_index);
+    const std::string& subject = choose(kSubjects, context_index / kEntityFields.size());
+    const std::string& stage = choose(kStages, mixed >> 16);
+    const std::string& action = choose(kActions, mixed >> 24);
+    const std::string& context_action = choose(kActions, context_index);
+    const std::string entity = taggedValue(ValueType::Entity, index);
+    const auto finalize = [&](std::string text) {
+        return text + " The " + subject + " remains in " + stage +
+            " before " + context_action + ".";
+    };
+
+    switch (pattern) {
+        case 0: return finalize("Set " + field + " to " + entity + " before " + action + ".");
+        case 1: return finalize("Before " + action + ", assign " + entity + " to " + field + ".");
+        case 2: return finalize("The " + subject + " request uses " + field + "=" + entity + ".");
+        case 3: return finalize("For the " + subject + ", the " + field + " value is " + entity + ".");
+        case 4: return finalize("Please keep " + field + " at " + entity + " while " + action + ".");
+        case 5: return finalize("Confirm that " + field + " should be " + entity + " for the " + subject + ".");
+        case 6: return finalize("Update the " + subject + " so " + field + " becomes " + entity + ".");
+        case 7: return finalize("Use " + entity + " as " + field + " when " + action + ".");
+        case 8: return finalize(field + ": " + entity + ". Apply this setting to the " + subject + ".");
+        case 9: return finalize("When preparing the " + subject + ", choose " + entity + " for " + field + ".");
+        case 10: return finalize("The value " + entity + " belongs in " + field + " for the " + subject + ".");
+        case 11: return finalize("Should the " + subject + " use " + entity + " as its " + field + " value?");
+        case 12: return finalize("Record " + field + " as " + entity + ", then continue the workflow.");
+        case 13: return finalize("On the " + subject + ", replace the current " + field + " with " + entity + ".");
+        case 14: return finalize("The requested " + field + " for the " + subject + " is " + entity + ".");
+        case 15: return finalize("For the next " + subject + " operation, set " + field + "=" + entity + ".");
+        case 16: return finalize("Assign " + field + " the value " + entity + " in the " + subject + " configuration.");
+        case 17: return finalize("Keep the " + subject + " unchanged except for " + field + ", which must be " + entity + ".");
+        case 18: return finalize("While " + action + ", read " + field + " as " + entity + ".");
+        case 19: return finalize("Apply this " + subject + " option: " + field + "=" + entity + ".");
+        case 20: return finalize(entity + " is recorded under " + field + " for the " + subject + ".");
+        case 21: return finalize("For " + field + " on the " + subject + ", use " + entity + ".");
+        case 22: return finalize("\"" + entity + "\" is listed in the " + field + " field.");
+        case 23: return finalize("(" + entity + ") is the current value of " + field + ".");
+        case 24: return finalize(subject + " | " + field + " maps to " + entity + ".");
+        case 25: return finalize(entity + " is assigned from " + field + " for the " + subject + ".");
+        case 26: return finalize("During " + stage + ", the " + subject + " associates " + field + " with " + entity + ".");
+        case 27: return finalize("Keep " + field + " unchanged unless it should point to " + entity + ".");
+        case 28: return finalize("Does " + field + " on the " + subject + " refer to " + entity + "?");
+        case 29: return finalize("The " + field + " entry for the " + subject + " ends with " + entity + ".");
+        case 30: return finalize(entity + " appears first; record it as " + field + " before " + action + ".");
+        default: return finalize("When " + action + ", compare the current " + field + " with " + entity + ".");
+    }
 }
 
 std::string makeSingleRaw(ValueType type, std::size_t index) {
@@ -334,14 +530,39 @@ std::string makeMixedRaw(std::vector<ValueType> types, std::size_t index) {
     std::rotate(types.begin(), types.begin() + rotation, types.end());
     if (index % 2 != 0) std::reverse(types.begin(), types.end());
 
+    const bool has_entity =
+        std::find(types.begin(), types.end(), ValueType::Entity) != types.end();
+    const bool has_string =
+        std::find(types.begin(), types.end(), ValueType::String) != types.end();
+    const bool same_surface_contrast = has_entity && has_string && index % 4 == 0;
+    const std::string contrast_surface = same_surface_contrast
+        ? entityValue(700000 + index)
+        : std::string{};
+
     std::vector<MixedField> fields;
     fields.reserve(types.size());
     for (std::size_t position = 0; position < types.size(); ++position) {
         const std::size_t value_index = 100000 + index * 7 + position * 100003;
+        const std::size_t entity_surface_index = same_surface_contrast
+            ? 700000 + index
+            : value_index;
+        std::string atom;
+        if (same_surface_contrast &&
+            (types[position] == ValueType::Entity ||
+             types[position] == ValueType::String)) {
+            const std::string tag = typeName(types[position]);
+            atom = "<" + tag + ">" + contrast_surface + "</" + tag + ">";
+        } else {
+            atom = taggedValue(types[position], value_index);
+        }
         fields.push_back(MixedField{
             types[position],
-            fieldFor(types[position], index + position * 5),
-            taggedValue(types[position], value_index),
+            types[position] == ValueType::Entity
+                ? entityFieldFor(
+                    entity_surface_index,
+                    index + position * 5)
+                : fieldFor(types[position], index + position * 5),
+            std::move(atom),
         });
     }
 
@@ -356,45 +577,88 @@ std::string makeMixedRaw(std::vector<ValueType> types, std::size_t index) {
         colon.push_back(field.field + ": " + field.atom);
     }
 
-    const std::string& subject = choose(kSubjects, index * 5 + types.size());
-    const std::string& action = choose(kActions, index * 11 + types.size());
-    switch (index % 12) {
+    const std::size_t pattern = index % 24;
+    const std::size_t context_index = index / 24;
+    const std::string& subject = choose(kSubjects, context_index);
+    const std::string& action = choose(kActions, context_index / kSubjects.size());
+    const std::string& stage = choose(
+        kStages,
+        context_index / (kSubjects.size() * kActions.size()));
+    const auto finalize = [&](std::string text) {
+        return text + " This configuration applies during " + stage +
+            " before " + action + ".";
+    };
+    switch (pattern) {
         case 0:
-            return "Configure the " + subject + " with " +
-                join(equals, ", ", ", and ") + " before " + action + ".";
+            return finalize("Configure the " + subject + " with " +
+                join(equals, ", ", ", and ") + ".");
         case 1:
-            return "For the " + subject + ", set " +
-                join(natural, "; ", "; and ") + ", then continue the workflow.";
+            return finalize("For the " + subject + ", set " +
+                join(natural, "; ", "; and ") + ", then continue the workflow.");
         case 2:
-            return "The " + subject + " request carries " +
-                join(natural, ", ", ", and ") + ".";
+            return finalize("The " + subject + " request carries " +
+                join(natural, ", ", ", and ") + ".");
         case 3:
-            return "While " + action + ", use these values: " +
-                join(equals, " | ") + ".";
+            return finalize("Use these " + subject + " values: " +
+                join(equals, " | ") + ".");
         case 4:
-            return "Should the " + subject + " use " +
-                join(equals, ", ", ", and ") + "?";
+            return finalize("Should the " + subject + " use " +
+                join(equals, ", ", ", and ") + "?");
         case 5:
-            return "Update the " + subject + ": " +
-                join(natural, ", ", ", while setting ") + ".";
+            return finalize("Update the " + subject + ": " +
+                join(natural, ", ", ", while setting ") + ".");
         case 6:
-            return "Before " + action + ", apply " +
-                join(colon, "; ", "; and ") + " to the " + subject + ".";
+            return finalize("Apply " + join(colon, "; ", "; and ") +
+                " to the " + subject + ".");
         case 7:
-            return "Use " + join(reversed, ", ", ", and ") +
-                " when handling the " + subject + ".";
+            return finalize("Use " + join(reversed, ", ", ", and ") +
+                " when handling the " + subject + ".");
         case 8:
-            return "The configuration for the " + subject + " is {" +
-                join(equals, ", ") + "}.";
+            return finalize("The configuration for the " + subject + " is {" +
+                join(equals, ", ") + "}.");
         case 9:
-            return "Assign the following " + subject + " values—" +
-                join(equals, "; ") + "—before " + action + ".";
+            return finalize("Assign the following " + subject + " values—" +
+                join(equals, "; ") + "—then continue.");
         case 10:
-            return "On the " + subject + ", keep " +
-                join(natural, ", ", ", and ") + ".";
+            return finalize("On the " + subject + ", keep " +
+                join(natural, ", ", ", and ") + ".");
+        case 11:
+            return finalize("Prepare the " + subject + " with " +
+                join(equals, "; ", "; and ") + "; afterward, continue the workflow.");
+        case 12:
+            return finalize("The " + subject + " values are " +
+                join(colon, ", ", ", and ") + ".");
+        case 13:
+            return finalize("Set " + join(natural, ", ", ", and ") +
+                " for the " + subject + ".");
+        case 14:
+            return finalize("For the " + subject + ": " + join(equals, "; ") + ".");
+        case 15:
+            return finalize("Record " + join(reversed, ", ", ", and ") +
+                " for the " + subject + ".");
+        case 16:
+            return finalize("The " + subject + " maps " +
+                join(natural, "; ", "; and ") + ".");
+        case 17:
+            return finalize("Use (" + join(equals, ", ") + ") for the " + subject + ".");
+        case 18:
+            return finalize("Please verify " + join(equals, " / ") +
+                " for the " + subject + ".");
+        case 19:
+            return finalize("For the " + subject + ", keep " +
+                join(colon, "; ", "; and ") + ".");
+        case 20:
+            return finalize("Fields for the " + subject + "—" +
+                join(equals, ", ") + ".");
+        case 21:
+            return finalize("Is the " + subject + " configured with " +
+                join(equals, ", ", ", and ") + "?");
+        case 22:
+            return finalize("Apply " + join(natural, "; ", "; and ") +
+                " to the " + subject + ".");
         default:
-            return "Prepare the " + subject + " with " +
-                join(equals, "; ", "; and ") + "; afterward, continue the workflow.";
+            return finalize("The " + subject + " uses " +
+                join(reversed, ", ", ", and ") + ".");
     }
 }
 
@@ -414,11 +678,11 @@ GRIM::ConceptBlock makeBlock(std::string id,
 
 struct GeneratedCurriculum {
     std::vector<GRIM::ConceptBlock> blocks;
-    std::array<int, 4> occurrences{};
-    std::array<int, 4> singles{};
+    std::array<int, kTypes.size()> occurrences{};
+    std::array<int, kTypes.size()> singles{};
     int mixed_pairs = 0;
     int mixed_triples = 0;
-    int mixed_all_four = 0;
+    int mixed_all_types = 0;
 };
 
 void addOccurrences(GeneratedCurriculum& generated,
@@ -438,7 +702,9 @@ GeneratedCurriculum generateCurriculum() {
                 std::string(kBlockPrefix) + typeSlug(type) + "_" + zeroPadded(index + 1),
                 std::string("Atom identification single ") + typeName(type) + " " +
                     zeroPadded(index + 1),
-                makeSingleRaw(type, static_cast<std::size_t>(index))));
+                type == ValueType::Entity
+                    ? makeEntitySingleRaw(static_cast<std::size_t>(index))
+                    : makeSingleRaw(type, static_cast<std::size_t>(index))));
             ++generated.singles[static_cast<std::size_t>(type)];
             ++generated.occurrences[static_cast<std::size_t>(type)];
         }
@@ -471,14 +737,14 @@ GeneratedCurriculum generateCurriculum() {
         }
     }
     const std::vector<ValueType> all_types(kTypes.begin(), kTypes.end());
-    for (int index = 0; index < kMixedAllFour; ++index) {
+    for (int index = 0; index < kMixedAllTypes; ++index) {
         ++mixed_id;
         generated.blocks.push_back(makeBlock(
             std::string(kBlockPrefix) + "mixed_" + zeroPadded(mixed_id),
             "Atom identification mixed all types " + zeroPadded(mixed_id),
             makeMixedRaw(all_types, mixed_index++)));
         addOccurrences(generated, all_types);
-        ++generated.mixed_all_four;
+        ++generated.mixed_all_types;
     }
     return generated;
 }
@@ -515,8 +781,8 @@ void validateFloat(std::string_view content, const std::string& id) {
     }
 }
 
-std::array<int, 4> validateAnnotatedRaw(const GRIM::ConceptBlock& block) {
-    std::array<int, 4> counts{};
+std::array<int, kTypes.size()> validateAnnotatedRaw(const GRIM::ConceptBlock& block) {
+    std::array<int, kTypes.size()> counts{};
     std::size_t cursor = 0;
     while (true) {
         const std::size_t open_begin = block.raw.find('<', cursor);
@@ -549,6 +815,26 @@ std::array<int, 4> validateAnnotatedRaw(const GRIM::ConceptBlock& block) {
                         throw std::runtime_error(block.id + ": invalid BOOL content");
                     }
                     break;
+                case ValueType::Entity:
+                    if (content.empty()) throw std::runtime_error(block.id + ": empty ENTITY");
+                    if (content.front() == ' ' || content.front() == '\t' ||
+                        content.front() == '\r' || content.front() == '\n' ||
+                        content.back() == ' ' || content.back() == '\t' ||
+                        content.back() == '\r' || content.back() == '\n') {
+                        throw std::runtime_error(
+                            block.id + ": ENTITY surface contains edge whitespace");
+                    }
+                    for (const std::string_view leaked_role :
+                         std::array<std::string_view, 8>{
+                             "Project ", "Repository ", "Document ", "Workspace ",
+                             "Service ", "Customer ", "Team ", "Organization "}) {
+                        if (content.starts_with(leaked_role)) {
+                            throw std::runtime_error(
+                                block.id + ": synthetic ENTITY surface leaks role prefix " +
+                                std::string(leaked_role));
+                        }
+                    }
+                    break;
             }
             ++counts[static_cast<std::size_t>(type)];
             cursor = close_begin + close.size();
@@ -567,10 +853,10 @@ std::array<int, 4> validateAnnotatedRaw(const GRIM::ConceptBlock& block) {
 
 void auditGenerated(const GeneratedCurriculum& generated) {
     if (generated.blocks.size() != kExpectedBlockCount) {
-        throw std::runtime_error("generated block count is not 30000");
+        throw std::runtime_error("generated block count is not 41200");
     }
-    if (generated.mixed_pairs != 2400 || generated.mixed_triples != 2400 ||
-        generated.mixed_all_four != 1200) {
+    if (generated.mixed_pairs != 4000 || generated.mixed_triples != 6000 ||
+        generated.mixed_all_types != 1200) {
         throw std::runtime_error("mixed distribution is incorrect");
     }
 
@@ -578,7 +864,8 @@ void auditGenerated(const GeneratedCurriculum& generated) {
     std::unordered_set<std::string> raws;
     ids.reserve(generated.blocks.size() * 2);
     raws.reserve(generated.blocks.size() * 2);
-    std::array<int, 4> audited_occurrences{};
+    std::array<int, kTypes.size()> audited_occurrences{};
+    int entity_string_same_surface_contrasts = 0;
     for (const auto& block : generated.blocks) {
         if (!ids.insert(block.id).second) {
             throw std::runtime_error("duplicate block id " + block.id);
@@ -593,6 +880,31 @@ void auditGenerated(const GeneratedCurriculum& generated) {
         for (std::size_t type = 0; type < counts.size(); ++type) {
             audited_occurrences[type] += counts[type];
         }
+
+        const std::size_t entity_open = block.raw.find("<ENTITY>");
+        const std::size_t string_open = block.raw.find("<STRING>");
+        if (entity_open != std::string::npos && string_open != std::string::npos) {
+            const std::size_t entity_begin = entity_open + std::string_view("<ENTITY>").size();
+            const std::size_t entity_end = block.raw.find("</ENTITY>", entity_begin);
+            const std::size_t string_begin = string_open + std::string_view("<STRING>").size();
+            const std::size_t string_end = block.raw.find("</STRING>", string_begin);
+            if (entity_end == std::string::npos || string_end == std::string::npos) {
+                throw std::runtime_error(block.id + ": missing contrast close delimiter");
+            }
+            if (block.raw.substr(entity_begin, entity_end - entity_begin) ==
+                block.raw.substr(string_begin, string_end - string_begin)) {
+                ++entity_string_same_surface_contrasts;
+            }
+        }
+    }
+
+    if (entity_string_same_surface_contrasts !=
+        kExpectedEntityStringSameSurfaceContrasts) {
+        throw std::runtime_error(
+            "ENTITY/STRING same-surface contrast count is " +
+            std::to_string(entity_string_same_surface_contrasts) +
+            ", expected " +
+            std::to_string(kExpectedEntityStringSameSurfaceContrasts));
     }
 
     for (std::size_t type = 0; type < kTypes.size(); ++type) {
@@ -706,18 +1018,24 @@ json makeManifest(const GeneratedCurriculum& generated) {
     return json{
         {"curriculum_id", kCurriculumId},
         {"curriculum_name", kCurriculumName},
-        {"generation_version", 1},
+        {"generation_version", 3},
         {"deterministic", true},
         {"total_blocks", generated.blocks.size()},
-        {"single_blocks", 24000},
+        {"single_blocks", 30000},
         {"single_blocks_by_type", std::move(single_counts)},
-        {"mixed_blocks", 6000},
+        {"mixed_blocks", 11200},
         {"mixed_pair_blocks", generated.mixed_pairs},
         {"mixed_triple_blocks", generated.mixed_triples},
-        {"mixed_all_four_blocks", generated.mixed_all_four},
+        {"mixed_all_types_blocks", generated.mixed_all_types},
         {"atom_occurrences_by_type", std::move(occurrence_counts)},
         {"format_type", "raw"},
         {"training_stage", "pt"},
+        {"model_input_encoding", "exact_utf8_bytes"},
+        {"entity_role_outside_tag", true},
+        {"entity_single_template_count", 32},
+        {"mixed_template_count", 24},
+        {"entity_string_same_surface_contrasts",
+         kExpectedEntityStringSameSurfaceContrasts},
     };
 }
 

@@ -13,7 +13,7 @@
 
 namespace GRIM::AtomInsertion {
 
-// Atom identification is a span-state task, not an eight-way tokenizer-token
+// Atom identification is a span-state task, not a ten-way tokenizer-token
 // prediction task. An opening decision carries the atom type; EXIT is
 // deliberately type-free because inference renders the matching close token
 // from the type persisted by the active span state.

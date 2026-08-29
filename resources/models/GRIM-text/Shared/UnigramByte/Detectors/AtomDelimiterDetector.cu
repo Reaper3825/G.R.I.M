@@ -50,6 +50,10 @@ std::optional<RawTextDetection> AtomDelimiterDetector::detect(
         open = "<BOOL>";
         close = "</BOOL>";
         atom_type = AtomType::ATOM_BOOL;
+    } else if (startsWithAt(text, pos, "<ENTITY>")) {
+        open = "<ENTITY>";
+        close = "</ENTITY>";
+        atom_type = AtomType::ATOM_ENTITY;
     } else {
         return std::nullopt;
     }
@@ -66,7 +70,8 @@ std::optional<RawTextDetection> AtomDelimiterDetector::detect(
 
     size_t content_begin = inner_begin;
     size_t content_end = close_begin;
-    if (atom_type != AtomType::ATOM_STRING) {
+    if (atom_type != AtomType::ATOM_STRING &&
+        atom_type != AtomType::ATOM_ENTITY) {
         while (content_begin < content_end &&
                isWhitespaceASCII(static_cast<unsigned char>(text[content_begin]))) {
             ++content_begin;

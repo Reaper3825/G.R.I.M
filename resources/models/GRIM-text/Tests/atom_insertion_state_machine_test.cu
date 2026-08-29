@@ -36,10 +36,11 @@ void setDecision(std::vector<float>& logits,
 
 void testAuthoredTargetsUseGenericExit() {
     const auto example = GRIM::AtomInsertion::buildAtomInsertionExample(
-        "<INT>42</INT><FLOAT>3.5</FLOAT><STRING>x</STRING><BOOL>true</BOOL>",
+        "<INT>42</INT><FLOAT>3.5</FLOAT><STRING>x</STRING><BOOL>true</BOOL>"
+        "<ENTITY>東京</ENTITY>",
         true,
         "testAuthoredTargetsUseGenericExit");
-    require(example.spans.size() == 4, "expected four authored atom spans");
+    require(example.spans.size() == 5, "expected five authored atom spans");
 
     for (const auto& span : example.spans) {
         const int open_class =
@@ -76,9 +77,41 @@ void testAuthoredTargetsUseGenericExit() {
     require(payload.atom_insertion_gap_targets.size() ==
                 static_cast<std::size_t>(payload.atomInsertionGapRowCount()) *
                     GRIM::AtomInsertion::kAtomDecisionClassCount,
-            "payload decision rectangle width is not five");
-    require(payload.atom_insertion_positive_label_count == 8,
+            "payload decision rectangle width is not six");
+    require(payload.atom_insertion_positive_label_count == 10,
             "each span must author exactly one OPEN and one EXIT target");
+}
+
+void testEntityUsesExactByteInput() {
+    const std::string entity_bytes = "München";
+    const auto example = GRIM::AtomInsertion::buildAtomInsertionExample(
+        "Meet <ENTITY>" + entity_bytes + "</ENTITY> today.",
+        true,
+        "testEntityUsesExactByteInput");
+
+    require(example.spans.size() == 1, "expected one ENTITY span");
+    require(example.spans[0].type == GRIM::Tokenizer::AtomType::ATOM_ENTITY,
+            "ENTITY span type was not preserved");
+    require(example.plain_text_bytes == "Meet " + entity_bytes + " today.",
+            "ENTITY delimiters were not removed without changing source bytes");
+    require(example.transformer_input_ids.size() ==
+                example.plain_text_bytes.size() + 2,
+            "byte-level ENTITY input does not have one row per byte plus BOS/EOS");
+    for (std::size_t byte_index = 0;
+         byte_index < example.plain_text_bytes.size();
+         ++byte_index) {
+        const auto byte_value = static_cast<std::uint8_t>(
+            static_cast<unsigned char>(example.plain_text_bytes[byte_index]));
+        require(example.transformer_input_ids[byte_index + 1] ==
+                    GRIM::Tokenizer::byteToTokenId(byte_value),
+                "ENTITY input was not encoded as its exact byte token form");
+    }
+    require(example.hasDecisionTarget(
+                example.spans[0].begin_gap,
+                GRIM::AtomInsertion::openDecisionClassIndexOrThrow(
+                    GRIM::Tokenizer::AtomType::ATOM_ENTITY,
+                    "testEntityUsesExactByteInput")),
+            "OPEN_ENTITY byte-gap target is missing");
 }
 
 void testExitRendersPersistedType() {
@@ -101,6 +134,28 @@ void testExitRendersPersistedType() {
             plain_text, valid_gaps, logits, 0.0f);
     require(decoded == "<FLOAT>3.14</FLOAT>",
             "EXIT did not render the close token from the persisted FLOAT type");
+}
+
+void testEntityExitRendersPersistedType() {
+    const std::string plain_text = "Ada Lovelace";
+    std::vector<std::uint8_t> valid_gaps(plain_text.size() + 1, 1);
+    auto logits = blankDecisionLogits(valid_gaps.size());
+    setDecision(
+        logits,
+        0,
+        GRIM::AtomInsertion::openDecisionClassIndexOrThrow(
+            GRIM::Tokenizer::AtomType::ATOM_ENTITY,
+            "testEntityExitRendersPersistedType"));
+    setDecision(
+        logits,
+        plain_text.size(),
+        GRIM::AtomInsertion::kExitDecisionClassIndex);
+
+    const std::string decoded =
+        GRIM::AtomInsertion::decodeAtomDecisionPredictions(
+            plain_text, valid_gaps, logits, 0.0f);
+    require(decoded == "<ENTITY>Ada Lovelace</ENTITY>",
+            "EXIT did not render the close token from the persisted ENTITY type");
 }
 
 void testAdjacentExitThenOpen() {
@@ -136,10 +191,12 @@ void testAdjacentExitThenOpen() {
 
 int main() {
     try {
-        static_assert(GRIM::AtomInsertion::kAtomDecisionClassCount == 5);
-        static_assert(GRIM::AtomInsertion::kExitDecisionClassIndex == 4);
+        static_assert(GRIM::AtomInsertion::kAtomDecisionClassCount == 6);
+        static_assert(GRIM::AtomInsertion::kExitDecisionClassIndex == 5);
         testAuthoredTargetsUseGenericExit();
+        testEntityUsesExactByteInput();
         testExitRendersPersistedType();
+        testEntityExitRendersPersistedType();
         testAdjacentExitThenOpen();
         std::cout << "atom_insertion_state_machine_test: PASS\n";
         return 0;

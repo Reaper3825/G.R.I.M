@@ -79,7 +79,8 @@ struct AtomInsertionExample {
 // closing targets are attached to gaps around "42". For non-string atoms,
 // whitespace inside authored delimiters remains in plain_text_bytes but stays
 // outside the labeled atom span, matching the tokenizer's trimmed content
-// contract without deleting source bytes.
+// contract without deleting source bytes. STRING and ENTITY preserve their
+// exact delimiter-interior UTF-8 bytes.
 //
 // EnableAtomIdentification is the explicit task gate and must be true. The
 // shared model entry validates it against the compiled full-context model

@@ -62,6 +62,11 @@ struct AtomFloat {
 // the parse result typed without duplicating the string-pool payload.
 struct AtomString {};
 
+// Entity bytes are stored once in AtomEntry::raw_text_ref, like strings. A
+// distinct marker prevents callers from conflating semantic entity spans with
+// general authored strings after parsing.
+struct AtomEntity {};
+
 struct AtomBoolean {
     bool value = false;
 };
@@ -73,7 +78,8 @@ using AtomValue = std::variant<
     AtomInteger,
     AtomFloat,
     AtomString,
-    AtomBoolean
+    AtomBoolean,
+    AtomEntity
 >;
 
 enum class NumericPayloadKind : uint8_t {
@@ -288,6 +294,7 @@ public:
     static ParseResult parseFloat(std::string_view text);
     static ParseResult parseString(std::string_view text);
     static ParseResult parseBoolean(std::string_view text);
+    static ParseResult parseEntity(std::string_view text);
 
 
     //--------------------------------------------------//

@@ -104,9 +104,9 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
     }
 
     const std::uint16_t version = readScalar<std::uint16_t>(bin_file, source);
-    if (version != 5) {
+    if (version != 6) {
         throw std::runtime_error("[TokenizerVocabFile] vocab file version " + std::to_string(version) +
-                                 " is unsupported; required version 5. Retrain tokenizer: " + source);
+                                 " is unsupported; required version 6. Retrain tokenizer: " + source);
     }
 
     (void)readScalar<std::uint32_t>(bin_file, source); // checksum placeholder
@@ -207,7 +207,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
     const char magic[4] = {'K', 'T', 'M', 'G'};
     writeExact(bin_file, magic, sizeof(magic), sink);
 
-    const std::uint16_t version = 5;
+    const std::uint16_t version = 6;
     writeScalar(bin_file, version, sink);
 
     const std::uint32_t checksum = 0;

@@ -139,7 +139,7 @@ constexpr int UPSILON_REFERENCE_LAYERS = 12;      // Reference layer count (L_re
 //======================================================//
 // Tokenizer / Atom Token Configuration
 // Token layout: [0-3] Special, [4-259] Byte, [260-305] fixed numeric,
-// [306-313] typed atom boundaries, [314+] Unigram
+// [306-315] typed atom boundaries, [316+] Unigram
 //======================================================//
 constexpr int BYTE_TOKEN_END = Tokenizer::BYTE_TOKEN_OFFSET + Tokenizer::BYTE_VOCAB_SIZE;  // 260
 constexpr int NUMERIC_TOKEN_START = Tokenizer::NUMERIC_TOKEN_OFFSET;
