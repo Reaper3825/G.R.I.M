@@ -15,6 +15,7 @@
 #include "../../Shared/InferenceState/KvCacheState_GPU.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
+#include "../../Shared/UnigramByte/SequenceLocalAtomTable.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
@@ -288,6 +289,8 @@ GRIM::GeneratedSequence generateOneSequence(
     const auto& prompt_atom_flags = prompt_payload.atom_flags;
     const auto& prompt_token_to_slot_index_map = prompt_payload.token_to_slot_index_map;
     const auto& prompt_atom_entry_ids = prompt_payload.atom_entry_ids;
+    const auto& prompt_local_atom_indices =
+        prompt_payload.token_local_atom_indices;
     const auto authored_prompt_atom_table = prompt_payload.seq_atom_tables[0];
     auto generation_atom_table = authored_prompt_atom_table
         ? authored_prompt_atom_table->cloneHostForGeneration()
@@ -295,12 +298,22 @@ GRIM::GeneratedSequence generateOneSequence(
     prompt_payload.seq_atom_tables[0] = generation_atom_table;
     const std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table =
         generation_atom_table;
+    if (prompt_payload.seq_local_atom_tables.size() != 1 ||
+        !prompt_payload.seq_local_atom_tables[0]) {
+        throw std::runtime_error(
+            "Phase2 payload inference: prompt local atom table is missing");
+    }
+    auto generation_local_atom_table =
+        std::make_shared<GRIM::Tokenizer::SequenceLocalAtomTable>(
+            *prompt_payload.seq_local_atom_tables[0]);
+    prompt_payload.seq_local_atom_tables[0] = generation_local_atom_table;
 
     GRIM::GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
     sequence.token_numeric_values = prompt_numeric_values;
     sequence.token_atom_mask = prompt_atom_mask;
     sequence.context_atom_table = prompt_atom_table;
+    sequence.context_local_atom_table = generation_local_atom_table;
     if (prompt_token_to_slot_index_map.size() != prompt_tokens.size()) {
         throw std::runtime_error("Phase2 payload inference: token_to_slot_index_map length mismatch");
     }
@@ -309,6 +322,11 @@ GRIM::GeneratedSequence generateOneSequence(
         throw std::runtime_error("Phase2 payload inference: atom_entry_ids length mismatch");
     }
     sequence.atom_entry_ids = prompt_atom_entry_ids;
+    if (prompt_local_atom_indices.size() != prompt_tokens.size()) {
+        throw std::runtime_error(
+            "Phase2 payload inference: token_local_atom_indices length mismatch");
+    }
+    sequence.token_local_atom_indices = prompt_local_atom_indices;
 
     if (!use_gpu) {
         throw std::runtime_error("Phase2 payload inference requires config.use_gpu=true");
@@ -482,8 +500,11 @@ GRIM::GeneratedSequence generateOneSequence(
         std::vector<uint32_t> aflags(feed_tokens.size(), 0);
         std::vector<uint32_t> aentry(
             feed_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+        std::vector<uint32_t> local_indices(
+            feed_tokens.size(), GRIM::Tokenizer::kLocalAtomIndexNone);
         auto decode_payload = GRIM::Batching::buildInferenceBatchPayload(
             feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry,
+            generation_local_atom_table, local_indices,
             vocab_size, /*batch_capacity=*/1,
             /*max_cached_seq_len=*/feed_tokens.size(),
             /*selector_enabled=*/false,
@@ -503,6 +524,8 @@ GRIM::GeneratedSequence generateOneSequence(
         sequence.token_atom_mask.push_back(0);
         sequence.token_to_slot_index_map.push_back(-1);
         sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+        sequence.token_local_atom_indices.push_back(
+            GRIM::Tokenizer::kLocalAtomIndexNone);
         sequence_atom_flags.push_back(0);
         sequence.score += s.log_probability;
         if (stream_callback) {
@@ -651,6 +674,8 @@ Phase2TextInferenceResult executePhase2TextInference(
     auto atom_flags = std::move(encoded.token_atom_flags);
     auto prompt_atom_table = encoded.atom_table;
     auto atom_entry_ids = std::move(encoded.atom_entry_ids);
+    auto prompt_local_atom_table = encoded.local_atom_table;
+    auto local_atom_indices = std::move(encoded.token_local_atom_indices);
     const auto end_encode = std::chrono::high_resolution_clock::now();
     result.encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_encode - start_encode).count();
@@ -674,6 +699,11 @@ Phase2TextInferenceResult executePhase2TextInference(
             throw std::runtime_error("executePhase2TextInference: atom_entry_ids empty while removing EOS");
         }
         atom_entry_ids.pop_back();
+        if (local_atom_indices.empty()) {
+            throw std::runtime_error(
+                "executePhase2TextInference: token_local_atom_indices empty while removing EOS");
+        }
+        local_atom_indices.pop_back();
     }
 
     result.prompt_token_count = tokens.size();
@@ -685,6 +715,8 @@ Phase2TextInferenceResult executePhase2TextInference(
         atom_flags,
         prompt_atom_table,
         atom_entry_ids,
+        prompt_local_atom_table,
+        local_atom_indices,
         vocab_size,
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),

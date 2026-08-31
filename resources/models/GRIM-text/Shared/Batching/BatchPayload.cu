@@ -13,8 +13,10 @@
 
 #include "BatchPayload.hpp"
 #include "Batching_GPU.hpp"
+#include "LocalAtomSelectionData.hpp"
 #include "../Goal/Goal.hpp"
 #include "../Goal/GoalSpanView.hpp"
+#include "../UnigramByte/SequenceLocalAtomTable.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../TokenizerArtifacts/GrmtSequence.hpp"
 #include <cstdio>
@@ -222,6 +224,9 @@ BatchPayload buildBatchPayload(
         const std::vector<uint32_t>* atom_flags;
         std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
         const std::vector<uint32_t>* atom_entry_ids;
+        std::shared_ptr<const GRIM::Tokenizer::SequenceLocalAtomTable>
+            local_atom_table;
+        const std::vector<uint32_t>* local_atom_indices;
         const std::vector<int32_t>* exec_slots;
         int length;
 
@@ -291,6 +296,18 @@ BatchPayload buildBatchPayload(
                 " atom_entry_ids.size()=" + std::to_string(seq->atom_entry_ids.size()) +
                 " != token_ids.size()=" + std::to_string(seq_len));
         }
+        if (static_cast<int>(seq->token_local_atom_indices.size()) != seq_len) {
+            throw std::runtime_error(
+                "buildBatchPayload: sequence " + std::to_string(sid) +
+                " token_local_atom_indices.size()=" +
+                std::to_string(seq->token_local_atom_indices.size()) +
+                " != token_ids.size()=" + std::to_string(seq_len));
+        }
+        if (!seq->local_atom_table) {
+            throw std::runtime_error(
+                "buildBatchPayload: sequence " + std::to_string(sid) +
+                " local_atom_table is NULL");
+        }
         if (static_cast<int>(seq->token_atom_flags.size()) != seq_len) {
             throw std::runtime_error(
                 "buildBatchPayload: sequence " + std::to_string(sid) +
@@ -343,6 +360,8 @@ BatchPayload buildBatchPayload(
             &seq->token_atom_flags,
             seq->atom_table,
             &seq->atom_entry_ids,
+            seq->local_atom_table,
+            &seq->token_local_atom_indices,
             exec_slots_ptr,
             seq_len
         });
@@ -420,8 +439,11 @@ BatchPayload buildBatchPayload(
     payload.atom_aux_target_mask.assign(flat_size, 0);
     payload.atom_flags.assign(flat_size, 0);
     payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
+    payload.token_local_atom_indices.assign(
+        flat_size, GRIM::Tokenizer::kLocalAtomIndexNone);
     payload.token_to_slot_index_map.assign(flat_size, -1);
     payload.seq_atom_tables.resize(payload.batch_size);
+    payload.seq_local_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
 
     payload.valid_tokens = 0;
@@ -500,6 +522,11 @@ BatchPayload buildBatchPayload(
                     r.atom_entry_ids->data(),
                     seq_len * sizeof(uint32_t));
 
+        // Copy sequence-local typed indices. These never alias AtomTable IDs.
+        std::memcpy(&payload.token_local_atom_indices[row_offset],
+                    r.local_atom_indices->data(),
+                    seq_len * sizeof(uint32_t));
+
         // Copy ARG bootstrap slot map (-1 for tokens that do not seed a slot).
         if (r.exec_slots) {
             std::memcpy(&payload.token_to_slot_index_map[row_offset],
@@ -510,10 +537,12 @@ BatchPayload buildBatchPayload(
 
         // Store AtomTable reference for this batch row
         payload.seq_atom_tables[b] = r.atom_table;
+        payload.seq_local_atom_tables[b] = r.local_atom_table;
 
     }
 
     materializeCompactAtomOpenings(payload, "buildBatchPayload");
+    materializeLocalAtomSelectionMetadata(payload, "buildBatchPayload");
 
     // ═════════════════════════════════════════════════════════════════════════
     // Typed-span rows are excluded from LM supervision by the authored mask.
@@ -556,6 +585,8 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
     const std::vector<uint32_t>& atom_entry_ids,
+    std::shared_ptr<const GRIM::Tokenizer::SequenceLocalAtomTable> local_atom_table,
+    const std::vector<uint32_t>& token_local_atom_indices,
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,
@@ -595,6 +626,16 @@ BatchPayload buildInferenceBatchPayload(
             std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
             std::to_string(seq_len));
     }
+    if (static_cast<int>(token_local_atom_indices.size()) != seq_len) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: token_local_atom_indices.size()=" +
+            std::to_string(token_local_atom_indices.size()) +
+            " != token_ids.size()=" + std::to_string(seq_len));
+    }
+    if (!local_atom_table) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: local_atom_table is NULL");
+    }
 
     for (int t = 0; t < seq_len; ++t) {
         const int token_id = token_ids[static_cast<size_t>(t)];
@@ -616,12 +657,16 @@ BatchPayload buildInferenceBatchPayload(
     payload.atom_mask = atom_mask;
     payload.atom_flags = atom_flags;
     payload.atom_entry_ids = atom_entry_ids;
+    payload.token_local_atom_indices = token_local_atom_indices;
     payload.token_to_slot_index_map.assign(static_cast<size_t>(seq_len), -1);
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;
+    payload.seq_local_atom_tables.resize(1);
+    payload.seq_local_atom_tables[0] = std::move(local_atom_table);
 
     if (mode == BatchPayloadMode::InferencePrefill) {
         materializeCompactAtomOpenings(payload, caller);
+        materializeLocalAtomSelectionMetadata(payload, caller);
     }
     payload.validate(caller);
     return payload;

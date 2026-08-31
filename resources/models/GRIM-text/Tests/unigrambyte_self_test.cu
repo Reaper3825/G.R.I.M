@@ -14,6 +14,8 @@
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/UnigramByte/SequenceLocalAtomTable.hpp"
+#include "../Shared/Batching/BatchPayload.hpp"
+#include "../Shared/Batching/LocalAtomSelectionData.hpp"
 #include "../Shared/UnigramByte/Detectors/DetectorRegistry.hpp"
 #include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
@@ -2004,6 +2006,77 @@ bool testSequenceLocalAtomTicketing(std::string& message) {
     return true;
 }
 
+bool testLocalAtomSelectionMetadata(std::string& message) {
+    GRIM::Batching::BatchPayload payload;
+    payload.mode = GRIM::Batching::BatchPayloadMode::Training;
+    payload.batch_size = 1;
+    payload.max_seq_len = 14;
+    payload.total_tokens = 14;
+    payload.actual_tokens = 14;
+    payload.seq_lengths = {14};
+    payload.input_ids = {
+        BOS_TOKEN_ID,
+        atomTypeToOpenTokenId(AtomType::ATOM_STRING),
+        BYTE_TOKEN_OFFSET + static_cast<int>('A'),
+        atomTypeToCloseTokenId(AtomType::ATOM_STRING),
+        atomTypeToOpenTokenId(AtomType::ATOM_INT),
+        BYTE_TOKEN_OFFSET + static_cast<int>('7'),
+        atomTypeToCloseTokenId(AtomType::ATOM_INT),
+        atomTypeToOpenTokenId(AtomType::ATOM_STRING),
+        BYTE_TOKEN_OFFSET + static_cast<int>('A'),
+        atomTypeToCloseTokenId(AtomType::ATOM_STRING),
+        atomTypeToOpenTokenId(AtomType::ATOM_STRING),
+        BYTE_TOKEN_OFFSET + static_cast<int>('B'),
+        atomTypeToCloseTokenId(AtomType::ATOM_STRING),
+        EOS_TOKEN_ID};
+    payload.token_local_atom_indices.assign(
+        payload.input_ids.size(), kLocalAtomIndexNone);
+
+    auto table = std::make_shared<SequenceLocalAtomTable>();
+    const uint32_t alice =
+        table->ticket(AtomType::ATOM_STRING, "Alice").local_index;
+    const uint32_t seven =
+        table->ticket(AtomType::ATOM_INT, "7").local_index;
+    const uint32_t bob =
+        table->ticket(AtomType::ATOM_STRING, "Bob").local_index;
+    payload.token_local_atom_indices[1] = alice;
+    payload.token_local_atom_indices[4] = seven;
+    payload.token_local_atom_indices[7] = alice;
+    payload.token_local_atom_indices[10] = bob;
+    payload.seq_local_atom_tables = {table};
+
+    GRIM::Batching::materializeLocalAtomSelectionMetadata(
+        payload, "testLocalAtomSelectionMetadata");
+
+    ASSERT_TRUE(payload.local_atom_query_positions ==
+                    std::vector<int>({1, 4, 7, 10}),
+                "Local selector queries must be authored at typed openings");
+    ASSERT_TRUE(payload.local_atom_query_types == std::vector<int>({
+                    static_cast<int>(AtomType::ATOM_STRING),
+                    static_cast<int>(AtomType::ATOM_INT),
+                    static_cast<int>(AtomType::ATOM_STRING),
+                    static_cast<int>(AtomType::ATOM_STRING)}),
+                "Local selector query types must come from opening tokens");
+    ASSERT_TRUE(payload.local_atom_query_targets ==
+                    std::vector<int>({0, 0, 1, 0}),
+                "First occurrences must target NO_REFERENCE and repeats local_index + 1");
+    ASSERT_EQ(payload.local_atom_reference_target_count, 1,
+              "Exactly one repeated local value should be reference-supervised");
+    ASSERT_TRUE(payload.local_atom_row_type_candidate_offsets ==
+                    std::vector<int>({0, 1, 1, 3, 3, 3}),
+                "Candidates must be segmented by row and AtomType");
+    ASSERT_TRUE(payload.local_atom_candidate_first_close_positions ==
+                    std::vector<int>({6, 3, 12}),
+                "Each typed local candidate must use its first completed occurrence");
+    ASSERT_TRUE(payload.local_atom_candidate_content_offsets ==
+                    std::vector<int>({0, 1, 2, 3}),
+                "Candidate content offsets must delimit each typed value independently");
+    ASSERT_TRUE(payload.local_atom_candidate_content_positions ==
+                    std::vector<int>({5, 2, 11}),
+                "Candidate content positions must expose first-occurrence token content");
+    return true;
+}
+
 bool testAtomTableDoesNotPopulateArgNumber(std::string& message) {
     AtomTable table;
     const uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_FLOAT, "-1.5e-4", 12, 19);
@@ -3592,6 +3665,7 @@ int main(int argc, char** argv) {
     suite.addTest("AtomTable.Metadata", testAtomTableMetadata);
     suite.addTest("AtomTable.HashDeduplication", testAtomTableHashDeduplication);
     suite.addTest("SequenceLocalAtomTable.Ticketing", testSequenceLocalAtomTicketing);
+    suite.addTest("SequenceLocalAtomTable.SelectionMetadata", testLocalAtomSelectionMetadata);
     suite.addTest("AtomTable.DoesNotPopulateArgNumber", testAtomTableDoesNotPopulateArgNumber);
     
     // Section 6: Integration Tests

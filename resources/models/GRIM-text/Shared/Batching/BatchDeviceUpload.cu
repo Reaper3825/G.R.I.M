@@ -229,6 +229,12 @@ BatchDeviceBindings uploadBatchToDevice(
         throw std::runtime_error(
             "uploadBatchToDevice: BatchDeviceStorage.atom_entry_ids_tensor.data is NULL");
     }
+    uint32_t* cached_local_atom_indices_ptr =
+        reinterpret_cast<uint32_t*>(storage.token_local_atom_indices_tensor.data);
+    if (!cached_local_atom_indices_ptr) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: BatchDeviceStorage.token_local_atom_indices_tensor.data is NULL");
+    }
     int* cached_atom_positions_ptr = reinterpret_cast<int*>(storage.atom_positions_tensor.data);
     if (!cached_atom_positions_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_positions_tensor.data is NULL");
@@ -236,6 +242,43 @@ BatchDeviceBindings uploadBatchToDevice(
     int* cached_atom_types_ptr = reinterpret_cast<int*>(storage.atom_types_tensor.data);
     if (!cached_atom_types_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_types_tensor.data is NULL");
+    }
+    int* cached_local_query_positions_ptr = reinterpret_cast<int*>(
+        storage.local_atom_query_positions_tensor.data);
+    int* cached_local_query_types_ptr = reinterpret_cast<int*>(
+        storage.local_atom_query_types_tensor.data);
+    int* cached_local_query_targets_ptr = reinterpret_cast<int*>(
+        storage.local_atom_query_targets_tensor.data);
+    int* cached_local_row_type_offsets_ptr = reinterpret_cast<int*>(
+        storage.local_atom_row_type_candidate_offsets_tensor.data);
+    int* cached_local_candidate_first_close_ptr = reinterpret_cast<int*>(
+        storage.local_atom_candidate_first_close_positions_tensor.data);
+    int* cached_local_candidate_content_offsets_ptr = reinterpret_cast<int*>(
+        storage.local_atom_candidate_content_offsets_tensor.data);
+    int* cached_local_candidate_content_positions_ptr = reinterpret_cast<int*>(
+        storage.local_atom_candidate_content_positions_tensor.data);
+    if (!cached_local_query_positions_ptr || !cached_local_query_types_ptr ||
+        !cached_local_query_targets_ptr || !cached_local_row_type_offsets_ptr ||
+        !cached_local_candidate_first_close_ptr ||
+        !cached_local_candidate_content_offsets_ptr ||
+        !cached_local_candidate_content_positions_ptr) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: local atom selector metadata storage is incomplete");
+    }
+    if (payload.localAtomQueryCount() > storage.max_tokens_capacity ||
+        payload.localAtomCandidateCount() > storage.max_tokens_capacity ||
+        payload.localAtomContentPositionCount() > storage.max_tokens_capacity) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: local atom compact metadata exceeds token capacity");
+    }
+    const std::size_t local_row_type_capacity =
+        static_cast<std::size_t>(storage.batch_size_capacity) *
+            GRIM::Tokenizer::kAtomTypeCount +
+        1;
+    if (payload.local_atom_row_type_candidate_offsets.size() >
+        local_row_type_capacity) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: local atom row/type offsets exceed device capacity");
     }
 
     const size_t input_ids_bytes   = payload.inputIdBytes();
@@ -250,6 +293,17 @@ BatchDeviceBindings uploadBatchToDevice(
     const size_t slot_map_bytes  = payload.slotMapBytes();
     const size_t atom_position_bytes = payload.atomPositionBytes();
     const size_t atom_type_bytes = payload.atomTypeBytes();
+    const size_t local_atom_index_bytes = payload.localAtomIndexBytes();
+    const size_t local_query_position_bytes = payload.localAtomQueryPositionBytes();
+    const size_t local_query_type_bytes = payload.localAtomQueryTypeBytes();
+    const size_t local_query_target_bytes = payload.localAtomQueryTargetBytes();
+    const size_t local_row_type_offset_bytes = payload.localAtomRowTypeOffsetBytes();
+    const size_t local_candidate_first_close_bytes =
+        payload.localAtomCandidateFirstCloseBytes();
+    const size_t local_candidate_content_offset_bytes =
+        payload.localAtomCandidateContentOffsetBytes();
+    const size_t local_candidate_content_position_bytes =
+        payload.localAtomCandidateContentPositionBytes();
 
     auto copy_start = std::chrono::high_resolution_clock::now();
 
@@ -307,6 +361,14 @@ BatchDeviceBindings uploadBatchToDevice(
         payload.atom_entry_ids.size() * sizeof(uint32_t),
         cudaMemcpyHostToDevice,
         stream));
+    if (local_atom_index_bytes > 0) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_atom_indices_ptr,
+            payload.token_local_atom_indices.data(),
+            local_atom_index_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+    }
 
     // Round 4: token_to_slot_index_map.
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -335,6 +397,58 @@ BatchDeviceBindings uploadBatchToDevice(
             cudaMemcpyHostToDevice,
             stream));
     }
+    if (local_query_position_bytes > 0) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_query_positions_ptr,
+            payload.local_atom_query_positions.data(),
+            local_query_position_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_query_types_ptr,
+            payload.local_atom_query_types.data(),
+            local_query_type_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_query_targets_ptr,
+            payload.local_atom_query_targets.data(),
+            local_query_target_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+    }
+    if (local_row_type_offset_bytes > 0) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_row_type_offsets_ptr,
+            payload.local_atom_row_type_candidate_offsets.data(),
+            local_row_type_offset_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+    }
+    if (local_candidate_first_close_bytes > 0) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_candidate_first_close_ptr,
+            payload.local_atom_candidate_first_close_positions.data(),
+            local_candidate_first_close_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+    }
+    if (local_candidate_content_offset_bytes > 0) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_candidate_content_offsets_ptr,
+            payload.local_atom_candidate_content_offsets.data(),
+            local_candidate_content_offset_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+    }
+    if (local_candidate_content_position_bytes > 0) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_local_candidate_content_positions_ptr,
+            payload.local_atom_candidate_content_positions.data(),
+            local_candidate_content_position_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+    }
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
     auto copy_end = std::chrono::high_resolution_clock::now();
@@ -360,9 +474,25 @@ BatchDeviceBindings uploadBatchToDevice(
         ? reinterpret_cast<uint32_t*>(storage.atom_flags_tensor.data)
         : nullptr;
     bindings.d_atom_entry_ids   = cached_atom_entry_ids_ptr;
+    bindings.d_token_local_atom_indices = cached_local_atom_indices_ptr;
     bindings.d_token_to_slot_index_map = cached_slot_map_ptr;
     bindings.d_atom_positions   = cached_atom_positions_ptr;
     bindings.d_atom_types       = cached_atom_types_ptr;
+    bindings.d_local_atom_query_positions = cached_local_query_positions_ptr;
+    bindings.d_local_atom_query_types = cached_local_query_types_ptr;
+    bindings.d_local_atom_query_targets = cached_local_query_targets_ptr;
+    bindings.d_local_atom_row_type_candidate_offsets =
+        cached_local_row_type_offsets_ptr;
+    bindings.d_local_atom_candidate_first_close_positions =
+        cached_local_candidate_first_close_ptr;
+    bindings.d_local_atom_candidate_content_offsets =
+        cached_local_candidate_content_offsets_ptr;
+    bindings.d_local_atom_candidate_content_positions =
+        cached_local_candidate_content_positions_ptr;
+    bindings.local_atom_query_count = payload.localAtomQueryCount();
+    bindings.local_atom_candidate_count = payload.localAtomCandidateCount();
+    bindings.local_atom_content_position_count =
+        payload.localAtomContentPositionCount();
     return bindings;
 }
 
@@ -474,6 +604,11 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_entry_ids");
+    storage->token_local_atom_indices_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_token_local_atom_indices");
     storage->token_to_slot_index_map_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,
@@ -489,6 +624,49 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_types");
+    storage->local_atom_query_positions_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_local_atom_query_positions");
+    storage->local_atom_query_types_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_local_atom_query_types");
+    storage->local_atom_query_targets_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_local_atom_query_targets");
+    if (workspace_hp.batch_size >
+        (std::numeric_limits<int>::max() - 1) /
+            GRIM::Tokenizer::kAtomTypeCount) {
+        throw std::runtime_error(
+            "createBatchDeviceStorage: local atom row/type offset capacity overflows int");
+    }
+    const int row_type_offset_capacity =
+        workspace_hp.batch_size * GRIM::Tokenizer::kAtomTypeCount + 1;
+    storage->local_atom_row_type_candidate_offsets_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, row_type_offset_capacity),
+        false,
+        stream,
+        "batch_local_atom_row_type_candidate_offsets");
+    storage->local_atom_candidate_first_close_positions_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_local_atom_candidate_first_close_positions");
+    storage->local_atom_candidate_content_offsets_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens + 1),
+        false,
+        stream,
+        "batch_local_atom_candidate_content_offsets");
+    storage->local_atom_candidate_content_positions_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_local_atom_candidate_content_positions");
 
     return storage;
 }

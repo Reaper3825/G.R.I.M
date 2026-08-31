@@ -451,6 +451,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchDeviceUpload.cu
     ../../Shared/Batching/BatchPayload.cu
+    ../../Shared/Batching/LocalAtomSelectionData.cu
     ../../Shared/Batching/EpochBatching.cu
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/Encoding/EncoderDiagnostics.cu
@@ -824,6 +825,7 @@ target_include_directories(atom_insertion_state_machine_test PRIVATE
 add_executable(unigrambyte_self_test
     ../../Tests/unigrambyte_self_test.cu
     ../Phases/Startup/SlidingWindow.cu
+    ../../Shared/Batching/LocalAtomSelectionData.cu
 )
 
 set_target_properties(unigrambyte_self_test PROPERTIES

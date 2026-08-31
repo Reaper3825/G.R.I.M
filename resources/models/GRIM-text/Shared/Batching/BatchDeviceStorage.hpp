@@ -36,9 +36,17 @@ struct BatchDeviceStorage {
     Tensor atom_mask_tensor;
     Tensor atom_flags_tensor;
     Tensor atom_entry_ids_tensor;
+    Tensor token_local_atom_indices_tensor;
     Tensor token_to_slot_index_map_tensor;
     Tensor atom_positions_tensor;
     Tensor atom_types_tensor;
+    Tensor local_atom_query_positions_tensor;
+    Tensor local_atom_query_types_tensor;
+    Tensor local_atom_query_targets_tensor;
+    Tensor local_atom_row_type_candidate_offsets_tensor;
+    Tensor local_atom_candidate_first_close_positions_tensor;
+    Tensor local_atom_candidate_content_offsets_tensor;
+    Tensor local_atom_candidate_content_positions_tensor;
 
     // Candidate atom-entry pool (arg/option selector). Allocated independently
     // when selector_enabled=true; pool capacity is max_tokens (every token could

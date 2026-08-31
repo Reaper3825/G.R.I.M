@@ -36,13 +36,20 @@ struct Goal;
 namespace TokenizerArtifacts { struct GrmtSequence; }
 }
 
-// Forward declaration — full definition in UnigramByte/AtomTable.hpp
-namespace GRIM { namespace Tokenizer { class AtomTable; } }
+// Forward declarations — full definitions live under Shared/UnigramByte.
+namespace GRIM { namespace Tokenizer {
+class AtomTable;
+class SequenceLocalAtomTable;
+} }
 
 namespace GRIM {
 
 // Forward declaration — full definition in UnigramByte/UniByte.hpp
 namespace Batching {
+
+// Local selector class zero means the current typed atom should be produced by
+// the ordinary atom-value path. Positive classes encode local_index + 1.
+inline constexpr int kLocalAtomNoReferenceTarget = 0;
 struct BatchAssignment;
 struct BatchDeviceStorage;
 }
@@ -153,6 +160,35 @@ struct BatchPayload {
     std::vector<std::shared_ptr<const GRIM::Tokenizer::AtomTable>> seq_atom_tables;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // SEQUENCE-LOCAL ATOM ADDRESSING AND SELECTOR METADATA
+    //
+    // token_local_atom_indices is the aligned opening-only address channel.
+    // AtomType comes from the opening token ID. The tables and every compact
+    // selector field below are independent of AtomTable / atom_entry_ids.
+    //
+    // Candidate order is row-major, then AtomType, then local_index. Therefore
+    // [local_atom_row_type_candidate_offsets[row * kAtomTypeCount + type],
+    //  local_atom_row_type_candidate_offsets[row * kAtomTypeCount + type + 1])
+    // is exactly that row/type's dense local-index bank.
+    //
+    // Candidate content positions describe the first complete occurrence of
+    // each local value. Query targets are derived at typed openings:
+    //   0               = NO_REFERENCE (first occurrence)
+    //   local_index + 1 = reference an already-complete local value
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::vector<uint32_t> token_local_atom_indices; // [total_tokens], opening-only
+    std::vector<std::shared_ptr<const GRIM::Tokenizer::SequenceLocalAtomTable>>
+        seq_local_atom_tables; // [batch_size]
+    std::vector<int> local_atom_query_positions; // [Q], flat opening positions
+    std::vector<int> local_atom_query_types;     // [Q], AtomType values
+    std::vector<int> local_atom_query_targets;   // [Q], 0 or local_index + 1
+    int local_atom_reference_target_count = 0;   // query targets > 0
+    std::vector<int> local_atom_row_type_candidate_offsets; // [batch_size * kAtomTypeCount + 1]
+    std::vector<int> local_atom_candidate_first_close_positions; // [C]
+    std::vector<int> local_atom_candidate_content_offsets; // [C + 1]
+    std::vector<int> local_atom_candidate_content_positions; // ragged flattened token positions
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // CANDIDATE ATOM-ENTRY POOL
     //
     // The "menu" of options the selector chooses among: every row's AtomTable
@@ -210,6 +246,7 @@ struct BatchPayload {
                !atom_aux_target_mask.empty() ||
                !atom_flags.empty() ||
                !atom_entry_ids.empty() ||
+               !token_local_atom_indices.empty() ||
                !token_to_slot_index_map.empty();
     }
     bool hasTrainingTargets() const {
@@ -569,6 +606,14 @@ struct BatchPayload {
                 std::to_string(atom_entry_ids.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
+        if (ownsHostInputData() && !EnableAtomIdentification &&
+            static_cast<int>(token_local_atom_indices.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": BatchPayload.token_local_atom_indices.size()=" +
+                std::to_string(token_local_atom_indices.size()) +
+                " != total_tokens=" + std::to_string(total_tokens));
+        }
         if (ownsHostInputData()) {
             for (int i = 0; i < total_tokens; ++i) {
                 if (atom_mask[i] > 1) {
@@ -580,6 +625,9 @@ struct BatchPayload {
                 const bool has_atom_metadata =
                     atom_mask[i] != 0 ||
                     atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone ||
+                    (!EnableAtomIdentification &&
+                     token_local_atom_indices[i] !=
+                        GRIM::Tokenizer::kLocalAtomIndexNone) ||
                     numeric_values[i] != 0.0f ||
                     atom_flags[i] != 0;
                 if (has_atom_metadata &&
@@ -614,6 +662,9 @@ struct BatchPayload {
                 if (atom_mask[static_cast<std::size_t>(i)] != 0 ||
                     atom_entry_ids[static_cast<std::size_t>(i)] !=
                         GRIM::Tokenizer::kAtomEntryNone ||
+                    (!EnableAtomIdentification &&
+                     token_local_atom_indices[static_cast<std::size_t>(i)] !=
+                        GRIM::Tokenizer::kLocalAtomIndexNone) ||
                     numeric_values[static_cast<std::size_t>(i)] != 0.0f ||
                     atom_flags[static_cast<std::size_t>(i)] != 0) {
                     throw std::runtime_error(
@@ -623,7 +674,8 @@ struct BatchPayload {
                 }
             }
         }
-        if (ownsHostInputData() && !isInferenceDecode()) {
+        if (ownsHostInputData() && !isInferenceDecode() &&
+            !EnableAtomIdentification) {
             std::size_t compact_atom_index = 0;
             for (int row = 0; row < batch_size; ++row) {
                 bool inside_atom = false;
@@ -716,6 +768,158 @@ struct BatchPayload {
                     ": compact atom metadata contains entries not backed by typed openings");
             }
         }
+        if (ownsHostInputData() && !isInferenceDecode() &&
+            !EnableAtomIdentification) {
+            if (seq_local_atom_tables.size() !=
+                static_cast<std::size_t>(batch_size)) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": BatchPayload.seq_local_atom_tables.size()=" +
+                    std::to_string(seq_local_atom_tables.size()) +
+                    " != batch_size=" + std::to_string(batch_size));
+            }
+            if (local_atom_query_positions.size() != local_atom_query_types.size() ||
+                local_atom_query_positions.size() != local_atom_query_targets.size()) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": local atom query metadata arrays are misaligned");
+            }
+            const std::size_t candidate_count =
+                local_atom_candidate_first_close_positions.size();
+            if (local_atom_candidate_content_offsets.size() !=
+                candidate_count + 1) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": local candidate content offsets must have candidate_count + 1 entries");
+            }
+            if (local_atom_row_type_candidate_offsets.size() !=
+                static_cast<std::size_t>(batch_size *
+                    GRIM::Tokenizer::kAtomTypeCount + 1)) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": local row/type candidate offsets have invalid size");
+            }
+            if (local_atom_candidate_content_offsets.empty() ||
+                local_atom_candidate_content_offsets.front() != 0 ||
+                local_atom_candidate_content_offsets.back() !=
+                    static_cast<int>(local_atom_candidate_content_positions.size())) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": local candidate content offsets do not span content positions");
+            }
+            if (local_atom_row_type_candidate_offsets.front() != 0 ||
+                local_atom_row_type_candidate_offsets.back() !=
+                    static_cast<int>(candidate_count)) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": local row/type candidate offsets do not span candidates");
+            }
+            for (std::size_t i = 1;
+                 i < local_atom_candidate_content_offsets.size();
+                 ++i) {
+                if (local_atom_candidate_content_offsets[i] <
+                    local_atom_candidate_content_offsets[i - 1]) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": local candidate content offsets are not monotonic");
+                }
+            }
+            for (std::size_t i = 1;
+                 i < local_atom_row_type_candidate_offsets.size();
+                 ++i) {
+                if (local_atom_row_type_candidate_offsets[i] <
+                    local_atom_row_type_candidate_offsets[i - 1]) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": local row/type candidate offsets are not monotonic");
+                }
+            }
+
+            int realized_reference_targets = 0;
+            for (std::size_t query = 0;
+                 query < local_atom_query_positions.size();
+                 ++query) {
+                const int position = local_atom_query_positions[query];
+                if (position < 0 || position >= total_tokens ||
+                    !GRIM::Tokenizer::isAtomOpenTokenId(
+                        input_ids[static_cast<std::size_t>(position)])) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": local query does not identify an opening boundary");
+                }
+                const auto type = GRIM::Tokenizer::tokenIdToAtomType(
+                    input_ids[static_cast<std::size_t>(position)]);
+                if (local_atom_query_types[query] != static_cast<int>(type)) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": local query type disagrees with opening boundary");
+                }
+                const int row = position / max_seq_len;
+                const int type_index = GRIM::Tokenizer::atomTypeIndexOrThrow(
+                    type, "BatchPayload::validate local query");
+                const std::size_t segment = static_cast<std::size_t>(
+                    row * GRIM::Tokenizer::kAtomTypeCount + type_index);
+                const int candidate_begin =
+                    local_atom_row_type_candidate_offsets[segment];
+                const int candidate_end =
+                    local_atom_row_type_candidate_offsets[segment + 1];
+                const int target = local_atom_query_targets[query];
+                if (target < kLocalAtomNoReferenceTarget ||
+                    target > candidate_end - candidate_begin) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": local query target is outside its typed candidate bank");
+                }
+                if (target > kLocalAtomNoReferenceTarget) {
+                    const int candidate = candidate_begin + target - 1;
+                    if (local_atom_candidate_first_close_positions[
+                            static_cast<std::size_t>(candidate)] >= position) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": local reference target is not causally available");
+                    }
+                    ++realized_reference_targets;
+                }
+            }
+            if (realized_reference_targets !=
+                local_atom_reference_target_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": local_atom_reference_target_count does not match query targets");
+            }
+
+            for (int position : local_atom_candidate_first_close_positions) {
+                if (position < 0 || position >= total_tokens ||
+                    !GRIM::Tokenizer::isAtomCloseTokenId(
+                        input_ids[static_cast<std::size_t>(position)])) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": local candidate first-close position is invalid");
+                }
+            }
+            for (int position : local_atom_candidate_content_positions) {
+                if (position < 0 || position >= total_tokens ||
+                    GRIM::Tokenizer::isAtomOpenTokenId(
+                        input_ids[static_cast<std::size_t>(position)]) ||
+                    GRIM::Tokenizer::isAtomCloseTokenId(
+                        input_ids[static_cast<std::size_t>(position)])) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": local candidate content position is invalid");
+                }
+            }
+        } else if (!local_atom_query_positions.empty() ||
+                   !local_atom_query_types.empty() ||
+                   !local_atom_query_targets.empty() ||
+                   !local_atom_row_type_candidate_offsets.empty() ||
+                   !local_atom_candidate_first_close_positions.empty() ||
+                   !local_atom_candidate_content_offsets.empty() ||
+                   !local_atom_candidate_content_positions.empty() ||
+                   local_atom_reference_target_count != 0) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": inference decode payload must not carry compact local atom metadata");
+        }
         const std::size_t pool_entries = static_cast<std::size_t>(num_pool_atoms);
         auto requirePoolChannelSize =
             [&](std::size_t actual, std::size_t expected, const char* name) {
@@ -794,6 +998,39 @@ struct BatchPayload {
     size_t slotMapBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int32_t); }
     size_t atomPositionBytes() const { return atom_positions.size() * sizeof(int); }
     size_t atomTypeBytes()     const { return atom_types.size() * sizeof(int); }
+    size_t localAtomIndexBytes() const {
+        return token_local_atom_indices.size() * sizeof(uint32_t);
+    }
+    size_t localAtomQueryPositionBytes() const {
+        return local_atom_query_positions.size() * sizeof(int);
+    }
+    size_t localAtomQueryTypeBytes() const {
+        return local_atom_query_types.size() * sizeof(int);
+    }
+    size_t localAtomQueryTargetBytes() const {
+        return local_atom_query_targets.size() * sizeof(int);
+    }
+    size_t localAtomRowTypeOffsetBytes() const {
+        return local_atom_row_type_candidate_offsets.size() * sizeof(int);
+    }
+    size_t localAtomCandidateFirstCloseBytes() const {
+        return local_atom_candidate_first_close_positions.size() * sizeof(int);
+    }
+    size_t localAtomCandidateContentOffsetBytes() const {
+        return local_atom_candidate_content_offsets.size() * sizeof(int);
+    }
+    size_t localAtomCandidateContentPositionBytes() const {
+        return local_atom_candidate_content_positions.size() * sizeof(int);
+    }
+    int localAtomQueryCount() const {
+        return static_cast<int>(local_atom_query_positions.size());
+    }
+    int localAtomCandidateCount() const {
+        return static_cast<int>(local_atom_candidate_first_close_positions.size());
+    }
+    int localAtomContentPositionCount() const {
+        return static_cast<int>(local_atom_candidate_content_positions.size());
+    }
     int authoredAtomCount() const { return static_cast<int>(atom_positions.size()); }
     size_t totalTransferBytes() const {
         return inputIdBytes() +
@@ -802,7 +1039,12 @@ struct BatchPayload {
                atomInsertionGapTargetBytes() +
                atomInsertionGapMaskBytes() + numericValueBytes() +
                atomMaskBytes() + atomFlagBytes() + slotMapBytes() +
-               atomPositionBytes() + atomTypeBytes();
+               atomPositionBytes() + atomTypeBytes() + localAtomIndexBytes() +
+               localAtomQueryPositionBytes() + localAtomQueryTypeBytes() +
+               localAtomQueryTargetBytes() + localAtomRowTypeOffsetBytes() +
+               localAtomCandidateFirstCloseBytes() +
+               localAtomCandidateContentOffsetBytes() +
+               localAtomCandidateContentPositionBytes();
     }
 };
 
@@ -827,7 +1069,9 @@ struct BatchPayload {
  * @param vocab_size     Model token-space width for target validation
  * @param batch_size         Fixed training batch size / row capacity
  * @param max_cached_seq_len GPU cache sequence length capacity
- * @param selector_enabled   Whether to materialize selector candidate metadata
+ * @param selector_enabled   Legacy selector feature gate. Sequence-local atom
+ *                           metadata is materialized unconditionally for the
+ *                           ordinary LM path because it is part of the batch ABI.
  * @return Complete BatchPayload ready for downstream consumption
  */
 BatchPayload buildBatchPayload(
@@ -853,6 +1097,8 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
     const std::vector<uint32_t>& atom_entry_ids,
+    std::shared_ptr<const GRIM::Tokenizer::SequenceLocalAtomTable> local_atom_table,
+    const std::vector<uint32_t>& token_local_atom_indices,
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,

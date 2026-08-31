@@ -58,9 +58,24 @@ struct BatchDeviceBindings {
     uint8_t*  d_atom_mask       = nullptr;  // [payload.total_tokens] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [payload.total_tokens] (nullable when not allocated)
     uint32_t* d_atom_entry_ids  = nullptr;  // [payload.total_tokens], row-local AtomTable entry id
+    uint32_t* d_token_local_atom_indices = nullptr; // [payload.total_tokens], typed local index at openings
     int32_t*  d_token_to_slot_index_map = nullptr; // [payload.total_tokens]
     int*      d_atom_positions  = nullptr;  // [payload.authoredAtomCount()] compact authored atom token positions
     int*      d_atom_types      = nullptr;  // [payload.authoredAtomCount()] compact authored atom types aligned with d_atom_positions
+
+    // Compact sequence-local selector metadata. Candidate banks are segmented
+    // by [row, AtomType] and ordered by local_index. Counts are zero when the
+    // active payload has no corresponding rows/data.
+    int* d_local_atom_query_positions = nullptr; // [local_atom_query_count]
+    int* d_local_atom_query_types = nullptr;     // [local_atom_query_count]
+    int* d_local_atom_query_targets = nullptr;   // [local_atom_query_count], 0 or local_index + 1
+    int* d_local_atom_row_type_candidate_offsets = nullptr; // [batch_size * kAtomTypeCount + 1]
+    int* d_local_atom_candidate_first_close_positions = nullptr; // [local_atom_candidate_count]
+    int* d_local_atom_candidate_content_offsets = nullptr; // [local_atom_candidate_count + 1]
+    int* d_local_atom_candidate_content_positions = nullptr; // [local_atom_content_position_count]
+    int local_atom_query_count = 0;
+    int local_atom_candidate_count = 0;
+    int local_atom_content_position_count = 0;
 
     // Candidate atom-entry pool (arg/option selector). Batch-global "menu" of
     // options the selector scores; row r's window is
