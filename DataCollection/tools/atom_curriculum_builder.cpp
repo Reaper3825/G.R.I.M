@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -46,8 +48,12 @@ constexpr int kSinglePerType = 6000;
 constexpr int kMixedPairPerCombination = 400;
 constexpr int kMixedTriplePerCombination = 600;
 constexpr int kMixedAllTypes = 1200;
-constexpr int kExpectedBlockCount = 41200;
-constexpr int kExpectedOccurrencesPerType = 12400;
+// v5 contrast families. They exist to teach what is *not* an atom: ordinary
+// noun phrases, interrogative clauses and role descriptions occupying the same
+// syntactic slots the tagged values occupy.
+constexpr int kContrastSamePerType = 700;
+constexpr int kContrastPairPerCombination = 150;
+constexpr int kNegativeOnlyBlocks = 1000;
 constexpr int kExpectedEntityStringSameSurfaceContrasts = 850;
 
 enum class ValueType : std::size_t {
@@ -91,6 +97,35 @@ constexpr std::array<std::array<ValueType, 3>, 10> kTriples{{
     {ValueType::Float, ValueType::Bool, ValueType::Entity},
     {ValueType::String, ValueType::Bool, ValueType::Entity},
 }};
+
+constexpr int kExpectedBlockCount =
+    kSinglePerType * static_cast<int>(kTypes.size()) +
+    kMixedPairPerCombination * static_cast<int>(kPairs.size()) +
+    kMixedTriplePerCombination * static_cast<int>(kTriples.size()) +
+    kMixedAllTypes +
+    kContrastSamePerType * static_cast<int>(kTypes.size()) +
+    kContrastPairPerCombination * static_cast<int>(kPairs.size()) +
+    kNegativeOnlyBlocks;
+
+// Every type sits in exactly four pair combinations and six triples, so the
+// per-type occurrence total stays identical across types by construction.
+// Derived rather than hardcoded so the balance audit tracks the counts above.
+constexpr int expectedOccurrencesPerType(ValueType type) {
+    int total = kSinglePerType + kMixedAllTypes + 2 * kContrastSamePerType;
+    for (const auto& pair : kPairs) {
+        for (const ValueType member : pair) {
+            if (member == type) {
+                total += kMixedPairPerCombination + kContrastPairPerCombination;
+            }
+        }
+    }
+    for (const auto& triple : kTriples) {
+        for (const ValueType member : triple) {
+            if (member == type) total += kMixedTriplePerCombination;
+        }
+    }
+    return total;
+}
 
 const char* typeName(ValueType type) {
     switch (type) {
@@ -203,6 +238,143 @@ const std::array<std::string, 16> kEntityFields{
     "service", "repository", "document", "workspace",
 };
 
+// ---------------------------------------------------------------------------
+// v5 negative inventory.
+//
+// v4 only ever put multi-word English inside <ENTITY>: INT/FLOAT are numerals,
+// STRING is a slug and BOOL is true/false, so "a run of English words" was a
+// perfectly consistent rule for ENTITY and the model began tagging the question
+// clause of a word problem ("How many liters were used"). Everything below is
+// text that must stay OUTSIDE every delimiter -- interrogative clauses,
+// definite descriptions and bare common nouns sitting in exactly the slots a
+// tagged value would occupy.
+// ---------------------------------------------------------------------------
+
+const std::array<std::string, 20> kCountNouns{
+    "liters", "crates", "boxes", "tickets", "pages", "sacks", "bottles",
+    "packets", "seats", "panels", "rolls", "cables", "bricks", "trays",
+    "envelopes", "batteries", "tiles", "jars", "cartons", "spools",
+};
+
+// FLOAT quantities read as measurements, not counts of discrete objects.
+const std::array<std::string, 20> kMeasureNouns{
+    "liters", "kilograms", "meters", "hours", "kilometers", "grams",
+    "milliliters", "minutes", "degrees", "megabytes", "watts", "acres",
+    "gallons", "pounds", "seconds", "millimeters", "tons", "yards",
+    "ounces", "centimeters",
+};
+
+const std::array<std::string, 16> kContainers{
+    "tank", "warehouse", "shelf", "pallet", "storage bin", "cabinet",
+    "delivery truck", "storeroom", "locker", "rack", "drawer",
+    "shipping container", "toolbox", "cooler", "trailer", "loading dock",
+};
+
+// Definite descriptions naming a participant by role instead of by name.
+const std::array<std::string, 16> kPersonRoles{
+    "the on-call engineer", "the shift supervisor", "the reviewing analyst",
+    "the duty manager", "the next available reviewer", "the current maintainer",
+    "the vendor representative", "the account holder of record",
+    "the person who signed off", "the auditor on record", "the default assignee",
+    "whoever closes the batch", "the previous owner", "an unnamed contributor",
+    "the customer who filed the ticket", "the requesting team",
+};
+
+const std::array<std::string, 16> kThingRoles{
+    "the largest available region", "the originating service",
+    "the upstream caller", "the team that owns the queue",
+    "the same account as before", "the department that raised it",
+    "the group listed on the ticket", "whichever worker is idle",
+    "the queue with the shortest backlog", "the office nearest the depot",
+    "the repository that failed last night", "the document under review",
+    "the workspace shared with the vendor", "the service that timed out",
+    "the project nobody has renamed", "the account flagged during intake",
+};
+
+// Clauses stating that a slot has no name yet. Every ENTITY field word appears
+// here inside a sentence where nothing at all should be tagged.
+const std::array<std::string, 16> kUnnamedClauses{
+    "no owner has been recorded yet",
+    "the reviewer has not been named",
+    "nobody is listed on the request",
+    "the team is still unassigned",
+    "the destination is not decided",
+    "the account remains anonymous",
+    "the contact is left blank",
+    "no organization is attached to this record",
+    "the location is described but never named",
+    "the vendor is referred to only by role",
+    "the customer stays unidentified in this note",
+    "the maintainer is listed as pending",
+    "the workspace has no name yet",
+    "the service is referenced generically",
+    "the document carries no title",
+    "the project is described without a name",
+};
+
+// Interrogative clauses. The object in question is the thing being asked about,
+// never an entity, so none of these may ever be wrapped in a delimiter.
+const std::array<std::string, 16> kOpenQuestions{
+    "Which setting changed during the last run",
+    "Who approved the change",
+    "What should happen when the queue drains",
+    "Which step failed first",
+    "How was the decision recorded",
+    "What is the object in question here",
+    "Which record does this line describe",
+    "Who is responsible once the batch closes",
+    "What remains to be verified",
+    "Which value should be trusted",
+    "How long should the record be kept",
+    "What was requested in the original ticket",
+    "Which part of the workflow repeats",
+    "Who receives the summary",
+    "What happens to the leftover work",
+    "Which option was chosen in the end",
+};
+
+std::string countQuestion(const std::string& noun, std::size_t index) {
+    switch (index % 16) {
+        case 0: return "How many " + noun + " were used";
+        case 1: return "How many " + noun + " remain";
+        case 2: return "How many more " + noun + " are needed";
+        case 3: return "What is the total number of " + noun;
+        case 4: return "How many " + noun + " were added";
+        case 5: return "How many " + noun + " are left over";
+        case 6: return "How many " + noun + " were returned";
+        case 7: return "How many " + noun + " did the second delivery bring";
+        case 8: return "How many " + noun + " were counted at the end";
+        case 9: return "By how many " + noun + " did the count fall short";
+        case 10: return "How many " + noun + " must still be packed";
+        case 11: return "What was the starting number of " + noun;
+        case 12: return "How many " + noun + " were removed during the check";
+        case 13: return "How many " + noun + " fit in the remaining space";
+        case 14: return "What is the difference in " + noun;
+        default: return "How many " + noun + " were unaccounted for";
+    }
+}
+
+// Picks a clause that differs from the one already used in the body, so a
+// block never states the same thing twice.
+const std::string& otherUnnamedClause(const std::string& used,
+                                      std::uint64_t seed) {
+    const std::size_t start = static_cast<std::size_t>(seed % kUnnamedClauses.size());
+    for (std::size_t step = 0; step < kUnnamedClauses.size(); ++step) {
+        const std::string& candidate =
+            kUnnamedClauses[(start + step) % kUnnamedClauses.size()];
+        if (candidate != used) return candidate;
+    }
+    return kUnnamedClauses.front();
+}
+
+std::string capitalize(std::string text) {
+    if (!text.empty()) {
+        text[0] = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(text[0])));
+    }
+    return text;
+}
+
 const std::string& fieldFor(ValueType type, std::size_t index) {
     switch (type) {
         case ValueType::Int: return choose(kIntFields, index);
@@ -259,8 +431,8 @@ std::string floatValue(std::size_t index) {
 std::string stringValue(std::size_t index) {
     static const std::array<std::string, 20> prefixes{
         "north", "amber", "quiet", "lunar", "rapid", "cedar", "velvet",
-        "silver", "orbit", "harbor", "billing", "research", "München",
-        "Québec", "東京", "Δelta", "résumé", "naïve", "crimson", "winter",
+        "silver", "orbit", "harbor", "billing", "research", "summit",
+        "meadow", "timber", "delta", "notebook", "simple", "crimson", "winter",
     };
     static const std::array<std::string, 20> suffixes{
         "star", "priority", "queue", "review", "cache", "worker", "route",
@@ -286,18 +458,18 @@ std::string entityValue(std::size_t index) {
     // to the surrounding field (for example, project=<ENTITY>Atlas</ENTITY>)
     // unless they are genuinely part of the entity's proper name.
     static const std::array<std::string, 16> given_names{
-        "Ada", "Grace", "Maya", "Amélie", "Ren", "Sofia", "Amina", "Luca",
-        "Noor", "Diego", "Imani", "Hiro", "Léa", "Nia", "Pavel", "Samira",
+        "Ada", "Grace", "Maya", "Amelia", "Ren", "Sofia", "Amina", "Luca",
+        "Noor", "Diego", "Imani", "Hiro", "Leah", "Nia", "Pavel", "Samira",
     };
     static const std::array<std::string, 16> family_names{
         "Lovelace", "Hopper", "Chen", "O'Connor-Smith", "Tanaka", "Rossi",
-        "Okafor", "Müller", "Dubois", "García", "Patel", "Kim", "Silva",
+        "Okafor", "Miller", "Dubois", "Garcia", "Patel", "Kim", "Silva",
         "Kowalski", "Hassan", "Wang",
     };
     static const std::array<std::string, 16> organization_stems{
         "Northwind", "Acme", "Lumen", "Cedar", "Bluebird", "Nimbus",
         "Solstice", "Orion", "Aurora", "Meridian", "Harbor", "Atlas",
-        "Juniper", "Mosaic", "Lantern", "Élan",
+        "Juniper", "Mosaic", "Lantern", "Summit",
     };
     static const std::array<std::string, 16> organization_names{
         "Labs", "Systems", "Works", "Analytics", "Dynamics", "Studio",
@@ -305,9 +477,9 @@ std::string entityValue(std::size_t index) {
         "Foundation", "Digital", "Industries", "Ventures", "AI",
     };
     static const std::array<std::string, 16> place_roots{
-        "München", "Québec", "東京", "São Paulo", "Nairobi", "Reykjavík",
-        "Zürich", "Seoul", "Lisboa", "Montréal", "Kraków", "Dublin",
-        "Kyoto", "Oslo", "València", "Lima",
+        "Boston", "Seattle", "Denver", "Austin", "Phoenix", "Portland",
+        "Detroit", "Atlanta", "Raleigh", "Tampa", "Madison", "Dublin",
+        "Bristol", "Oxford", "York", "Cambridge",
     };
     static const std::array<std::string, 16> place_names{
         "Central", "North", "South", "East", "West", "Harbor", "Heights",
@@ -317,7 +489,7 @@ std::string entityValue(std::size_t index) {
     static const std::array<std::string, 16> named_roots{
         "Atlas", "Aurora", "Orion", "Cedar", "Nimbus", "Solstice", "Delta",
         "Lumen", "Mosaic", "Juniper", "Lantern", "Harbor", "Meridian",
-        "Bluebird", "Northstar", "Élan",
+        "Bluebird", "Northstar", "Summit",
     };
     static const std::array<std::string, 16> named_variants{
         "Prime", "Nova", "One", "Blue", "Green", "Gold", "Silver", "Dawn",
@@ -328,10 +500,10 @@ std::string entityValue(std::size_t index) {
         "B-612", "ACME-7", "NVIDIA", "UNESCO", "DeepMind", "SpaceX",
         "Q4-Atlas", "K-2", "X.Org",
     };
-    static const std::array<std::string, 16> non_latin_names{
-        "東京", "京都", "서울", "北京", "القاهرة", "دبي", "Αθήνα", "Москва",
-        "दिल्ली", "मुंबई", "กรุงเทพ", "台北", "香港", "Zürich", "Reykjavík",
-        "Český Krumlov",
+    static const std::array<std::string, 16> additional_place_names{
+        "Albany", "Baltimore", "Charlotte", "Columbus", "Dallas", "Hartford",
+        "Houston", "Jacksonville", "Louisville", "Memphis", "Nashville",
+        "Pittsburgh", "Richmond", "Savannah", "Spokane", "Wilmington",
     };
 
     const std::uint64_t mixed = mixIndex(index, 0x454e544954595f31ULL);
@@ -354,7 +526,7 @@ std::string entityValue(std::size_t index) {
             return compact ? named_roots[first]
                            : named_roots[first] + " " + named_variants[second];
         case 4: return compact_names[first];
-        default: return non_latin_names[first];
+        default: return additional_place_names[first];
     }
 }
 
@@ -389,6 +561,139 @@ const std::string& entityFieldFor(std::size_t entity_index,
     }
 }
 
+// ---------------------------------------------------------------------------
+// v5 ENTITY surface pool.
+//
+// Deliberately separate from entityValue(): the mixed blocks are frozen for
+// this revision, so widening their surface pool would change their bytes. Only
+// the regenerated ENTITY singles and the contrast families draw from here.
+// ---------------------------------------------------------------------------
+
+std::size_t entitySingleCategory(std::size_t index) { return index % 10; }
+
+std::string entitySingleSurface(std::size_t index) {
+    static const std::array<std::string, 24> given_names{
+        "Ada", "Grace", "Maya", "Amelia", "Ren", "Sofia", "Amina", "Luca",
+        "Noor", "Diego", "Imani", "Hiro", "Leah", "Nia", "Pavel", "Samira",
+        "Jonas", "Priya", "Kwame", "Elena", "Tomas", "Yara", "Oskar", "Mei",
+    };
+    static const std::array<std::string, 24> family_names{
+        "Lovelace", "Hopper", "Chen", "O'Connor", "Tanaka", "Rossi",
+        "Okafor", "Miller", "Dubois", "Garcia", "Patel", "Kim", "Silva",
+        "Kowalski", "Hassan", "Wang", "Nakamura", "Ferreira", "Bergstrom",
+        "Adeyemi", "Ibarra", "Novak", "Whitfield", "Larsen",
+    };
+    static const std::array<std::string, 24> organization_stems{
+        "Northwind", "Acme", "Lumen", "Cedar", "Bluebird", "Nimbus",
+        "Solstice", "Orion", "Aurora", "Meridian", "Harbor", "Atlas",
+        "Juniper", "Mosaic", "Lantern", "Summit", "Ironwood", "Kestrel",
+        "Marlowe", "Pinnacle", "Redstone", "Thistle", "Vantage", "Wexler",
+    };
+    static const std::array<std::string, 24> organization_tails{
+        "Labs", "Systems", "Works", "Analytics", "Dynamics", "Studio",
+        "Collective", "Network", "Research", "Technologies", "Partners",
+        "Foundation", "Digital", "Industries", "Ventures", "AI", "Logistics",
+        "Robotics", "Instruments", "Holdings", "Group", "Micro", "Optics",
+        "Freight",
+    };
+    static const std::array<std::string, 24> place_roots{
+        "Boston", "Seattle", "Denver", "Austin", "Phoenix", "Portland",
+        "Detroit", "Atlanta", "Raleigh", "Tampa", "Madison", "Dublin",
+        "Bristol", "Oxford", "York", "Cambridge", "Albany", "Baltimore",
+        "Charlotte", "Columbus", "Hartford", "Nashville", "Savannah", "Spokane",
+    };
+    static const std::array<std::string, 16> place_qualifiers{
+        "Central", "North", "South", "East", "West", "Harbor", "Heights",
+        "Old Town", "Riverside", "Market", "Garden", "Station", "Quarter",
+        "Park", "Point", "Crossing",
+    };
+    static const std::array<std::string, 24> product_roots{
+        "Atlas", "Aurora", "Orion", "Cedar", "Nimbus", "Solstice", "Delta",
+        "Lumen", "Mosaic", "Juniper", "Lantern", "Harbor", "Meridian",
+        "Bluebird", "Northstar", "Summit", "Halcyon", "Quill", "Tessera",
+        "Vireo", "Zephyr", "Anvil", "Beacon", "Cinder",
+    };
+    static const std::array<std::string, 16> product_tails{
+        "Prime", "Nova", "One", "Mk II", "Mk III", "Core", "Edge", "Light",
+        "Field", "Bridge", "Echo", "Pulse", "Wave", "Dawn", "Relay", "Arc",
+    };
+    static const std::array<std::string, 24> compact_names{
+        "OpenAI", "NASA", "CERN", "IBM", "GitHub", "GRIM-text", "R2-D2",
+        "B-612", "ACME-7", "NVIDIA", "UNESCO", "DeepMind", "SpaceX",
+        "Q4-Atlas", "K-2", "X.Org", "NOAA", "ESA-9", "T-1000", "V-2",
+        "MIT", "CSIRO", "JAXA", "BBC",
+    };
+
+    const std::uint64_t mixed = mixIndex(index, 0x454e545f53474cULL);
+    const std::size_t first = static_cast<std::size_t>((mixed >> 8) % 24ULL);
+    const std::size_t second = static_cast<std::size_t>((mixed >> 24) % 24ULL);
+    const std::size_t small = static_cast<std::size_t>((mixed >> 36) % 16ULL);
+    // Offset keeps the two halves of a compound distinct without a retry loop.
+    const std::size_t other = (first + 1 + (second % 23)) % 24;
+    switch (entitySingleCategory(index)) {
+        case 0:
+            return given_names[first] + " " + family_names[second];
+        case 1: {
+            const char initial = static_cast<char>('A' + ((mixed >> 44) % 26ULL));
+            return given_names[first] + " " + initial + ". " + family_names[second];
+        }
+        case 2:
+            return given_names[first] + " " + family_names[second] + "-" +
+                family_names[other];
+        case 3:
+            return given_names[first];
+        case 4:
+            return organization_stems[first] + " " + organization_tails[second];
+        case 5:
+            return organization_stems[first] + " & " + organization_stems[other];
+        case 6:
+            return ((mixed >> 40) & 1ULL) != 0
+                ? place_roots[first]
+                : place_roots[first] + " " + place_qualifiers[small];
+        case 7:
+            return product_roots[first] + " " + product_tails[small];
+        case 8:
+            return compact_names[first];
+        default:
+            return organization_stems[first] + "-" + organization_stems[other];
+    }
+}
+
+const std::string& entitySingleField(std::size_t index,
+                                     std::size_t variation_index) {
+    static const std::array<std::string, 4> person_fields{
+        "owner", "assignee", "contact_name", "reviewer",
+    };
+    static const std::array<std::string, 4> organization_fields{
+        "organization", "customer", "vendor", "account",
+    };
+    static const std::array<std::string, 4> place_fields{
+        "office", "location", "destination", "workspace",
+    };
+    static const std::array<std::string, 5> named_fields{
+        "project", "service", "repository", "document", "workspace",
+    };
+    static const std::array<std::string, 5> compact_fields{
+        "organization", "project", "service", "repository", "account",
+    };
+
+    const std::uint64_t mixed = mixIndex(
+        variation_index,
+        0x454e545f464c44ULL + static_cast<std::uint64_t>(index));
+    switch (entitySingleCategory(index)) {
+        case 0:
+        case 1:
+        case 2:
+        case 3: return choose(person_fields, mixed);
+        case 4:
+        case 5:
+        case 9: return choose(organization_fields, mixed);
+        case 6: return choose(place_fields, mixed);
+        case 7: return choose(named_fields, mixed);
+        default: return choose(compact_fields, mixed);
+    }
+}
+
 std::string rawValue(ValueType type, std::size_t index) {
     switch (type) {
         case ValueType::Int: return integerValue(index);
@@ -405,19 +710,46 @@ std::string taggedValue(ValueType type, std::size_t index) {
     return "<" + tag + ">" + rawValue(type, index) + "</" + tag + ">";
 }
 
+// v5 ENTITY singles. Two changes from v4: a wider template and surface pool,
+// and role descriptions / interrogative clauses woven through the templates so
+// every block carries an in-place contrast between the name that belongs inside
+// the delimiter and the noun phrase beside it that does not.
+//
+// The (pattern, subject, stage) triple is drawn through a multiplier coprime
+// with 48*16*16, so those three slots differ for every index below 6000 and the
+// authored text is unique by construction.
 std::string makeEntitySingleRaw(std::size_t index) {
+    const std::size_t spread = (index * 7) % 12288;
+    const std::size_t pattern = spread % 48;
+    const std::string& subject = kSubjects[(spread / 48) % 16];
+    const std::string& stage = kStages[(spread / 768) % 16];
+
     const std::uint64_t mixed = mixIndex(index, 0x454e544954595f32ULL);
-    const std::size_t pattern = index % 32;
-    const std::size_t context_index = index / 32;
-    const std::string& field = entityFieldFor(index, context_index);
-    const std::string& subject = choose(kSubjects, context_index / kEntityFields.size());
-    const std::string& stage = choose(kStages, mixed >> 16);
+    const std::size_t context_index = index / 48;
+    const std::string& field = entitySingleField(index, context_index);
     const std::string& action = choose(kActions, mixed >> 24);
-    const std::string& context_action = choose(kActions, context_index);
-    const std::string entity = taggedValue(ValueType::Entity, index);
+    const std::string& person = choose(kPersonRoles, mixed >> 8);
+    const std::string& thing = choose(kThingRoles, mixed >> 16);
+    const std::string& open_question = choose(kOpenQuestions, mixed >> 32);
+    const std::string entity =
+        "<ENTITY>" + entitySingleSurface(index) + "</ENTITY>";
+
     const auto finalize = [&](std::string text) {
-        return text + " The " + subject + " remains in " + stage +
-            " before " + context_action + ".";
+        switch ((mixed >> 48) % 4ULL) {
+            case 0:
+                return text + " The " + subject + " remains in " + stage +
+                    " before " + action + ".";
+            case 1:
+                return text + " On this " + subject + ", " + person +
+                    " names a role rather than a value, so " + stage +
+                    " continues unchanged.";
+            case 2:
+                return text + " Everything else on the " + subject +
+                    " still points at " + thing + " during " + stage + ".";
+            default:
+                return text + " The " + subject + " stays in " + stage +
+                    " while " + person + " reviews the entry.";
+        }
     };
 
     switch (pattern) {
@@ -443,7 +775,7 @@ std::string makeEntitySingleRaw(std::size_t index) {
         case 19: return finalize("Apply this " + subject + " option: " + field + "=" + entity + ".");
         case 20: return finalize(entity + " is recorded under " + field + " for the " + subject + ".");
         case 21: return finalize("For " + field + " on the " + subject + ", use " + entity + ".");
-        case 22: return finalize("\"" + entity + "\" is listed in the " + field + " field.");
+        case 22: return finalize("\"" + entity + "\"" + " is listed in the " + field + " field.");
         case 23: return finalize("(" + entity + ") is the current value of " + field + ".");
         case 24: return finalize(subject + " | " + field + " maps to " + entity + ".");
         case 25: return finalize(entity + " is assigned from " + field + " for the " + subject + ".");
@@ -452,7 +784,26 @@ std::string makeEntitySingleRaw(std::size_t index) {
         case 28: return finalize("Does " + field + " on the " + subject + " refer to " + entity + "?");
         case 29: return finalize("The " + field + " entry for the " + subject + " ends with " + entity + ".");
         case 30: return finalize(entity + " appears first; record it as " + field + " before " + action + ".");
-        default: return finalize("When " + action + ", compare the current " + field + " with " + entity + ".");
+        case 31: return finalize("When " + action + ", compare the current " + field + " with " + entity + ".");
+
+        // Contrast templates: a described participant stands beside the named
+        // one, and only the name is ever delimited.
+        case 32: return finalize("Set " + field + " to " + entity + " rather than to " + person + ".");
+        case 33: return finalize("The " + subject + " names " + entity + " while " + thing + " stays unnamed.");
+        case 34: return finalize(open_question + "? For the " + subject + ", " + field + " is " + entity + ".");
+        case 35: return finalize("Route the " + subject + " to " + entity + ", not to " + person + ".");
+        case 36: return finalize("Although " + person + " raised the " + subject + ", " + field + " is " + entity + ".");
+        case 37: return finalize(capitalize(person) + " asked that " + field + " be " + entity + " for the " + subject + ".");
+        case 38: return finalize("Between " + person + " and " + entity + ", only the latter belongs in " + field + ".");
+        case 39: return finalize("The " + subject + " lists " + field + "=" + entity + " and leaves the rest to " + thing + ".");
+        case 40: return finalize("Who owns the " + subject + "? The " + field + " field points to " + entity + ".");
+        case 41: return finalize("Replace " + person + " with " + entity + " in the " + field + " slot.");
+        case 42: return finalize("The " + field + " on this " + subject + " is " + entity + ", not " + thing + ".");
+        case 43: return finalize("Once " + action + " begins, " + field + " must read " + entity + " instead of " + person + ".");
+        case 44: return finalize("A request from " + person + " assigns " + field + " to " + entity + ".");
+        case 45: return finalize("The " + subject + " record shows " + field + ": " + entity + "; " + thing + " is only referenced.");
+        case 46: return finalize(open_question + "? The " + subject + " answers with " + field + "=" + entity + ".");
+        default: return finalize("Do not confuse " + person + " with " + entity + " when reading " + field + ".");
     }
 }
 
@@ -662,6 +1013,515 @@ std::string makeMixedRaw(std::vector<ValueType> types, std::size_t index) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// v5 contrast families.
+//
+// Three shapes, all sharing one property: the noun phrase a reader would call
+// "the thing being talked about" sits untagged next to the values that are
+// genuinely atoms.
+//
+//   * same-type blocks  -- two atoms of one type plus untagged bait
+//   * pair blocks       -- reuse the balanced kPairs table with a prose voice
+//   * negative blocks   -- ordinary English with no atom and no numeral at all
+//
+// Per-type balance is preserved by construction: same-type blocks contribute
+// exactly two occurrences to their own type, pair blocks walk the same
+// combination table the mixed blocks do, and negative blocks contribute none.
+// ---------------------------------------------------------------------------
+
+std::string contrastAtom(ValueType type, std::size_t index) {
+    switch (type) {
+        case ValueType::Int: {
+            // Plain readable magnitudes: the prose voice reads as a word
+            // problem, so the sign and exponent variety of the config set would
+            // only add noise. Still strict-validator clean.
+            const std::size_t value = ((index * 37 + 11) % 4800) + 12;
+            return "<INT>" + std::to_string(value) + "</INT>";
+        }
+        case ValueType::Float: {
+            const std::size_t whole = ((index * 29 + 7) % 9000) + 3;
+            const std::size_t fraction = (index * 61 + 13) % 100;
+            std::ostringstream out;
+            out << "<FLOAT>" << whole << '.' << std::setw(2)
+                << std::setfill('0') << fraction << "</FLOAT>";
+            return out.str();
+        }
+        case ValueType::String:
+            return taggedValue(ValueType::String, 300000 + index);
+        case ValueType::Bool:
+            return index % 2 == 0 ? "<BOOL>true</BOOL>" : "<BOOL>false</BOOL>";
+        case ValueType::Entity:
+            return "<ENTITY>" + entitySingleSurface(400000 + index) + "</ENTITY>";
+    }
+    throw std::runtime_error("unknown ValueType");
+}
+
+// INT/FLOAT contrast: the shape the v4 model got wrong. Both quantities are
+// tagged; the interrogative clause naming the object in question is not.
+std::string makeContrastQuantitativeRaw(ValueType type, std::size_t index) {
+    const std::size_t spread = (index * 7) % 3840;
+    const std::size_t pattern = spread % 12;
+    const std::string& noun = type == ValueType::Float
+        ? kMeasureNouns[(spread / 12) % 20]
+        : kCountNouns[(spread / 12) % 20];
+    const std::string& container = kContainers[(spread / 240) % 16];
+
+    const std::uint64_t mixed = mixIndex(index, 0x434f4e5451554eULL);
+    const std::string& person = choose(kPersonRoles, mixed >> 8);
+    const std::string& thing = choose(kThingRoles, mixed >> 16);
+    const std::string& unnamed = choose(kUnnamedClauses, mixed >> 24);
+    const std::string& tail_unnamed = otherUnnamedClause(unnamed, mixed >> 44);
+    const std::string question = countQuestion(noun, mixed >> 32);
+
+    // An explicit larger/smaller pair keeps "after using some, N remain" from
+    // reading as an increase. The larger value is injective in index, so the
+    // authored text stays unique without leaning on the template slots.
+    std::string high;
+    std::string low;
+    if (type == ValueType::Int) {
+        const std::size_t upper = ((index * 37 + 11) % 4800) + 80;
+        const std::size_t delta = ((index * 13 + 5) % 60) + 3;
+        high = "<INT>" + std::to_string(upper) + "</INT>";
+        low = "<INT>" + std::to_string(upper - delta) + "</INT>";
+    } else {
+        const std::size_t whole = ((index * 29 + 7) % 9000) + 80;
+        const std::size_t fraction = (index * 61 + 13) % 100;
+        const std::size_t delta = ((index * 17 + 3) % 60) + 3;
+        const auto wrap = [](std::size_t units, std::size_t hundredths) {
+            std::ostringstream out;
+            out << "<FLOAT>" << units << '.' << std::setw(2)
+                << std::setfill('0') << hundredths << "</FLOAT>";
+            return out.str();
+        };
+        high = wrap(whole, fraction);
+        low = wrap(whole - delta, (fraction + 37) % 100);
+    }
+
+    const auto finalize = [&](std::string text) {
+        switch ((mixed >> 48) % 4ULL) {
+            case 0:
+                return text + " The tally for the " + container +
+                    " was confirmed by " + person + ", and " + tail_unnamed + ".";
+            case 1:
+                return text + " " + capitalize(person) + " logged the " +
+                    container + " figures, though " + tail_unnamed + ".";
+            case 2:
+                return text + " This " + container + " tally was filed under " +
+                    thing + " because " + tail_unnamed + ".";
+            default:
+                return text + " Ask " + person + " for the " + container +
+                    " worksheet; " + tail_unnamed + ".";
+        }
+    };
+
+    switch (pattern) {
+        case 0:
+            return finalize("A " + container + " holds " + high + " " + noun +
+                ". After using some, " + low + " " + noun + " remain. " +
+                question + "?");
+        case 1:
+            return finalize(question + "? The " + container + " started with " +
+                high + " " + noun + " and ended with " + low + ".");
+        case 2:
+            return finalize("The first delivery brought " + low + " " + noun +
+                " to the " + container + " and the second brought " + high +
+                ". " + question + "?");
+        case 3:
+            return finalize("Counting the " + container + " twice gave " +
+                high + " " + noun + " and then " + low + ". " + question + "?");
+        case 4:
+            return finalize("Of the " + high + " " + noun + " ordered, only " +
+                low + " reached the " + container + ". " + question + "?");
+        case 5:
+            return finalize("The log records " + high + " " + noun +
+                " in the " + container + " at intake and " + low +
+                " at handoff. " + question + "?");
+        case 6:
+            return finalize("Someone moved " + noun + " out of the " + container +
+                ": " + high + " went out and " + low + " came back. " +
+                question + "?");
+        case 7:
+            return finalize("The " + container + " was rated for " + low + " " +
+                noun + " but held " + high + ". " + question + "?");
+        case 8:
+            return finalize("Before the audit the " + container + " held " +
+                high + " " + noun + "; afterwards, " + low + ". " +
+                question + "?");
+        case 9:
+            return finalize("Two counts of the " + container + " disagree: " +
+                high + " " + noun + " versus " + low + ". " + question + "?");
+        case 10:
+            return finalize("The " + container + " lost " + high + " " + noun +
+                " overnight and gained " + low + " at dawn. " + question + "?");
+        default:
+            return finalize("A worker packed " + high + " " + noun + " into the " +
+                container + " and unpacked " + low + ". " + question + "?");
+    }
+}
+
+// STRING/BOOL/ENTITY contrast: two tagged values of one type surrounded by role
+// descriptions and open questions that must stay bare. For ENTITY this is the
+// direct lesson -- these two are names, that phrase beside them is not.
+std::string makeContrastDescriptiveRaw(ValueType type, std::size_t index) {
+    const std::size_t spread = (index * 7) % 3072;
+    const std::size_t pattern = spread % 12;
+    const std::string& subject = kSubjects[(spread / 12) % 16];
+    const std::string& stage = kStages[(spread / 192) % 16];
+
+    const std::uint64_t mixed = mixIndex(index, 0x434f4e5444455343ULL);
+    const std::string& person = choose(kPersonRoles, mixed >> 8);
+    const std::string& thing = choose(kThingRoles, mixed >> 16);
+    const std::string& unnamed = choose(kUnnamedClauses, mixed >> 24);
+    const std::string& tail_unnamed = otherUnnamedClause(unnamed, mixed >> 44);
+    const std::string& open_question = choose(kOpenQuestions, mixed >> 32);
+
+    const std::size_t first_index = index * 2;
+    const std::size_t second_index = index * 2 + 1;
+    const std::string first = contrastAtom(type, first_index);
+    const std::string second = contrastAtom(type, second_index);
+    const std::string& first_field = type == ValueType::Entity
+        ? entitySingleField(400000 + first_index, index)
+        : fieldFor(type, index);
+    const std::string& second_field = type == ValueType::Entity
+        ? entitySingleField(400000 + second_index, index + 5)
+        : fieldFor(type, index + 5);
+
+    const auto finalize = [&](std::string text) {
+        switch ((mixed >> 48) % 4ULL) {
+            case 0:
+                return text + " The " + subject + " stays in " + stage +
+                    " until " + tail_unnamed + ".";
+            case 1:
+                return text + " During " + stage + ", the " + subject +
+                    " lists " + person + " only as a role.";
+            case 2:
+                return text + " The " + subject + " reached " + stage +
+                    " while " + thing + " went unnamed.";
+            default:
+                return text + " No name is attached to the " + subject +
+                    " at " + stage + ", since " + tail_unnamed + ".";
+        }
+    };
+
+    switch (pattern) {
+        case 0:
+            return finalize("The " + subject + " lists " + first_field + "=" +
+                first + " and " + second_field + "=" + second + ", but " +
+                unnamed + ". " + open_question + "?");
+        case 1:
+            return finalize(open_question + "? The record sets " + first_field +
+                " to " + first + " and " + second_field + " to " + second +
+                ", while " + unnamed + ".");
+        case 2:
+            return finalize("Assign " + first + " to " + first_field + " and " +
+                second + " to " + second_field + "; route the remainder to " +
+                person + ".");
+        case 3:
+            return finalize("Both " + first_field + " (" + first + ") and " +
+                second_field + " (" + second + ") are set, yet " + unnamed +
+                ". " + open_question + "?");
+        case 4:
+            return finalize("For this request, " + first_field + " is " + first +
+                " and " + second_field + " is " + second +
+                ". Everything else stays with " + thing + ".");
+        case 5:
+            return finalize("Compare " + first + " in " + first_field +
+                " against " + second + " in " + second_field +
+                " before handing the work to " + person + ".");
+        case 6:
+            return finalize(capitalize(person) + " asked why " + first_field +
+                " holds " + first + " while " + second_field + " holds " +
+                second + ". " + open_question + "?");
+        case 7:
+            return finalize("One entry keeps " + first_field + "=" + first +
+                "; " + thing + " keeps " + second_field + "=" + second + ".");
+        case 8:
+            return finalize("Update " + first_field + " to " + first + ", then " +
+                second_field + " to " + second + ", and tell " + person +
+                " that " + unnamed + ".");
+        case 9:
+            return finalize("Only " + first_field + " (" + first + ") and " +
+                second_field + " (" + second + ") were filled in, so " +
+                unnamed + ".");
+        case 10:
+            return finalize("The change set " + first_field + " to " + first +
+                " and " + second_field + " to " + second + " even though " +
+                unnamed + ".");
+        default:
+            return finalize(open_question + "? Neither " + person + " nor " +
+                thing + " changed " + first_field + "=" + first + " or " +
+                second_field + "=" + second + ".");
+    }
+}
+
+std::string makeContrastSameTypeRaw(ValueType type, std::size_t index) {
+    return type == ValueType::Int || type == ValueType::Float
+        ? makeContrastQuantitativeRaw(type, index)
+        : makeContrastDescriptiveRaw(type, index);
+}
+
+// Pair contrast. Walks the same kPairs table as the mixed blocks so the added
+// occurrences stay balanced across types. Combinations containing ENTITY get a
+// named-actor voice: the person is tagged, the question about the object is not.
+std::string makeContrastPairRaw(std::vector<ValueType> types, std::size_t index) {
+    if (index % 2 != 0) std::reverse(types.begin(), types.end());
+
+    const std::size_t spread = (index * 7) % 3072;
+    const std::size_t pattern = spread % 12;
+    const std::string& subject = kSubjects[(spread / 12) % 16];
+    const std::string& stage = kStages[(spread / 192) % 16];
+
+    const std::uint64_t mixed = mixIndex(index, 0x434f4e54524150ULL);
+    const std::string& person = choose(kPersonRoles, mixed >> 8);
+    const std::string& thing = choose(kThingRoles, mixed >> 16);
+    const std::string& unnamed = choose(kUnnamedClauses, mixed >> 24);
+    const std::string& tail_unnamed = otherUnnamedClause(unnamed, mixed >> 48);
+    const std::string& open_question = choose(kOpenQuestions, mixed >> 32);
+    const std::string& noun = choose(kCountNouns, mixed >> 40);
+    const std::string& container = choose(kContainers, mixed >> 44);
+
+    std::vector<MixedField> parts;
+    parts.reserve(types.size());
+    for (std::size_t position = 0; position < types.size(); ++position) {
+        const std::size_t value_index = 500000 + index * 3 + position;
+        parts.push_back(MixedField{
+            types[position],
+            types[position] == ValueType::Entity
+                ? entitySingleField(400000 + value_index, index + position)
+                : fieldFor(types[position], index + position * 5),
+            contrastAtom(types[position], value_index),
+        });
+    }
+
+    const auto finalize = [&](std::string text) {
+        switch ((mixed >> 52) % 4ULL) {
+            case 0:
+                return text + " The " + subject + " remains in " + stage +
+                    " until " + tail_unnamed + ".";
+            case 1:
+                return text + " This " + subject + " entry was written during " +
+                    stage + ".";
+            case 2:
+                return text + " " + capitalize(person) + " will close the " +
+                    subject + " after " + stage + ".";
+            default:
+                return text + " The " + subject + " stays in " + stage +
+                    " while " + thing + " is reviewed.";
+        }
+    };
+
+    const auto entity_part = std::find_if(
+        parts.begin(), parts.end(), [](const MixedField& part) {
+            return part.type == ValueType::Entity;
+        });
+
+    if (entity_part == parts.end()) {
+        const MixedField& one = parts.front();
+        const MixedField& two = parts.back();
+        switch (pattern) {
+            case 0:
+                return finalize("The " + subject + " report shows " + one.field +
+                    "=" + one.atom + " and " + two.field + "=" + two.atom +
+                    ", but " + unnamed + ". " + open_question + "?");
+            case 1:
+                return finalize(open_question + "? For the " + subject + ", " +
+                    one.field + " is " + one.atom + " and " + two.field + " is " +
+                    two.atom + ".");
+            case 2:
+                return finalize("Set " + one.field + " to " + one.atom + " and " +
+                    two.field + " to " + two.atom + "; leave the " + subject +
+                    " with " + person + ".");
+            case 3:
+                return finalize("The " + subject + " carries " + one.field + ": " +
+                    one.atom + " and " + two.field + ": " + two.atom + ", while " +
+                    thing + " is only described.");
+            case 4:
+                return finalize("Neither " + person + " nor " + thing +
+                    " is a name, yet both appear beside " + one.field + "=" +
+                    one.atom + " and " + two.field + "=" + two.atom + ".");
+            case 5:
+                return finalize("Check " + one.field + " (" + one.atom + ") and " +
+                    two.field + " (" + two.atom + ") on the " + subject + "; " +
+                    unnamed + ".");
+            case 6:
+                return finalize(capitalize(person) + " reviewed the " + subject +
+                    " with " + one.field + "=" + one.atom + " and " + two.field +
+                    "=" + two.atom + ". " + open_question + "?");
+            case 7:
+                return finalize("During " + stage + ", the " + subject +
+                    " kept " + one.field + " at " + one.atom + " and " +
+                    two.field + " at " + two.atom + ".");
+            case 8:
+                return finalize("A " + container + " was tagged with " + one.field +
+                    "=" + one.atom + " and " + two.field + "=" + two.atom + ". " +
+                    open_question + "?");
+            case 9:
+                return finalize("The " + subject + " belongs to " + thing +
+                    ", and its " + one.field + " is " + one.atom + " with " +
+                    two.field + " at " + two.atom + ".");
+            case 10:
+                return finalize(open_question + "? Nothing here is a name: " +
+                    one.field + " is " + one.atom + " and " + two.field + " is " +
+                    two.atom + ".");
+            default:
+                return finalize("Hand the " + subject + " to " + person +
+                    " once " + one.field + "=" + one.atom + " and " + two.field +
+                    "=" + two.atom + " are confirmed.");
+        }
+    }
+
+    const std::string named = entity_part->atom;
+    const MixedField& other = &parts.front() == &*entity_part
+        ? parts.back() : parts.front();
+    const bool numeric =
+        other.type == ValueType::Int || other.type == ValueType::Float;
+
+    if (numeric && pattern < 8) {
+        const std::string question = countQuestion(noun, mixed >> 36);
+        switch (pattern) {
+            case 0:
+                return finalize(named + " loaded " + other.atom + " " + noun +
+                    " into the " + container + ". " + question + "?");
+            case 1:
+                return finalize("A " + container + " logged by " + named +
+                    " held " + other.atom + " " + noun + ". " + question + "?");
+            case 2:
+                return finalize(question + "? " + named + " counted " +
+                    other.atom + " " + noun + " in the " + container + ".");
+            case 3:
+                return finalize(named + " signed for " + other.atom + " " + noun +
+                    " at the " + container + ", but " + unnamed + ". " +
+                    question + "?");
+            case 4:
+                return finalize("The " + container + " was left with " +
+                    other.atom + " " + noun + " after " + named +
+                    " finished the round. " + question + "?");
+            case 5:
+                return finalize(named + " reported " + other.atom + " " + noun +
+                    " while " + person + " reported none. " + question + "?");
+            case 6:
+                return finalize("Only " + named + " is a name in this note: the " +
+                    container + " held " + other.atom + " " + noun + ", and " +
+                    unnamed + ". " + question + "?");
+            default:
+                return finalize("After " + named + " emptied the " + container +
+                    ", " + other.atom + " " + noun + " were still on the floor. " +
+                    question + "?");
+        }
+    }
+
+    switch (pattern) {
+        case 0:
+            return finalize(named + " updated " + other.field + " to " +
+                other.atom + " for the " + subject + ". " + open_question + "?");
+        case 1:
+            return finalize("According to " + named + ", the " + subject +
+                " now carries " + other.field + "=" + other.atom + ", though " +
+                unnamed + ".");
+        case 2:
+            return finalize(open_question + "? " + named + " set " + other.field +
+                " to " + other.atom + " while " + person + " watched.");
+        case 3:
+            return finalize("The " + subject + " passed from " + person + " to " +
+                named + " with " + other.field + " at " + other.atom + ".");
+        case 4:
+            return finalize(named + " is named on the " + subject + "; " + person +
+                " is not. The " + other.field + " remains " + other.atom + ".");
+        case 5:
+            return finalize("Neither " + person + " nor " + thing + " matches " +
+                named + ", and " + other.field + " stays " + other.atom + ".");
+        case 6:
+            return finalize("Ask " + named + ", not " + person + ", why " +
+                other.field + " is " + other.atom + " on the " + subject + ".");
+        case 7:
+            return finalize("The " + subject + " credits " + named + " with " +
+                other.field + "=" + other.atom + " even though " + unnamed + ".");
+        case 8:
+            return finalize(open_question + "? Only " + named +
+                " is a name here; " + thing + " is a description, and " +
+                other.field + " is " + other.atom + ".");
+        case 9:
+            return finalize("During " + stage + ", " + named + " changed " +
+                other.field + " to " + other.atom + " on behalf of " + person + ".");
+        case 10:
+            return finalize("Record " + named + " as the responsible party and " +
+                other.atom + " as " + other.field + " for the " + subject + ".");
+        default:
+            return finalize(named + " handled the " + subject + " and left " +
+                other.field + " at " + other.atom + ". " + open_question + "?");
+    }
+}
+
+// Pure negatives: ordinary English, every participant described rather than
+// named, and deliberately free of numerals so that nothing in the block is a
+// candidate for any delimiter.
+std::string makeNegativeOnlyRaw(std::size_t index) {
+    const std::size_t spread = (index * 617) % 4096;
+    const std::size_t pattern = spread % 16;
+    const std::string& subject = kSubjects[(spread / 16) % 16];
+    const std::string& person = kPersonRoles[(spread / 256) % 16];
+
+    const std::uint64_t mixed = mixIndex(index, 0x4e45474154495645ULL);
+    const std::string& thing = choose(kThingRoles, mixed >> 8);
+    const std::string& unnamed = choose(kUnnamedClauses, mixed >> 16);
+    const std::string& open_question = choose(kOpenQuestions, mixed >> 24);
+    const std::string& noun = choose(kCountNouns, mixed >> 32);
+    const std::string& container = choose(kContainers, mixed >> 40);
+
+    switch (pattern) {
+        case 0:
+            return capitalize(unnamed) + ", so the " + subject + " lists " +
+                person + " instead. " + open_question + "?";
+        case 1:
+            return "The " + subject + " mentions " + person + " and " + thing +
+                ", but " + unnamed + ".";
+        case 2:
+            return open_question + "? The " + subject + " points at " + person +
+                ", which describes a role rather than naming anyone.";
+        case 3:
+            return "Hand the " + subject + " to " + person + "; " + thing +
+                " has no name on record.";
+        case 4:
+            return "Here the object in question is the " + noun +
+                " count, not a named party, and the " + subject +
+                " still waits on " + person + ".";
+        case 5:
+            return "No proper name appears on this " + subject + ": only " +
+                person + " and " + thing + " are referenced.";
+        case 6:
+            return capitalize(person) + " opened the " + subject + " while " +
+                unnamed + ". " + open_question + "?";
+        case 7:
+            return "The " + subject + " belongs to " + thing + " for now, since " +
+                person + " has not been identified.";
+        case 8:
+            return "Ask " + person + " about the " + subject + " before the " +
+                container + " is sealed; " + unnamed + ".";
+        case 9:
+            return open_question + "? Neither " + person + " nor " + thing +
+                " is a name, and the " + subject + " has none either.";
+        case 10:
+            return "Every party on this " + subject +
+                " is described rather than named, from " + person + " to " +
+                thing + ".";
+        case 11:
+            return "The " + noun + " in the " + container + " were counted by " +
+                person + ", and the " + subject + " records no name.";
+        case 12:
+            return capitalize(thing) + " raised the " + subject + ", though " +
+                person + " signed for it and " + unnamed + ".";
+        case 13:
+            return "Leave the " + subject + " with " + person +
+                " until a real name replaces " + thing + ".";
+        case 14:
+            return "This " + subject + " note refers to " + person +
+                " throughout; " + unnamed + ".";
+        default:
+            return "Who handles the " + subject + "? For now, " + person +
+                ", because " + unnamed + ".";
+    }
+}
+
 GRIM::ConceptBlock makeBlock(std::string id,
                              std::string name,
                              std::string raw) {
@@ -683,6 +1543,9 @@ struct GeneratedCurriculum {
     int mixed_pairs = 0;
     int mixed_triples = 0;
     int mixed_all_types = 0;
+    int contrast_same = 0;
+    int contrast_pairs = 0;
+    int negative_only = 0;
 };
 
 void addOccurrences(GeneratedCurriculum& generated,
@@ -746,6 +1609,43 @@ GeneratedCurriculum generateCurriculum() {
         addOccurrences(generated, all_types);
         ++generated.mixed_all_types;
     }
+
+    int contrast_id = 0;
+    for (const ValueType type : kTypes) {
+        for (int index = 0; index < kContrastSamePerType; ++index) {
+            ++contrast_id;
+            generated.blocks.push_back(makeBlock(
+                std::string(kBlockPrefix) + "contrast_" + zeroPadded(contrast_id),
+                std::string("Atom identification contrast ") + typeName(type) +
+                    " " + zeroPadded(contrast_id),
+                makeContrastSameTypeRaw(type, static_cast<std::size_t>(index))));
+            // Two atoms of the block's own type, so the family stays balanced.
+            generated.occurrences[static_cast<std::size_t>(type)] += 2;
+            ++generated.contrast_same;
+        }
+    }
+
+    std::size_t contrast_pair_index = 0;
+    for (const auto& combination : kPairs) {
+        const std::vector<ValueType> types(combination.begin(), combination.end());
+        for (int index = 0; index < kContrastPairPerCombination; ++index) {
+            ++contrast_id;
+            generated.blocks.push_back(makeBlock(
+                std::string(kBlockPrefix) + "contrast_" + zeroPadded(contrast_id),
+                "Atom identification contrast pair " + zeroPadded(contrast_id),
+                makeContrastPairRaw(types, contrast_pair_index++)));
+            addOccurrences(generated, types);
+            ++generated.contrast_pairs;
+        }
+    }
+
+    for (int index = 0; index < kNegativeOnlyBlocks; ++index) {
+        generated.blocks.push_back(makeBlock(
+            std::string(kBlockPrefix) + "negative_" + zeroPadded(index + 1),
+            "Atom identification negative " + zeroPadded(index + 1),
+            makeNegativeOnlyRaw(static_cast<std::size_t>(index))));
+        ++generated.negative_only;
+    }
     return generated;
 }
 
@@ -781,6 +1681,24 @@ void validateFloat(std::string_view content, const std::string& id) {
     }
 }
 
+// The whole point of the v5 families is that described participants and
+// interrogative clauses stay outside the delimiters. Enforce it rather than
+// trusting the templates: any negative-inventory phrase that turns up inside an
+// atom means a template was assembled wrong.
+void validateNoDescribedPhrase(std::string_view content, const std::string& id) {
+    const auto reject = [&](const std::string& phrase) {
+        if (content.find(phrase) != std::string_view::npos) {
+            throw std::runtime_error(
+                id + ": atom content contains the described phrase \"" + phrase +
+                "\", which must stay outside every delimiter");
+        }
+    };
+    for (const auto& phrase : kPersonRoles) reject(phrase);
+    for (const auto& phrase : kThingRoles) reject(phrase);
+    for (const auto& phrase : kUnnamedClauses) reject(phrase);
+    for (const auto& phrase : kOpenQuestions) reject(phrase);
+}
+
 std::array<int, kTypes.size()> validateAnnotatedRaw(const GRIM::ConceptBlock& block) {
     std::array<int, kTypes.size()> counts{};
     std::size_t cursor = 0;
@@ -804,6 +1722,7 @@ std::array<int, kTypes.size()> validateAnnotatedRaw(const GRIM::ConceptBlock& bl
             }
             const std::string_view content(
                 block.raw.data() + content_begin, close_begin - content_begin);
+            validateNoDescribedPhrase(content, block.id);
             switch (type) {
                 case ValueType::Int: validateInteger(content, block.id); break;
                 case ValueType::Float: validateFloat(content, block.id); break;
@@ -817,6 +1736,12 @@ std::array<int, kTypes.size()> validateAnnotatedRaw(const GRIM::ConceptBlock& bl
                     break;
                 case ValueType::Entity:
                     if (content.empty()) throw std::runtime_error(block.id + ": empty ENTITY");
+                    if (std::any_of(content.begin(), content.end(), [](unsigned char byte) {
+                            return byte > 0x7f;
+                        })) {
+                        throw std::runtime_error(
+                            block.id + ": ENTITY surface must be ASCII in the English-focused curriculum");
+                    }
                     if (content.front() == ' ' || content.front() == '\t' ||
                         content.front() == '\r' || content.front() == '\n' ||
                         content.back() == ' ' || content.back() == '\t' ||
@@ -853,11 +1778,22 @@ std::array<int, kTypes.size()> validateAnnotatedRaw(const GRIM::ConceptBlock& bl
 
 void auditGenerated(const GeneratedCurriculum& generated) {
     if (generated.blocks.size() != kExpectedBlockCount) {
-        throw std::runtime_error("generated block count is not 41200");
+        throw std::runtime_error(
+            "generated block count is not " + std::to_string(kExpectedBlockCount));
     }
-    if (generated.mixed_pairs != 4000 || generated.mixed_triples != 6000 ||
-        generated.mixed_all_types != 1200) {
+    if (generated.mixed_pairs !=
+            kMixedPairPerCombination * static_cast<int>(kPairs.size()) ||
+        generated.mixed_triples !=
+            kMixedTriplePerCombination * static_cast<int>(kTriples.size()) ||
+        generated.mixed_all_types != kMixedAllTypes) {
         throw std::runtime_error("mixed distribution is incorrect");
+    }
+    if (generated.contrast_same !=
+            kContrastSamePerType * static_cast<int>(kTypes.size()) ||
+        generated.contrast_pairs !=
+            kContrastPairPerCombination * static_cast<int>(kPairs.size()) ||
+        generated.negative_only != kNegativeOnlyBlocks) {
+        throw std::runtime_error("contrast distribution is incorrect");
     }
 
     std::unordered_set<std::string> ids;
@@ -879,6 +1815,23 @@ void auditGenerated(const GeneratedCurriculum& generated) {
         const auto counts = validateAnnotatedRaw(block);
         for (std::size_t type = 0; type < counts.size(); ++type) {
             audited_occurrences[type] += counts[type];
+        }
+
+        if (block.id.find("_negative_") != std::string::npos) {
+            const int tagged = std::accumulate(counts.begin(), counts.end(), 0);
+            if (tagged != 0) {
+                throw std::runtime_error(
+                    block.id + ": negative-only block carries " +
+                    std::to_string(tagged) + " atoms");
+            }
+            // A bare numeral in a negative block would teach the opposite of
+            // what the family is for, so keep them numeral-free.
+            if (std::any_of(block.raw.begin(), block.raw.end(), [](unsigned char byte) {
+                    return byte >= '0' && byte <= '9';
+                })) {
+                throw std::runtime_error(
+                    block.id + ": negative-only block contains an untagged numeral");
+            }
         }
 
         const std::size_t entity_open = block.raw.find("<ENTITY>");
@@ -908,11 +1861,15 @@ void auditGenerated(const GeneratedCurriculum& generated) {
     }
 
     for (std::size_t type = 0; type < kTypes.size(); ++type) {
+        const int expected = expectedOccurrencesPerType(kTypes[type]);
         if (generated.singles[type] != kSinglePerType ||
-            generated.occurrences[type] != kExpectedOccurrencesPerType ||
-            audited_occurrences[type] != kExpectedOccurrencesPerType) {
+            generated.occurrences[type] != expected ||
+            audited_occurrences[type] != expected) {
             throw std::runtime_error(
-                std::string("type balance failed for ") + typeName(kTypes[type]));
+                std::string("type balance failed for ") + typeName(kTypes[type]) +
+                ": bookkeeping " + std::to_string(generated.occurrences[type]) +
+                ", audited " + std::to_string(audited_occurrences[type]) +
+                ", expected " + std::to_string(expected));
         }
     }
 }
@@ -975,6 +1932,64 @@ void writeJsonl(const fs::path& path,
     replaceFile(temporary, path);
 }
 
+struct JsonlMergeStats {
+    std::size_t kept = 0;
+    std::size_t replaced = 0;
+};
+
+bool isAtomCurriculumJsonlEntry(const std::string& line) {
+    if (line.find(kBlockPrefix) == std::string::npos &&
+        line.find(kSourceId) == std::string::npos) {
+        return false;
+    }
+    const json entry = json::parse(line);
+    if (!entry.is_object()) return false;
+    const std::string id = entry.value("id", std::string{});
+    const std::string source_id = entry.value("source_sequence_id", std::string{});
+    return startsWith(id, kBlockPrefix) || source_id == kSourceId;
+}
+
+JsonlMergeStats mergeCanonicalJsonl(
+    const fs::path& path,
+    const std::vector<GRIM::ConceptBlock>& blocks) {
+    fs::path temporary = path;
+    temporary += ".atom_curriculum.tmp";
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) throw std::runtime_error("cannot open " + path.string());
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) throw std::runtime_error("cannot write " + temporary.string());
+
+    JsonlMergeStats stats;
+    std::string line;
+    std::size_t line_number = 0;
+    while (std::getline(input, line)) {
+        ++line_number;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        try {
+            if (isAtomCurriculumJsonlEntry(line)) {
+                ++stats.replaced;
+                continue;
+            }
+        } catch (const std::exception& error) {
+            throw std::runtime_error(
+                path.string() + ":" + std::to_string(line_number) +
+                ": cannot inspect JSONL entry: " + error.what());
+        }
+        output << line << '\n';
+        ++stats.kept;
+    }
+    if (!input.eof()) throw std::runtime_error("failed while reading " + path.string());
+
+    for (const auto& block : blocks) output << blockJson(block).dump() << '\n';
+    if (!output.good()) throw std::runtime_error("failed while writing " + temporary.string());
+    output.close();
+    input.close();
+    replaceFile(temporary, path);
+    return stats;
+}
+
 void updateRegistry(const fs::path& path,
                     const std::vector<GRIM::ConceptBlock>& blocks) {
     std::ifstream input(path);
@@ -1018,22 +2033,42 @@ json makeManifest(const GeneratedCurriculum& generated) {
     return json{
         {"curriculum_id", kCurriculumId},
         {"curriculum_name", kCurriculumName},
-        {"generation_version", 3},
+        {"generation_version", 5},
         {"deterministic", true},
         {"total_blocks", generated.blocks.size()},
-        {"single_blocks", 30000},
+        {"single_blocks", kSinglePerType * static_cast<int>(kTypes.size())},
         {"single_blocks_by_type", std::move(single_counts)},
-        {"mixed_blocks", 11200},
+        {"mixed_blocks", generated.mixed_pairs + generated.mixed_triples +
+                         generated.mixed_all_types},
         {"mixed_pair_blocks", generated.mixed_pairs},
         {"mixed_triple_blocks", generated.mixed_triples},
         {"mixed_all_types_blocks", generated.mixed_all_types},
+        {"contrast_blocks", generated.contrast_same + generated.contrast_pairs},
+        {"contrast_same_type_blocks", generated.contrast_same},
+        {"contrast_pair_blocks", generated.contrast_pairs},
+        {"negative_only_blocks", generated.negative_only},
         {"atom_occurrences_by_type", std::move(occurrence_counts)},
         {"format_type", "raw"},
         {"training_stage", "pt"},
         {"model_input_encoding", "exact_utf8_bytes"},
         {"entity_role_outside_tag", true},
-        {"entity_single_template_count", 32},
+        {"entity_surface_language", "English"},
+        {"entity_surface_encoding", "ASCII"},
+        {"entity_single_template_count", 48},
         {"mixed_template_count", 24},
+        {"contrast_quantitative_template_count", 12},
+        {"contrast_descriptive_template_count", 12},
+        {"contrast_pair_template_count", 12},
+        {"negative_only_template_count", 16},
+        {"negative_phrase_pool", {
+            {"person_roles", static_cast<int>(kPersonRoles.size())},
+            {"thing_roles", static_cast<int>(kThingRoles.size())},
+            {"unnamed_clauses", static_cast<int>(kUnnamedClauses.size())},
+            {"open_questions", static_cast<int>(kOpenQuestions.size())},
+            {"count_nouns", static_cast<int>(kCountNouns.size())},
+            {"containers", static_cast<int>(kContainers.size())},
+        }},
+        {"described_phrases_outside_tag", true},
         {"entity_string_same_surface_contrasts",
          kExpectedEntityStringSameSurfaceContrasts},
     };
@@ -1045,18 +2080,51 @@ fs::path parseDataDirectory(int argc, char** argv) {
             return fs::absolute(argv[index + 1]).lexically_normal();
         }
     }
-    throw std::runtime_error("usage: atom_curriculum_builder --data-dir <training-data-directory>");
+    throw std::runtime_error(
+        "usage: atom_curriculum_builder --data-dir <training-data-directory> "
+        "[--preview-out <directory>]");
+}
+
+// Preview writes only the standalone curriculum JSONL and its manifest, leaving
+// concept_blocks.{jsonl,fb} and the registry untouched. Useful for eyeballing a
+// generation change before committing it to the canonical dataset.
+fs::path parsePreviewOut(int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--preview-out" && index + 1 < argc) {
+            return fs::absolute(argv[index + 1]).lexically_normal();
+        }
+    }
+    return {};
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
     try {
+        const fs::path preview_directory = parsePreviewOut(argc, argv);
+        if (!preview_directory.empty()) {
+            fs::create_directories(preview_directory);
+            GeneratedCurriculum preview = generateCurriculum();
+            auditGenerated(preview);
+            writeJsonl(preview_directory / "atom_identification_v1.jsonl",
+                       preview.blocks);
+            writeJsonAtomic(
+                preview_directory / "atom_identification_v1_manifest.json",
+                makeManifest(preview));
+            std::cout << "Preview: generated and audited " << preview.blocks.size()
+                      << " blocks into " << preview_directory.string()
+                      << " (canonical dataset untouched)\n";
+            return 0;
+        }
+
         const fs::path data_directory = parseDataDirectory(argc, argv);
         const fs::path flatbuffer_path = data_directory / "concept_blocks.fb";
+        const fs::path jsonl_path = data_directory / "concept_blocks.jsonl";
         const fs::path registry_path = data_directory / "curriculum_registry.json";
-        if (!fs::is_regular_file(flatbuffer_path) || !fs::is_regular_file(registry_path)) {
-            throw std::runtime_error("data directory lacks concept_blocks.fb or curriculum_registry.json");
+        if (!fs::is_regular_file(flatbuffer_path) || !fs::is_regular_file(jsonl_path) ||
+            !fs::is_regular_file(registry_path)) {
+            throw std::runtime_error(
+                "data directory lacks concept_blocks.jsonl, concept_blocks.fb, or curriculum_registry.json");
         }
 
         GeneratedCurriculum generated = generateCurriculum();
@@ -1078,6 +2146,7 @@ int main(int argc, char** argv) {
         const std::size_t replaced = before - existing.size();
         existing.insert(existing.end(), generated.blocks.begin(), generated.blocks.end());
 
+        const JsonlMergeStats jsonl_stats = mergeCanonicalJsonl(jsonl_path, generated.blocks);
         if (!GRIM::ConceptBlockIO::saveFlatBuffer(flatbuffer_path, existing, &io_error)) {
             throw std::runtime_error("failed to save concept blocks: " + io_error);
         }
@@ -1088,9 +2157,18 @@ int main(int argc, char** argv) {
             makeManifest(generated));
 
         std::cout << "Replaced prior curriculum blocks: " << replaced << '\n'
+                  << "Canonical JSONL kept/replaced/appended: "
+                  << jsonl_stats.kept << '/' << jsonl_stats.replaced << '/'
+                  << generated.blocks.size() << '\n'
                   << "Concept-block total: " << existing.size() << '\n'
                   << "Curriculum: " << kCurriculumName << " (" << kCurriculumId << ")\n"
-                  << "Per-type occurrences: " << kExpectedOccurrencesPerType << '\n';
+                  << "Contrast blocks (same-type/pair): "
+                  << generated.contrast_same << '/'
+                  << generated.contrast_pairs << '\n'
+                  << "Negative-only blocks: " << generated.negative_only
+                  << '\n'
+                  << "Per-type occurrences: "
+                  << expectedOccurrencesPerType(ValueType::Int) << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "atom_curriculum_builder: " << error.what() << '\n';
