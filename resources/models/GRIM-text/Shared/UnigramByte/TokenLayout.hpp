@@ -109,6 +109,9 @@ static_assert(ATOM_TOKEN_OFFSET == 306, "Atom token range must begin at ID 306")
 static_assert(UNIGRAM_VOCAB_OFFSET == 316, "Learned unigram range must begin at ID 316");
 // Sentinel: position has no registered AtomTable entry (0 is a valid AtomTable ID)
 constexpr uint32_t kAtomEntryNone = UINT32_MAX;
+// Sequence-local atom addresses use a separate typed index space and never
+// alias durable AtomTable entry IDs.
+constexpr uint32_t kLocalAtomIndexNone = UINT32_MAX;
 constexpr int MAX_PIECE_LENGTH = 32;           // Maximum token length in bytes
 constexpr float UNKNOWN_SCORE = -100.0f;       // Unnormalized fixed per-byte fallback penalty
 

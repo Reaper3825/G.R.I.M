@@ -152,8 +152,8 @@ flowchart LR
 ### What actually happens
 
 1. `DetectorRegistry::scan()` finds raw detections; `UniByte` passes them to `createAtomTableFromRawTextDetections()`.
-2. `createAtomTableFromRawTextDetections()` allocates the per-sequence `AtomTable`, registers each atom-emitting detection exactly once, and stores numeric `arg_number` / `DigitBinding` metadata on the deduped `AtomEntry` itself before returning `AtomTokenizationPayload` records.
-3. Each atom payload carries the finalized `StructuralSpan`, matching opening/closing token IDs, `atom_entry_id`, packed numeric value, atom flags, and atom mask used by the merge step.
+2. `createAtomTableFromRawTextDetections()` allocates the durable per-sequence `AtomTable` and the independent `SequenceLocalAtomTable`. Each detected value is ticketed directly into its atom type's dense local index space; local ticketing never resolves through `atom_entry_id`.
+3. Each atom payload carries the finalized `StructuralSpan`, matching opening/closing token IDs, durable `atom_entry_id`, independent `local_atom_index`, packed numeric value, and atom flags used by the merge step.
 4. The original text is segmented around atom spans; non-atom gaps go through unigram segmentation, while atom gaps emit the returned atom payload directly.
 5. Text normalization happens before unigram segmentation of each non-atom gap.
 6. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized gap text.

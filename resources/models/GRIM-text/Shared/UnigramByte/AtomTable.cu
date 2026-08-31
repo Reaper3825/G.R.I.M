@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "AtomTable.hpp"
+#include "SequenceLocalAtomTable.hpp"
 #include "Detectors/StructuralSpan.hpp"
 
 #include <cuda_runtime.h>
@@ -601,6 +602,7 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
 
     AtomTableFromDetectionsResult result;
     result.atom_table = std::make_shared<AtomTable>();
+    result.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
     result.atom_tokens.reserve(detections.size());
 
     size_t previous_detection_end = 0;
@@ -643,6 +645,12 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
         const std::string_view atom_text(
             source_text.data() + span.content_offset,
             span.content_length);
+
+        // Local references form their own typed, sequence-scoped address space.
+        // They are assigned directly from the detected value and never resolve
+        // through AtomTable entry IDs.
+        span.local_atom_index =
+            result.local_atom_table->ticket(span.atom_type, atom_text).local_index;
 
         bool registered = false;
         try {

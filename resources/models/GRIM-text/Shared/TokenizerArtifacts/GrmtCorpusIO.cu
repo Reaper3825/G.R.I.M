@@ -621,6 +621,33 @@ std::shared_ptr<GRIM::Tokenizer::AtomTable> readAtomTableForSequence(std::istrea
     return atom_table;
 }
 
+void writeLocalAtomTableForSequence(std::ostream& output,
+                                    const GrmtSequence& sequence,
+                                    const std::string& sink) {
+    const std::uint8_t has_local_atom_table = sequence.local_atom_table ? 1 : 0;
+    writeScalar(output, has_local_atom_table, sink);
+    if (has_local_atom_table == 0) {
+        return;
+    }
+    sequence.local_atom_table->serializeToStreamOrThrow(output, sink.c_str());
+}
+
+std::shared_ptr<GRIM::Tokenizer::SequenceLocalAtomTable>
+readLocalAtomTableForSequence(std::istream& input, const std::string& source) {
+    const std::uint8_t has_local_atom_table = readScalar<std::uint8_t>(input, source);
+    if (has_local_atom_table > 1) {
+        throw std::runtime_error("[GRMT] invalid local_atom_table flag in " + source +
+                                 ": " + std::to_string(
+                                     static_cast<unsigned int>(has_local_atom_table)));
+    }
+    if (has_local_atom_table == 0) {
+        return nullptr;
+    }
+    auto table = std::make_shared<GRIM::Tokenizer::SequenceLocalAtomTable>();
+    table->deserializeFromStreamOrThrow(input, source.c_str());
+    return table;
+}
+
 } // namespace
 
 bool GrmtSequence::hasAnyValidTarget() const {
@@ -657,6 +684,12 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
     if (atom_entry_ids.size() != n) {
         throw std::runtime_error("[GRMT] " + source + ": atom_entry_ids.size()=" +
                                  std::to_string(atom_entry_ids.size()) +
+                                 " != token_ids.size()=" + std::to_string(n));
+    }
+    if (token_local_atom_indices.size() != n) {
+        throw std::runtime_error("[GRMT] " + source +
+                                 ": token_local_atom_indices.size()=" +
+                                 std::to_string(token_local_atom_indices.size()) +
                                  " != token_ids.size()=" + std::to_string(n));
     }
     if (token_exec_slot_indices.size() != n) {
@@ -702,6 +735,7 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
     }
 
     bool saw_atom_entry = false;
+    bool saw_local_atom = false;
     for (std::size_t i = 0; i < n; ++i) {
         const bool token_is_atom_open = GRIM::Tokenizer::isAtomOpenTokenId(token_ids[i]);
         if (token_atom_mask[i] > 1) {
@@ -724,12 +758,28 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                          std::to_string(i) + " token_id=" +
                                          std::to_string(token_ids[i]));
             }
+            const auto token_type = GRIM::Tokenizer::tokenIdToAtomType(token_ids[i]);
+            if (token_local_atom_indices[i] == GRIM::Tokenizer::kLocalAtomIndexNone) {
+                throw std::runtime_error("[GRMT] " + source +
+                                         ": atom opening boundary has no local atom index at index=" +
+                                         std::to_string(i));
+            }
+            if (!local_atom_table ||
+                !local_atom_table->contains(token_type, token_local_atom_indices[i])) {
+                throw std::runtime_error("[GRMT] " + source +
+                                         ": atom opening boundary has invalid local address (" +
+                                         std::string(GRIM::Tokenizer::atomTypeName(token_type)) +
+                                         ", " + std::to_string(token_local_atom_indices[i]) +
+                                         ") at token index=" + std::to_string(i));
+            }
             saw_atom_entry = true;
+            saw_local_atom = true;
             continue;
         }
 
         if (token_atom_mask[i] != 0 ||
             atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone ||
+            token_local_atom_indices[i] != GRIM::Tokenizer::kLocalAtomIndexNone ||
             token_numeric_values[i] != 0.0f ||
             token_atom_flags[i] != 0) {
             const char* position_kind = GRIM::Tokenizer::isAtomCloseTokenId(token_ids[i])
@@ -744,6 +794,10 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
 
     if (saw_atom_entry && !atom_table) {
         throw std::runtime_error("[GRMT] " + source + ": atom_entry_ids are present but atom_table is null");
+    }
+    if (saw_local_atom && !local_atom_table) {
+        throw std::runtime_error("[GRMT] " + source +
+                                 ": local atom indices are present but local_atom_table is null");
     }
     if (atom_table) {
         for (std::size_t i = 0; i < n; ++i) {
@@ -968,6 +1022,9 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     writeExact(file_, sequence.token_atom_flags.data(), static_cast<std::size_t>(len) * sizeof(std::uint32_t), sink);
     writeExact(file_, sequence.atom_entry_ids.data(), static_cast<std::size_t>(len) * sizeof(std::uint32_t), sink);
     writeAtomTableForSequence(file_, sequence, sink);
+    writeExact(file_, sequence.token_local_atom_indices.data(),
+               static_cast<std::size_t>(len) * sizeof(std::uint32_t), sink);
+    writeLocalAtomTableForSequence(file_, sequence, sink);
 
     const std::uint8_t exec_active = sequence.execution_active ? 1 : 0;
     writeScalar(file_, exec_active, sink);
@@ -1089,6 +1146,7 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     seq.token_atom_mask.resize(seq_len);
     seq.token_atom_flags.resize(seq_len);
     seq.atom_entry_ids.resize(seq_len);
+    seq.token_local_atom_indices.resize(seq_len);
 
     readExact(file_, seq.token_ids.data(), static_cast<std::size_t>(seq_len) * sizeof(int), source);
     readExact(file_, seq.targets.data(), static_cast<std::size_t>(seq_len) * sizeof(int), source);
@@ -1097,6 +1155,9 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     readExact(file_, seq.token_atom_flags.data(), static_cast<std::size_t>(seq_len) * sizeof(std::uint32_t), source);
     readExact(file_, seq.atom_entry_ids.data(), static_cast<std::size_t>(seq_len) * sizeof(std::uint32_t), source);
     seq.atom_table = readAtomTableForSequence(file_, source);
+    readExact(file_, seq.token_local_atom_indices.data(),
+              static_cast<std::size_t>(seq_len) * sizeof(std::uint32_t), source);
+    seq.local_atom_table = readLocalAtomTableForSequence(file_, source);
 
     const std::uint8_t exec_active = readScalar<std::uint8_t>(file_, source);
     seq.execution_active = (exec_active != 0);

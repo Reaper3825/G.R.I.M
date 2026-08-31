@@ -22,6 +22,7 @@ struct StructuralSpan {
     size_t end = 0;         // End position (exclusive)
     AtomType atom_type = AtomType::ATOM_INT; // Meaningful only for placeholder-emitting structures
     uint32_t atom_entry_id = kAtomEntryNone; // Per-sequence AtomTable entry ID once registered
+    uint32_t local_atom_index = kLocalAtomIndexNone; // Index within this type's sequence-local table
 
     const char* buffer_ptr = nullptr; // Pointer to original text buffer
     uint32_t offset = 0;              // Offset in buffer

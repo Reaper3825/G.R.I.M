@@ -219,6 +219,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
         // Keep the contract uniform: every result carries an allocated (possibly
         // empty) per-sequence AtomTable, never a null pointer.
         result.atom_table = std::make_shared<AtomTable>();
+        result.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
         recordBoundary(0);
         result.validate("UniByte::tokenizeWithMetadata");
         return result;
@@ -243,6 +244,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
         detections,
         "UniByte::tokenizeWithMetadata");
     result.atom_table = std::move(atom_table_build.atom_table);
+    result.local_atom_table = std::move(atom_table_build.local_atom_table);
     std::vector<AtomTokenizationPayload> atom_tokens = std::move(atom_table_build.atom_tokens);
 
     // Pre-allocate based on heuristic: ~1 token per 3-4 bytes plus two typed
@@ -253,6 +255,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
     result.token_numeric_values.reserve(estimated_tokens);
     result.token_atom_flags.reserve(estimated_tokens);
     result.atom_entry_ids.reserve(estimated_tokens);
+    result.token_local_atom_indices.reserve(estimated_tokens);
     result.token_atom_mask.reserve(estimated_tokens);
     result.atoms.reserve(atom_tokens.size());
 
@@ -301,6 +304,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
                 result.token_numeric_values.push_back(0.0f);
                 result.token_atom_flags.push_back(0);
                 result.atom_entry_ids.push_back(kAtomEntryNone);
+                result.token_local_atom_indices.push_back(kLocalAtomIndexNone);
                 appendNonAtomSideChannels();
 
                 result.is_byte_fallback.push_back(false);
@@ -336,6 +340,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
                 result.token_numeric_values.push_back(0.0f);
                 result.token_atom_flags.push_back(0);
                 result.atom_entry_ids.push_back(kAtomEntryNone);
+                result.token_local_atom_indices.push_back(kLocalAtomIndexNone);
                 appendNonAtomSideChannels();
             }
             result.numeric_tokens += emitted_numeric_tokens;
@@ -373,6 +378,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
             result.token_numeric_values.push_back(atom_payload.token_numeric_value);
             result.token_atom_flags.push_back(atom_payload.token_atom_flags);
             result.atom_entry_ids.push_back(span.atom_entry_id);
+            result.token_local_atom_indices.push_back(span.local_atom_index);
             result.token_atom_mask.push_back(1);
             result.atom_tokens++;
 
@@ -392,6 +398,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
             result.token_numeric_values.push_back(0.0f);
             result.token_atom_flags.push_back(0);
             result.atom_entry_ids.push_back(kAtomEntryNone);
+            result.token_local_atom_indices.push_back(kLocalAtomIndexNone);
             result.token_atom_mask.push_back(0);
             result.atom_tokens++;
 

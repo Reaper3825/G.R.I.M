@@ -489,10 +489,13 @@ bool PrepareTrainingDataFromCache(
 		seq.token_atom_mask = std::move(result.token_atom_mask);
 		seq.atom_table = std::move(result.atom_table);
 		seq.atom_entry_ids = std::move(result.atom_entry_ids);
+		seq.local_atom_table = std::move(result.local_atom_table);
+		seq.token_local_atom_indices = std::move(result.token_local_atom_indices);
 		if (seq.token_numeric_values.size() != seq.token_ids.size() ||
 			seq.token_atom_flags.size() != seq.token_ids.size() ||
 			seq.token_atom_mask.size() != seq.token_ids.size() ||
-			seq.atom_entry_ids.size() != seq.token_ids.size()) {
+			seq.atom_entry_ids.size() != seq.token_ids.size() ||
+			seq.token_local_atom_indices.size() != seq.token_ids.size()) {
 			throw std::runtime_error("[DataLoader] Token/side-channel length mismatch");
 		}
 

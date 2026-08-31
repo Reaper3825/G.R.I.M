@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../UnigramByte/AtomTable.hpp"
+#include "../UnigramByte/SequenceLocalAtomTable.hpp"
 #include "../Execution/ExecutionMetadata.hpp"
 
 #include <cstdint>
@@ -23,6 +24,11 @@ struct GrmtSequence {
     std::vector<std::uint32_t> token_atom_flags;
     std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;
     std::vector<std::uint32_t> atom_entry_ids;
+    // Independent transient address plane for within-sequence references.
+    // The opening token supplies AtomType; this channel supplies only the
+    // corresponding type-local index. It is metadata, never a supervision target.
+    std::shared_ptr<GRIM::Tokenizer::SequenceLocalAtomTable> local_atom_table;
+    std::vector<std::uint32_t> token_local_atom_indices;
     // Runtime-only causal span mask authored after BOS/EOS insertion and
     // sliding-window construction. For <TYPE> value </TYPE>, positions from
     // the opening boundary through the final value token are 1; BatchPayload

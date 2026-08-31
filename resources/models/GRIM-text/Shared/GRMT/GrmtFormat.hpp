@@ -14,6 +14,10 @@ namespace GRIM {
 
 // Current GRMT training tensor stream version.
 //
+// v22 adds the independent sequence-local typed atom table and the opening-only
+// local index channel. Local addresses are (AtomType, local_index) and do not
+// reuse durable AtomTable entry IDs.
+//
 // v21 changes numeric atoms from one metadata-bearing placeholder token to a
 // typed boundary span. The serialized row shape is unchanged: atom metadata is
 // carried only at the opening boundary, while content and closing boundaries
@@ -34,7 +38,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 21;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 22;
 
 } // namespace GRIM
 

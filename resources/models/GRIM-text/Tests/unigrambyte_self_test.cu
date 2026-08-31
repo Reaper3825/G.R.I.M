@@ -13,6 +13,7 @@
 #include "../Shared/UnigramByte/UnigramViterbi.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
+#include "../Shared/UnigramByte/SequenceLocalAtomTable.hpp"
 #include "../Shared/UnigramByte/Detectors/DetectorRegistry.hpp"
 #include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
@@ -1383,6 +1384,20 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
             "testAuthoredAtomDelimiterDetector");
     ASSERT_EQ(table_result.atom_tokens.size(), static_cast<size_t>(5),
               "Authored delimiter detections must register five atom payloads");
+    ASSERT_TRUE(table_result.local_atom_table != nullptr,
+                "Detection finalization must create a sequence-local atom table");
+    for (const auto& payload : table_result.atom_tokens) {
+        ASSERT_EQ(payload.span.local_atom_index, 0u,
+                  "The first value of each atom type must receive local index zero");
+        ASSERT_TRUE(table_result.local_atom_table->contains(
+                        payload.span.atom_type,
+                        payload.span.local_atom_index),
+                    "Detected atom local address must resolve without an AtomTable entry ID");
+    }
+    ASSERT_TRUE(table_result.local_atom_table
+                    ->getRawText(AtomType::ATOM_STRING, 0)
+                    .value_or("") == "  hello world  ",
+                "Sequence-local string table must preserve exact authored bytes");
     ASSERT_EQ(table_result.atom_tokens[0].span.open_token_id,
               atomTypeToOpenTokenId(AtomType::ATOM_INT),
               "Authored integer opening token mismatch");
@@ -1956,6 +1971,36 @@ bool testAtomTableHashDeduplication(std::string& message) {
     ASSERT_TRUE(entry3, "Different atom should exist");
     ASSERT_TRUE(entry1->hash != entry3->hash, "Different atoms should have different hashes");
     
+    return true;
+}
+
+bool testSequenceLocalAtomTicketing(std::string& message) {
+    SequenceLocalAtomTable table;
+
+    const auto alice = table.ticket(AtomType::ATOM_STRING, "Alice");
+    const auto alice_again = table.ticket(AtomType::ATOM_STRING, "Alice");
+    const auto bob = table.ticket(AtomType::ATOM_STRING, "Bob");
+    const auto seven = table.ticket(AtomType::ATOM_INT, "7");
+
+    ASSERT_EQ(alice.local_index, 0u,
+              "First string must receive string-local index zero");
+    ASSERT_EQ(alice_again.local_index, alice.local_index,
+              "Repeated typed value must reuse its local index");
+    ASSERT_EQ(bob.local_index, 1u,
+              "Second distinct string must receive string-local index one");
+    ASSERT_EQ(seven.local_index, 0u,
+              "Integer indices must be independent from string indices");
+    ASSERT_EQ(table.size(AtomType::ATOM_STRING), static_cast<size_t>(2),
+              "String ticket count must include unique string values only");
+    ASSERT_EQ(table.size(AtomType::ATOM_INT), static_cast<size_t>(1),
+              "Integer ticket count must be maintained independently");
+    ASSERT_TRUE(table.getRawText(AtomType::ATOM_STRING, 0).value_or("") == "Alice",
+                "Typed local address must resolve its original value");
+
+    table.clear();
+    ASSERT_TRUE(table.empty(), "Sequence-local table clear must remove every typed value");
+    ASSERT_EQ(table.ticket(AtomType::ATOM_STRING, "Alice").local_index, 0u,
+              "A cleared sequence-local type must restart at index zero");
     return true;
 }
 
@@ -2598,6 +2643,8 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     sequence.token_atom_flags.assign(n, 0);
     sequence.atom_table = std::make_shared<AtomTable>();
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
+    sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
+    sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
     sequence.token_exec_slot_indices.assign(n, -1);
 
     const uint32_t entry_id = registerSelfTestAtom(
@@ -2613,6 +2660,8 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     sequence.token_atom_mask[0] = 1;
     sequence.token_atom_flags[0] = entry->flags;
     sequence.atom_entry_ids[0] = entry_id;
+    sequence.token_local_atom_indices[0] =
+        sequence.local_atom_table->ticket(AtomType::ATOM_INT, "42").local_index;
     return sequence;
 }
 
@@ -2645,6 +2694,15 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
                 "Opening-only atom mask must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].atom_entry_ids == valid.atom_entry_ids,
                 "Opening-only AtomTable entry IDs must survive GRMT round-trip");
+    ASSERT_TRUE(round_trip.sequences[0].token_local_atom_indices ==
+                    valid.token_local_atom_indices,
+                "Opening-only local atom indices must survive GRMT round-trip");
+    ASSERT_TRUE(round_trip.sequences[0].local_atom_table != nullptr,
+                "Sequence-local atom table must survive GRMT round-trip");
+    ASSERT_TRUE(round_trip.sequences[0].local_atom_table
+                    ->getRawText(AtomType::ATOM_INT, 0)
+                    .value_or("") == "42",
+                "Round-tripped local atom address must retain its value");
 
     auto validationRejects = [](const TokenizerArtifacts::GrmtSequence& sequence) {
         try {
@@ -2706,6 +2764,8 @@ bool testGrmtFixedNumericTokenRoundTripAndRangeValidation(std::string& message) 
     sequence.token_atom_mask.assign(n, 0);
     sequence.token_atom_flags.assign(n, 0);
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
+    sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
+    sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
     sequence.token_exec_slot_indices.assign(n, -1);
 
     std::filesystem::create_directories("output");
@@ -2787,8 +2847,10 @@ static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     sequence.token_atom_mask.assign(n, 0);
     sequence.token_atom_flags.assign(n, 0);
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
+    sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
     sequence.token_exec_slot_indices.assign(n, -1);
     sequence.atom_table = std::make_shared<AtomTable>();
+    sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
 
     const uint32_t entry_id = registerSelfTestAtom(
         *sequence.atom_table, AtomType::ATOM_INT, "42");
@@ -2803,6 +2865,8 @@ static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     sequence.token_atom_mask[open_index] = 1;
     sequence.token_atom_flags[open_index] = entry->flags;
     sequence.atom_entry_ids[open_index] = entry_id;
+    sequence.token_local_atom_indices[open_index] =
+        sequence.local_atom_table->ticket(AtomType::ATOM_INT, "42").local_index;
     return sequence;
 }
 
@@ -2828,6 +2892,11 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                 if (isAtomOpenTokenId(token_id)) {
                     if (inside_atom || window.token_atom_mask[i] != 1 ||
                         window.atom_entry_ids[i] == kAtomEntryNone ||
+                        window.token_local_atom_indices[i] == kLocalAtomIndexNone ||
+                        !window.local_atom_table ||
+                        !window.local_atom_table->contains(
+                            tokenIdToAtomType(token_id),
+                            window.token_local_atom_indices[i]) ||
                         window.token_atom_aux_target_mask[i] != 1) {
                         message = std::string(stage) +
                                   " emitted an invalid typed opening boundary";
@@ -2841,6 +2910,7 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                     if (!inside_atom || tokenIdToAtomType(token_id) != open_type ||
                         window.token_atom_mask[i] != 0 ||
                         window.atom_entry_ids[i] != kAtomEntryNone ||
+                        window.token_local_atom_indices[i] != kLocalAtomIndexNone ||
                         window.token_atom_aux_target_mask[i] != 0) {
                         message = std::string(stage) +
                                   " emitted an unmatched or metadata-bearing closing boundary";
@@ -2851,7 +2921,8 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                     continue;
                 }
                 if (window.token_atom_mask[i] != 0 ||
-                    window.atom_entry_ids[i] != kAtomEntryNone) {
+                    window.atom_entry_ids[i] != kAtomEntryNone ||
+                    window.token_local_atom_indices[i] != kLocalAtomIndexNone) {
                     message = std::string(stage) +
                               " moved atom metadata away from the opening boundary";
                     return false;
@@ -3520,6 +3591,7 @@ int main(int argc, char** argv) {
     suite.addTest("AtomTable.Clear", testAtomTableClear);
     suite.addTest("AtomTable.Metadata", testAtomTableMetadata);
     suite.addTest("AtomTable.HashDeduplication", testAtomTableHashDeduplication);
+    suite.addTest("SequenceLocalAtomTable.Ticketing", testSequenceLocalAtomTicketing);
     suite.addTest("AtomTable.DoesNotPopulateArgNumber", testAtomTableDoesNotPopulateArgNumber);
     
     // Section 6: Integration Tests

@@ -732,6 +732,7 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/UniByte.cu
     ../../Shared/UnigramByte/NumericTokens.cu
     ../../Shared/UnigramByte/AtomTable.cu
+    ../../Shared/UnigramByte/SequenceLocalAtomTable.cu
     ../../Shared/UnigramByte/AhoCorasick.cu
     ../../Shared/UnigramByte/TextUtils.cu
     ../../Shared/UnigramByte/Detectors/DetectorRegistry.cu

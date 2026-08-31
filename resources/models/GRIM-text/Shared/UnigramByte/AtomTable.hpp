@@ -208,6 +208,7 @@ struct ParseResult {
 };
 
 class AtomTable;
+class SequenceLocalAtomTable;
 
 struct AtomTokenizationPayload {
     StructuralSpan span;
@@ -217,6 +218,7 @@ struct AtomTokenizationPayload {
 
 struct AtomTableFromDetectionsResult {
     std::shared_ptr<AtomTable> atom_table;
+    std::shared_ptr<SequenceLocalAtomTable> local_atom_table;
     std::vector<AtomTokenizationPayload> atom_tokens;
 };
 

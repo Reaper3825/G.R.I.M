@@ -113,6 +113,49 @@ void authorAtomAuxTargetMask(
     }
 }
 
+void rebaseSequenceLocalAtoms(
+    GrmtSequence& sequence,
+    const std::shared_ptr<const GRIM::Tokenizer::SequenceLocalAtomTable>& source_table,
+    const std::string& source) {
+    if (sequence.token_local_atom_indices.size() != sequence.token_ids.size()) {
+        throw std::runtime_error(
+            source + ": token_local_atom_indices.size()=" +
+            std::to_string(sequence.token_local_atom_indices.size()) +
+            " != token_ids.size()=" + std::to_string(sequence.token_ids.size()));
+    }
+
+    auto rebased = std::make_shared<GRIM::Tokenizer::SequenceLocalAtomTable>();
+    for (size_t i = 0; i < sequence.token_ids.size(); ++i) {
+        const int token_id = sequence.token_ids[i];
+        uint32_t& local_index = sequence.token_local_atom_indices[i];
+        if (!GRIM::Tokenizer::isAtomOpenTokenId(token_id)) {
+            if (local_index != GRIM::Tokenizer::kLocalAtomIndexNone) {
+                throw std::runtime_error(
+                    source + ": local atom index is present outside an opening boundary at token index=" +
+                    std::to_string(i));
+            }
+            continue;
+        }
+
+        const auto type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
+        if (!source_table) {
+            throw std::runtime_error(
+                source + ": atom opening has no source sequence-local atom table at token index=" +
+                std::to_string(i));
+        }
+        const auto raw_text = source_table->getRawText(type, local_index);
+        if (!raw_text.has_value()) {
+            throw std::runtime_error(
+                source + ": cannot resolve source local atom address (" +
+                std::string(GRIM::Tokenizer::atomTypeName(type)) + ", " +
+                std::to_string(local_index) + ") at token index=" +
+                std::to_string(i));
+        }
+        local_index = rebased->ticket(type, *raw_text).local_index;
+    }
+    sequence.local_atom_table = std::move(rebased);
+}
+
 const AtomTokenSpan* atomSpanContainingCut(
     const std::vector<AtomTokenSpan>& spans,
     size_t cut) {
@@ -245,6 +288,10 @@ void appendSftTokenRange(GrmtSequence& destination,
     destination.atom_entry_ids.insert(destination.atom_entry_ids.end(),
         source.atom_entry_ids.begin() + static_cast<ptrdiff_t>(begin),
         source.atom_entry_ids.begin() + static_cast<ptrdiff_t>(end));
+    destination.token_local_atom_indices.insert(
+        destination.token_local_atom_indices.end(),
+        source.token_local_atom_indices.begin() + static_cast<ptrdiff_t>(begin),
+        source.token_local_atom_indices.begin() + static_cast<ptrdiff_t>(end));
     destination.token_atom_flags.insert(destination.token_atom_flags.end(),
         source.token_atom_flags.begin() + static_cast<ptrdiff_t>(begin),
         source.token_atom_flags.begin() + static_cast<ptrdiff_t>(end));
@@ -416,6 +463,10 @@ SftWindowConstruction constructSftWindows(
             const auto output_atom_spans = collectAtomTokenSpans(
                 window.token_ids,
                 "Sliding window (" + split_name + ", SFT output)");
+            rebaseSequenceLocalAtoms(
+                window,
+                sequence.local_atom_table,
+                "Sliding window (" + split_name + ", SFT output)");
             authorAtomAuxTargetMask(
                 window,
                 output_atom_spans,
@@ -459,6 +510,9 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
             seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
             seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_local_atom_indices.insert(
+                seq.token_local_atom_indices.begin(),
+                GRIM::Tokenizer::kLocalAtomIndexNone);
             seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
             // BOS predicts the first real token. This is valid LM supervision;
             // do not mask it away just because the input token is BOS.
@@ -482,6 +536,7 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             seq.token_numeric_values.push_back(0.0f);
             seq.token_atom_mask.push_back(0);
             seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_local_atom_indices.push_back(GRIM::Tokenizer::kLocalAtomIndexNone);
             seq.token_atom_flags.push_back(0);
             // Fix shift: the PREVIOUS position's target was -1 (no next token existed
             // when DataLoader ran). Now EOS follows it, so set target = EOS.
@@ -571,6 +626,10 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             // Short sequence or exactly max_seq_len — no windowing.
             GRIM::TokenizerArtifacts::GrmtSequence copy = seq;
             MaskFinalTarget(copy);
+            rebaseSequenceLocalAtoms(
+                copy,
+                seq.local_atom_table,
+                "Sliding window (" + split_name + ", PT output)");
             authorAtomAuxTargetMask(
                 copy,
                 atom_spans,
@@ -679,6 +738,8 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                 window.token_numeric_values.push_back(0.0f);
                 window.token_atom_mask.push_back(0);
                 window.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+                window.token_local_atom_indices.push_back(
+                    GRIM::Tokenizer::kLocalAtomIndexNone);
                 window.token_atom_flags.push_back(0);
                 if (!seq.token_exec_slot_indices.empty())
                     window.token_exec_slot_indices.push_back(static_cast<int32_t>(-1));
@@ -698,6 +759,10 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             window.atom_table = seq.atom_table;
             window.atom_entry_ids.insert(window.atom_entry_ids.end(),
                 seq.atom_entry_ids.begin() + start, seq.atom_entry_ids.begin() + end);
+            window.token_local_atom_indices.insert(
+                window.token_local_atom_indices.end(),
+                seq.token_local_atom_indices.begin() + static_cast<ptrdiff_t>(start),
+                seq.token_local_atom_indices.begin() + static_cast<ptrdiff_t>(end));
             window.token_atom_flags.insert(window.token_atom_flags.end(),
                 seq.token_atom_flags.begin() + start, seq.token_atom_flags.begin() + end);
 
@@ -758,6 +823,10 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
 
             const auto output_atom_spans = collectAtomTokenSpans(
                 window.token_ids,
+                "Sliding window (" + split_name + ", PT output)");
+            rebaseSequenceLocalAtoms(
+                window,
+                seq.local_atom_table,
                 "Sliding window (" + split_name + ", PT output)");
             authorAtomAuxTargetMask(
                 window,

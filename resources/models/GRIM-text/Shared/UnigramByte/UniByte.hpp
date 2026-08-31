@@ -22,6 +22,7 @@
 #pragma once
 
 #include "AtomTable.hpp"
+#include "SequenceLocalAtomTable.hpp"
 #include "Detectors/DetectorRegistry.hpp"
 #include "Detectors/StructuralSpan.hpp"
 #include "TokenLayout.hpp"
@@ -50,6 +51,8 @@ struct UniByteResult {
     std::vector<uint8_t> token_atom_mask;       // 1 only at metadata-bearing opening boundaries
     std::shared_ptr<AtomTable> atom_table;       // Per-sequence atom registry (shared across windows)
     std::vector<uint32_t> atom_entry_ids;        // Opening-boundary AtomTable index (kAtomEntryNone elsewhere)
+    std::shared_ptr<SequenceLocalAtomTable> local_atom_table; // Typed local values, indexed independently per atom type
+    std::vector<uint32_t> token_local_atom_indices; // Opening-boundary local index (type comes from token ID)
     size_t unigram_tokens = 0;
     size_t byte_tokens = 0;
     size_t numeric_tokens = 0;
@@ -91,6 +94,16 @@ struct UniByteResult {
                 std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
+        if (token_local_atom_indices.size() != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.token_local_atom_indices.size()=" +
+                std::to_string(token_local_atom_indices.size()) + " != token_ids.size()=" +
+                std::to_string(n));
+        }
+        if (!local_atom_table) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.local_atom_table is NULL");
+        }
         if (unigram_tokens + byte_tokens + numeric_tokens + atom_tokens != n) {
             throw std::runtime_error(
                 std::string(caller) + ": UniByteResult token count mismatch: unigram=" +
@@ -108,9 +121,18 @@ struct UniByteResult {
                         ": atom opening boundary is missing anchored metadata at token index=" +
                         std::to_string(i));
                 }
+                const AtomType type = tokenIdToAtomType(token_ids[i]);
+                if (!local_atom_table->contains(type, token_local_atom_indices[i])) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": atom opening boundary has an invalid sequence-local atom address at token index=" +
+                        std::to_string(i));
+                }
                 continue;
             }
-            if (token_atom_mask[i] != 0 || atom_entry_ids[i] != kAtomEntryNone) {
+            if (token_atom_mask[i] != 0 ||
+                atom_entry_ids[i] != kAtomEntryNone ||
+                token_local_atom_indices[i] != kLocalAtomIndexNone) {
                 throw std::runtime_error(
                     std::string(caller) +
                     ": atom metadata is present outside an opening boundary at token index=" +
