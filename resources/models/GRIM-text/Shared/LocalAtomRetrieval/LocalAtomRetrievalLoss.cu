@@ -192,7 +192,7 @@ __global__ void kernelLocalAtomRetrievalLossForward(
             sequence_length)) {
         // BatchPayload::validate() prevents this. Preserve fail-visible output
         // if a corrupted device binding ever disagrees with its host payload.
-        atomicAdd(mean_loss, CUDART_INF_F);
+        atomicAdd(mean_loss, INFINITY);
         return;
     }
 
