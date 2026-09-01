@@ -1,7 +1,7 @@
 #pragma once
 //======================================================//
 //  LocalAtomRetrievalForward.hpp
-//  Detached proposal for the sequence-local atom retrieval head.
+//  Scoring over pre-encoded sequence-local atom banks.
 //======================================================//
 
 #include "../Batching/BatchDeviceBindings.hpp"
@@ -12,27 +12,16 @@
 
 namespace GRIM::LocalAtomRetrieval {
 
-// Parameter layouts intentionally keep AtomType as the outermost dimension:
-//
-//   type_query_projection [kAtomTypeCount * d_model, retrieval_dim]
-//   type_key_projection   [kAtomTypeCount * d_model, retrieval_dim]
-//   type_no_reference_key [kAtomTypeCount, retrieval_dim]
-//
-// A row range [type * d_model, (type + 1) * d_model) is therefore an entirely
-// separate projection for that atom type. The head never mixes candidate banks
-// belonging to different rows or types.
 struct LocalAtomRetrievalParameterTensors {
-    Tensor& type_query_projection;
-    Tensor& type_key_projection;
+    // [kAtomTypeCount, retrieval_dim]. Candidate and query encoders own all
+    // other projections; retrieval owns only the learned NO_REFERENCE key.
     Tensor& type_no_reference_key;
 };
 
 struct LocalAtomRetrievalForwardOutputs {
-    // [query_count, class_count]
-    //
-    // Column 0 is NO_REFERENCE. Column local_index + 1 addresses the candidate
-    // in the query's own [sequence row, AtomType] bank. Slots outside that bank
-    // and candidates that are not yet causally available contain a mask value.
+    // [query_count, class_count]. Column 0 is NO_REFERENCE. Column
+    // local_index + 1 addresses the corresponding entry in the query's
+    // payload-authored [sequence row, AtomType] bank.
     Tensor logits;
 
     int query_count = 0;
@@ -41,13 +30,21 @@ struct LocalAtomRetrievalForwardOutputs {
     int retrieval_dim = 0;
 };
 
-// Proposed detached head entry point. It is intentionally not called from
-// ModelForward_GPU, loss, inference, or batching. The caller decides which
-// contextual-state tensor to expose. Passing contextual_states.detach() makes
-// the head train only its own parameters; passing the graph-connected tensor
-// also lets retrieval loss train the shared representation.
+// Pre-encoded inputs use the compact payload ordering:
+//
+//   query_embeddings     [payload.localAtomQueryCount(), retrieval_dim]
+//   candidate_embeddings [payload.localAtomCandidateCount(), retrieval_dim]
+//
+// Candidate row c corresponds directly to
+// bindings.d_local_atom_candidate_first_close_positions[c]. Query banks are
+// resolved from the payload-authored query position/type and row/type offsets;
+// no second padded layout is accepted or synthesized here.
+//
+// The caller owns query_embeddings and candidate_embeddings through backward.
+// LocalAtomRetrievalGradFn borrows their forward data and owns no saved copies.
 LocalAtomRetrievalForwardOutputs LocalAtomRetrievalForward(
-    const Tensor& contextual_states,
+    Tensor& query_embeddings,
+    Tensor& candidate_embeddings,
     const LocalAtomRetrievalParameterTensors& parameters,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
