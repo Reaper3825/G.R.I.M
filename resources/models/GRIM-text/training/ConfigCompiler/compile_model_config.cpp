@@ -26,8 +26,8 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 5;
-constexpr std::uint32_t kSemanticVersion = 4;
+constexpr std::uint32_t kSchemaVersion = 6;
+constexpr std::uint32_t kSemanticVersion = 5;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -94,6 +94,7 @@ struct EffectiveConfig {
     float lm_head_mlp_alpha = 0.0f;
 
     bool atom_insertion_enabled = false;
+    bool local_atom_retrieval_enabled = false;
     bool use_atom_data = false;
     std::uint32_t atom_embedding_dim = 0;
     bool execution_block_enabled = false;
@@ -526,6 +527,19 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
                 "atom_insertion_enabled=true requires max_seq_len > 1");
         }
     }
+    c.local_atom_retrieval_enabled =
+        required<bool>(j, "local_atom_retrieval_enabled");
+    if (c.local_atom_retrieval_enabled) {
+        if (c.atom_insertion_enabled) {
+            throw std::runtime_error(
+                "local_atom_retrieval_enabled=true is incompatible with "
+                "atom_insertion_enabled=true");
+        }
+        if (!c.causal_mask) {
+            throw std::runtime_error(
+                "local_atom_retrieval_enabled=true requires causal_mask=true");
+        }
+    }
     c.use_atom_data = required<bool>(j, "use_atom_data");
     c.atom_embedding_dim = requiredU32(j, "atom_embedding_dim", !c.use_atom_data);
     c.execution_block_enabled = required<bool>(j, "execution_block_enabled");
@@ -629,6 +643,12 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     if (c.tokenizer_enable_atom_reasoning && !c.use_atom_data) {
         throw std::runtime_error("tokenizer_enable_atom_reasoning requires use_atom_data");
     }
+    if (c.local_atom_retrieval_enabled &&
+        !c.tokenizer_enable_atom_reasoning) {
+        throw std::runtime_error(
+            "local_atom_retrieval_enabled=true requires "
+            "tokenizer_enable_atom_reasoning=true");
+    }
     auto addCapability = [&](bool enabled, GRIMConfig::ModelCapability capability) {
         if (enabled) c.capabilities.push_back(capability);
     };
@@ -646,6 +666,8 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     addCapability(c.lm_head_mlp_enabled, GRIMConfig::ModelCapability_LmHeadMlp);
     addCapability(c.use_atom_data, GRIMConfig::ModelCapability_AtomData);
     addCapability(c.atom_insertion_enabled, GRIMConfig::ModelCapability_AtomInsertion);
+    addCapability(c.local_atom_retrieval_enabled,
+                  GRIMConfig::ModelCapability_LocalAtomRetrieval);
     std::sort(c.capabilities.begin(), c.capabilities.end(), [](auto a, auto b) {
         return static_cast<std::uint16_t>(a) < static_cast<std::uint16_t>(b);
     });
@@ -735,7 +757,8 @@ std::vector<std::uint8_t> buildArtifact(
     const auto features = GRIMConfig::CreateModelFeatures(
         builder, c.use_atom_data, c.atom_embedding_dim, bias, attention, positional,
         encoder, lm_head, execution, number_encoder, c.arg_selector_enabled,
-        slot_seed, c.atom_insertion_enabled);
+        slot_seed, c.atom_insertion_enabled,
+        c.local_atom_retrieval_enabled);
 
     const auto model_type = builder.CreateString(c.tokenizer_model_type);
     std::vector<flatbuffers::Offset<flatbuffers::String>> special_strings;

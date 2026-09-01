@@ -58,14 +58,15 @@ struct BatchDeviceBindings {
     uint8_t*  d_atom_mask       = nullptr;  // [payload.total_tokens] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [payload.total_tokens] (nullable when not allocated)
     uint32_t* d_atom_entry_ids  = nullptr;  // [payload.total_tokens], row-local AtomTable entry id
-    uint32_t* d_token_local_atom_indices = nullptr; // [payload.total_tokens], typed local index at openings
+    uint32_t* d_token_local_atom_indices = nullptr; // [payload.total_tokens], nullable when retrieval is disabled
     int32_t*  d_token_to_slot_index_map = nullptr; // [payload.total_tokens]
     int*      d_atom_positions  = nullptr;  // [payload.authoredAtomCount()] compact authored atom token positions
     int*      d_atom_types      = nullptr;  // [payload.authoredAtomCount()] compact authored atom types aligned with d_atom_positions
 
     // Compact sequence-local selector metadata. Candidate banks are segmented
-    // by [row, AtomType] and ordered by local_index. Counts are zero when the
-    // active payload has no corresponding rows/data.
+    // by [row, AtomType] and ordered by local_index. Pointers are null when the
+    // compiled retrieval feature is disabled; counts are zero when the active
+    // payload has no corresponding rows/data.
     int* d_local_atom_query_positions = nullptr; // [local_atom_query_count]
     int* d_local_atom_query_types = nullptr;     // [local_atom_query_count]
     int* d_local_atom_query_targets = nullptr;   // [local_atom_query_count], 0 or local_index + 1

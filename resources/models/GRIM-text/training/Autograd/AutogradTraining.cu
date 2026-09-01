@@ -13,6 +13,7 @@
 #include "../../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Loss/ComputeLoss/AtomInsertionLoss.hpp"
+#include "../../Shared/LocalAtomRetrieval/LocalAtomRetrievalLoss.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/VerboseLogging.hpp"
 
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #define AG_INFO(msg) do { \
     if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRAINING_LOGS) { \
@@ -84,9 +86,10 @@ LossResult computeAutogradLoss(
             << " valid_rows=" << valid_rows
             << " atom_insertion=" << atom_insertion_enabled);
 
+    Tensor primary_loss_tensor;
     if (atom_insertion_enabled) {
         AtomInsertion::AtomInsertionLossStats atom_stats{};
-        loss_state.loss_tensor = AtomInsertion::atomInsertionLoss(
+        primary_loss_tensor = AtomInsertion::atomInsertionLoss(
             forward_outputs.logits_tensor,
             forward_outputs,
             payload,
@@ -100,7 +103,7 @@ LossResult computeAutogradLoss(
                 "computeAutogradLoss: atom loss valid-gap count mismatch");
         }
     } else {
-        loss_state.loss_tensor = autograd::unified_loss(
+        primary_loss_tensor = autograd::unified_loss(
             forward_outputs.logits_tensor,
             payload,
             *ctx.device_bindings,
@@ -109,18 +112,74 @@ LossResult computeAutogradLoss(
             ctx.stream);
     }
 
+    const int retrieval_query_count = payload.localAtomQueryCount();
+    const auto model_hp = HyperParameters::modelHP(*ctx.config);
+    const bool retrieval_active =
+        model_hp.local_atom_retrieval_enabled &&
+        !atom_insertion_enabled &&
+        retrieval_query_count > 0;
+
+    Tensor retrieval_loss_tensor;
+    Tensor weighted_retrieval_loss_tensor;
+    if (retrieval_active) {
+        if (!forward_outputs.local_atom_retrieval_logits.data) {
+            throw std::runtime_error(
+                "computeAutogradLoss: local atom retrieval is enabled for a batch "
+                "with queries, but the shared forward did not emit retrieval logits");
+        }
+        retrieval_loss_tensor = LocalAtomRetrieval::LocalAtomRetrievalLoss(
+            forward_outputs,
+            payload,
+            *ctx.device_bindings,
+            ctx.stream);
+        weighted_retrieval_loss_tensor = autograd::mul_scalar(
+            retrieval_loss_tensor,
+            loss_config.local_atom_retrieval_weight,
+            ctx.stream);
+        loss_state.loss_tensor = autograd::add(
+            primary_loss_tensor,
+            weighted_retrieval_loss_tensor,
+            ctx.stream);
+    } else {
+        loss_state.loss_tensor = std::move(primary_loss_tensor);
+    }
+
+    float primary_loss = 0.0f;
+    float retrieval_loss_raw = 0.0f;
+    float weighted_retrieval_loss = 0.0f;
     float total_loss = 0.0f;
+    if (retrieval_active) {
+        CUDA_CHECK(cudaMemcpyAsync(
+            &primary_loss, primary_loss_tensor.data, sizeof(float),
+            cudaMemcpyDeviceToHost, ctx.stream));
+        CUDA_CHECK(cudaMemcpyAsync(
+            &retrieval_loss_raw, retrieval_loss_tensor.data, sizeof(float),
+            cudaMemcpyDeviceToHost, ctx.stream));
+        CUDA_CHECK(cudaMemcpyAsync(
+            &weighted_retrieval_loss, weighted_retrieval_loss_tensor.data,
+            sizeof(float), cudaMemcpyDeviceToHost, ctx.stream));
+    } else {
+        CUDA_CHECK(cudaMemcpyAsync(
+            &primary_loss, loss_state.loss_tensor.data, sizeof(float),
+            cudaMemcpyDeviceToHost, ctx.stream));
+    }
     CUDA_CHECK(cudaMemcpyAsync(
         &total_loss, loss_state.loss_tensor.data, sizeof(float),
         cudaMemcpyDeviceToHost, ctx.stream));
     CUDA_CHECK(cudaStreamSynchronize(ctx.stream));
 
-    const float primary_loss = total_loss;
     if (!std::isfinite(primary_loss)) {
         throw std::runtime_error(
             std::string("computeAutogradLoss: ") +
             (atom_insertion_enabled ? "atom BCE" : "pure text CE") +
             " is non-finite (" + std::to_string(primary_loss) + ")");
+    }
+    if (!std::isfinite(retrieval_loss_raw) ||
+        !std::isfinite(weighted_retrieval_loss)) {
+        throw std::runtime_error(
+            "computeAutogradLoss: local atom retrieval loss is non-finite "
+            "(raw=" + std::to_string(retrieval_loss_raw) +
+            ", weighted=" + std::to_string(weighted_retrieval_loss) + ")");
     }
 
     // Phase2's historical primary-loss channel is named text_loss. Atom mode
@@ -129,15 +188,27 @@ LossResult computeAutogradLoss(
     result.valid_tokens = valid_rows;
     result.loss_value = total_loss;
     result.selector_loss = 0.0f;
+    result.local_atom_retrieval_loss_raw = retrieval_loss_raw;
+    result.local_atom_retrieval_loss = weighted_retrieval_loss;
     result.weight_text = 1.0f;
+    result.weight_local_atom_retrieval =
+        retrieval_active ? loss_config.local_atom_retrieval_weight : 0.0f;
+    result.local_atom_retrieval_queries =
+        retrieval_active ? retrieval_query_count : 0;
+    result.local_atom_reference_targets =
+        retrieval_active ? payload.local_atom_reference_target_count : 0;
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error(
             "computeAutogradLoss: loss is non-finite (primary=" +
-            std::to_string(primary_loss) + ")");
+            std::to_string(primary_loss) + ", retrieval=" +
+            std::to_string(weighted_retrieval_loss) + ")");
     }
 
     AG_INFO("Loss computed: total=" << total_loss
             << " primary=" << primary_loss
+            << " local_atom_retrieval_raw=" << retrieval_loss_raw
+            << " local_atom_retrieval_weighted=" << weighted_retrieval_loss
+            << " local_atom_retrieval_queries=" << result.local_atom_retrieval_queries
             << " selector=" << result.selector_loss
             << " valid_rows=" << valid_rows);
     result.success = true;

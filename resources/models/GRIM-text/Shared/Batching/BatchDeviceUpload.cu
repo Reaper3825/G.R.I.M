@@ -76,6 +76,15 @@ BatchDeviceBindings uploadBatchToDevice(
     const int cfg_batch_size = HyperParameters::snapshotTrainingConfigField<int>(config, "batch_size");
     const int cfg_max_cached_seq_len = HyperParameters::snapshotTrainingConfigField<int>(config, "max_cached_seq_len");
     const int cfg_max_tokens_per_batch = HyperParameters::snapshotTrainingConfigField<int>(config, "max_tokens_per_batch");
+    const bool local_atom_retrieval_enabled =
+        HyperParameters::snapshotTrainingConfigField<bool>(
+            config, "local_atom_retrieval_enabled");
+    if (payload.local_atom_retrieval_enabled !=
+        local_atom_retrieval_enabled) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: payload local-atom retrieval feature does "
+            "not match the compiled model semantic");
+    }
     if (payload.isTraining() && HyperParameters::snapshotExecutionMode(config) == HyperParameters::ModelExecutionMode::INFERENCE) {
         throw std::runtime_error(
             "uploadBatchToDevice: training BatchPayload cannot be uploaded in inference mode");
@@ -229,11 +238,15 @@ BatchDeviceBindings uploadBatchToDevice(
         throw std::runtime_error(
             "uploadBatchToDevice: BatchDeviceStorage.atom_entry_ids_tensor.data is NULL");
     }
-    uint32_t* cached_local_atom_indices_ptr =
-        reinterpret_cast<uint32_t*>(storage.token_local_atom_indices_tensor.data);
-    if (!cached_local_atom_indices_ptr) {
-        throw std::runtime_error(
-            "uploadBatchToDevice: BatchDeviceStorage.token_local_atom_indices_tensor.data is NULL");
+    uint32_t* cached_local_atom_indices_ptr = nullptr;
+    if (local_atom_retrieval_enabled) {
+        cached_local_atom_indices_ptr = reinterpret_cast<uint32_t*>(
+            storage.token_local_atom_indices_tensor.data);
+        if (!cached_local_atom_indices_ptr) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: local atom index storage is NULL while "
+                "the compiled retrieval feature is enabled");
+        }
     }
     int* cached_atom_positions_ptr = reinterpret_cast<int*>(storage.atom_positions_tensor.data);
     if (!cached_atom_positions_ptr) {
@@ -257,13 +270,23 @@ BatchDeviceBindings uploadBatchToDevice(
         storage.local_atom_candidate_content_offsets_tensor.data);
     int* cached_local_candidate_content_positions_ptr = reinterpret_cast<int*>(
         storage.local_atom_candidate_content_positions_tensor.data);
-    if (!cached_local_query_positions_ptr || !cached_local_query_types_ptr ||
-        !cached_local_query_targets_ptr || !cached_local_row_type_offsets_ptr ||
-        !cached_local_candidate_first_close_ptr ||
-        !cached_local_candidate_content_offsets_ptr ||
-        !cached_local_candidate_content_positions_ptr) {
+    if (local_atom_retrieval_enabled) {
+        if (!cached_local_query_positions_ptr || !cached_local_query_types_ptr ||
+            !cached_local_query_targets_ptr || !cached_local_row_type_offsets_ptr ||
+            !cached_local_candidate_first_close_ptr ||
+            !cached_local_candidate_content_offsets_ptr ||
+            !cached_local_candidate_content_positions_ptr) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: local atom retrieval metadata storage is incomplete");
+        }
+    } else if (cached_local_query_positions_ptr || cached_local_query_types_ptr ||
+               cached_local_query_targets_ptr || cached_local_row_type_offsets_ptr ||
+               cached_local_candidate_first_close_ptr ||
+               cached_local_candidate_content_offsets_ptr ||
+               cached_local_candidate_content_positions_ptr) {
         throw std::runtime_error(
-            "uploadBatchToDevice: local atom selector metadata storage is incomplete");
+            "uploadBatchToDevice: local atom retrieval storage exists while "
+            "the compiled feature is disabled");
     }
     if (payload.localAtomQueryCount() > storage.max_tokens_capacity ||
         payload.localAtomCandidateCount() > storage.max_tokens_capacity ||
@@ -293,7 +316,9 @@ BatchDeviceBindings uploadBatchToDevice(
     const size_t slot_map_bytes  = payload.slotMapBytes();
     const size_t atom_position_bytes = payload.atomPositionBytes();
     const size_t atom_type_bytes = payload.atomTypeBytes();
-    const size_t local_atom_index_bytes = payload.localAtomIndexBytes();
+    const size_t local_atom_index_bytes = local_atom_retrieval_enabled
+        ? payload.localAtomIndexBytes()
+        : 0;
     const size_t local_query_position_bytes = payload.localAtomQueryPositionBytes();
     const size_t local_query_type_bytes = payload.localAtomQueryTypeBytes();
     const size_t local_query_target_bytes = payload.localAtomQueryTargetBytes();
@@ -505,6 +530,9 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
     }
 
     const auto workspace_hp = HyperParameters::trainingStateWorkspaceHP(config);
+    const bool local_atom_retrieval_enabled =
+        HyperParameters::snapshotTrainingConfigField<bool>(
+            config, "local_atom_retrieval_enabled");
     if (workspace_hp.batch_size <= 0) {
         throw std::runtime_error("createBatchDeviceStorage: batch_size must be > 0");
     }
@@ -604,11 +632,6 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_entry_ids");
-    storage->token_local_atom_indices_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens),
-        false,
-        stream,
-        "batch_token_local_atom_indices");
     storage->token_to_slot_index_map_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,
@@ -624,49 +647,56 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_types");
-    storage->local_atom_query_positions_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens),
-        false,
-        stream,
-        "batch_local_atom_query_positions");
-    storage->local_atom_query_types_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens),
-        false,
-        stream,
-        "batch_local_atom_query_types");
-    storage->local_atom_query_targets_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens),
-        false,
-        stream,
-        "batch_local_atom_query_targets");
-    if (workspace_hp.batch_size >
-        (std::numeric_limits<int>::max() - 1) /
-            GRIM::Tokenizer::kAtomTypeCount) {
-        throw std::runtime_error(
-            "createBatchDeviceStorage: local atom row/type offset capacity overflows int");
+    if (local_atom_retrieval_enabled) {
+        storage->token_local_atom_indices_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_token_local_atom_indices");
+        storage->local_atom_query_positions_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_local_atom_query_positions");
+        storage->local_atom_query_types_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_local_atom_query_types");
+        storage->local_atom_query_targets_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_local_atom_query_targets");
+        if (workspace_hp.batch_size >
+            (std::numeric_limits<int>::max() - 1) /
+                GRIM::Tokenizer::kAtomTypeCount) {
+            throw std::runtime_error(
+                "createBatchDeviceStorage: local atom row/type offset capacity overflows int");
+        }
+        const int row_type_offset_capacity =
+            workspace_hp.batch_size * GRIM::Tokenizer::kAtomTypeCount + 1;
+        storage->local_atom_row_type_candidate_offsets_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, row_type_offset_capacity),
+            false,
+            stream,
+            "batch_local_atom_row_type_candidate_offsets");
+        storage->local_atom_candidate_first_close_positions_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_local_atom_candidate_first_close_positions");
+        storage->local_atom_candidate_content_offsets_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens + 1),
+            false,
+            stream,
+            "batch_local_atom_candidate_content_offsets");
+        storage->local_atom_candidate_content_positions_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_local_atom_candidate_content_positions");
     }
-    const int row_type_offset_capacity =
-        workspace_hp.batch_size * GRIM::Tokenizer::kAtomTypeCount + 1;
-    storage->local_atom_row_type_candidate_offsets_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, row_type_offset_capacity),
-        false,
-        stream,
-        "batch_local_atom_row_type_candidate_offsets");
-    storage->local_atom_candidate_first_close_positions_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens),
-        false,
-        stream,
-        "batch_local_atom_candidate_first_close_positions");
-    storage->local_atom_candidate_content_offsets_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens + 1),
-        false,
-        stream,
-        "batch_local_atom_candidate_content_offsets");
-    storage->local_atom_candidate_content_positions_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens),
-        false,
-        stream,
-        "batch_local_atom_candidate_content_positions");
 
     return storage;
 }

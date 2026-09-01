@@ -35,6 +35,7 @@ enum class CompiledModelCapability : std::uint16_t {
     LmHeadMlp = 12,
     AtomData = 13,
     AtomInsertion = 14,
+    LocalAtomRetrieval = 15,
 };
 
 struct CompiledConfigIntegrity {
@@ -153,6 +154,7 @@ struct CompiledSlotSeedEncoderConfig {
 
 struct CompiledModelFeatures {
     bool atom_insertion_enabled = false;
+    bool local_atom_retrieval_enabled = false;
     bool use_atom_data = false;
     std::uint32_t atom_embedding_dim = 0;
     CompiledBiasPolicy bias;

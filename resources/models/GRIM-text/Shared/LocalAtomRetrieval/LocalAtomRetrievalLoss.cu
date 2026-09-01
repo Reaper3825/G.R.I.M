@@ -1,8 +1,6 @@
 //======================================================//
 //  LocalAtomRetrievalLoss.cu
-//  Standalone causal selector cross-entropy.
-//
-//  Deliberately not wired into ModelForward or the training hot path.
+//  Causal sequence-local atom retrieval cross-entropy.
 //======================================================//
 
 #include "LocalAtomRetrievalLoss.hpp"
@@ -40,7 +38,7 @@ void checkCuda(cudaError_t status, const char* caller) {
     }
 }
 
-int expectedCandidateClassCount(
+int expectedCandidateSlotCount(
     const Batching::BatchPayload& payload,
     const char* caller) {
     const auto& offsets = payload.local_atom_row_type_candidate_offsets;
@@ -66,7 +64,7 @@ int expectedCandidateClassCount(
     }
     if (maximum_bank_width == std::numeric_limits<int>::max()) {
         throw std::runtime_error(
-            std::string(caller) + ": candidate class count overflows int");
+            std::string(caller) + ": candidate slot count overflows int");
     }
     return maximum_bank_width + 1;
 }
@@ -93,9 +91,9 @@ void requireBindings(
     }
 }
 
-__device__ bool isCausalCandidateClass(
+__device__ bool isCausalCandidateSlot(
     int query,
-    int candidate_class,
+    int candidate_slot,
     const int* query_positions,
     const int* query_types,
     const int* row_type_candidate_offsets,
@@ -103,7 +101,7 @@ __device__ bool isCausalCandidateClass(
     int candidate_count,
     int type_count,
     int sequence_length) {
-    if (candidate_class == Batching::kLocalAtomNoReferenceTarget) {
+    if (candidate_slot == Batching::kLocalAtomNoReferenceTarget) {
         return true;
     }
 
@@ -116,7 +114,7 @@ __device__ bool isCausalCandidateClass(
     const int bank = row * type_count + type;
     const int candidate_begin = row_type_candidate_offsets[bank];
     const int candidate_end = row_type_candidate_offsets[bank + 1];
-    const int candidate = candidate_begin + candidate_class - 1;
+    const int candidate = candidate_begin + candidate_slot - 1;
     return candidate >= candidate_begin && candidate < candidate_end &&
            candidate >= 0 && candidate < candidate_count &&
            candidate_first_close_positions[candidate] < query_position;
@@ -136,21 +134,21 @@ __global__ void kernelLocalAtomRetrievalLossForward(
     int candidate_count,
     int type_count,
     int sequence_length,
-    int candidate_class_count) {
+    int candidate_slot_count) {
     const int query = blockIdx.x * blockDim.x + threadIdx.x;
     if (query >= query_count) {
         return;
     }
 
     const float* row =
-        logits + static_cast<std::size_t>(query) * candidate_class_count;
+        logits + static_cast<std::size_t>(query) * candidate_slot_count;
     float maximum = row[Batching::kLocalAtomNoReferenceTarget];
-    for (int candidate_class = 1;
-         candidate_class < candidate_class_count;
-         ++candidate_class) {
-        if (isCausalCandidateClass(
+    for (int candidate_slot = 1;
+         candidate_slot < candidate_slot_count;
+         ++candidate_slot) {
+        if (isCausalCandidateSlot(
                 query,
-                candidate_class,
+                candidate_slot,
                 query_positions,
                 query_types,
                 row_type_candidate_offsets,
@@ -158,17 +156,17 @@ __global__ void kernelLocalAtomRetrievalLossForward(
                 candidate_count,
                 type_count,
                 sequence_length)) {
-            maximum = fmaxf(maximum, row[candidate_class]);
+            maximum = fmaxf(maximum, row[candidate_slot]);
         }
     }
 
     float exponential_sum = 0.0f;
-    for (int candidate_class = 0;
-         candidate_class < candidate_class_count;
-         ++candidate_class) {
-        if (isCausalCandidateClass(
+    for (int candidate_slot = 0;
+         candidate_slot < candidate_slot_count;
+         ++candidate_slot) {
+        if (isCausalCandidateSlot(
                 query,
-                candidate_class,
+                candidate_slot,
                 query_positions,
                 query_types,
                 row_type_candidate_offsets,
@@ -176,13 +174,13 @@ __global__ void kernelLocalAtomRetrievalLossForward(
                 candidate_count,
                 type_count,
                 sequence_length)) {
-            exponential_sum += expf(row[candidate_class] - maximum);
+            exponential_sum += expf(row[candidate_slot] - maximum);
         }
     }
 
     const int target = targets[query];
-    if (target < 0 || target >= candidate_class_count ||
-        !isCausalCandidateClass(
+    if (target < 0 || target >= candidate_slot_count ||
+        !isCausalCandidateSlot(
             query,
             target,
             query_positions,
@@ -216,21 +214,21 @@ __global__ void kernelLocalAtomRetrievalLossBackward(
     int candidate_count,
     int type_count,
     int sequence_length,
-    int candidate_class_count) {
+    int candidate_slot_count) {
     const int query = blockIdx.x * blockDim.x + threadIdx.x;
     if (query >= query_count) {
         return;
     }
 
     const float* row =
-        logits + static_cast<std::size_t>(query) * candidate_class_count;
+        logits + static_cast<std::size_t>(query) * candidate_slot_count;
     float maximum = row[Batching::kLocalAtomNoReferenceTarget];
-    for (int candidate_class = 1;
-         candidate_class < candidate_class_count;
-         ++candidate_class) {
-        if (isCausalCandidateClass(
+    for (int candidate_slot = 1;
+         candidate_slot < candidate_slot_count;
+         ++candidate_slot) {
+        if (isCausalCandidateSlot(
                 query,
-                candidate_class,
+                candidate_slot,
                 query_positions,
                 query_types,
                 row_type_candidate_offsets,
@@ -238,17 +236,17 @@ __global__ void kernelLocalAtomRetrievalLossBackward(
                 candidate_count,
                 type_count,
                 sequence_length)) {
-            maximum = fmaxf(maximum, row[candidate_class]);
+            maximum = fmaxf(maximum, row[candidate_slot]);
         }
     }
 
     float exponential_sum = 0.0f;
-    for (int candidate_class = 0;
-         candidate_class < candidate_class_count;
-         ++candidate_class) {
-        if (isCausalCandidateClass(
+    for (int candidate_slot = 0;
+         candidate_slot < candidate_slot_count;
+         ++candidate_slot) {
+        if (isCausalCandidateSlot(
                 query,
-                candidate_class,
+                candidate_slot,
                 query_positions,
                 query_types,
                 row_type_candidate_offsets,
@@ -256,7 +254,7 @@ __global__ void kernelLocalAtomRetrievalLossBackward(
                 candidate_count,
                 type_count,
                 sequence_length)) {
-            exponential_sum += expf(row[candidate_class] - maximum);
+            exponential_sum += expf(row[candidate_slot] - maximum);
         }
     }
 
@@ -265,14 +263,14 @@ __global__ void kernelLocalAtomRetrievalLossBackward(
     const float scale = grad_loss[0] / static_cast<float>(query_count);
     const int target = targets[query];
     float* gradient_row =
-        grad_logits + static_cast<std::size_t>(query) * candidate_class_count;
+        grad_logits + static_cast<std::size_t>(query) * candidate_slot_count;
 
-    for (int candidate_class = 0;
-         candidate_class < candidate_class_count;
-         ++candidate_class) {
-        if (!isCausalCandidateClass(
+    for (int candidate_slot = 0;
+         candidate_slot < candidate_slot_count;
+         ++candidate_slot) {
+        if (!isCausalCandidateSlot(
                 query,
-                candidate_class,
+                candidate_slot,
                 query_positions,
                 query_types,
                 row_type_candidate_offsets,
@@ -283,23 +281,23 @@ __global__ void kernelLocalAtomRetrievalLossBackward(
             continue;
         }
         const float probability =
-            expf(row[candidate_class] - maximum) * inverse_sum;
+            expf(row[candidate_slot] - maximum) * inverse_sum;
         const float target_indicator =
-            candidate_class == target ? 1.0f : 0.0f;
+            candidate_slot == target ? 1.0f : 0.0f;
         atomicAdd(
-            gradient_row + candidate_class,
+            gradient_row + candidate_slot,
             scale * (probability - target_indicator));
     }
 }
 
 struct LocalAtomRetrievalLossGradFn final : public GradFn {
-    const Tensor* logits_ = nullptr;
+    const float* logits_data_ = nullptr;
     std::shared_ptr<Tensor> logits_gradient_;
     int query_count_ = 0;
     int candidate_count_ = 0;
     int type_count_ = 0;
     int sequence_length_ = 0;
-    int candidate_class_count_ = 0;
+    int candidate_slot_count_ = 0;
 
     LocalAtomRetrievalLossGradFn() {
         op_name = "LocalAtomRetrievalLoss";
@@ -308,14 +306,14 @@ struct LocalAtomRetrievalLossGradFn final : public GradFn {
     void captureInput(
         Tensor& logits,
         const Batching::BatchPayload& payload,
-        int candidate_class_count,
+        int candidate_slot_count,
         cudaStream_t stream) {
-        logits_ = &logits;
+        logits_data_ = logits.data;
         query_count_ = payload.localAtomQueryCount();
         candidate_count_ = payload.localAtomCandidateCount();
         type_count_ = Tokenizer::kAtomTypeCount;
         sequence_length_ = payload.max_seq_len;
-        candidate_class_count_ = candidate_class_count;
+        candidate_slot_count_ = candidate_slot_count;
         logits_gradient_ = capture_input_gradient(
             logits,
             stream,
@@ -336,7 +334,7 @@ struct LocalAtomRetrievalLossGradFn final : public GradFn {
             throw std::runtime_error(
                 "LocalAtomRetrievalLossGradFn::apply: stream/payload/bindings are required");
         }
-        if (!logits_ || !logits_gradient_) {
+        if (!logits_data_ || !logits_gradient_) {
             throw std::runtime_error(
                 "LocalAtomRetrievalLossGradFn::apply: logits handles are unavailable");
         }
@@ -354,15 +352,14 @@ struct LocalAtomRetrievalLossGradFn final : public GradFn {
         if (backward_payload->localAtomQueryCount() != query_count_ ||
             backward_payload->localAtomCandidateCount() != candidate_count_ ||
             backward_payload->max_seq_len != sequence_length_ ||
-            expectedCandidateClassCount(
+            expectedCandidateSlotCount(
                 *backward_payload,
                 "LocalAtomRetrievalLossGradFn::apply") !=
-                candidate_class_count_) {
+                candidate_slot_count_) {
             throw std::runtime_error(
                 "LocalAtomRetrievalLossGradFn::apply: backward geometry differs from forward");
         }
 
-        logits_->require("LocalAtomRetrievalLossGradFn::apply logits");
         logits_gradient_->require(
             "LocalAtomRetrievalLossGradFn::apply logits_gradient");
         kernelLocalAtomRetrievalLossBackward<<<
@@ -370,7 +367,7 @@ struct LocalAtomRetrievalLossGradFn final : public GradFn {
             kQueryBlockSize,
             0,
             stream>>>(
-            logits_->data,
+            logits_data_,
             grad_output.data,
             backward_bindings->d_local_atom_query_targets,
             backward_bindings->d_local_atom_query_positions,
@@ -382,7 +379,7 @@ struct LocalAtomRetrievalLossGradFn final : public GradFn {
             candidate_count_,
             type_count_,
             sequence_length_,
-            candidate_class_count_);
+            candidate_slot_count_);
         checkCuda(
             cudaGetLastError(),
             "LocalAtomRetrievalLossGradFn::apply kernel");
@@ -398,14 +395,14 @@ struct LocalAtomRetrievalLossGradFn final : public GradFn {
     void release_saved() override {
         GradFn::release_saved();
         logits_gradient_.reset();
-        logits_ = nullptr;
+        logits_data_ = nullptr;
     }
 };
 
 } // namespace
 
 Tensor LocalAtomRetrievalLoss(
-    Tensor& logits,
+    Forward::ModelForwardOutputs& forward_outputs,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream) {
@@ -416,6 +413,7 @@ Tensor LocalAtomRetrievalLoss(
     payload.validate(caller);
 
     const int query_count = payload.localAtomQueryCount();
+    Tensor& logits = forward_outputs.local_atom_retrieval_logits;
     Tensor loss = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, 1),
         query_count > 0 && logits.requires_grad,
@@ -432,13 +430,13 @@ Tensor LocalAtomRetrievalLoss(
             std::string(caller) + ": logits must be 2D");
     }
     const auto logits_shape = logits.shape.as_2d();
-    const int candidate_class_count =
-        expectedCandidateClassCount(payload, caller);
+    const int candidate_slot_count =
+        expectedCandidateSlotCount(payload, caller);
     if (logits_shape.rows != query_count ||
-        logits_shape.cols != candidate_class_count) {
+        logits_shape.cols != candidate_slot_count) {
         throw std::runtime_error(
             std::string(caller) +
-            ": logits must be [localAtomQueryCount, candidate_class_count]");
+            ": logits must be [localAtomQueryCount, candidate_slot_count]");
     }
 
     kernelLocalAtomRetrievalLossForward<<<
@@ -457,13 +455,13 @@ Tensor LocalAtomRetrievalLoss(
         payload.localAtomCandidateCount(),
         Tokenizer::kAtomTypeCount,
         payload.max_seq_len,
-        candidate_class_count);
-    checkCuda(cudaGetLastError(), caller);
+        candidate_slot_count);
+        checkCuda(cudaGetLastError(), caller);
 
     if (logits.requires_grad) {
         loss.is_leaf = false;
         auto grad_fn = std::make_shared<LocalAtomRetrievalLossGradFn>();
-        grad_fn->captureInput(logits, payload, candidate_class_count, stream);
+        grad_fn->captureInput(logits, payload, candidate_slot_count, stream);
         loss.grad_fn = std::move(grad_fn);
     }
     return loss;

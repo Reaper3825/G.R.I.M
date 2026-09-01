@@ -328,13 +328,14 @@ public:
     // BCE-with-logits saves its own sigmoid probabilities for backward; this
     // remains the ordinary graph input connecting loss to full-vocabulary logits.
     Tensor atom_insertion_decision_logits;
-    // Candidate keys supplied by the independent selector pipeline. Core model
-    // forward does not derive these from NumberEncoder.
-    Tensor selector_candidate_keys; // [num_pool_atoms, d_model]
-    // Arg/option selector head: [total_tokens, num_pool_atoms] selection logits over
-    // the candidate atom-entry pool (out-of-row-window candidates masked to -inf).
-    // Empty until the independent selector pipeline materializes keys and logits.
-    Tensor selector_logits;
+    // Sequence-local retrieval signals derived from the final encoder output.
+    // Query rows gather typed opening positions. Candidate rows mean-pool the
+    // payload-authored content positions of each first complete local value.
+    // The logits axis is NO_REFERENCE plus local candidate slots within the
+    // query's already-selected [row, AtomType] bank.
+    Tensor local_atom_query_embeddings;     // [localAtomQueryCount, d_model]
+    Tensor local_atom_candidate_embeddings; // [localAtomCandidateCount, d_model]
+    Tensor local_atom_retrieval_logits;      // [localAtomQueryCount, candidate_slot_count]
 
     // Contextual numeric-placeholder slot-seed state. ModelForwardOutputs is
     // the sole owner of every buffer referenced by SlotSeedEncoder backward.
@@ -415,8 +416,9 @@ public:
         atom_insertion_left_projected = Tensor();
         atom_insertion_right_contextual_states = Tensor();
         atom_insertion_left_contextual_states = Tensor();
-        selector_candidate_keys = Tensor();
-        selector_logits = Tensor();
+        local_atom_retrieval_logits = Tensor();
+        local_atom_candidate_embeddings = Tensor();
+        local_atom_query_embeddings = Tensor();
         // Reverse graph order keeps non-owning backward caches alive until
         // their consumer GradFns have been released.
         slot_seeds = Tensor();
@@ -524,8 +526,15 @@ public:
         reportTensor(
             "atom_insertion_decision_logits",
             atom_insertion_decision_logits);
-        reportTensor("selector_candidate_keys", selector_candidate_keys);
-        reportTensor("selector_logits", selector_logits);
+        reportTensor(
+            "local_atom_query_embeddings",
+            local_atom_query_embeddings);
+        reportTensor(
+            "local_atom_candidate_embeddings",
+            local_atom_candidate_embeddings);
+        reportTensor(
+            "local_atom_retrieval_logits",
+            local_atom_retrieval_logits);
         reportTensor("slot_seed_contextual_input", slot_seed_contextual_input);
         reportTensor(
             "slot_seed_hidden_pre_activation",

@@ -59,6 +59,11 @@ struct BatchResult {
     float loss = 0.0f;
     float text_loss = 0.0f;
     float selector_loss = 0.0f;
+    float local_atom_retrieval_loss_raw = 0.0f;
+    float local_atom_retrieval_loss = 0.0f;
+    float weight_local_atom_retrieval = 0.0f;
+    int local_atom_retrieval_queries = 0;
+    int local_atom_reference_targets = 0;
     float grad_rms = 0.0f;
     bool grad_rms_valid = false;
     float learning_rate = 0.0f;

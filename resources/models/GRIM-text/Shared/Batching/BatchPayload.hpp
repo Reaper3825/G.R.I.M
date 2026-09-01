@@ -72,6 +72,10 @@ struct BatchPayload {
     // This is runtime payload state, not application-config wiring.
     bool EnableAtomIdentification = false;
 
+    // Compiled-model feature gate carried onto the realized batch so metadata
+    // materialization and forward validation share one explicit contract.
+    bool local_atom_retrieval_enabled = false;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // IDENTITY (from BatchAssignment — carried through, not recomputed)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -269,6 +273,11 @@ struct BatchPayload {
     const uint8_t* atomAuxTargetMaskForRow(std::size_t row) const;
 
     void validate(const char* caller) const {
+        if (EnableAtomIdentification && local_atom_retrieval_enabled) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": atom insertion and local atom retrieval payload modes are mutually exclusive");
+        }
         if (batch_size <= 0) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.batch_size=" +
@@ -769,7 +778,7 @@ struct BatchPayload {
             }
         }
         if (ownsHostInputData() && !isInferenceDecode() &&
-            !EnableAtomIdentification) {
+            !EnableAtomIdentification && local_atom_retrieval_enabled) {
             if (seq_local_atom_tables.size() !=
                 static_cast<std::size_t>(batch_size)) {
                 throw std::runtime_error(
@@ -817,11 +826,11 @@ struct BatchPayload {
             for (std::size_t i = 1;
                  i < local_atom_candidate_content_offsets.size();
                  ++i) {
-                if (local_atom_candidate_content_offsets[i] <
+                if (local_atom_candidate_content_offsets[i] <=
                     local_atom_candidate_content_offsets[i - 1]) {
                     throw std::runtime_error(
                         std::string(caller) +
-                        ": local candidate content offsets are not monotonic");
+                        ": each local candidate must own a non-empty content-position segment");
                 }
             }
             for (std::size_t i = 1;
@@ -918,7 +927,7 @@ struct BatchPayload {
                    local_atom_reference_target_count != 0) {
             throw std::runtime_error(
                 std::string(caller) +
-                ": inference decode payload must not carry compact local atom metadata");
+                ": payload must not carry compact local atom retrieval metadata");
         }
         const std::size_t pool_entries = static_cast<std::size_t>(num_pool_atoms);
         auto requirePoolChannelSize =
@@ -1069,9 +1078,8 @@ struct BatchPayload {
  * @param vocab_size     Model token-space width for target validation
  * @param batch_size         Fixed training batch size / row capacity
  * @param max_cached_seq_len GPU cache sequence length capacity
- * @param selector_enabled   Legacy selector feature gate. Sequence-local atom
- *                           metadata is materialized unconditionally for the
- *                           ordinary LM path because it is part of the batch ABI.
+ * @param local_atom_retrieval_enabled Compiled feature gate controlling
+ *                           sequence-local retrieval metadata materialization.
  * @return Complete BatchPayload ready for downstream consumption
  */
 BatchPayload buildBatchPayload(
@@ -1081,7 +1089,7 @@ BatchPayload buildBatchPayload(
     const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t batch_size,
     size_t max_cached_seq_len,
-    bool selector_enabled);
+    bool local_atom_retrieval_enabled);
 
 /**
  * Build a validated single-row inference payload. Prefill mode consumes strict
@@ -1102,7 +1110,7 @@ BatchPayload buildInferenceBatchPayload(
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,
-    bool selector_enabled,
+    bool local_atom_retrieval_enabled,
     BatchPayloadMode mode = BatchPayloadMode::InferencePrefill);
 
 /** Build a single-token inference decode geometry payload. */

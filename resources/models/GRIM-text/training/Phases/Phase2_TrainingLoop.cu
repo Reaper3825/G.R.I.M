@@ -161,6 +161,9 @@ struct ProcessBatchStepStateClearScope {
     GRIM::Autograd::AutogradLossState& loss_state;
 
     ~ProcessBatchStepStateClearScope() {
+        // Release the scalar consumer root before clearing the retained forward
+        // tensors that feed its GradFn graph.
+        loss_state.clear();
         forward_outputs.clear();
     }
 
@@ -535,6 +538,8 @@ void runOptimizerWindowFromEpoch(
         tel_input.should_step       = true;
         tel_input.text_loss         = result.text_loss;
         tel_input.selector_loss     = result.selector_loss;
+        tel_input.local_atom_retrieval_loss =
+            result.local_atom_retrieval_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
         tel_input.batch_idx         = batch_idx;
         tel_input.global_step       = ctx.global_step;
@@ -605,7 +610,7 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Batching::BatchDeviceBindings& bindings,
     uint64_t batch_idx,
-    bool emit_selector_logits)
+    bool emit_local_atom_retrieval)
 {
     GRIM::Forward::ModelForwardRequest request{};
     request.config = &config;
@@ -620,7 +625,7 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/true,
         /*enable_dropout=*/true,
-        /*emit_selector_logits=*/emit_selector_logits};
+        /*emit_local_atom_retrieval=*/emit_local_atom_retrieval};
     return request;
 }
 
@@ -723,6 +728,7 @@ BatchResult processBatch(
         payload,
         stream);
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
+    const auto model_hp = GRIM::HyperParameters::modelHP(ctx.config);
     const auto& model_config = ctx.config;
 
     const auto forward_topology = validateTrainingForwardInputs(
@@ -748,7 +754,10 @@ BatchResult processBatch(
             payload,
             train_bindings,
             plan.batch_idx,
-            /*emit_selector_logits=*/false);
+            /*emit_local_atom_retrieval=*/
+                model_hp.local_atom_retrieval_enabled &&
+                !payload.EnableAtomIdentification &&
+                payload.localAtomQueryCount() > 0);
 
     if constexpr (GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS &&
                   GRIM::VerboseLogging::ENABLE_GPU_ALLOCATION_LEDGER) {
@@ -884,6 +893,16 @@ BatchResult processBatch(
     result.loss = loss_result.loss_value;
     result.text_loss = loss_result.text_loss;
     result.selector_loss = loss_result.selector_loss;
+    result.local_atom_retrieval_loss_raw =
+        loss_result.local_atom_retrieval_loss_raw;
+    result.local_atom_retrieval_loss =
+        loss_result.local_atom_retrieval_loss;
+    result.weight_local_atom_retrieval =
+        loss_result.weight_local_atom_retrieval;
+    result.local_atom_retrieval_queries =
+        loss_result.local_atom_retrieval_queries;
+    result.local_atom_reference_targets =
+        loss_result.local_atom_reference_targets;
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
 
@@ -1117,6 +1136,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
     auto& training_state = ctx.requireTrainingState("runValidation");
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
+    const auto model_hp = GRIM::HyperParameters::modelHP(ctx.config);
     const auto& model_config = ctx.config;
 
     // Match the training loss composition so the validation number is comparable.
@@ -1175,7 +1195,10 @@ ValidationResult runValidation(TrainingContext& ctx) {
         forward_request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*enable_dropout=*/false,
-            /*emit_selector_logits=*/false};
+            /*emit_local_atom_retrieval=*/
+                model_hp.local_atom_retrieval_enabled &&
+                !val_payload.EnableAtomIdentification &&
+                val_payload.localAtomQueryCount() > 0};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
         Internal::logMeanPoolHistogram(

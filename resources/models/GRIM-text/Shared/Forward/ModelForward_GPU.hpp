@@ -49,9 +49,11 @@ struct ModelForwardGraphPolicy {
     // autograd edges to durable parameters.
     bool connect_parameter_graph = false;
     bool enable_dropout = false;
-    // Reserved request bit for selector-logit materialization. Candidate-key
-    // generation is not owned by the core model forward.
-    bool emit_selector_logits = false;
+    // Materialize sequence-local retrieval signals and logits on
+    // ModelForwardOutputs. Inference prefill uses this to seed session-owned
+    // candidate banks; training leaves it false until the auxiliary loss is
+    // intentionally composed into the training root.
+    bool emit_local_atom_retrieval = false;
 };
 
 struct ModelForwardRequest {

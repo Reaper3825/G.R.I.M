@@ -6,7 +6,8 @@
 //  DeviceBuffers, AuxiliaryBatchViews, and all sub-module function 
 //  declarations) was DEAD CODE. The production loss path is:
 //
-//    BatchPayload + LossConfigHP → AutogradContext → computeAutogradLoss() → unified_loss()
+//    BatchPayload + LossConfigHP → AutogradContext → computeAutogradLoss()
+//      → primary loss + optional weighted LocalAtomRetrievalLoss
 //
 //  Functions removed:
 //    - computeLossTerms()

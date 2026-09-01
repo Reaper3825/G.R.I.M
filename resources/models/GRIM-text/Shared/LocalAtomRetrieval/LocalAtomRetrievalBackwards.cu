@@ -69,7 +69,7 @@ __global__ void kernelQueryAndNoReferenceBackward(
     int type_count,
     int sequence_length,
     int retrieval_dim,
-    int class_count,
+    int candidate_slot_count,
     float score_scale) {
     const std::size_t index =
         static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -92,7 +92,7 @@ __global__ void kernelQueryAndNoReferenceBackward(
     const int candidate_begin = row_type_candidate_offsets[bank];
     const int candidate_end = row_type_candidate_offsets[bank + 1];
     const float* grad_row =
-        grad_logits + static_cast<std::size_t>(query) * class_count;
+        grad_logits + static_cast<std::size_t>(query) * candidate_slot_count;
 
     float gradient = grad_row[0] * type_no_reference_key[
         static_cast<std::size_t>(type) * retrieval_dim + feature];
@@ -131,12 +131,12 @@ __global__ void kernelCandidateBackward(
     int type_count,
     int sequence_length,
     int retrieval_dim,
-    int class_count,
+    int candidate_slot_count,
     float score_scale) {
     const std::size_t index =
         static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const std::size_t row_width =
-        static_cast<std::size_t>(class_count) * retrieval_dim;
+        static_cast<std::size_t>(candidate_slot_count) * retrieval_dim;
     const std::size_t count =
         static_cast<std::size_t>(query_count) * row_width;
     if (index >= count) {
@@ -168,7 +168,7 @@ __global__ void kernelCandidateBackward(
     }
 
     const float gradient = grad_logits[
-        static_cast<std::size_t>(query) * class_count + local_class] *
+        static_cast<std::size_t>(query) * candidate_slot_count + local_class] *
         query_embeddings[
             static_cast<std::size_t>(query) * retrieval_dim + feature];
     atomicAdd(
@@ -181,8 +181,8 @@ __global__ void kernelCandidateBackward(
 
 static void localAtomRetrievalBackwards(
     const Tensor& grad_logits,
-    const Tensor& query_embeddings,
-    const Tensor& candidate_embeddings,
+    const float* query_embeddings,
+    const float* candidate_embeddings,
     const Tensor& type_no_reference_key,
     Tensor* grad_query_embeddings,
     Tensor* grad_candidate_embeddings,
@@ -192,7 +192,7 @@ static void localAtomRetrievalBackwards(
     int type_count,
     int sequence_length,
     int retrieval_dim,
-    int class_count,
+    int candidate_slot_count,
     const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream) {
     constexpr const char* caller = "LocalAtomRetrievalBackwards";
@@ -200,31 +200,28 @@ static void localAtomRetrievalBackwards(
         throw std::runtime_error(std::string(caller) + ": stream is NULL");
     }
     grad_logits.require(caller);
-    query_embeddings.require(caller);
-    candidate_embeddings.require(caller);
     type_no_reference_key.require(caller);
+    if (!query_embeddings || !candidate_embeddings) {
+        throw std::runtime_error(
+            std::string(caller) + ": borrowed embedding data is NULL");
+    }
     if (!grad_logits.shape.is_2d_layout() ||
-        !query_embeddings.shape.is_2d_layout() ||
-        !candidate_embeddings.shape.is_2d_layout() ||
         !type_no_reference_key.shape.is_2d_layout()) {
         throw std::runtime_error(
             std::string(caller) + ": all retrieval tensors must be 2D");
     }
     const auto grad_shape = grad_logits.shape.as_2d();
-    const auto query_shape = query_embeddings.shape.as_2d();
-    const auto candidate_shape = candidate_embeddings.shape.as_2d();
     const auto no_reference_shape = type_no_reference_key.shape.as_2d();
-    if (grad_shape.rows != query_count || grad_shape.cols != class_count ||
-        query_shape.rows != query_count || query_shape.cols != retrieval_dim ||
-        candidate_shape.rows != candidate_count ||
-        candidate_shape.cols != retrieval_dim ||
+    if (grad_shape.rows != query_count ||
+        grad_shape.cols != candidate_slot_count ||
         no_reference_shape.rows != type_count ||
         no_reference_shape.cols != retrieval_dim) {
         throw std::runtime_error(
             std::string(caller) + ": retrieval tensor shape mismatch");
     }
     if (query_count <= 0 || candidate_count <= 0 || type_count <= 0 ||
-        sequence_length <= 0 || retrieval_dim <= 0 || class_count <= 1) {
+        sequence_length <= 0 || retrieval_dim <= 0 ||
+        candidate_slot_count <= 1) {
         throw std::runtime_error(
             std::string(caller) + ": invalid saved retrieval geometry");
     }
@@ -271,8 +268,8 @@ static void localAtomRetrievalBackwards(
             0,
             stream>>>(
             grad_logits.data,
-            query_embeddings.data,
-            candidate_embeddings.data,
+            query_embeddings,
+            candidate_embeddings,
             type_no_reference_key.data,
             bindings.d_local_atom_query_positions,
             bindings.d_local_atom_query_types,
@@ -287,7 +284,7 @@ static void localAtomRetrievalBackwards(
             type_count,
             sequence_length,
             retrieval_dim,
-            class_count,
+            candidate_slot_count,
             score_scale);
         checkCuda(cudaGetLastError(), "LocalAtomRetrievalBackwards query");
     }
@@ -295,14 +292,14 @@ static void localAtomRetrievalBackwards(
     if (grad_candidate_embeddings) {
         const std::size_t candidate_work_count =
             static_cast<std::size_t>(query_count) *
-            class_count * retrieval_dim;
+            candidate_slot_count * retrieval_dim;
         kernelCandidateBackward<<<
             blocksFor(candidate_work_count, caller),
             kBlockSize,
             0,
             stream>>>(
             grad_logits.data,
-            query_embeddings.data,
+            query_embeddings,
             bindings.d_local_atom_query_positions,
             bindings.d_local_atom_query_types,
             bindings.d_local_atom_row_type_candidate_offsets,
@@ -313,17 +310,187 @@ static void localAtomRetrievalBackwards(
             type_count,
             sequence_length,
             retrieval_dim,
-            class_count,
+            candidate_slot_count,
             score_scale);
         checkCuda(cudaGetLastError(), "LocalAtomRetrievalBackwards candidates");
     }
 }
 
-LocalAtomRetrievalGradFn::LocalAtomRetrievalGradFn() {
-    op_name = "LocalAtomRetrievalForward";
-}
+namespace {
 
-void LocalAtomRetrievalGradFn::captureInputs(
+struct LocalAtomRetrievalGradFn final : GradFn {
+    LocalAtomRetrievalGradFn() {
+        op_name = "LocalAtomRetrievalForward";
+    }
+
+    void captureInputs(
+        Tensor& query_embeddings,
+        Tensor& candidate_embeddings,
+        ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+        int query_count,
+        int candidate_count,
+        int type_count,
+        int sequence_length,
+        int retrieval_dim,
+        int candidate_slot_count,
+        cudaStream_t stream) {
+        constexpr const char* caller =
+            "LocalAtomRetrievalGradFn::captureInputs";
+        query_embeddings.require(caller);
+        candidate_embeddings.require(caller);
+        if (!query_embeddings.shape.is_2d_layout() ||
+            !candidate_embeddings.shape.is_2d_layout()) {
+            throw std::runtime_error(
+                std::string(caller) + ": embeddings must be 2D");
+        }
+        const auto query_shape = query_embeddings.shape.as_2d();
+        const auto candidate_shape = candidate_embeddings.shape.as_2d();
+        if (query_count <= 0 || candidate_count <= 0 || type_count <= 0 ||
+            sequence_length <= 0 || retrieval_dim <= 0 ||
+            candidate_slot_count <= 1 ||
+            query_shape.rows != query_count ||
+            query_shape.cols != retrieval_dim ||
+            candidate_shape.rows != candidate_count ||
+            candidate_shape.cols != retrieval_dim) {
+            throw std::runtime_error(
+                std::string(caller) + ": invalid retrieval geometry");
+        }
+
+        query_embeddings_data_ = query_embeddings.data;
+        candidate_embeddings_data_ = candidate_embeddings.data;
+        parameter_registry_ = &parameter_registry;
+        query_count_ = query_count;
+        candidate_count_ = candidate_count;
+        type_count_ = type_count;
+        sequence_length_ = sequence_length;
+        retrieval_dim_ = retrieval_dim;
+        candidate_slot_count_ = candidate_slot_count;
+
+        auto& type_no_reference_key =
+            parameter_registry.requireLocalAtomRetrievalParameters(caller)
+                .type_no_reference_key;
+        if (query_embeddings.requires_grad) {
+            query_embeddings_gradient_ = capture_input_gradient(
+                query_embeddings, stream,
+                "LocalAtomRetrievalGradFn::captureInputs queries");
+        }
+        if (candidate_embeddings.requires_grad) {
+            candidate_embeddings_gradient_ = capture_input_gradient(
+                candidate_embeddings, stream,
+                "LocalAtomRetrievalGradFn::captureInputs candidates");
+        }
+        if (type_no_reference_key.requires_grad) {
+            type_no_reference_key_gradient_ = capture_input_gradient(
+                type_no_reference_key, stream,
+                "LocalAtomRetrievalGradFn::captureInputs no_reference_key");
+        }
+    }
+
+    void apply_impl(
+        const Tensor& grad_output,
+        cudaStream_t stream,
+        const Batching::BatchPayload* backward_payload,
+        const Batching::BatchDeviceBindings* backward_bindings) override {
+        setCurrentGradFnOp("LocalAtomRetrievalBackwards", this);
+        if (applied) {
+            return;
+        }
+        applied = true;
+        if (!backward_payload || !backward_bindings) {
+            throw std::runtime_error(
+                "LocalAtomRetrievalGradFn::apply: backward batch data is NULL");
+        }
+        if (!query_embeddings_data_ || !candidate_embeddings_data_ ||
+            !parameter_registry_) {
+            throw std::runtime_error(
+                "LocalAtomRetrievalGradFn::apply: borrowed owner data is NULL");
+        }
+        backward_payload->validate("LocalAtomRetrievalGradFn::apply");
+        if (backward_payload->localAtomQueryCount() != query_count_ ||
+            backward_payload->localAtomCandidateCount() != candidate_count_ ||
+            backward_payload->max_seq_len != sequence_length_ ||
+            backward_bindings->local_atom_query_count != query_count_ ||
+            backward_bindings->local_atom_candidate_count != candidate_count_) {
+            throw std::runtime_error(
+                "LocalAtomRetrievalGradFn::apply: backward batch geometry differs from forward");
+        }
+
+        auto& type_no_reference_key =
+            parameter_registry_->requireLocalAtomRetrievalParameters(
+                "LocalAtomRetrievalGradFn::apply")
+                .type_no_reference_key;
+        if (type_no_reference_key_gradient_ &&
+            type_no_reference_key.grad() !=
+                type_no_reference_key_gradient_.get()) {
+            throw std::runtime_error(
+                "LocalAtomRetrievalGradFn::apply: registry parameter gradient owner changed since forward");
+        }
+        localAtomRetrievalBackwards(
+            grad_output,
+            query_embeddings_data_,
+            candidate_embeddings_data_,
+            type_no_reference_key,
+            query_embeddings_gradient_.get(),
+            candidate_embeddings_gradient_.get(),
+            type_no_reference_key_gradient_.get(),
+            query_count_,
+            candidate_count_,
+            type_count_,
+            sequence_length_,
+            retrieval_dim_,
+            candidate_slot_count_,
+            *backward_bindings,
+            stream);
+
+        if (query_embeddings_gradient_) {
+            propagate_input_gradient(
+                query_embeddings_gradient_, stream, backward_payload,
+                backward_bindings,
+                "LocalAtomRetrievalGradFn::apply queries");
+        }
+        if (candidate_embeddings_gradient_) {
+            propagate_input_gradient(
+                candidate_embeddings_gradient_, stream, backward_payload,
+                backward_bindings,
+                "LocalAtomRetrievalGradFn::apply candidates");
+        }
+        if (type_no_reference_key_gradient_) {
+            propagate_input_gradient(
+                type_no_reference_key_gradient_, stream, backward_payload,
+                backward_bindings,
+                "LocalAtomRetrievalGradFn::apply no_reference_key");
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        query_embeddings_gradient_.reset();
+        candidate_embeddings_gradient_.reset();
+        type_no_reference_key_gradient_.reset();
+        query_embeddings_data_ = nullptr;
+        candidate_embeddings_data_ = nullptr;
+        parameter_registry_ = nullptr;
+    }
+
+private:
+    const float* query_embeddings_data_ = nullptr;
+    const float* candidate_embeddings_data_ = nullptr;
+    const ::ParameterRegistry::StartupParameterRegistry*
+        parameter_registry_ = nullptr;
+    std::shared_ptr<Tensor> query_embeddings_gradient_;
+    std::shared_ptr<Tensor> candidate_embeddings_gradient_;
+    std::shared_ptr<Tensor> type_no_reference_key_gradient_;
+    int query_count_ = 0;
+    int candidate_count_ = 0;
+    int type_count_ = 0;
+    int sequence_length_ = 0;
+    int retrieval_dim_ = 0;
+    int candidate_slot_count_ = 0;
+};
+
+} // namespace
+
+std::shared_ptr<GradFn> makeLocalAtomRetrievalGradFn(
     Tensor& query_embeddings,
     Tensor& candidate_embeddings,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -332,135 +499,21 @@ void LocalAtomRetrievalGradFn::captureInputs(
     int type_count,
     int sequence_length,
     int retrieval_dim,
-    int class_count,
+    int candidate_slot_count,
     cudaStream_t stream) {
-    query_embeddings_ = &query_embeddings;
-    candidate_embeddings_ = &candidate_embeddings;
-    parameter_registry_ = &parameter_registry;
-    query_count_ = query_count;
-    candidate_count_ = candidate_count;
-    type_count_ = type_count;
-    sequence_length_ = sequence_length;
-    retrieval_dim_ = retrieval_dim;
-    class_count_ = class_count;
-
-    auto& type_no_reference_key =
-        parameter_registry.requireLocalAtomRetrievalParameters(
-            "LocalAtomRetrievalGradFn::captureInputs")
-            .type_no_reference_key;
-
-    if (query_embeddings.requires_grad) {
-        query_embeddings_gradient_ = capture_input_gradient(
-            query_embeddings,
-            stream,
-            "LocalAtomRetrievalGradFn::captureInputs queries");
-    }
-    if (candidate_embeddings.requires_grad) {
-        candidate_embeddings_gradient_ = capture_input_gradient(
-            candidate_embeddings,
-            stream,
-            "LocalAtomRetrievalGradFn::captureInputs candidates");
-    }
-    if (type_no_reference_key.requires_grad) {
-        type_no_reference_key_gradient_ = capture_input_gradient(
-            type_no_reference_key,
-            stream,
-            "LocalAtomRetrievalGradFn::captureInputs no_reference_key");
-    }
-}
-
-void LocalAtomRetrievalGradFn::apply_impl(
-    const Tensor& grad_output,
-    cudaStream_t stream,
-    const Batching::BatchPayload* backward_payload,
-    const Batching::BatchDeviceBindings* backward_bindings) {
-    setCurrentGradFnOp("LocalAtomRetrievalBackwards", this);
-    if (applied) {
-        return;
-    }
-    applied = true;
-    if (!backward_payload) {
-        throw std::runtime_error(
-            "LocalAtomRetrievalGradFn::apply: backward_payload is NULL");
-    }
-    if (!backward_bindings) {
-        throw std::runtime_error(
-            "LocalAtomRetrievalGradFn::apply: backward_bindings is NULL");
-    }
-    if (!query_embeddings_ || !candidate_embeddings_ || !parameter_registry_) {
-        throw std::runtime_error(
-            "LocalAtomRetrievalGradFn::apply: borrowed Tensor/registry handle is NULL");
-    }
-    backward_payload->validate("LocalAtomRetrievalGradFn::apply");
-    if (backward_payload->localAtomQueryCount() != query_count_ ||
-        backward_payload->localAtomCandidateCount() != candidate_count_ ||
-        backward_payload->max_seq_len != sequence_length_ ||
-        backward_bindings->local_atom_query_count != query_count_ ||
-        backward_bindings->local_atom_candidate_count != candidate_count_) {
-        throw std::runtime_error(
-            "LocalAtomRetrievalGradFn::apply: backward batch geometry differs from forward");
-    }
-
-    auto& type_no_reference_key =
-        parameter_registry_->requireLocalAtomRetrievalParameters(
-            "LocalAtomRetrievalGradFn::apply")
-            .type_no_reference_key;
-    if (type_no_reference_key_gradient_ &&
-        type_no_reference_key.grad() != type_no_reference_key_gradient_.get()) {
-        throw std::runtime_error(
-            "LocalAtomRetrievalGradFn::apply: registry parameter gradient owner changed since forward");
-    }
-    localAtomRetrievalBackwards(
-        grad_output,
-        *query_embeddings_,
-        *candidate_embeddings_,
-        type_no_reference_key,
-        query_embeddings_gradient_.get(),
-        candidate_embeddings_gradient_.get(),
-        type_no_reference_key_gradient_.get(),
-        query_count_,
-        candidate_count_,
-        type_count_,
-        sequence_length_,
-        retrieval_dim_,
-        class_count_,
-        *backward_bindings,
+    auto grad_fn = std::make_shared<LocalAtomRetrievalGradFn>();
+    grad_fn->captureInputs(
+        query_embeddings,
+        candidate_embeddings,
+        parameter_registry,
+        query_count,
+        candidate_count,
+        type_count,
+        sequence_length,
+        retrieval_dim,
+        candidate_slot_count,
         stream);
-
-    if (query_embeddings_gradient_) {
-        propagate_input_gradient(
-            query_embeddings_gradient_,
-            stream,
-            backward_payload,
-            backward_bindings,
-            "LocalAtomRetrievalGradFn::apply queries");
-    }
-    if (candidate_embeddings_gradient_) {
-        propagate_input_gradient(
-            candidate_embeddings_gradient_,
-            stream,
-            backward_payload,
-            backward_bindings,
-            "LocalAtomRetrievalGradFn::apply candidates");
-    }
-    if (type_no_reference_key_gradient_) {
-        propagate_input_gradient(
-            type_no_reference_key_gradient_,
-            stream,
-            backward_payload,
-            backward_bindings,
-            "LocalAtomRetrievalGradFn::apply no_reference_key");
-    }
-}
-
-void LocalAtomRetrievalGradFn::release_saved() {
-    GradFn::release_saved();
-    query_embeddings_gradient_.reset();
-    candidate_embeddings_gradient_.reset();
-    type_no_reference_key_gradient_.reset();
-    query_embeddings_ = nullptr;
-    candidate_embeddings_ = nullptr;
-    parameter_registry_ = nullptr;
+    return grad_fn;
 }
 
 } // namespace GRIM::LocalAtomRetrieval

@@ -188,10 +188,12 @@ BatchPayload buildBatchPayload(
     const GRIM::Tokenizer::TokenLayout&,
     size_t batch_size,
     size_t max_cached_seq_len,
-    bool)
+    bool local_atom_retrieval_enabled)
 {
     BatchPayload payload;
     payload.mode = BatchPayloadMode::Training;
+    payload.local_atom_retrieval_enabled =
+        local_atom_retrieval_enabled;
 
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 1: Identity — carry forward from assignment
@@ -542,7 +544,9 @@ BatchPayload buildBatchPayload(
     }
 
     materializeCompactAtomOpenings(payload, "buildBatchPayload");
-    materializeLocalAtomSelectionMetadata(payload, "buildBatchPayload");
+    if (payload.local_atom_retrieval_enabled) {
+        materializeLocalAtomSelectionMetadata(payload, "buildBatchPayload");
+    }
 
     // ═════════════════════════════════════════════════════════════════════════
     // Typed-span rows are excluded from LM supervision by the authored mask.
@@ -590,7 +594,7 @@ BatchPayload buildInferenceBatchPayload(
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,
-    bool,
+    bool local_atom_retrieval_enabled,
     BatchPayloadMode mode)
 {
     const char* caller = "buildInferenceBatchPayload";
@@ -650,6 +654,8 @@ BatchPayload buildInferenceBatchPayload(
     BatchPayload payload = makeInferenceBasePayload(
         seq_len, vocab_size, batch_capacity, max_cached_seq_len,
         mode, caller);
+    payload.local_atom_retrieval_enabled =
+        local_atom_retrieval_enabled;
 
     payload.input_ids = token_ids;
     payload.target_ids.assign(static_cast<size_t>(seq_len), -1);
@@ -666,7 +672,9 @@ BatchPayload buildInferenceBatchPayload(
 
     if (mode == BatchPayloadMode::InferencePrefill) {
         materializeCompactAtomOpenings(payload, caller);
-        materializeLocalAtomSelectionMetadata(payload, caller);
+        if (payload.local_atom_retrieval_enabled) {
+            materializeLocalAtomSelectionMetadata(payload, caller);
+        }
     }
     payload.validate(caller);
     return payload;

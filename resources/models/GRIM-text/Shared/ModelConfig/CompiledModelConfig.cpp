@@ -20,8 +20,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 5;
-constexpr std::uint32_t kSupportedSemanticVersion = 4;
+constexpr std::uint32_t kSupportedSchemaVersion = 6;
+constexpr std::uint32_t kSupportedSemanticVersion = 5;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -335,6 +335,13 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
         throw std::runtime_error(
             "compiled atom-insertion model requires non-causal attention and max_seq_len > 1");
     }
+    if (f.local_atom_retrieval_enabled &&
+        (f.atom_insertion_enabled || !f.attention.causal_mask ||
+         !c.tokenizer.enable_atom_reasoning)) {
+        throw std::runtime_error(
+            "compiled local-atom retrieval requires causal attention, atom "
+            "reasoning metadata, and the ordinary language-model path");
+    }
     if (f.execution_block) {
         const auto& e = *f.execution_block;
         requireBiasParent(e.decode_bias_enabled, "execution_block.decode_bias");
@@ -393,6 +400,8 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     add(f.lm_head.mlp_enabled, CompiledModelCapability::LmHeadMlp);
     add(f.use_atom_data, CompiledModelCapability::AtomData);
     add(f.atom_insertion_enabled, CompiledModelCapability::AtomInsertion);
+    add(f.local_atom_retrieval_enabled,
+        CompiledModelCapability::LocalAtomRetrieval);
     if (expected != c.required_capabilities) {
         throw std::runtime_error("compiled required-capability vector does not match model features");
     }
@@ -505,7 +514,8 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     std::vector<std::uint8_t> capability_bytes;
     capability_bytes.reserve(capabilities->size() * 2u);
     for (const auto raw : *capabilities) {
-        if (raw == 0 || raw > static_cast<std::uint16_t>(CompiledModelCapability::AtomInsertion)) {
+        if (raw == 0 || raw > static_cast<std::uint16_t>(
+                                  CompiledModelCapability::LocalAtomRetrieval)) {
             throw std::runtime_error("model config contains an unknown required capability");
         }
         result.required_capabilities.push_back(static_cast<CompiledModelCapability>(raw));
@@ -536,6 +546,8 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         copyFloats(d->pbm_rope_inv_freq())};
 
     result.features.atom_insertion_enabled = f->atom_insertion_enabled();
+    result.features.local_atom_retrieval_enabled =
+        f->local_atom_retrieval_enabled();
     result.features.use_atom_data = f->use_atom_data();
     result.features.atom_embedding_dim = f->atom_embedding_dim();
     result.features.bias = {f->bias()->use_bias(), f->bias()->attention_qkv(),

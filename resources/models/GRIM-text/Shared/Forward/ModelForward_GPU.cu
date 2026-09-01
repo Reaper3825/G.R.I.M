@@ -14,6 +14,7 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../AtomInsertion/AtomInsertionForward.hpp"
+#include "../LocalAtomRetrieval/LocalAtomRetrievalForward.hpp"
 #include "../InferenceState/KvCacheState_GPU.hpp"
 #include "../CudaAllocUtils.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
@@ -199,6 +200,7 @@ void ModelForwardRequest::validate(const char* caller) const {
     (void)parameter_registry->requireEmbeddingParameters(caller);
     (void)parameter_registry->requireLmHeadParameters(caller);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*config);
+    const auto model_hp = HyperParameters::modelHP(*config);
     const auto atom_boundary_hp =
         HyperParameters::atomInsertionBoundaryProjectionHP(*config);
     if (lm_head_hp.atom_insertion_enabled != atom_boundary_hp.enabled) {
@@ -212,6 +214,13 @@ void ModelForwardRequest::validate(const char* caller) const {
             std::string(caller) +
             ": BatchPayload.EnableAtomIdentification does not match the compiled "
             "atom_insertion_enabled model semantic");
+    }
+    if (payload && payload->local_atom_retrieval_enabled !=
+                       model_hp.local_atom_retrieval_enabled) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": BatchPayload.local_atom_retrieval_enabled does not match the "
+            "compiled model semantic");
     }
     if (atom_boundary_hp.enabled) {
         (void)parameter_registry->requireAtomInsertionBoundaryParameters(caller);
@@ -238,6 +247,24 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!stream) throw std::runtime_error(std::string(caller) + ": stream is NULL");
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
+    if (graph.emit_local_atom_retrieval) {
+        if (!model_hp.local_atom_retrieval_enabled) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": local atom retrieval was requested for a model that does not enable it");
+        }
+        (void)parameter_registry->requireLocalAtomRetrievalParameters(caller);
+        if (atom_boundary_hp.enabled || payload->EnableAtomIdentification) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": local atom retrieval requires the ordinary language-model payload");
+        }
+        if (kv_cache && !payload->isInferencePrefill()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": full-sequence local atom assembly is available only during KV-cache prefill");
+        }
+    }
     (void)graphPolicyName(graph);
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
@@ -565,6 +592,17 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs.encoder_output_tensor.is_leaf = false;
         forward_outputs.encoder_output_tensor.stream = request.stream;
         forward_outputs.encoder_output_tensor.grad_fn = last.grad_fn;
+    }
+
+    if (request.graph.emit_local_atom_retrieval) {
+        LocalAtomRetrieval::LocalAtomRetrievalForward(
+            forward_outputs.encoder_output_tensor,
+            *request.parameter_registry,
+            payload,
+            *bindings,
+            connect_parameter_graph,
+            request.stream,
+            forward_outputs);
     }
 
     const GRIM::LMHeadParameterTensors* lm_head_parameter_ptr = &lm_head_parameters;

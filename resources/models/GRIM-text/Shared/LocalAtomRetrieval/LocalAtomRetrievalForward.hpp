@@ -7,6 +7,8 @@
 #include "../Batching/BatchDeviceBindings.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
+#include "../Forward/ModelForwardOutputs.hpp"
+#include "../UnigramByte/TokenLayout.hpp"
 
 #include <cuda_runtime.h>
 
@@ -14,32 +16,41 @@ namespace ParameterRegistry {
 struct StartupParameterRegistry;
 }
 
+namespace GRIM {
+struct LocalAtomRetrievalInferenceState;
+}
+
 namespace GRIM::LocalAtomRetrieval {
 
-// Pre-encoded inputs use the compact payload ordering:
+// Derives and commits the complete retrieval signal path to ModelForwardOutputs:
 //
-//   query_embeddings     [payload.localAtomQueryCount(), retrieval_dim]
-//   candidate_embeddings [payload.localAtomCandidateCount(), retrieval_dim]
+//   query embeddings     = gather encoder rows at local_atom_query_positions
+//   candidate embeddings = mean encoder rows over each candidate's ragged
+//                          local_atom_candidate_content_positions segment
+//   logits               = causal dot-product selector scores
 //
-// Candidate row c corresponds directly to
-// bindings.d_local_atom_candidate_first_close_positions[c]. Query banks are
-// resolved from the payload-authored query position/type and row/type offsets;
-// no second padded layout is accepted or synthesized here.
-//
-// The caller owns query_embeddings and candidate_embeddings through backward.
-// LocalAtomRetrievalGradFn borrows their forward data and owns no saved copies.
-// The learned NO_REFERENCE keys are resolved through the root parameter
-// registry; this compute API does not accept or own a weight bundle.
-//
-// Returns logits [payload.localAtomQueryCount(), class_count]. AtomType selects
-// the payload-authored row/type bank; it is not the class axis. Column 0 is
-// NO_REFERENCE and column local_index + 1 selects that local bank candidate.
-Tensor LocalAtomRetrievalForward(
-    Tensor& query_embeddings,
-    Tensor& candidate_embeddings,
+// BatchPayload owns host identities/geometry, BatchDeviceBindings owns no data
+// and supplies the uploaded metadata addresses, StartupParameterRegistry owns
+// the learned NO_REFERENCE keys, and ModelForwardOutputs is the sole active-step
+// owner of the three produced tensors.
+void LocalAtomRetrievalForward(
+    Tensor& encoder_output,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    cudaStream_t stream);
+    bool connect_parameter_graph,
+    cudaStream_t stream,
+    Forward::ModelForwardOutputs& forward_outputs);
+
+// Read-only KV-decode assembly. The current encoder row supplies the query and
+// GenerationState's retrieval state supplies the already-completed typed bank.
+// The same registry key and scaled-dot scoring primitive are used as above.
+void LocalAtomRetrievalDecodeForward(
+    Tensor& current_encoder_output,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const LocalAtomRetrievalInferenceState& inference_state,
+    Tokenizer::AtomType query_type,
+    cudaStream_t stream,
+    Forward::ModelForwardOutputs& forward_outputs);
 
 } // namespace GRIM::LocalAtomRetrieval

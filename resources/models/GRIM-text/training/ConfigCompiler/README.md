@@ -42,6 +42,13 @@ wrappers are not accepted.
 requires `causal_mask=false` and `max_seq_len > 1`; ordinary causal LM presets
 must author it as `false`.
 
+`local_atom_retrieval_enabled` selects the causal sequence-local typed-atom
+retrieval path across batching, parameter ownership, training, validation, and
+inference. It requires `causal_mask=true`,
+`tokenizer_enable_atom_reasoning=true`, and
+`atom_insertion_enabled=false`. Its training loss weight remains procedure
+configuration and is not part of the compiled model artifact.
+
 Artifact integrity is source-independent: SHA-256 and model-compatibility
 xxHash64 are computed over the serialized artifact after normalizing all three
 integrity values to zero. A loader can therefore verify a `.grimcfg` without

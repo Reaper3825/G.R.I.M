@@ -189,6 +189,15 @@ void initializeLocalAtomRetrievalSubsystem(
     const GRIM::Config::AiConfigSnapshot& model_cfg,
     uint64_t weight_init_seed,
     cudaStream_t init_stream) {
+    const auto model_hp = GRIM::HyperParameters::modelHP(model_cfg);
+    if (!model_hp.local_atom_retrieval_enabled) {
+        if (parameter_registry.getLocalAtomRetrievalParameters()) {
+            throw std::runtime_error(
+                "Startup::assembleGpuModel: LocalAtomRetrieval parameter owner "
+                "exists while the compiled feature is disabled");
+        }
+        return;
+    }
     const int d_model =
         GRIM::HyperParameters::snapshotTrainingConfigField<int>(
             model_cfg,

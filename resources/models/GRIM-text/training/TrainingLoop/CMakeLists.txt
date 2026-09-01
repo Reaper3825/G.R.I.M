@@ -436,9 +436,13 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/AtomInsertion/AtomInsertionDecode.cpp
     ../../Shared/AtomInsertion/AtomInsertionBoundaryProjection.cu
     ../../Shared/AtomInsertion/AtomInsertionForward.cu
+    ../../Shared/LocalAtomRetrieval/LocalAtomRetrievalForward.cu
+    ../../Shared/LocalAtomRetrieval/LocalAtomRetrievalBackwards.cu
+    ../../Shared/LocalAtomRetrieval/LocalAtomRetrievalLoss.cu
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
     ../../Shared/InferenceState/KvCacheState_GPU.cu
+    ../../Shared/InferenceState/LocalAtomRetrievalInferenceState.cu
     ../Autograd/AutogradContext.cu
     ../Autograd/AutogradTraining.cu
     ../Diagnostics/GradientConnectivityDiagnostic.cu

@@ -47,8 +47,13 @@ struct LossResult {
     float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
     float text_loss = 0.0f;          // Primary task loss (next-token CE or atom BCE)
     float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE)
+    float local_atom_retrieval_loss_raw = 0.0f; // Mean causal retrieval CE before weighting
+    float local_atom_retrieval_loss = 0.0f;     // Weighted contribution present in loss_value
     float weight_text = 1.0f;
+    float weight_local_atom_retrieval = 0.0f;
     int valid_tokens = 0;
+    int local_atom_retrieval_queries = 0;
+    int local_atom_reference_targets = 0;
     bool success = false;
     std::string error_message;
 };
@@ -182,8 +187,9 @@ AutogradContext initAutogradContext(
  * the host-side LossResult consumed by Phase2.
  * 
  * Computes the configured primary task loss (text CE or atom insertion BCE),
- * leaves the canonical loss Tensor on AutogradLossState for backward, and
- * returns decomposed host-side scalars to Phase2.
+ * adds the weighted local-atom retrieval CE for eligible ordinary-LM batches,
+ * leaves the single canonical total-loss Tensor on AutogradLossState for
+ * backward, and returns decomposed host-side scalars to Phase2.
  * 
  * @param ctx     Autograd context with logits populated by shared forward
  * @param payload Phase1-authored BatchPayload for this explicit loss boundary

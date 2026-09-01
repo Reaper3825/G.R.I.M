@@ -57,11 +57,20 @@ void runLossStatsDiagnostic(
 
         std::ostringstream eq;
         eq << "[BATCH_LOSS] total = "
-           << (atom_mode ? "atom_bce" : "text_ce") << "\n";
+           << (atom_mode ? "atom_bce" : "text_ce");
+        if (result.local_atom_retrieval_queries > 0) {
+            eq << " + " << result.weight_local_atom_retrieval
+               << " * local_atom_retrieval_ce";
+        }
+        eq << "\n";
         eq << "  valid_tokens=" << valid_tokens_eq << " vocab_size=" << payload.vocab_size << "\n";
         eq << "  EXPECTED random = " << expected_random_loss << "\n";
         eq << "  ACTUAL total = " << result.loss << "\n";
         eq << "  ACTUAL primary = " << result.text_loss << "\n";
+        eq << "  ACTUAL local_atom_retrieval_raw = "
+           << result.local_atom_retrieval_loss_raw << "\n";
+        eq << "  ACTUAL local_atom_retrieval_weighted = "
+           << result.local_atom_retrieval_loss << "\n";
         EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_COMPUTATION, -1, "BATCH_LOSS", eq.str().c_str());
     }
 
@@ -83,6 +92,15 @@ void runLossStatsDiagnostic(
                    << " text_loss_sum=" << formatScalar(text_loss_sum, 4)
                    << " primary_loss=" << formatScalar(result.text_loss, 4)
                    << " task=" << (atom_mode ? "atom_insertion" : "language_model")
+                   << " local_atom_retrieval_raw="
+                   << formatScalar(result.local_atom_retrieval_loss_raw, 4)
+                   << " local_atom_retrieval_weighted="
+                   << formatScalar(result.local_atom_retrieval_loss, 4)
+                   << " local_atom_retrieval_weight="
+                   << formatScalar(result.weight_local_atom_retrieval, 4)
+                   << " local_atom_queries=" << result.local_atom_retrieval_queries
+                   << " local_atom_reference_targets="
+                   << result.local_atom_reference_targets
                    << " selector=" << formatScalar(result.selector_loss, 4)
                    << " valid_tokens=" << valid_tokens
                    << " masked_tokens=" << masked_tokens

@@ -617,10 +617,21 @@ void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& par
 
 void registerLocalAtomRetrievalParameters(
     ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    Registrar& registrar) {
-    auto& parameters = parameter_registry.requireLocalAtomRetrievalParameters(
+    Registrar& registrar,
+    const GRIM::Config::AiConfigSnapshot& config) {
+    auto* parameters = parameter_registry.getLocalAtomRetrievalParameters();
+    const auto model_hp = GRIM::HyperParameters::modelHP(config);
+    if (!model_hp.local_atom_retrieval_enabled) {
+        if (parameters) {
+            throw std::runtime_error(
+                "[buildParameterGroups] LocalAtomRetrieval parameter owner "
+                "exists while config.local_atom_retrieval_enabled=false");
+        }
+        return;
+    }
+    auto& owner = parameter_registry.requireLocalAtomRetrievalParameters(
         "registerLocalAtomRetrievalParameters");
-    ParameterRegistry::registerLocalAtomRetrievalParameters(parameters, registrar);
+    ParameterRegistry::registerLocalAtomRetrievalParameters(owner, registrar);
 }
 
 void registerSlotSeedEncoderParameters(
@@ -1789,7 +1800,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
     registerNumberEncoderParameters(parameter_registry, registrar, config);
-    registerLocalAtomRetrievalParameters(parameter_registry, registrar);
+    registerLocalAtomRetrievalParameters(parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);

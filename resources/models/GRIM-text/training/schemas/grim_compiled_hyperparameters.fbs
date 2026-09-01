@@ -50,7 +50,8 @@ enum ModelCapability : ushort {
   SlotSeedEncoder = 11,
   LmHeadMlp = 12,
   AtomData = 13,
-  AtomInsertion = 14
+  AtomInsertion = 14,
+  LocalAtomRetrieval = 15
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +220,10 @@ table ModelFeatures {
   // Selects the separate full-context byte-gap atom-insertion model.
   // Appended to preserve the field IDs of the existing table members.
   atom_insertion_enabled:bool;
+
+  // Enables the causal sequence-local typed-atom retrieval path in training
+  // and inference. Appended to preserve existing ModelFeatures field IDs.
+  local_atom_retrieval_enabled:bool;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +257,7 @@ table TokenizerConfig {
 
 table CompiledModelHyperparameters {
   // FlatBuffer wire shape version implemented by the loader.
-  schema_version:uint32 = 5;
+  schema_version:uint32 = 6;
 
   // Identifies the formula/validation rules used to produce this artifact.
   // It is separate from schema_version because computations can change without

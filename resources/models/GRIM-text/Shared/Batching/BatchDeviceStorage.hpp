@@ -36,10 +36,13 @@ struct BatchDeviceStorage {
     Tensor atom_mask_tensor;
     Tensor atom_flags_tensor;
     Tensor atom_entry_ids_tensor;
+    // Retrieval-only storage is absent when the compiled model feature is off.
     Tensor token_local_atom_indices_tensor;
     Tensor token_to_slot_index_map_tensor;
     Tensor atom_positions_tensor;
     Tensor atom_types_tensor;
+    // Compact retrieval-only metadata buffers. These share this root batch
+    // owner and are never allocated by the retrieval forward/loss code.
     Tensor local_atom_query_positions_tensor;
     Tensor local_atom_query_types_tensor;
     Tensor local_atom_query_targets_tensor;

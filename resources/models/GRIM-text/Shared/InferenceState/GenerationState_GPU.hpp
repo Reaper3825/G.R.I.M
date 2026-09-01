@@ -8,17 +8,20 @@
 #ifdef USE_CUDA
 
 #include "../../Shared/InferenceState/KvCacheState_GPU.hpp"
+#include "../../Shared/InferenceState/LocalAtomRetrievalInferenceState.hpp"
 
 namespace GRIM {
 
 struct GenerationState {
-    // Session-scoped KV cache for autoregressive decode. Buffers are allocated
-    // lazily on first prefill and reused across decode steps; resetSession()
-    // re-zeroes the fill counter (host side) while keeping the buffers.
+    // Session-scoped state for autoregressive decode. Device buffers are
+    // allocated lazily on first prefill and reused across decode steps;
+    // resetSession() clears logical contents while retaining capacities.
     KvCacheState kv_cache;
+    LocalAtomRetrievalInferenceState local_atom_retrieval;
 
     void resetSession() {
         kv_cache.resetSession();
+        local_atom_retrieval.resetSession();
     }
 };
 

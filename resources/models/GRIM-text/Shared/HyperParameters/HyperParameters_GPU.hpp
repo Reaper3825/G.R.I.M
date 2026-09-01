@@ -369,6 +369,10 @@ struct LanguageModelConfig {
     // semantic is distinct from use_atom_data, which feeds ExecutionBlock.
     bool atom_insertion_enabled = false;
 
+    // Causal sequence-local typed-atom retrieval. This is a compiled model
+    // semantic shared by training, validation, and inference.
+    bool local_atom_retrieval_enabled = false;
+
     // Atom-data pipeline config (consumed by ExecutionBlock)
     bool use_atom_data = false;
     int atom_embedding_dim = 0;
@@ -605,6 +609,7 @@ struct LanguageModelConfig {
     float loss_entropy_reg_lambda = 0.0f;
     bool loss_class_balanced_enabled = false;
     float loss_class_balanced_beta = 0.0f;
+    float loss_local_atom_retrieval_weight = 0.0f;
 
     bool lm_head_centering_enabled = false;
     bool embedding_freeze_enabled = false;
@@ -1419,6 +1424,20 @@ inline void validateRootConfigDocument(
                                      ": atom_insertion_enabled=true requires max_seq_len > 1");
         }
     }
+    if (params.local_atom_retrieval_enabled) {
+        if (params.atom_insertion_enabled) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": local_atom_retrieval_enabled=true is incompatible with atom_insertion_enabled=true");
+        }
+        if (!params.causal_mask) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": local_atom_retrieval_enabled=true requires causal_mask=true");
+        }
+        if (!params.tokenizer_enable_atom_reasoning) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": local_atom_retrieval_enabled=true requires tokenizer_enable_atom_reasoning=true");
+        }
+    }
     validateParameterGroupPrecision(params.parameter_precision_embedding, "parameter_precision_embedding", caller);
     validateParameterGroupPrecision(params.parameter_precision_lm_head, "parameter_precision_lm_head", caller);
     validateParameterGroupPrecision(params.parameter_precision_attention, "parameter_precision_attention", caller);
@@ -1429,6 +1448,7 @@ inline void validateRootConfigDocument(
     validateNonNegativeFiniteFields(params, {
         validationField("loss_focal_gamma", &LanguageModelConfig::loss_focal_gamma),
         validationField("loss_entropy_reg_lambda", &LanguageModelConfig::loss_entropy_reg_lambda),
+        validationField("loss_local_atom_retrieval_weight", &LanguageModelConfig::loss_local_atom_retrieval_weight),
         validationField("weight_decay", &LanguageModelConfig::weight_decay)
     }, caller);
     if (params.loss_focal_enabled) {
@@ -1439,6 +1459,13 @@ inline void validateRootConfigDocument(
     if (params.loss_class_balanced_enabled) {
         validatePositiveFiniteFields(params, {
             validationField("loss_class_balanced_beta", &LanguageModelConfig::loss_class_balanced_beta)
+        }, caller);
+    }
+    if (params.local_atom_retrieval_enabled) {
+        validatePositiveFiniteFields(params, {
+            validationField(
+                "loss_local_atom_retrieval_weight",
+                &LanguageModelConfig::loss_local_atom_retrieval_weight)
         }, caller);
     }
     validateHalfOpenUnitIntervalFields(params, {
@@ -1827,6 +1854,7 @@ inline void applyCompiledModelConfig(
     params.lm_head_mlp_alpha = lm.mlp_alpha;
 
     params.atom_insertion_enabled = f.atom_insertion_enabled;
+    params.local_atom_retrieval_enabled = f.local_atom_retrieval_enabled;
     params.use_atom_data = f.use_atom_data;
     params.atom_embedding_dim = compiledU32ToInt(f.atom_embedding_dim, "features.atom_embedding_dim");
     params.execution_block_enabled = f.execution_block.has_value();
@@ -2021,6 +2049,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(loss_entropy_reg_lambda);
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_enabled);
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_beta);
+    GRIM_LOAD_CONFIG_FIELD(loss_local_atom_retrieval_weight);
     GRIM_LOAD_CONFIG_FIELD(loss_preference_enabled);
     GRIM_LOAD_CONFIG_FIELD(loss_preference_beta);
     GRIM_LOAD_CONFIG_FIELD(loss_distillation_enabled);
@@ -2516,6 +2545,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_insertion_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(local_atom_retrieval_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_embedding_dim);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
@@ -2719,6 +2749,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_entropy_reg_lambda);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_beta);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_local_atom_retrieval_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_centering_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_after_step);

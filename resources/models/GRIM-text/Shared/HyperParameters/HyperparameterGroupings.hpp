@@ -179,6 +179,8 @@ struct LossConfigHP {
 
     bool class_balanced_enabled = false;
     float class_balanced_beta = 0.0f;
+
+    float local_atom_retrieval_weight = 0.0f;
 };
 
 struct AutoStopHP {
@@ -525,6 +527,7 @@ struct ModelHP {
     float lm_head_mlp_alpha = 0.0f;
 
     bool atom_insertion_enabled = false;
+    bool local_atom_retrieval_enabled = false;
     int atom_embedding_dim = 0;
 
     bool execution_block_enabled = false;
@@ -715,6 +718,8 @@ inline LossConfigHP lossConfigHP(
     view.entropy_reg_lambda = hp.loss_entropy_reg_lambda;
     view.class_balanced_enabled = hp.loss_class_balanced_enabled;
     view.class_balanced_beta = hp.loss_class_balanced_beta;
+    view.local_atom_retrieval_weight =
+        hp.loss_local_atom_retrieval_weight;
     return view;
 }
 
@@ -1086,6 +1091,8 @@ inline LossConfigHP lossConfigHP(
     view.entropy_reg_lambda = snapshotTrainingConfigField<float>(snapshot, "loss_entropy_reg_lambda");
     view.class_balanced_enabled = snapshotTrainingConfigField<bool>(snapshot, "loss_class_balanced_enabled");
     view.class_balanced_beta = snapshotTrainingConfigField<float>(snapshot, "loss_class_balanced_beta");
+    view.local_atom_retrieval_weight = snapshotTrainingConfigField<float>(
+        snapshot, "loss_local_atom_retrieval_weight");
     return view;
 }
 
@@ -1320,6 +1327,8 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.lm_head_mlp_alpha = requireFloat("lm_head_mlp_alpha");
 
     view.atom_insertion_enabled = requireBool("atom_insertion_enabled");
+    view.local_atom_retrieval_enabled =
+        requireBool("local_atom_retrieval_enabled");
     view.atom_embedding_dim = requireInt("atom_embedding_dim");
 
     view.execution_block_enabled = requireBool("execution_block_enabled");

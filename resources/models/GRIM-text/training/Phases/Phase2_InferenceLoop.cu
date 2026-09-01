@@ -13,6 +13,8 @@
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/InferenceState/KvCacheState_GPU.hpp"
+#include "../../Shared/InferenceState/LocalAtomRetrievalInferenceState.hpp"
+#include "../../Shared/LocalAtomRetrieval/LocalAtomRetrievalForward.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/UnigramByte/SequenceLocalAtomTable.hpp"
@@ -125,7 +127,7 @@ std::vector<float> runAtomInsertionForward(
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/false,
         /*enable_dropout=*/false,
-        /*emit_selector_logits=*/false};
+        /*emit_local_atom_retrieval=*/false};
 
     auto forward_outputs =
         GRIM::Forward::executeModelForward(request, runtime_payload);
@@ -275,10 +277,14 @@ GRIM::GeneratedSequence generateOneSequence(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::PBM::PBMState& pbm,
     GRIM::Batching::BatchPayload& prompt_payload,
+    GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::HyperParameters::GenerationHP& cfg,
     GRIM::HyperParameters::GenerationStreamCallback* stream_callback)
 {
     validatePromptPayload(prompt_payload);
+    const auto model_hp = GRIM::HyperParameters::modelHP(config);
+    const bool local_atom_retrieval_enabled =
+        model_hp.local_atom_retrieval_enabled;
 
     const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
     const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
@@ -306,7 +312,6 @@ GRIM::GeneratedSequence generateOneSequence(
     auto generation_local_atom_table =
         std::make_shared<GRIM::Tokenizer::SequenceLocalAtomTable>(
             *prompt_payload.seq_local_atom_tables[0]);
-    prompt_payload.seq_local_atom_tables[0] = generation_local_atom_table;
 
     GRIM::GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
@@ -410,6 +415,11 @@ GRIM::GeneratedSequence generateOneSequence(
     kv_cache.ensureAllocated(num_layers, num_heads, num_kv_heads, head_dim, rotary_dim,
                              max_cached_seq_len, pbm.rope_inv_freq, stream);
     kv_cache.beginSession(stream);
+    GRIM::LocalAtomRetrievalInferenceState& retrieval_state =
+        generation_state.local_atom_retrieval;
+    if (local_atom_retrieval_enabled) {
+        retrieval_state.ensureAllocated(d_model, max_cached_seq_len, stream);
+    }
 
     std::shared_ptr<GRIM::Batching::BatchDeviceStorage> inference_device_storage;
 
@@ -418,6 +428,8 @@ GRIM::GeneratedSequence generateOneSequence(
         int n_rows = 0;
         int vocab = 0;
         std::vector<float> primary;  // [n_rows * vocab]
+        std::vector<float> current_encoder; // Decode row [d_model].
+        std::vector<float> local_retrieval; // [NO_REFERENCE, typed candidates].
         const float* primaryRow(int i) const {
             return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
         }
@@ -454,10 +466,31 @@ GRIM::GeneratedSequence generateOneSequence(
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*enable_dropout=*/false,
-            /*emit_selector_logits=*/false};
+            /*emit_local_atom_retrieval=*/
+                local_atom_retrieval_enabled &&
+                active_payload.isInferencePrefill()};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
         InferenceForwardScope inference_forward_scope{forward_outputs};
+
+        if (local_atom_retrieval_enabled &&
+            active_payload.isInferencePrefill()) {
+            retrieval_state.seedFromPrefill(
+                forward_outputs.local_atom_candidate_embeddings,
+                active_payload,
+                stream);
+        } else if (local_atom_retrieval_enabled && q_len == 1 &&
+                   GRIM::Tokenizer::isAtomOpenTokenId(
+                       active_payload.input_ids[0])) {
+            GRIM::LocalAtomRetrieval::LocalAtomRetrievalDecodeForward(
+                forward_outputs.encoder_output_tensor,
+                parameter_registry,
+                retrieval_state,
+                GRIM::Tokenizer::tokenIdToAtomType(
+                    active_payload.input_ids[0]),
+                stream,
+                forward_outputs);
+        }
 
         const auto& live_logits = forward_outputs.logits_tensor;
         if (!live_logits.data) {
@@ -481,6 +514,48 @@ GRIM::GeneratedSequence generateOneSequence(
         if (copy_err != cudaSuccess) {
             throw std::runtime_error("generateOneSequence: cudaMemcpyAsync primary logits failed: " +
                                      std::string(cudaGetErrorString(copy_err)));
+        }
+        if (active_payload.isInferenceDecode()) {
+            const auto encoder_shape =
+                forward_outputs.encoder_output_tensor.shape.as_2d();
+            if (encoder_shape.rows != q_len || encoder_shape.cols != d_model) {
+                throw std::runtime_error(
+                    "generateOneSequence: decode encoder output shape mismatch");
+            }
+            tail.current_encoder.resize(static_cast<std::size_t>(d_model));
+            copy_err = cudaMemcpyAsync(
+                tail.current_encoder.data(),
+                forward_outputs.encoder_output_tensor.data +
+                    static_cast<std::size_t>(q_len - 1) * d_model,
+                static_cast<std::size_t>(d_model) * sizeof(float),
+                cudaMemcpyDeviceToHost,
+                stream);
+            if (copy_err != cudaSuccess) {
+                throw std::runtime_error(
+                    "generateOneSequence: current encoder row copy failed: " +
+                    std::string(cudaGetErrorString(copy_err)));
+            }
+            if (forward_outputs.local_atom_retrieval_logits.data) {
+                const auto retrieval_shape =
+                    forward_outputs.local_atom_retrieval_logits.shape.as_2d();
+                if (retrieval_shape.rows != 1 || retrieval_shape.cols <= 0) {
+                    throw std::runtime_error(
+                        "generateOneSequence: decode retrieval logits shape mismatch");
+                }
+                tail.local_retrieval.resize(
+                    static_cast<std::size_t>(retrieval_shape.cols));
+                copy_err = cudaMemcpyAsync(
+                    tail.local_retrieval.data(),
+                    forward_outputs.local_atom_retrieval_logits.data,
+                    tail.local_retrieval.size() * sizeof(float),
+                    cudaMemcpyDeviceToHost,
+                    stream);
+                if (copy_err != cudaSuccess) {
+                    throw std::runtime_error(
+                        "generateOneSequence: retrieval logits copy failed: " +
+                        std::string(cudaGetErrorString(copy_err)));
+                }
+            }
         }
         cudaError_t sync_err = cudaStreamSynchronize(stream);
         if (sync_err != cudaSuccess) {
@@ -507,7 +582,7 @@ GRIM::GeneratedSequence generateOneSequence(
             generation_local_atom_table, local_indices,
             vocab_size, /*batch_capacity=*/1,
             /*max_cached_seq_len=*/feed_tokens.size(),
-            /*selector_enabled=*/false,
+            local_atom_retrieval_enabled,
             GRIM::Batching::BatchPayloadMode::InferenceDecode);
         return decode_payload;
     };
@@ -533,6 +608,14 @@ GRIM::GeneratedSequence generateOneSequence(
         }
     };
 
+    auto commitForcedToken = [&](int token_id) {
+        GRIM::Sampling::SampleResult forced{};
+        forced.token_id = token_id;
+        forced.probability = 1.0f;
+        forced.log_probability = 0.0f;
+        commitToken(forced);
+    };
+
     // Select the next token from a primary-logit row using the SAME pipeline +
     // pre-min_new_tokens EOS mask as the full-recompute decoder.
     auto selectFrom = [&](const TailLogits& tail, int tail_row,
@@ -550,6 +633,167 @@ GRIM::GeneratedSequence generateOneSequence(
                                      std::to_string(s.token_id) + ", vocab=" + std::to_string(vocab_size) + ")");
         }
         return s;
+    };
+
+    auto selectLocalRetrievalSlot = [&]
+        (const TailLogits& tail,
+         GRIM::Tokenizer::AtomType type,
+         int remaining_token_capacity) -> int {
+        const int candidate_count = retrieval_state.candidateCount(type);
+        if (tail.local_retrieval.size() !=
+            static_cast<std::size_t>(candidate_count + 1)) {
+            throw std::runtime_error(
+                "generateOneSequence: retrieval logit count disagrees with typed candidate bank");
+        }
+        if (!std::isfinite(tail.local_retrieval[0])) {
+            throw std::runtime_error(
+                "generateOneSequence: NO_REFERENCE logit is non-finite");
+        }
+
+        int best_slot = GRIM::Batching::kLocalAtomNoReferenceTarget;
+        float best_logit = tail.local_retrieval[0];
+        for (int local_index = 0; local_index < candidate_count;
+             ++local_index) {
+            const auto& content =
+                retrieval_state.candidateContentTokenIds(type, local_index);
+            const int replay_token_count =
+                static_cast<int>(content.size()) + 1; // matching CLOSE
+            if (replay_token_count > remaining_token_capacity) {
+                continue;
+            }
+            const float logit = tail.local_retrieval[
+                static_cast<std::size_t>(local_index + 1)];
+            if (!std::isfinite(logit)) {
+                throw std::runtime_error(
+                    "generateOneSequence: candidate retrieval logit is non-finite");
+            }
+            if (logit > best_logit) {
+                best_logit = logit;
+                best_slot = local_index + 1;
+            }
+        }
+        return best_slot;
+    };
+
+    auto processPendingLocalAtom = [&]
+        (const TailLogits& tail, std::size_t pending_sequence_index) {
+        if (!local_atom_retrieval_enabled) {
+            return;
+        }
+        if (tail.current_encoder.size() != static_cast<std::size_t>(d_model)) {
+            throw std::runtime_error(
+                "generateOneSequence: pending token encoder signal is unavailable");
+        }
+        const int token_id = sequence.token_ids[pending_sequence_index];
+
+        if (retrieval_state.inside_atom) {
+            const int expected_close =
+                GRIM::Tokenizer::atomTypeToCloseTokenId(
+                    retrieval_state.active_type);
+            if (retrieval_state.replaying_reference) {
+                if (token_id == expected_close) {
+                    retrieval_state.clearActiveSpan();
+                    return;
+                }
+                if (GRIM::Tokenizer::isAtomOpenTokenId(token_id) ||
+                    GRIM::Tokenizer::isAtomCloseTokenId(token_id)) {
+                    throw std::runtime_error(
+                        "generateOneSequence: replayed local atom contains an unexpected boundary");
+                }
+                return;
+            }
+
+            if (token_id == expected_close) {
+                if (retrieval_state.active_content_count <= 0 ||
+                    retrieval_state.active_content_token_ids.empty()) {
+                    throw std::runtime_error(
+                        "generateOneSequence: generated local atom has no content");
+                }
+                std::vector<float> mean_embedding(
+                    static_cast<std::size_t>(d_model));
+                const float inverse_count =
+                    1.0f / static_cast<float>(
+                        retrieval_state.active_content_count);
+                for (int feature = 0; feature < d_model; ++feature) {
+                    mean_embedding[static_cast<std::size_t>(feature)] =
+                        retrieval_state.active_embedding_sum[
+                            static_cast<std::size_t>(feature)] * inverse_count;
+                }
+
+                const std::string raw_text = tokenizer.decode(
+                    GRIM::Tokenizer::DecodeRequest(
+                        retrieval_state.active_content_token_ids));
+                const auto address = generation_local_atom_table->ticket(
+                    retrieval_state.active_type, raw_text);
+                const int local_index = static_cast<int>(address.local_index);
+                const int candidate_count = retrieval_state.candidateCount(
+                    retrieval_state.active_type);
+                if (local_index == candidate_count) {
+                    retrieval_state.appendCandidate(
+                        retrieval_state.active_type,
+                        local_index,
+                        mean_embedding,
+                        retrieval_state.active_content_token_ids,
+                        stream);
+                } else if (local_index < 0 || local_index > candidate_count) {
+                    throw std::runtime_error(
+                        "generateOneSequence: generated local atom table index is not dense");
+                }
+                sequence.token_local_atom_indices[
+                    retrieval_state.active_open_sequence_index] =
+                    address.local_index;
+                retrieval_state.clearActiveSpan();
+                return;
+            }
+
+            if (GRIM::Tokenizer::isAtomOpenTokenId(token_id) ||
+                GRIM::Tokenizer::isAtomCloseTokenId(token_id)) {
+                throw std::runtime_error(
+                    "generateOneSequence: generated local atom contains a nested or mismatched boundary");
+            }
+            if (retrieval_state.active_embedding_sum.empty()) {
+                retrieval_state.active_embedding_sum.assign(
+                    static_cast<std::size_t>(d_model), 0.0f);
+            }
+            for (int feature = 0; feature < d_model; ++feature) {
+                retrieval_state.active_embedding_sum[
+                    static_cast<std::size_t>(feature)] +=
+                    tail.current_encoder[static_cast<std::size_t>(feature)];
+            }
+            retrieval_state.active_content_token_ids.push_back(token_id);
+            ++retrieval_state.active_content_count;
+            return;
+        }
+
+        if (!GRIM::Tokenizer::isAtomOpenTokenId(token_id)) {
+            return;
+        }
+        const auto type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
+        const int remaining_token_capacity = std::min(
+            cfg.max_new_tokens - committedNewTokens(),
+            max_seq_len - static_cast<int>(sequence.token_ids.size()));
+        const int selected_slot = selectLocalRetrievalSlot(
+            tail, type, remaining_token_capacity);
+
+        retrieval_state.clearActiveSpan();
+        retrieval_state.inside_atom = true;
+        retrieval_state.active_type = type;
+        retrieval_state.active_open_sequence_index = pending_sequence_index;
+        if (selected_slot == GRIM::Batching::kLocalAtomNoReferenceTarget) {
+            retrieval_state.active_embedding_sum.assign(
+                static_cast<std::size_t>(d_model), 0.0f);
+            return;
+        }
+
+        const int local_index = selected_slot - 1;
+        sequence.token_local_atom_indices[pending_sequence_index] =
+            static_cast<std::uint32_t>(local_index);
+        retrieval_state.replaying_reference = true;
+        retrieval_state.forced_token_ids =
+            retrieval_state.candidateContentTokenIds(type, local_index);
+        retrieval_state.forced_token_ids.push_back(
+            GRIM::Tokenizer::atomTypeToCloseTokenId(type));
+        retrieval_state.forced_token_cursor = 0;
     };
 
     // ── Prefill: populate the cache from the prompt; read the last position. ──
@@ -581,9 +825,18 @@ GRIM::GeneratedSequence generateOneSequence(
         TailLogits tail = runCachedForward(decode_payload, /*n_tail=*/1);
         kv_cache.setSeqlen(cache_base + 1, stream);
 
-        GRIM::Sampling::SampleResult chosen =
-            selectFrom(tail, 0, committedNewTokens());
-        commitToken(chosen);
+        processPendingLocalAtom(tail, sequence.token_ids.size() - 1);
+
+        GRIM::Sampling::SampleResult chosen{};
+        if (local_atom_retrieval_enabled && retrieval_state.hasForcedToken()) {
+            chosen.token_id = retrieval_state.popForcedToken();
+            chosen.probability = 1.0f;
+            chosen.log_probability = 0.0f;
+            commitForcedToken(chosen.token_id);
+        } else {
+            chosen = selectFrom(tail, 0, committedNewTokens());
+            commitToken(chosen);
+        }
 
         if (chosen.token_id == cfg.eos_token_id &&
             committedNewTokens() >= cfg.min_new_tokens) {
@@ -601,6 +854,7 @@ GRIM::GeneratedSequence generateOneSequence(
 std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
     TrainingContext& ctx,
     GRIM::Batching::BatchPayload& prompt_payload,
+    GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     GRIM::HyperParameters::GenerationStreamCallback* stream_callback)
 {
@@ -622,7 +876,7 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
-        outputs.push_back(generateOneSequence(ctx.config, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, sequence_hp, stream_callback));
+        outputs.push_back(generateOneSequence(ctx.config, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, tokenizer, sequence_hp, stream_callback));
 
     }
     return outputs;
@@ -643,6 +897,9 @@ Phase2TextInferenceResult executePhase2TextInference(
     const bool atom_insertion_enabled =
         GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(model_config)
             .enabled;
+    const bool local_atom_retrieval_enabled =
+        GRIM::HyperParameters::modelHP(model_config)
+            .local_atom_retrieval_enabled;
     validateInferenceContext(ctx, !atom_insertion_enabled);
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "vocab_size");
     const int batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "batch_size");
@@ -720,10 +977,11 @@ Phase2TextInferenceResult executePhase2TextInference(
         vocab_size,
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),
-        /*selector_enabled=*/false);
+        local_atom_retrieval_enabled);
 
     const auto start_generation = std::chrono::high_resolution_clock::now();
-    auto generated = generatePayloadSequences(ctx, prompt_payload, generation_hp, nullptr);
+    auto generated = generatePayloadSequences(
+        ctx, prompt_payload, tokenizer, generation_hp, nullptr);
     const auto end_generation = std::chrono::high_resolution_clock::now();
     result.generation_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_generation - start_generation).count();

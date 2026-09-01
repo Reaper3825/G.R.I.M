@@ -41,6 +41,7 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
     const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views)
 {
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+    const auto model_hp = GRIM::HyperParameters::modelHP(ctx.config);
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
     const std::uint32_t actual_vocab_size = ctx.data.vocab_size;
     const auto layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
@@ -69,7 +70,7 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
         layout,
         static_cast<std::size_t>(fixed_shape.batch_size),
         static_cast<std::size_t>(fixed_shape.max_seq_len),
-        /*selector_enabled=*/false);
+        model_hp.local_atom_retrieval_enabled);
 }
 
 std::vector<GRIM::AtomInsertion::AtomInsertionExample>

@@ -72,6 +72,7 @@ struct GradientSignalExpectation {
 
 struct GradientVerificationActivity {
     bool text_loss_active = false;
+    bool local_atom_retrieval_active = false;
 };
 
 GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
@@ -184,6 +185,11 @@ GradientVerificationActivity detectActivity(const AutogradContext& ctx) {
     activity.text_loss_active = ctx.payload &&
         (ctx.payload->lm_valid_tokens > 0 ||
          ctx.payload->atom_insertion_valid_gap_count > 0);
+    activity.local_atom_retrieval_active =
+        ctx.payload &&
+        ctx.forward_outputs &&
+        ctx.payload->localAtomQueryCount() > 0 &&
+        ctx.forward_outputs->local_atom_retrieval_logits.data != nullptr;
     return activity;
 }
 
@@ -251,6 +257,14 @@ GradientVerificationSession::GradientVerificationSession(
                 capture(ffn.W2, "layer 0 ffnW2 (attn ablated)");
             }
         }
+    }
+    if (activity.local_atom_retrieval_active) {
+        auto& retrieval =
+            ctx.parameter_registry->requireLocalAtomRetrievalParameters(
+                "GradientVerificationSession");
+        capture(
+            retrieval.type_no_reference_key,
+            "local atom retrieval no-reference key");
     }
 
     GD_INFO("Captured " << impl_->expected.size()
@@ -383,6 +397,52 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
         }
     };
 
+    // Some valid retrieval batches contain only a single causal NO_REFERENCE
+    // slot. Their CE and numerical gradient are exactly zero, so connectivity
+    // is proven by leaf delivery and finite/stable storage rather than by a
+    // mandatory nonzero value.
+    auto requireStructuralGradientDelivery =
+        [&](Tensor& tensor, const std::string& label) {
+        requireAllocatedFinite(tensor, label);
+        if (!tensor.data || !tensor.has_grad() || !tensor.grad_data()) return;
+
+        auto& group = requireRegisteredGroup(tensor, label);
+        auto& verification = group.gradient_verification;
+        const uint64_t delivery_count = tensor.gradient_delivery_count();
+        if (!verification.observe_active_check(delivery_count)) {
+            GD_WARN(label << ".grad received no leaf-gradient delivery during this active backward"
+                    << " (active_check=" << verification.active_check_count
+                    << ", delivery_count=" << delivery_count << ")");
+            ok = false;
+            return;
+        }
+
+        if (impl_->require_current_microbatch_delta) {
+            const GradientSignalExpectation* expectation = impl_->find(label);
+            if (!expectation) {
+                GD_WARN(label << ".grad current-microbatch baseline is missing during accumulation verification");
+                ok = false;
+                return;
+            }
+            const GradientDeltaProbe probe =
+                probeGradientDelta(tensor, *expectation, ctx.stream);
+            if (!probe.comparable) {
+                GD_WARN(label << ".grad could not be compared against its pre-backward accumulation baseline"
+                        << probe.error_message);
+                ok = false;
+                return;
+            }
+            if (!probe.finite) {
+                GD_WARN(label << ".grad current-microbatch delta contains non-finite values (checked="
+                        << probe.checked << ", delta_rms=" << probe.delta_rms << ")");
+                ok = false;
+                return;
+            }
+            GD_INFO(label << ".grad received structural delivery; checked="
+                    << probe.checked << " delta_rms=" << probe.delta_rms);
+        }
+    };
+
     auto& embedding = ctx.parameter_registry->requireEmbeddingParameters(
         "GradientVerificationSession::verify");
     requireAllocatedFinite(embedding.token_weights, "embedding token_weights");
@@ -431,6 +491,25 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
         check_atom_parameter(
             atom_boundary.projection_bias,
             "atom insertion projection bias");
+    }
+
+    if (model_hp.local_atom_retrieval_enabled) {
+        auto& local_atom_retrieval =
+            ctx.parameter_registry->requireLocalAtomRetrievalParameters(
+                "GradientVerificationSession::verify");
+        if (activity.local_atom_retrieval_active) {
+            requireStructuralGradientDelivery(
+                local_atom_retrieval.type_no_reference_key,
+                "local atom retrieval no-reference key");
+        } else {
+            requireAllocatedFinite(
+                local_atom_retrieval.type_no_reference_key,
+                "local atom retrieval no-reference key");
+        }
+    } else if (ctx.parameter_registry->getLocalAtomRetrievalParameters()) {
+        throw std::runtime_error(
+            "GradientVerificationSession::verify: LocalAtomRetrieval parameter "
+            "owner exists while the compiled feature is disabled");
     }
 
     const int num_layers = model_hp.encoder_num_layers;
