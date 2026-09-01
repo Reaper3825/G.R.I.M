@@ -184,6 +184,26 @@ void initializeNumberEncoderSubsystem(
     }
 }
 
+void initializeLocalAtomRetrievalSubsystem(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::Config::AiConfigSnapshot& model_cfg,
+    uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    const int d_model =
+        GRIM::HyperParameters::snapshotTrainingConfigField<int>(
+            model_cfg,
+            "d_model");
+    GRIMText::Training::Startup::ModelRegistration::
+        initializeLocalAtomRetrievalParameterTensors(
+            parameter_registry,
+            d_model,
+            weight_init_seed + 70,
+            init_stream);
+    (void)parameter_registry.requireLocalAtomRetrievalParameters(
+        "Startup::assembleGpuModel.LocalAtomRetrieval");
+    std::cout << "LocalAtomRetrieval parameters created\n";
+}
+
 void initializeAtomInsertionSubsystem(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
@@ -559,6 +579,12 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             init_stream);
 
         initializeNumberEncoderSubsystem(
+            parameter_registry,
+            model_cfg,
+            weight_init_seed,
+            init_stream);
+
+        initializeLocalAtomRetrievalSubsystem(
             parameter_registry,
             model_cfg,
             weight_init_seed,

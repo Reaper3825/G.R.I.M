@@ -110,6 +110,12 @@ void initializeSelectorParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 
+void initializeLocalAtomRetrievalParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    int d_model,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream);
+
 void initializeSlotSeedEncoderParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::HyperParameters::SlotSeedEncoderConstructionHP& slot_seed_encoder_hp,

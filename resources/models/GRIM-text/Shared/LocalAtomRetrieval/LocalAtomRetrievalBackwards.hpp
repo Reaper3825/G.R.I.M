@@ -1,7 +1,7 @@
 #pragma once
 //======================================================//
 //  LocalAtomRetrievalBackwards.hpp
-//  Explicit backward primitive and GradFn for retrieval scoring.
+//  Autograd node for retrieval scoring.
 //======================================================//
 
 #include "../Batching/BatchDeviceBindings.hpp"
@@ -11,58 +11,25 @@
 
 #include <memory>
 
+namespace ParameterRegistry {
+struct StartupParameterRegistry;
+}
+
 namespace GRIM::LocalAtomRetrieval {
 
-struct LocalAtomRetrievalBackwardsArgs {
-    const Tensor& grad_logits;
-
-    // Borrowed forward data. The forward-output owner keeps these buffers live
-    // through backward; this primitive allocates and saves no private copies.
-    const float* query_embeddings = nullptr;
-    const float* candidate_embeddings = nullptr;
-    const float* type_no_reference_key = nullptr;
-
-    float* grad_query_embeddings = nullptr;
-    float* grad_candidate_embeddings = nullptr;
-    float* grad_type_no_reference_key = nullptr;
-
-    int query_count = 0;
-    int candidate_count = 0;
-    int type_count = 0;
-    int sequence_length = 0;
-    int retrieval_dim = 0;
-    int class_count = 0;
-};
-
-// Explicit Jacobian of LocalAtomRetrievalForward. Batch metadata remains owned
-// by the active payload upload and is borrowed through BatchDeviceBindings.
-void LocalAtomRetrievalBackwards(
-    const LocalAtomRetrievalBackwardsArgs& args,
-    const Batching::BatchDeviceBindings& bindings,
-    cudaStream_t stream);
-
 struct LocalAtomRetrievalGradFn final : public GradFn {
-    std::shared_ptr<Tensor> query_embeddings_gradient;
-    std::shared_ptr<Tensor> candidate_embeddings_gradient;
-    std::shared_ptr<Tensor> type_no_reference_key_gradient;
-
-    const float* query_embeddings_data = nullptr;
-    const float* candidate_embeddings_data = nullptr;
-    const float* type_no_reference_key_data = nullptr;
-
-    int query_count = 0;
-    int candidate_count = 0;
-    int type_count = 0;
-    int sequence_length = 0;
-    int retrieval_dim = 0;
-    int class_count = 0;
-
     LocalAtomRetrievalGradFn();
 
     void captureInputs(
         Tensor& query_embeddings,
         Tensor& candidate_embeddings,
-        Tensor& type_no_reference_key,
+        ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+        int query_count,
+        int candidate_count,
+        int type_count,
+        int sequence_length,
+        int retrieval_dim,
+        int class_count,
         cudaStream_t stream);
 
     void apply_impl(
@@ -72,6 +39,27 @@ struct LocalAtomRetrievalGradFn final : public GradFn {
         const Batching::BatchDeviceBindings* backward_bindings) override;
 
     void release_saved() override;
+
+private:
+    // Host-side borrowed handles only. Device addresses are resolved inside
+    // the CUDA implementation and never form part of this public header API.
+    const Tensor* query_embeddings_ = nullptr;
+    const Tensor* candidate_embeddings_ = nullptr;
+    const ::ParameterRegistry::StartupParameterRegistry* parameter_registry_ = nullptr;
+
+    // TensorContract-owned gradient carriers. Leaf parameter gradients remain
+    // owned by the root registry tensor; non-leaf activation gradients remain
+    // owned by the active autograd graph.
+    std::shared_ptr<Tensor> query_embeddings_gradient_;
+    std::shared_ptr<Tensor> candidate_embeddings_gradient_;
+    std::shared_ptr<Tensor> type_no_reference_key_gradient_;
+
+    int query_count_ = 0;
+    int candidate_count_ = 0;
+    int type_count_ = 0;
+    int sequence_length_ = 0;
+    int retrieval_dim_ = 0;
+    int class_count_ = 0;
 };
 
 } // namespace GRIM::LocalAtomRetrieval

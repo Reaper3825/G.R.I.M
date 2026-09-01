@@ -12,6 +12,8 @@
 //    - Encoder durable per-layer parameter tensor owner
 //    - NumberEncoder durable tensor owner
 //    - NumberEncoder parameter-group inventory
+//    - LocalAtomRetrieval durable tensor owner
+//    - LocalAtomRetrieval parameter-group inventory
 //    - SlotSeedEncoder durable tensor owner
 //    - SlotSeedEncoder parameter-group inventory
 //    - ExecutionBlock durable parameter tensor owner
@@ -90,6 +92,12 @@ struct NumberEncoderParameterTensors {
 // candidate-key space.
 struct SelectorParameterTensors {
     Tensor W_q;   // [d_model, d_model] query projection
+};
+
+// Sequence-local atom retrieval parameters. The retrieval compute path borrows
+// this tensor through StartupParameterRegistry and never owns model weights.
+struct LocalAtomRetrievalParameterTensors {
+    Tensor type_no_reference_key;  // [kAtomTypeCount, d_model]
 };
 
 // SlotSeedEncoder — contextual numeric-placeholder representation.
@@ -178,6 +186,8 @@ struct StartupParameterRegistry {
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
     std::unique_ptr<GRIM::NumberEncoderParameterTensors> number_encoder_parameters;
     std::unique_ptr<GRIM::SelectorParameterTensors> selector_parameters;
+    std::unique_ptr<GRIM::LocalAtomRetrievalParameterTensors>
+        local_atom_retrieval_parameters;
     std::unique_ptr<GRIM::SlotSeedEncoderParameterTensors> slot_seed_encoder_parameters;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
@@ -362,6 +372,36 @@ struct StartupParameterRegistry {
         return *selector_parameters;
     }
 
+    GRIM::LocalAtomRetrievalParameterTensors*
+    getLocalAtomRetrievalParameters() {
+        return local_atom_retrieval_parameters.get();
+    }
+
+    const GRIM::LocalAtomRetrievalParameterTensors*
+    getLocalAtomRetrievalParameters() const {
+        return local_atom_retrieval_parameters.get();
+    }
+
+    GRIM::LocalAtomRetrievalParameterTensors&
+    requireLocalAtomRetrievalParameters(const char* caller) {
+        if (!local_atom_retrieval_parameters) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": StartupParameterRegistry.local_atom_retrieval_parameters is NULL");
+        }
+        return *local_atom_retrieval_parameters;
+    }
+
+    const GRIM::LocalAtomRetrievalParameterTensors&
+    requireLocalAtomRetrievalParameters(const char* caller) const {
+        if (!local_atom_retrieval_parameters) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": StartupParameterRegistry.local_atom_retrieval_parameters is NULL");
+        }
+        return *local_atom_retrieval_parameters;
+    }
+
     GRIM::SlotSeedEncoderParameterTensors* getSlotSeedEncoderParameters() {
         return slot_seed_encoder_parameters.get();
     }
@@ -505,6 +545,9 @@ using EmbeddingTensorParameterSpec =
 using AtomInsertionBoundaryTensorParameterSpec =
     TensorParameterSpec<GRIM::AtomInsertionBoundaryParameterTensors>;
 
+using LocalAtomRetrievalTensorParameterSpec =
+    TensorParameterSpec<GRIM::LocalAtomRetrievalParameterTensors>;
+
 inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
     kEmbeddingTensorParameters = {{
         {"embedding", &GRIM::EmbeddingParameterTensors::token_weights,
@@ -551,6 +594,13 @@ inline constexpr std::array<NumberEncoderTensorParameterSpec, 10>
 inline constexpr std::array<SelectorTensorParameterSpec, 1>
     kSelectorTensorParameters = {{
         {"selector_W_q", &GRIM::SelectorParameterTensors::W_q,
+         GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
+    }};
+
+inline constexpr std::array<LocalAtomRetrievalTensorParameterSpec, 1>
+    kLocalAtomRetrievalTensorParameters = {{
+        {"local_atom_retrieval_type_no_reference_key",
+         &GRIM::LocalAtomRetrievalParameterTensors::type_no_reference_key,
          GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
     }};
 
@@ -770,6 +820,19 @@ inline void registerSelectorParameters(
     for (const auto& spec : kSelectorTensorParameters) {
         registrar.addTensor(spec.name,
                             selector_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            spec.layer);
+    }
+}
+
+template <typename RegistrarT>
+inline void registerLocalAtomRetrievalParameters(
+    GRIM::LocalAtomRetrievalParameterTensors& parameters,
+    RegistrarT& registrar) {
+    for (const auto& spec : kLocalAtomRetrievalTensorParameters) {
+        registrar.addTensor(spec.name,
+                            parameters.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);

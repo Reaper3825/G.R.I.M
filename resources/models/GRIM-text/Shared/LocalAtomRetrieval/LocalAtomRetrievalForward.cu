@@ -7,6 +7,7 @@
 #include "LocalAtomRetrievalBackwards.hpp"
 
 #include "../UnigramByte/TokenLayout.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 #include <cuda_runtime.h>
 
@@ -172,10 +173,10 @@ __global__ void kernelLocalAtomRetrievalForward(
 
 } // namespace
 
-LocalAtomRetrievalForwardOutputs LocalAtomRetrievalForward(
+Tensor LocalAtomRetrievalForward(
     Tensor& query_embeddings,
     Tensor& candidate_embeddings,
-    const LocalAtomRetrievalParameterTensors& parameters,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream) {
@@ -185,14 +186,15 @@ LocalAtomRetrievalForwardOutputs LocalAtomRetrievalForward(
     }
     payload.validate(caller);
     requireBindings(payload, bindings, caller);
+    auto& parameters =
+        parameter_registry.requireLocalAtomRetrievalParameters(caller);
 
-    LocalAtomRetrievalForwardOutputs outputs;
-    outputs.query_count = payload.localAtomQueryCount();
-    outputs.candidate_count = payload.localAtomCandidateCount();
-    if (outputs.query_count == 0) {
-        return outputs;
+    const int query_count = payload.localAtomQueryCount();
+    const int candidate_count = payload.localAtomCandidateCount();
+    if (query_count == 0) {
+        return {};
     }
-    if (outputs.candidate_count <= 0 || payload.max_seq_len <= 0) {
+    if (candidate_count <= 0 || payload.max_seq_len <= 0) {
         throw std::runtime_error(
             std::string(caller) + ": invalid compact retrieval geometry");
     }
@@ -207,11 +209,11 @@ LocalAtomRetrievalForwardOutputs LocalAtomRetrievalForward(
         caller);
 
     const int retrieval_dim = query_shape.cols;
-    if (retrieval_dim <= 0 || query_shape.rows != outputs.query_count) {
+    if (retrieval_dim <= 0 || query_shape.rows != query_count) {
         throw std::runtime_error(
             std::string(caller) + ": query embedding shape mismatch");
     }
-    if (candidate_shape.rows != outputs.candidate_count ||
+    if (candidate_shape.rows != candidate_count ||
         candidate_shape.cols != retrieval_dim) {
         throw std::runtime_error(
             std::string(caller) +
@@ -236,17 +238,15 @@ LocalAtomRetrievalForwardOutputs LocalAtomRetrievalForward(
         candidate_embeddings.requires_grad ||
         parameters.type_no_reference_key.requires_grad;
 
-    outputs.logits = Tensor::empty(
+    Tensor logits = Tensor::empty(
         TensorContract::TensorShape::make_LOGITS(
-            outputs.query_count, class_count),
+            query_count, class_count),
         requires_grad,
         stream,
         "local_atom_retrieval_logits");
-    outputs.class_count = class_count;
-    outputs.retrieval_dim = retrieval_dim;
 
     const std::size_t logit_count =
-        static_cast<std::size_t>(outputs.query_count) * class_count;
+        static_cast<std::size_t>(query_count) * class_count;
     kernelLocalAtomRetrievalForward<<<
         blocksFor(logit_count, caller), kBlockSize, 0, stream>>>(
         query_embeddings.data,
@@ -256,34 +256,34 @@ LocalAtomRetrievalForwardOutputs LocalAtomRetrievalForward(
         bindings.d_local_atom_query_types,
         bindings.d_local_atom_row_type_candidate_offsets,
         bindings.d_local_atom_candidate_first_close_positions,
-        outputs.logits.data,
-        outputs.query_count,
+        logits.data,
+        query_count,
         Tokenizer::kAtomTypeCount,
         payload.max_seq_len,
-        outputs.candidate_count,
+        candidate_count,
         retrieval_dim,
         class_count,
         1.0f / std::sqrt(static_cast<float>(retrieval_dim)));
     checkCuda(cudaGetLastError(), caller);
 
     if (requires_grad) {
-        outputs.logits.is_leaf = false;
+        logits.is_leaf = false;
         auto grad_fn = std::make_shared<LocalAtomRetrievalGradFn>();
-        grad_fn->query_count = outputs.query_count;
-        grad_fn->candidate_count = outputs.candidate_count;
-        grad_fn->type_count = Tokenizer::kAtomTypeCount;
-        grad_fn->sequence_length = payload.max_seq_len;
-        grad_fn->retrieval_dim = retrieval_dim;
-        grad_fn->class_count = class_count;
         grad_fn->captureInputs(
             query_embeddings,
             candidate_embeddings,
-            parameters.type_no_reference_key,
+            parameter_registry,
+            query_count,
+            candidate_count,
+            Tokenizer::kAtomTypeCount,
+            payload.max_seq_len,
+            retrieval_dim,
+            class_count,
             stream);
-        outputs.logits.grad_fn = std::move(grad_fn);
+        logits.grad_fn = std::move(grad_fn);
     }
 
-    return outputs;
+    return logits;
 }
 
 } // namespace GRIM::LocalAtomRetrieval

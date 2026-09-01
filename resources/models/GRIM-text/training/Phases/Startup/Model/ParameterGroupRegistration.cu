@@ -615,6 +615,14 @@ void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& par
     ParameterRegistry::registerSelectorParameters(selector_tensor_owner, registrar);
 }
 
+void registerLocalAtomRetrievalParameters(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    Registrar& registrar) {
+    auto& parameters = parameter_registry.requireLocalAtomRetrievalParameters(
+        "registerLocalAtomRetrievalParameters");
+    ParameterRegistry::registerLocalAtomRetrievalParameters(parameters, registrar);
+}
+
 void registerSlotSeedEncoderParameters(
     ParameterRegistry::StartupParameterRegistry& parameter_registry,
     Registrar& registrar,
@@ -1618,6 +1626,54 @@ void initializeSelectorParameterTensors(
              std::to_string(d_model) + ")");
 }
 
+void initializeLocalAtomRetrievalParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    int d_model,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!init_stream) {
+        throw std::runtime_error(
+            "initializeLocalAtomRetrievalParameterTensors: init_stream is NULL");
+    }
+    if (parameter_registry.getLocalAtomRetrievalParameters()) {
+        throw std::runtime_error(
+            "initializeLocalAtomRetrievalParameterTensors: registry owner is already initialized");
+    }
+    if (d_model <= 0) {
+        throw std::runtime_error(
+            "initializeLocalAtomRetrievalParameterTensors: d_model must be > 0, got " +
+            std::to_string(d_model));
+    }
+
+    auto params = std::make_unique<GRIM::LocalAtomRetrievalParameterTensors>();
+    params->type_no_reference_key = GRIM::Tensor::zeros(
+        {GRIM::Tokenizer::kAtomTypeCount, d_model},
+        init_stream,
+        "local_atom_retrieval.type_no_reference_key");
+    params->type_no_reference_key.requires_grad_();
+    params->type_no_reference_key.alloc_grad();
+    GRIM::Tensor::xavier_uniform_(
+        params->type_no_reference_key,
+        weight_init_seed,
+        init_stream);
+
+    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(
+                "initializeLocalAtomRetrievalParameterTensors: "
+                "cudaStreamSynchronize failed: ") +
+            cudaGetErrorString(sync_err));
+    }
+
+    parameter_registry.local_atom_retrieval_parameters = std::move(params);
+    emitInfo(
+        "[initializeLocalAtomRetrievalParameterTensors] Initialized registry-owned "
+        "NO_REFERENCE keys (atom_types=" +
+        std::to_string(GRIM::Tokenizer::kAtomTypeCount) +
+        ", d_model=" + std::to_string(d_model) + ")");
+}
+
 void initializeSlotSeedEncoderParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::HyperParameters::SlotSeedEncoderConstructionHP& slot_seed_encoder_hp,
@@ -1733,6 +1789,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
     registerNumberEncoderParameters(parameter_registry, registrar, config);
+    registerLocalAtomRetrievalParameters(parameter_registry, registrar);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);

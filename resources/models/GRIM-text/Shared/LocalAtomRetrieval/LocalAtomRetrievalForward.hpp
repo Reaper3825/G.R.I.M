@@ -10,25 +10,11 @@
 
 #include <cuda_runtime.h>
 
+namespace ParameterRegistry {
+struct StartupParameterRegistry;
+}
+
 namespace GRIM::LocalAtomRetrieval {
-
-struct LocalAtomRetrievalParameterTensors {
-    // [kAtomTypeCount, retrieval_dim]. Candidate and query encoders own all
-    // other projections; retrieval owns only the learned NO_REFERENCE key.
-    Tensor& type_no_reference_key;
-};
-
-struct LocalAtomRetrievalForwardOutputs {
-    // [query_count, class_count]. Column 0 is NO_REFERENCE. Column
-    // local_index + 1 addresses the corresponding entry in the query's
-    // payload-authored [sequence row, AtomType] bank.
-    Tensor logits;
-
-    int query_count = 0;
-    int candidate_count = 0;
-    int class_count = 0;
-    int retrieval_dim = 0;
-};
 
 // Pre-encoded inputs use the compact payload ordering:
 //
@@ -42,10 +28,16 @@ struct LocalAtomRetrievalForwardOutputs {
 //
 // The caller owns query_embeddings and candidate_embeddings through backward.
 // LocalAtomRetrievalGradFn borrows their forward data and owns no saved copies.
-LocalAtomRetrievalForwardOutputs LocalAtomRetrievalForward(
+// The learned NO_REFERENCE keys are resolved through the root parameter
+// registry; this compute API does not accept or own a weight bundle.
+//
+// Returns logits [payload.localAtomQueryCount(), class_count]. AtomType selects
+// the payload-authored row/type bank; it is not the class axis. Column 0 is
+// NO_REFERENCE and column local_index + 1 selects that local bank candidate.
+Tensor LocalAtomRetrievalForward(
     Tensor& query_embeddings,
     Tensor& candidate_embeddings,
-    const LocalAtomRetrievalParameterTensors& parameters,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream);
