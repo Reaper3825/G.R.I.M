@@ -29,6 +29,8 @@
 | `Layers/ReasoningHead/reasoning_head_GPU.{hpp,cu}`, `Forward::ReasoningHeadOutput`, `ParamGroupType::REASONING_HEAD` | Dead architecture. ExecutionBlock owns live structured reasoning, ScratchBlock owns atom detection/injection, and the old ReasoningHead had no active training loss or runtime path when execution was enabled. Do not recreate atom-op logits as a parallel subsystem. |
 | `ExecutionBlockLayer` | Deleted runtime shell for the removed register-machine execution path. Do not recreate a presence-sentinel class around it. |
 | `ExecutionBlockParameterTensors`, `ExecutionMemory`, `ParamGroupType::EXECUTION_BLOCK` | Dead register-machine parameters and storage. The gate/op/arg/write/stop/readback math was already removed, leaving these tensors allocated, checkpointed, and optimized without a forward or gradient path. |
+| `SlotSeedEncoderParameterTensors`, SlotSeedEncoder graph-output placeholders, `ParamGroupType::SLOT_SEED_ENCODER` | Orphaned startup and registry surface with no initializer call, registration call, forward operation, or backward consumer. Compiled config fields remain reserved migration metadata. |
+| `NumberEncoderParameterTensors`, NumericAtom GRU parameter allocation, `ParamGroupType::NUMBER_ENCODER` | Dead parameter implementation with no forward, loss, backward, or inference consumer. Authored NumberEncoder config, compiled feature metadata, and serialized checkpoint enum values remain reserved. |
 | `DecodeTimeNumPolicy` class | Replaced by free decode-time selector ops, which were themselves later deleted (see decode-time slot selector row). |
 | `DecodeTimeSlotSelectorLayer` class | Replaced by the startup-owned selector tensor struct, which was itself later deleted (see decode-time slot selector row). |
 

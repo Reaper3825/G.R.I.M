@@ -146,25 +146,6 @@ void verifyEncoderLayersConstructed(GRIM::GPUGrimEncoder& encoder,
     }
 }
 
-void initializeNumberEncoderSubsystem(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::Config::AiConfigSnapshot& model_cfg,
-    uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
-    const auto number_encoder_hp =
-        GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
-    GRIMText::Training::Startup::ModelRegistration::initializeNumberEncoderParameterTensors(
-        parameter_registry,
-        number_encoder_hp,
-        weight_init_seed + 40,
-        init_stream);
-    if (number_encoder_hp.enabled) {
-        (void)parameter_registry.requireNumberEncoderParameters(
-            "Startup::assembleGpuModel.NumberEncoder");
-        std::cout << "NumberEncoder/NumericAtom parameters created\n";
-    }
-}
-
 void initializeLocalAtomRetrievalSubsystem(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
@@ -377,14 +358,6 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     (void)requireEmbeddingParametersReady(parameter_registry, caller);
     (void)requireLmHeadParametersReady(parameter_registry, caller);
 
-    const auto number_encoder_hp =
-        GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
-    if (number_encoder_hp.enabled &&
-        !parameter_registry.getNumberEncoderParameters()) {
-        throw std::runtime_error(
-            std::string("[") + caller +
-            "] NumberEncoder parameters not assembled by Startup::assembleGpuModel() while number_encoder is enabled.");
-    }
     const auto atom_hp =
         GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(model_cfg);
     if (atom_hp.enabled &&
@@ -559,12 +532,6 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         }
 
         initializeAtomInsertionSubsystem(
-            parameter_registry,
-            model_cfg,
-            weight_init_seed,
-            init_stream);
-
-        initializeNumberEncoderSubsystem(
             parameter_registry,
             model_cfg,
             weight_init_seed,

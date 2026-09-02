@@ -542,10 +542,8 @@ enum class ParamGroupType : uint8_t {
     ATTENTION = 2,      ///< Attention weights (W_qkv, W_o)
     FFN = 3,            ///< Feed-forward network weights (W1, W2)
     RMSNORM = 4,        ///< RMSNorm gamma parameters
-    NUMBER_ENCODER = 5, ///< NumberEncoder digit-place numeric-meaning weights (digit/pow10 emb, contribution + global MLPs)
-    ARG_SELECTOR = 6,   ///< Arg/option selector head (query projection over candidate atom-entry keys); execution-independent
-    SLOT_SEED_ENCODER = 7, ///< Contextual numeric-placeholder to execution-slot seed encoder
-    COUNT = 8           ///< Number of parameter group types
+    ARG_SELECTOR = 5,   ///< Arg/option selector head (query projection over candidate atom-entry keys); execution-independent
+    COUNT = 6           ///< Number of parameter group types
 };
 
 enum class ParamStatsBucket : uint8_t {

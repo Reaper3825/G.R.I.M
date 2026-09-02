@@ -164,9 +164,7 @@ const char* OptimizerUpdateTraceMetrics::typeName(int type_idx) {
         case ParamGroupType::ATTENTION: return "attn";
         case ParamGroupType::FFN: return "ffn";
         case ParamGroupType::RMSNORM: return "rmsnorm";
-        case ParamGroupType::NUMBER_ENCODER: return "number_encoder";
         case ParamGroupType::ARG_SELECTOR: return "arg_selector";
-        case ParamGroupType::SLOT_SEED_ENCODER: return "slot_seed_encoder";
         case ParamGroupType::COUNT: return "?";
     }
     return "?";

@@ -336,15 +336,6 @@ public:
     Tensor local_atom_candidate_embeddings; // [localAtomCandidateCount, d_model]
     Tensor local_atom_retrieval_logits;      // [localAtomQueryCount, candidate_slot_count]
 
-    // Contextual numeric-placeholder slot-seed state. ModelForwardOutputs is
-    // the sole owner of every buffer referenced by SlotSeedEncoder backward.
-    Tensor slot_seed_contextual_input;       // routed context + optional type embedding
-    Tensor slot_seed_hidden_pre_activation;  // MLP input projection; SiLU cache
-    Tensor slot_seed_hidden_activation;      // SiLU(hidden_pre_activation)
-    Tensor slot_seed_residual_delta;         // hidden @ W_seed_out (+ bias)
-    Tensor slot_seed_unmasked;               // contextual_input + residual_delta
-    Tensor slot_seeds;                       // authored-slot-gated dense slot seeds
-
     // Optional reasoning forward-owned state.
     Tensor scratch_atom_embeddings;
 
@@ -420,12 +411,6 @@ public:
         local_atom_query_embeddings = Tensor();
         // Reverse graph order keeps non-owning backward caches alive until
         // their consumer GradFns have been released.
-        slot_seeds = Tensor();
-        slot_seed_unmasked = Tensor();
-        slot_seed_residual_delta = Tensor();
-        slot_seed_hidden_activation = Tensor();
-        slot_seed_hidden_pre_activation = Tensor();
-        slot_seed_contextual_input = Tensor();
         scratch_atom_embeddings = Tensor();
     }
 
@@ -534,16 +519,6 @@ public:
         reportTensor(
             "local_atom_retrieval_logits",
             local_atom_retrieval_logits);
-        reportTensor("slot_seed_contextual_input", slot_seed_contextual_input);
-        reportTensor(
-            "slot_seed_hidden_pre_activation",
-            slot_seed_hidden_pre_activation);
-        reportTensor(
-            "slot_seed_hidden_activation",
-            slot_seed_hidden_activation);
-        reportTensor("slot_seed_residual_delta", slot_seed_residual_delta);
-        reportTensor("slot_seed_unmasked", slot_seed_unmasked);
-        reportTensor("slot_seeds", slot_seeds);
         reportTensor("scratch_atom_embeddings", scratch_atom_embeddings);
 
         std::ostringstream out;

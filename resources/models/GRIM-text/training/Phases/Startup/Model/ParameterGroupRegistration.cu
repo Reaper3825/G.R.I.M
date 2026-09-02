@@ -163,9 +163,7 @@ size_t paramGroupTypeIndex(ParamGroupType type) {
         case ParamGroupType::ATTENTION:       return 2;
         case ParamGroupType::FFN:             return 3;
         case ParamGroupType::RMSNORM:         return 4;
-        case ParamGroupType::NUMBER_ENCODER:  return 5;
-        case ParamGroupType::ARG_SELECTOR:    return 6;
-        case ParamGroupType::SLOT_SEED_ENCODER: return 7;
+        case ParamGroupType::ARG_SELECTOR:    return 5;
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -178,9 +176,7 @@ const char* paramGroupTypeSummaryName(ParamGroupType type) {
         case ParamGroupType::ATTENTION:       return "attention";
         case ParamGroupType::FFN:             return "ffn";
         case ParamGroupType::RMSNORM:         return "rmsnorm";
-        case ParamGroupType::NUMBER_ENCODER:  return "number_encoder";
         case ParamGroupType::ARG_SELECTOR:    return "arg_selector";
-        case ParamGroupType::SLOT_SEED_ENCODER: return "slot_seed_encoder";
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -343,9 +339,7 @@ private:
             case ParamGroupType::ATTENTION:       return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_attention");
             case ParamGroupType::FFN:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_ffn");
             case ParamGroupType::RMSNORM:         return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_rmsnorm");
-            case ParamGroupType::NUMBER_ENCODER:  return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_number_encoder");
             case ParamGroupType::ARG_SELECTOR:    return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_arg_selector");
-            case ParamGroupType::SLOT_SEED_ENCODER: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_slot_seed_encoder");
             case ParamGroupType::COUNT: break;
         }
         throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT for parameter precision lookup");
@@ -524,28 +518,6 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
     }
 }
 
-void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
-                                     Registrar& registrar,
-                                     const GRIM::Config::AiConfigSnapshot& config) {
-    auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
-    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(config);
-
-    if (!number_encoder_hp.enabled) {
-        if (number_encoder_parameters) {
-            throw std::runtime_error("[buildParameterGroups] NumberEncoder parameter owner exists while config.number_encoder_enabled=false");
-        }
-        return;
-    }
-
-    auto& number_encoder_tensor_owner = requireLayer(
-        number_encoder_parameters,
-        "NumberEncoderParameterTensors",
-        "registerNumberEncoderParameters");
-    ParameterRegistry::registerNumberEncoderParameters(
-        number_encoder_tensor_owner,
-        registrar);
-}
-
 void registerAtomInsertionBoundaryParameters(
     ParameterRegistry::StartupParameterRegistry& parameter_registry,
     Registrar& registrar,
@@ -608,34 +580,6 @@ void registerLocalAtomRetrievalParameters(
     ParameterRegistry::registerLocalAtomRetrievalParameters(owner, registrar);
 }
 
-void registerSlotSeedEncoderParameters(
-    ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    Registrar& registrar,
-    const GRIM::Config::AiConfigSnapshot& config) {
-    auto* slot_seed_encoder_parameters =
-        parameter_registry.getSlotSeedEncoderParameters();
-    const auto slot_seed_encoder_hp =
-        GRIM::HyperParameters::slotSeedEncoderConstructionHP(config);
-
-    if (!slot_seed_encoder_hp.enabled) {
-        if (slot_seed_encoder_parameters) {
-            throw std::runtime_error(
-                "[buildParameterGroups] SlotSeedEncoder parameter owner exists while "
-                "config.slot_seed_encoder_enabled=false");
-        }
-        return;
-    }
-
-    auto& slot_seed_encoder_tensor_owner = requireLayer(
-        slot_seed_encoder_parameters,
-        "SlotSeedEncoderParameterTensors",
-        "registerSlotSeedEncoderParameters");
-    ParameterRegistry::registerSlotSeedEncoderParameters(
-        slot_seed_encoder_tensor_owner,
-        slot_seed_encoder_hp,
-        registrar);
-}
-
 void clearOptimizerBindings(std::vector<ParameterGroup>& groups) {
     for (auto& group : groups) {
         group.m_tensor = nullptr;
@@ -696,7 +640,7 @@ void validateRegisteredTensorPrecisionMetadata(const std::vector<ParameterGroup>
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
     constexpr size_t kPrecisionCount = 2;
-    static_assert(kParamGroupTypeCount == 8,
+    static_assert(kParamGroupTypeCount == 6,
                   "Registered group precision summary must list every ParamGroupType");
 
     const std::array<ParamGroupType, kParamGroupTypeCount> group_types = {
@@ -705,9 +649,7 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
         ParamGroupType::ATTENTION,
         ParamGroupType::FFN,
         ParamGroupType::RMSNORM,
-        ParamGroupType::NUMBER_ENCODER,
-        ParamGroupType::ARG_SELECTOR,
-        ParamGroupType::SLOT_SEED_ENCODER
+        ParamGroupType::ARG_SELECTOR
     };
     const std::array<ParameterGroupPrecision, kPrecisionCount> precisions = {
         ParameterGroupPrecision::FP32,
@@ -728,9 +670,7 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
             case ParamGroupType::ATTENTION: ++attn_count; break;
             case ParamGroupType::FFN: ++ffn_count; break;
             case ParamGroupType::RMSNORM: ++rms_count; break;
-            case ParamGroupType::NUMBER_ENCODER: ++other_count; break;
             case ParamGroupType::ARG_SELECTOR: ++other_count; break;
-            case ParamGroupType::SLOT_SEED_ENCODER: ++other_count; break;
             case ParamGroupType::COUNT:
                 throw std::runtime_error("[buildParameterGroups] group " + group.name +
                                          " has invalid ParamGroupType::COUNT");
@@ -795,7 +735,6 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_rmsnorm"), "parameter_precision_rmsnorm", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_number_encoder"), "parameter_precision_number_encoder", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_arg_selector"), "parameter_precision_arg_selector", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_slot_seed_encoder"), "parameter_precision_slot_seed_encoder", "buildParameterGroups");
 }
 
 } // namespace
@@ -1285,81 +1224,6 @@ void initializeAtomInsertionBoundaryParameterTensors(
         "atom boundary tensors (d_model=" + std::to_string(atom_hp.d_model) + ")");
 }
 
-void initializeNumberEncoderParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
-    if (!number_encoder_hp.enabled) {
-        if (parameter_registry.getNumberEncoderParameters()) {
-            throw std::runtime_error("initializeNumberEncoderParameterTensors: NumberEncoder disabled but registry owner already exists");
-        }
-        return;
-    }
-    if (!init_stream) {
-        throw std::runtime_error("initializeNumberEncoderParameterTensors: init_stream is NULL");
-    }
-    if (parameter_registry.getNumberEncoderParameters()) {
-        throw std::runtime_error("initializeNumberEncoderParameterTensors: registry NumberEncoder tensor owner is already initialized");
-    }
-    if (number_encoder_hp.d_model <= 0) {
-        throw std::runtime_error("initializeNumberEncoderParameterTensors: d_model must be > 0, got " +
-                                 std::to_string(number_encoder_hp.d_model));
-    }
-    if (number_encoder_hp.max_digit_slots <= 0) {
-        throw std::runtime_error("initializeNumberEncoderParameterTensors: max_digit_slots must be > 0, got " +
-                                 std::to_string(number_encoder_hp.max_digit_slots));
-    }
-    if (number_encoder_hp.pow10_buckets != 2 * number_encoder_hp.max_abs_pow10 + 1 ||
-        number_encoder_hp.pow10_buckets <= 0) {
-        throw std::runtime_error("initializeNumberEncoderParameterTensors: pow10_buckets=" +
-                                 std::to_string(number_encoder_hp.pow10_buckets) +
-                                 " does not match 2 * max_abs_pow10 + 1 (max_abs_pow10=" +
-                                 std::to_string(number_encoder_hp.max_abs_pow10) + ")");
-    }
-
-    const int d_model = number_encoder_hp.d_model;
-
-    auto params = std::make_unique<GRIM::NumberEncoderParameterTensors>();
-    auto make_xavier = [&](int rows, int cols, std::uint64_t seed, const char* name) -> GRIM::Tensor {
-        GRIM::Tensor t = GRIM::Tensor::zeros({rows, cols}, init_stream, name);
-        t.requires_grad_();
-        t.alloc_grad();
-        GRIM::Tensor::xavier_uniform_(t, seed, init_stream);
-        return t;
-    };
-
-    params->digit_emb = make_xavier(10, d_model, weight_init_seed, "number_encoder.digit_emb");
-    params->pow10_emb = make_xavier(number_encoder_hp.pow10_buckets, d_model, weight_init_seed + 1, "number_encoder.pow10_emb");
-    params->numeric_atom_Wz = make_xavier(
-        2 * d_model, d_model, weight_init_seed + 6, "numeric_atom_Wz");
-    params->numeric_atom_Uz = make_xavier(
-        d_model, d_model, weight_init_seed + 7, "numeric_atom_Uz");
-    params->numeric_atom_Wr = make_xavier(
-        2 * d_model, d_model, weight_init_seed + 8, "numeric_atom_Wr");
-    params->numeric_atom_Ur = make_xavier(
-        d_model, d_model, weight_init_seed + 9, "numeric_atom_Ur");
-    params->numeric_atom_Wh = make_xavier(
-        2 * d_model, d_model, weight_init_seed + 10, "numeric_atom_Wh");
-    params->numeric_atom_Uh = make_xavier(
-        d_model, d_model, weight_init_seed + 11, "numeric_atom_Uh");
-    params->numeric_atom_sign_classifier = make_xavier(
-        1, d_model, weight_init_seed + 13, "numeric_atom_sign_classifier");
-    params->numeric_atom_stop_classifier = make_xavier(
-        1, d_model, weight_init_seed + 12, "numeric_atom_stop_classifier");
-
-    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(std::string("initializeNumberEncoderParameterTensors: cudaStreamSynchronize failed: ") +
-                                 cudaGetErrorString(sync_err));
-    }
-
-    parameter_registry.number_encoder_parameters = std::move(params);
-    emitInfo("[initializeNumberEncoderParameterTensors] Initialized registry-owned NumericAtom tensors (d_model=" +
-             std::to_string(d_model) + ", pow10_buckets=" + std::to_string(number_encoder_hp.pow10_buckets) +
-             ", max_digit_slots=" + std::to_string(number_encoder_hp.max_digit_slots) + ")");
-}
-
 void initializeSelectorParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     bool selector_enabled,
@@ -1449,106 +1313,6 @@ void initializeLocalAtomRetrievalParameterTensors(
         ", d_model=" + std::to_string(d_model) + ")");
 }
 
-void initializeSlotSeedEncoderParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::SlotSeedEncoderConstructionHP& slot_seed_encoder_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
-    if (!slot_seed_encoder_hp.enabled) {
-        if (parameter_registry.getSlotSeedEncoderParameters()) {
-            throw std::runtime_error(
-                "initializeSlotSeedEncoderParameterTensors: SlotSeedEncoder disabled "
-                "but registry owner already exists");
-        }
-        return;
-    }
-    if (!init_stream) {
-        throw std::runtime_error(
-            "initializeSlotSeedEncoderParameterTensors: init_stream is NULL");
-    }
-    if (parameter_registry.getSlotSeedEncoderParameters()) {
-        throw std::runtime_error(
-            "initializeSlotSeedEncoderParameterTensors: registry SlotSeedEncoder "
-            "tensor owner is already initialized");
-    }
-    if (slot_seed_encoder_hp.d_model <= 0) {
-        throw std::runtime_error(
-            "initializeSlotSeedEncoderParameterTensors: d_model must be > 0, got " +
-            std::to_string(slot_seed_encoder_hp.d_model));
-    }
-    if (slot_seed_encoder_hp.d_hidden <= 0) {
-        throw std::runtime_error(
-            "initializeSlotSeedEncoderParameterTensors: d_hidden must be > 0, got " +
-            std::to_string(slot_seed_encoder_hp.d_hidden));
-    }
-
-    const int d_model = slot_seed_encoder_hp.d_model;
-    const int d_hidden = slot_seed_encoder_hp.d_hidden;
-    auto params = std::make_unique<GRIM::SlotSeedEncoderParameterTensors>();
-    auto make_xavier = [&](int rows,
-                           int cols,
-                           std::uint64_t seed,
-                           const char* name) -> GRIM::Tensor {
-        GRIM::Tensor tensor = GRIM::Tensor::zeros({rows, cols}, init_stream, name);
-        tensor.requires_grad_();
-        tensor.alloc_grad();
-        GRIM::Tensor::xavier_uniform_(tensor, seed, init_stream);
-        return tensor;
-    };
-    auto make_zero_bias = [&](int cols, const char* name) -> GRIM::Tensor {
-        GRIM::Tensor tensor = GRIM::Tensor::zeros({1, cols}, init_stream, name);
-        tensor.requires_grad_();
-        tensor.alloc_grad();
-        return tensor;
-    };
-    auto make_zero_weight = [&](int rows, int cols, const char* name) -> GRIM::Tensor {
-        GRIM::Tensor tensor = GRIM::Tensor::zeros({rows, cols}, init_stream, name);
-        tensor.requires_grad_();
-        tensor.alloc_grad();
-        return tensor;
-    };
-
-    params->W_seed_in = make_xavier(
-        d_model, d_hidden, weight_init_seed, "slot_seed_encoder.W_seed_in");
-    if (slot_seed_encoder_hp.bias_enabled) {
-        params->b_seed_in =
-            make_zero_bias(d_hidden, "slot_seed_encoder.b_seed_in");
-    }
-    // Zero-init the residual output projection so the new path begins as an
-    // exact identity on contextual placeholder states.
-    params->W_seed_out = make_zero_weight(
-        d_hidden, d_model, "slot_seed_encoder.W_seed_out");
-    if (slot_seed_encoder_hp.bias_enabled) {
-        params->b_seed_out =
-            make_zero_bias(d_model, "slot_seed_encoder.b_seed_out");
-    }
-    if (slot_seed_encoder_hp.type_embedding_enabled) {
-        params->type_embeddings = make_xavier(
-            GRIM::Tokenizer::kAtomTypeCount,
-            d_model,
-            weight_init_seed + 1,
-            "slot_seed_encoder.type_embeddings");
-    }
-
-    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string(
-                "initializeSlotSeedEncoderParameterTensors: "
-                "cudaStreamSynchronize failed: ") +
-            cudaGetErrorString(sync_err));
-    }
-
-    parameter_registry.slot_seed_encoder_parameters = std::move(params);
-    emitInfo(
-        "[initializeSlotSeedEncoderParameterTensors] Initialized registry-owned "
-        "SlotSeedEncoder tensors (d_model=" +
-        std::to_string(d_model) + ", d_hidden=" + std::to_string(d_hidden) +
-        ", bias=" + std::to_string(slot_seed_encoder_hp.bias_enabled ? 1 : 0) +
-        ", type_embedding=" +
-        std::to_string(slot_seed_encoder_hp.type_embedding_enabled ? 1 : 0) + ")");
-}
-
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
@@ -1563,7 +1327,6 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerAtomInsertionBoundaryParameters(parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
-    registerNumberEncoderParameters(parameter_registry, registrar, config);
     registerLocalAtomRetrievalParameters(parameter_registry, registrar, config);
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);

@@ -10,14 +10,8 @@
 //    - LM head durable tensor owner
 //    - Optional atom insertion boundary-projection tensor owner
 //    - Encoder durable per-layer parameter tensor owner
-//    - NumberEncoder durable tensor owner
-//    - NumberEncoder parameter-group inventory
 //    - LocalAtomRetrieval durable tensor owner
 //    - LocalAtomRetrieval parameter-group inventory
-//    - SlotSeedEncoder durable tensor owner
-//    - SlotSeedEncoder parameter-group inventory
-//    - ExecutionBlock durable parameter tensor owner
-//    - ExecutionBlock parameter-group inventory
 //    - FeedForward durable per-layer parameter tensor owner
 //    - FeedForward parameter-group inventory
 //    - Durable ParameterGroup inventory owner
@@ -72,21 +66,6 @@ struct AtomInsertionBoundaryParameterTensors {
     Tensor projection_bias;          // [1, d_model]
 };
 
-// NumericAtom decoder parameters. The decoder reuses digit_emb/pow10_emb as
-// tied input/output tables and owns Wz/Uz, Wr/Ur, Wh/Uh for its transition.
-struct NumberEncoderParameterTensors {
-    Tensor digit_emb;   // [10, d_model] digit identity embedding
-    Tensor pow10_emb;   // [pow10_buckets, d_model] place identity embedding
-    Tensor numeric_atom_Wz; // [2 * d_model, d_model] GRU update-gate input projection
-    Tensor numeric_atom_Uz; // [d_model, d_model] GRU update-gate state projection
-    Tensor numeric_atom_Wr; // [2 * d_model, d_model] GRU reset-gate input projection
-    Tensor numeric_atom_Ur; // [d_model, d_model] GRU reset-gate state projection
-    Tensor numeric_atom_Wh; // [2 * d_model, d_model] GRU candidate input projection
-    Tensor numeric_atom_Uh; // [d_model, d_model] GRU candidate state projection
-    Tensor numeric_atom_sign_classifier; // [1, d_model] negative-sign projection
-    Tensor numeric_atom_stop_classifier; // [1, d_model] typed CLOSE / stop projection
-};
-
 // Arg/option selector head parameters (execution-INDEPENDENT). A single query
 // projection W_q maps encoder hidden states into an externally owned
 // candidate-key space.
@@ -98,18 +77,6 @@ struct SelectorParameterTensors {
 // this tensor through StartupParameterRegistry and never owns model weights.
 struct LocalAtomRetrievalParameterTensors {
     Tensor type_no_reference_key;  // [kAtomTypeCount, d_model]
-};
-
-// SlotSeedEncoder — contextual numeric-placeholder representation.
-//   hidden = SiLU(context @ W_seed_in + b_seed_in)
-//   seed   = context + hidden @ W_seed_out + b_seed_out
-// The optional type embedding is added to context before the residual MLP.
-struct SlotSeedEncoderParameterTensors {
-    Tensor W_seed_in;       // [d_model, d_hidden]
-    Tensor b_seed_in;       // [1, d_hidden] when bias_enabled=true
-    Tensor W_seed_out;      // [d_hidden, d_model]
-    Tensor b_seed_out;      // [1, d_model] when bias_enabled=true
-    Tensor type_embeddings; // [kAtomTypeCount, d_model] when enabled
 };
 
 struct AttentionResidualGateParameterTensors {
@@ -146,11 +113,9 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::AtomInsertionBoundaryParameterTensors>
         atom_insertion_boundary_parameters;
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
-    std::unique_ptr<GRIM::NumberEncoderParameterTensors> number_encoder_parameters;
     std::unique_ptr<GRIM::SelectorParameterTensors> selector_parameters;
     std::unique_ptr<GRIM::LocalAtomRetrievalParameterTensors>
         local_atom_retrieval_parameters;
-    std::unique_ptr<GRIM::SlotSeedEncoderParameterTensors> slot_seed_encoder_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     // Single durable optimizer/autograd parameter inventory owner.
     // ParameterGroup entries are non-owning views into the tensor owners in
@@ -286,28 +251,6 @@ struct StartupParameterRegistry {
         return gate_parameters;
     }
 
-    GRIM::NumberEncoderParameterTensors* getNumberEncoderParameters() {
-        return number_encoder_parameters.get();
-    }
-
-    const GRIM::NumberEncoderParameterTensors* getNumberEncoderParameters() const {
-        return number_encoder_parameters.get();
-    }
-
-    GRIM::NumberEncoderParameterTensors& requireNumberEncoderParameters(const char* caller) {
-        if (!number_encoder_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.number_encoder_parameters is NULL");
-        }
-        return *number_encoder_parameters;
-    }
-
-    const GRIM::NumberEncoderParameterTensors& requireNumberEncoderParameters(const char* caller) const {
-        if (!number_encoder_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.number_encoder_parameters is NULL");
-        }
-        return *number_encoder_parameters;
-    }
-
     GRIM::SelectorParameterTensors* getSelectorParameters() { return selector_parameters.get(); }
     const GRIM::SelectorParameterTensors* getSelectorParameters() const { return selector_parameters.get(); }
 
@@ -353,33 +296,6 @@ struct StartupParameterRegistry {
                 ": StartupParameterRegistry.local_atom_retrieval_parameters is NULL");
         }
         return *local_atom_retrieval_parameters;
-    }
-
-    GRIM::SlotSeedEncoderParameterTensors* getSlotSeedEncoderParameters() {
-        return slot_seed_encoder_parameters.get();
-    }
-
-    const GRIM::SlotSeedEncoderParameterTensors* getSlotSeedEncoderParameters() const {
-        return slot_seed_encoder_parameters.get();
-    }
-
-    GRIM::SlotSeedEncoderParameterTensors& requireSlotSeedEncoderParameters(const char* caller) {
-        if (!slot_seed_encoder_parameters) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": StartupParameterRegistry.slot_seed_encoder_parameters is NULL");
-        }
-        return *slot_seed_encoder_parameters;
-    }
-
-    const GRIM::SlotSeedEncoderParameterTensors& requireSlotSeedEncoderParameters(
-        const char* caller) const {
-        if (!slot_seed_encoder_parameters) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": StartupParameterRegistry.slot_seed_encoder_parameters is NULL");
-        }
-        return *slot_seed_encoder_parameters;
     }
 
     std::vector<GRIM::FeedForwardParameterTensors>& feedForwardParameterTensors() {
@@ -457,14 +373,8 @@ struct TensorParameterSpec {
     int layer = -1;
 };
 
-using NumberEncoderTensorParameterSpec =
-    TensorParameterSpec<GRIM::NumberEncoderParameterTensors>;
-
 using SelectorTensorParameterSpec =
     TensorParameterSpec<GRIM::SelectorParameterTensors>;
-
-using SlotSeedEncoderTensorParameterSpec =
-    TensorParameterSpec<GRIM::SlotSeedEncoderParameterTensors>;
 
 using EncodingLayerTensorParameterSpec =
     TensorParameterSpec<GRIM::EncodingLayerParameterTensors>;
@@ -503,30 +413,6 @@ inline constexpr std::array<AtomInsertionBoundaryTensorParameterSpec, 3>
          GRIM::ParamGroupType::LM_HEAD, GRIM::ParamStatsBucket::LM_HEAD},
     }};
 
-inline constexpr std::array<NumberEncoderTensorParameterSpec, 10>
-    kNumberEncoderTensorParameters = {{
-        {"number_encoder_digit_emb", &GRIM::NumberEncoderParameterTensors::digit_emb,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"number_encoder_pow10_emb", &GRIM::NumberEncoderParameterTensors::pow10_emb,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"numeric_atom_Wz", &GRIM::NumberEncoderParameterTensors::numeric_atom_Wz,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"numeric_atom_Uz", &GRIM::NumberEncoderParameterTensors::numeric_atom_Uz,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"numeric_atom_Wr", &GRIM::NumberEncoderParameterTensors::numeric_atom_Wr,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"numeric_atom_Ur", &GRIM::NumberEncoderParameterTensors::numeric_atom_Ur,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"numeric_atom_Wh", &GRIM::NumberEncoderParameterTensors::numeric_atom_Wh,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"numeric_atom_Uh", &GRIM::NumberEncoderParameterTensors::numeric_atom_Uh,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"numeric_atom_sign_classifier", &GRIM::NumberEncoderParameterTensors::numeric_atom_sign_classifier,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"numeric_atom_stop_classifier", &GRIM::NumberEncoderParameterTensors::numeric_atom_stop_classifier,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-    }};
-
 inline constexpr std::array<SelectorTensorParameterSpec, 1>
     kSelectorTensorParameters = {{
         {"selector_W_q", &GRIM::SelectorParameterTensors::W_q,
@@ -538,25 +424,6 @@ inline constexpr std::array<LocalAtomRetrievalTensorParameterSpec, 1>
         {"local_atom_retrieval_type_no_reference_key",
          &GRIM::LocalAtomRetrievalParameterTensors::type_no_reference_key,
          GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
-    }};
-
-inline constexpr std::array<SlotSeedEncoderTensorParameterSpec, 5>
-    kSlotSeedEncoderTensorParameters = {{
-        {"slot_seed_encoder_W_seed_in",
-         &GRIM::SlotSeedEncoderParameterTensors::W_seed_in,
-         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"slot_seed_encoder_b_seed_in",
-         &GRIM::SlotSeedEncoderParameterTensors::b_seed_in,
-         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"slot_seed_encoder_W_seed_out",
-         &GRIM::SlotSeedEncoderParameterTensors::W_seed_out,
-         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"slot_seed_encoder_b_seed_out",
-         &GRIM::SlotSeedEncoderParameterTensors::b_seed_out,
-         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"slot_seed_encoder_type_embeddings",
-         &GRIM::SlotSeedEncoderParameterTensors::type_embeddings,
-         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
     }};
 
 inline constexpr std::array<EncodingLayerTensorParameterSpec, 8>
@@ -600,45 +467,6 @@ inline constexpr std::array<FeedForwardTensorParameterSpec, 4>
     }};
 
 template <typename RegistrarT>
-inline void registerEmbeddingParameters(
-    GRIM::EmbeddingParameterTensors& embedding_parameters,
-    RegistrarT& registrar) {
-    for (const auto& spec : kEmbeddingTensorParameters) {
-        registrar.addTensor(spec.name,
-                            embedding_parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerAtomInsertionBoundaryParameters(
-    GRIM::AtomInsertionBoundaryParameterTensors& parameters,
-    RegistrarT& registrar) {
-    for (const auto& spec : kAtomInsertionBoundaryTensorParameters) {
-        registrar.addTensor(spec.name,
-                            parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerNumberEncoderParameters(
-    GRIM::NumberEncoderParameterTensors& number_encoder_parameters,
-    RegistrarT& registrar) {
-    for (const auto& spec : kNumberEncoderTensorParameters) {
-        registrar.addTensor(spec.name,
-                            number_encoder_parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
 inline void registerSelectorParameters(
     GRIM::SelectorParameterTensors& selector_parameters,
     RegistrarT& registrar) {
@@ -661,40 +489,6 @@ inline void registerLocalAtomRetrievalParameters(
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerSlotSeedEncoderParameters(
-    GRIM::SlotSeedEncoderParameterTensors& slot_seed_encoder_parameters,
-    const GRIM::HyperParameters::SlotSeedEncoderConstructionHP& hp,
-    RegistrarT& registrar) {
-    for (const auto& spec : kSlotSeedEncoderTensorParameters) {
-        const bool is_bias =
-            spec.tensor_member == &GRIM::SlotSeedEncoderParameterTensors::b_seed_in ||
-            spec.tensor_member == &GRIM::SlotSeedEncoderParameterTensors::b_seed_out;
-        const bool is_type_embedding =
-            spec.tensor_member == &GRIM::SlotSeedEncoderParameterTensors::type_embeddings;
-        if (is_bias || is_type_embedding) {
-            const bool enabled = is_bias ? hp.bias_enabled : hp.type_embedding_enabled;
-            registrar.addConfigGatedTensor(
-                spec.name,
-                slot_seed_encoder_parameters.*(spec.tensor_member),
-                spec.type,
-                spec.stats_bucket,
-                spec.layer,
-                enabled,
-                is_bias
-                    ? "slot_seed_encoder_bias_enabled=false"
-                    : "slot_seed_encoder_type_embedding_enabled=false");
-            continue;
-        }
-        registrar.addTensor(
-            spec.name,
-            slot_seed_encoder_parameters.*(spec.tensor_member),
-            spec.type,
-            spec.stats_bucket,
-            spec.layer);
     }
 }
 

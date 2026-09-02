@@ -25,7 +25,6 @@ struct ExecutionBlockConstructionHP;
 struct LMHeadLayerConstructionHP;
 struct AtomInsertionBoundaryProjectionHP;
 struct NumberEncoderConstructionHP;
-struct SlotSeedEncoderConstructionHP;
 }
 }
 
@@ -91,12 +90,6 @@ void initializeAtomInsertionBoundaryParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 
-void initializeNumberEncoderParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
-
 void initializeSelectorParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     bool selector_enabled,
@@ -107,12 +100,6 @@ void initializeSelectorParameterTensors(
 void initializeLocalAtomRetrievalParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int d_model,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
-
-void initializeSlotSeedEncoderParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::SlotSeedEncoderConstructionHP& slot_seed_encoder_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 

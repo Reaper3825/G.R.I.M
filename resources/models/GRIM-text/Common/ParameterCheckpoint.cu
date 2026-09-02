@@ -314,9 +314,7 @@ GRIMCheckpoint::ParameterGroupType checkpointGroupType(ParamGroupType type) {
         case ParamGroupType::ATTENTION: return GRIMCheckpoint::ParameterGroupType_ATTENTION;
         case ParamGroupType::FFN: return GRIMCheckpoint::ParameterGroupType_FFN;
         case ParamGroupType::RMSNORM: return GRIMCheckpoint::ParameterGroupType_RMSNORM;
-        case ParamGroupType::NUMBER_ENCODER: return GRIMCheckpoint::ParameterGroupType_NUMBER_ENCODER;
         case ParamGroupType::ARG_SELECTOR: return GRIMCheckpoint::ParameterGroupType_ARG_SELECTOR;
-        case ParamGroupType::SLOT_SEED_ENCODER: return GRIMCheckpoint::ParameterGroupType_SLOT_SEED_ENCODER;
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("ParameterCheckpoint encountered ParamGroupType::COUNT");
