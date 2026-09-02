@@ -14,7 +14,6 @@
 #include "TelemetryState_GPU.hpp"
 #include "TelemetryLattice_GPU.hpp"
 #include "TelemetryCsvLogger.hpp"
-#include "../GradNorm/GradNormGPU.hpp"
 
 #include "../../training/Phases/Startup/Model/ModelGpuState.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
@@ -43,9 +42,6 @@ struct TelemetryBatchInput {
     float preclip_grad_rms      = 0.0f;
     float learning_rate         = 0.0f;
     int   total_tokens          = 0;
-
-    // Gradient component for EB ratio (stream 15)
-    float enc_rms_pre           = 0.0f;
 
     // Optimizer state (streams 9-13 and optimizer_iteration stream 60)
     int   optimizer_step        = 0;
@@ -89,14 +85,12 @@ struct TelemetryBatchInput {
 /// @param gpu_model Explicit durable GPU topology owner
 /// @param parameter_registry Explicit durable startup parameter owner
 /// @param input    Pre-computed metrics from processBatch
-/// @param gm       Gradient metrics (for EB grad norm)
 void updateTelemetryObservations(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::TrainingState& training_state,
     const GRIMText::Training::Startup::GpuModelState& gpu_model,
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const TelemetryBatchInput& input,
-    const GRIM::GradNorm::GradMetrics& gm);
+    const TelemetryBatchInput& input);
 
 /// Emits log-interval telemetry/monitoring derived from the latest batch:
 /// step loss/lr and model-health telemetry.

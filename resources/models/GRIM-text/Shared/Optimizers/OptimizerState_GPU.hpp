@@ -16,7 +16,7 @@
 #include <cuda_runtime_api.h>
 
 #include "../TensorContract/TensorContract_GPU.hpp"
-#include "../GradNorm/GradNormGPU.hpp"
+#include "../Gradients/GradientCC_GPU.hpp"
 
 namespace GRIM {
 
@@ -27,8 +27,8 @@ struct OptimizerState {
 
     // Gradient-norm/clip scratch. Lives on the optimizer-step lifetime boundary;
     // allocated/validated lazily by GradClip::clipGradientNorms, freed via the
-    // GradNormScratch RAII destructor when OptimizerState is destroyed.
-    std::unique_ptr<GradNorm::GradNormScratch> grad_norm_scratch;
+    // ClipScratch RAII destructor when OptimizerState is destroyed.
+    std::unique_ptr<GradClip::ClipScratch> gradient_clip_scratch;
 
     void allocate(const std::vector<std::size_t>& sizes, cudaStream_t stream);
     void clear();

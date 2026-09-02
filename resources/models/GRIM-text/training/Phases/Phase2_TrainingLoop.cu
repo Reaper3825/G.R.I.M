@@ -450,7 +450,7 @@ void runOptimizerWindowFromEpoch(
 
     const auto clip = GRIM::GradClip::clipGradientNorms(
         parameter_groups.data(), parameter_groups.size(),
-        ctx.optimizer.optimizer_state.grad_norm_scratch, clipping_hp, schedule_hp, clip_stream);
+        ctx.optimizer.optimizer_state.gradient_clip_scratch, clipping_hp, schedule_hp, clip_stream);
 
     result.grad_rms = clip.global_rms_post;
     result.grad_rms_valid = true;
@@ -533,7 +533,6 @@ void runOptimizerWindowFromEpoch(
         tel_input.preclip_grad_rms  = clip_metrics.global_rms_pre;
         tel_input.learning_rate     = result.learning_rate;
         tel_input.total_tokens      = payload.actual_tokens;
-        tel_input.enc_rms_pre       = clip_metrics.encoder_rms_pre;
         tel_input.optimizer_step    = optimizer_step;
         tel_input.should_step       = true;
         tel_input.text_loss         = result.text_loss;
@@ -551,8 +550,7 @@ void runOptimizerWindowFromEpoch(
             training_state,
             ctx.gpu_model,
             parameter_registry,
-            tel_input,
-            clip_metrics.metrics);
+            tel_input);
     }
 }
 

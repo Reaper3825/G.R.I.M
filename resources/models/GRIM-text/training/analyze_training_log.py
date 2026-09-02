@@ -444,7 +444,6 @@ def analyze_log(log_path: Path, max_lines: int | None = None) -> dict[str, Any]:
 					"clipped": str(parsed_fields.get("clipped", "")).lower(),
 					"emb_rms_pre": parsed_fields.get("emb_rms_pre"),
 					"enc_rms_pre": parsed_fields.get("enc_rms_pre"),
-					"sb_rms_pre": parsed_fields.get("sb_rms_pre"),
 				}
 				clip_rows.append(row)
 

@@ -143,8 +143,8 @@ enum class MetricStream : int {
     ADAM_DISRUPTION_EMB = 12,     // cumulative_disp / xavier_emb_scale: displacement in Xavier units
     ADAM_INV_BC2_AMP = 13,        // 1/(1-β₂^(step+1)): v bias correction amplification factor
     // Execution Block health tracking
-    EXEC_GRAD_NORM = 14,             // RMS of execution block parameter gradients
-    EXEC_GRAD_RATIO = 15,            // exec_grad_norm / encoder_grad_norm: relative learning signal
+    RESERVED_14 = 14,
+    RESERVED_15 = 15,
     EXEC_SELECTION_ENTROPY = 16,     // mean(H(arg1)+H(arg2)+H(op)+H(write))/4: decision sharpness
     EXEC_OP_ENTROPY = 17,            // mean(H(op)): operation diversity (collapse = single op)
     EXEC_DIV_CLAMP_RATE = 18,        // div_clamp_count / total_steps: numerical stability

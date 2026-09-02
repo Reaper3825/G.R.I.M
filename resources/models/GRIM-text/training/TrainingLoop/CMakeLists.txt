@@ -283,7 +283,6 @@ add_library(grim_training_kernels STATIC
     # Rule 26: CrossEntropy_GPU.cu DELETED — dead code. Production loss uses autograd::unified_loss() in AutogradLoss.cu
     ../../Shared/Gradients/GradientCC_GPU.cu
     ../../Shared/GPUBuffer/GPUBuffer.cu
-    ../../Shared/GradNorm/GradNormGPU.cu
     ../../Shared/Telemetry/TelemetryLattice_GPU.cu
     ../../Shared/Telemetry/TelemetryControl_GPU.cu
     ../../Shared/Telemetry/TelemetryCsvLogger.cu

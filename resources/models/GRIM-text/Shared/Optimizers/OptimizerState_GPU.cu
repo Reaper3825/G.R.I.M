@@ -41,7 +41,7 @@ void OptimizerState::allocate(const std::vector<std::size_t>& sizes, cudaStream_
 void OptimizerState::clear() {
     m_states.clear();
     v_states.clear();
-    grad_norm_scratch.reset();
+    gradient_clip_scratch.reset();
     allocated = false;
 }
 

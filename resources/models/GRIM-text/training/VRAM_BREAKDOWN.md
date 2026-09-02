@@ -152,7 +152,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Optimizer states** | `Training::OptimizerContext::optimizer_state.clear()` clears dedicated optimizer-state owner tensors. |
 | **Guess cache (GRIM-TS)** | `GuessCacheScope::OwnedBuffers` RAII member; released when `ctx.guess_cache_scope.reset()` runs before model teardown. |
 | **Debug grad buffers** | ~TrainingState: `freeDebugGradBuffers()` (assigns Tensor() to release). |
-| **GradNorm scratch** | `std::unique_ptr<GradNormScratch>` member; `GradNormScratch::~GradNormScratch()` releases GPU/pinned buffers. |
+| **Gradient clip scratch** | `std::unique_ptr<GradClip::ClipScratch>` member; `ClipScratch::~ClipScratch()` releases GPU/pinned buffers. |
 | **Autograd step state** (`forward_outputs.layer_outputs`, `forward_outputs.embedding_tensor`, `encoder_layer_outputs`, `logits_tensor`, sibling `autograd_loss_state.loss_tensor`, etc.) | Owned by the per-call `ModelForwardOutputs` / `AutogradLossState` objects in Phase2 and cleared by the active forward/autograd scope; it is not stored on `TrainingState`. |
 | **Per-layer grad_fns** (ScaledDotProductAttentionGradFn dq_accum, dsoftmax_sum, dq/dk/dv/dout_bf16, saved_*) | When intermediates are cleared or Tensors destruct, grad_fn refcount drops; ~ScaledDotProductAttentionGradFn calls release_saved() which cudaFrees all 11 buffers. |
 | **Telemetry (lattice, control)** | Owned by TrainingContext (ctx.telemetry); when ctx is destroyed, unique_ptrs destruct; TelemetryLattice_GPU and TelemetryControl_GPU destructors cudaFree their buffers. |
@@ -189,7 +189,7 @@ Every GPU allocation site that can run during training, with source and size for
 | | qkv_out | Encoding | `[tokens, d_model + 2×kv_dim]×4` |
 | | Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd | Encoding | `[batch, heads, seq, head_dim]×4` |
 | | ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out | Encoding | `[tokens, d_ff]×4` |
-| **GradNorm** | d_partial_sums | GradNormGPU.cu | `max_groups × 4` (GPU); h_partial_sums / h_metrics are host |
+| **Gradient clipping** | d_partial_sums | GradientCC_GPU.cu | `max_groups × 4` (GPU); h_partial_sums / h_metrics are host |
 | **TeacherLogits / ReferenceLogits** | Buffer | TeacherLogits_GPU.hpp ensureCapacity | When used: `tokens × vocab_size × 4` per buffer |
 | **Autograd (ephemeral)** | LayerScaleGradFn input_grad / input_data | GradFns/LayerScaleGradFn.cu | Non-leaf only: `element_count × 4`; gamma vectors are `[1, d_model]` (freed after backward) |
 | **FlashAttentionLayer** | ensureScratch (fwd bf16, softmax_lse) | FlashAttention layer | Fwd-only scratch; backward uses GradFn buffers above |

@@ -61,7 +61,7 @@ float rmsOrThrow(double sum_sq, uint64_t count, const char* label, int batch_idx
 }
 
 void validateMeasuredMetricsOrThrow(
-    const GRIM::GradNorm::GradMetrics& gm,
+    const GRIM::GradClip::ClipMetrics& gm,
     size_t expected_groups,
     int batch_idx)
 {
@@ -130,7 +130,7 @@ void validateClipResultOrThrow(const GRIM::GradClip::ClipResult& clip, int batch
 }
 
 float computeEmbeddingDiagnosticRmsOrThrow(
-    const GRIM::GradNorm::GradMetrics& gm,
+    const GRIM::GradClip::ClipMetrics& gm,
     bool tied,
     int batch_idx)
 {
@@ -139,23 +139,14 @@ float computeEmbeddingDiagnosticRmsOrThrow(
     return rmsOrThrow(sum_sq, count, tied ? "emb_lm_tied" : "emb_lm_untied", batch_idx);
 }
 
-float computeEncoderTelemetryRms(const GRIM::GradNorm::GradMetrics& gm, int batch_idx) {
-    const double sum_sq = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq +
-        gm.scratchblock_sum_sq + gm.execution_block_sum_sq;
+float computeEncoderTelemetryRms(const GRIM::GradClip::ClipMetrics& gm, int batch_idx) {
+    const double sum_sq = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq;
     const uint64_t count = gm.attention_count + gm.ffn_count +
-        gm.rmsnorm_count + gm.scratchblock_count +
-        gm.execution_block_count;
+        gm.rmsnorm_count;
     if (count == 0) {
         return std::numeric_limits<float>::quiet_NaN();
     }
     return rmsOrThrow(sum_sq, count, "encoder_telemetry", batch_idx);
-}
-
-float computeScratchBlockTelemetryRms(const GRIM::GradNorm::GradMetrics& gm) {
-    if (gm.scratchblock_count <= 0) {
-        return std::numeric_limits<float>::quiet_NaN();
-    }
-    return static_cast<float>(std::sqrt(gm.scratchblock_sum_sq / static_cast<double>(gm.scratchblock_count)));
 }
 
 std::string formatTopGradientGroups(
@@ -207,7 +198,6 @@ void runGradientNormClipDiagnostic(
     const float preclip_grad_rms = clip.global_rms_pre;
     const float emb_rms_pre = computeEmbeddingDiagnosticRmsOrThrow(gm, tied, batch_idx);
     const float enc_rms_pre = computeEncoderTelemetryRms(gm, batch_idx);
-    const float sb_rms_pre = computeScratchBlockTelemetryRms(gm);
     const auto& groups = ctx.parameter_registry.requireParameterGroups("runGradientNormClipDiagnostic");
 
     ctx.logging.logger->log("[GradTrace] POST-CLIP-MEASURE preclip_registered_global=" +
@@ -215,8 +205,7 @@ void runGradientNormClipDiagnostic(
                             " postclip_registered_global=" + formatScalar(clip.global_rms_post, 6) +
                             " clipped=" + (clip.clipped ? "YES" : "NO") +
                             " emb_rms_pre=" + formatScalar(emb_rms_pre, 6) +
-                            " enc_rms_pre=" + formatScalar(enc_rms_pre, 6) +
-                            " sb_rms_pre=" + formatScalar(sb_rms_pre, 6));
+                            " enc_rms_pre=" + formatScalar(enc_rms_pre, 6));
     ctx.logging.logger->log(formatTopGradientGroups(clip, groups));
 
     runPostClipParamGradEmbLmEquation(

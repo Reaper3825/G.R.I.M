@@ -318,8 +318,8 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::ADAM_CUMULATIVE_DISP: return "adam_cumulative_disp";
         case MetricStream::ADAM_DISRUPTION_EMB: return "adam_disruption_emb";
         case MetricStream::ADAM_INV_BC2_AMP: return "adam_inv_bc2_amp";
-        case MetricStream::EXEC_GRAD_NORM: return "exec_grad_norm";
-        case MetricStream::EXEC_GRAD_RATIO: return "exec_grad_ratio";
+        case MetricStream::RESERVED_14: return "reserved_14";
+        case MetricStream::RESERVED_15: return "reserved_15";
         case MetricStream::EXEC_SELECTION_ENTROPY: return "exec_selection_entropy";
         case MetricStream::EXEC_OP_ENTROPY: return "exec_op_entropy";
         case MetricStream::EXEC_DIV_CLAMP_RATE: return "exec_div_clamp_rate";

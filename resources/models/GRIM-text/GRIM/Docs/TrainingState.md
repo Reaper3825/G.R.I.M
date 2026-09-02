@@ -9,7 +9,7 @@ Trainable parameter verification is not a `TrainingState` responsibility. `Start
 `TrainingState` owns two different resource classes:
 
 - **Tensor members** (`class_weights_tensor` and `read_gate_accum_tensor`) release themselves through `Tensor::~Tensor()`. Per-call shared-forward tensors live on the returned `ModelForwardOutputs` owner, not on `TrainingState`. Never call `cudaFree` on `Tensor::data` from the destructor.
-- **RAII non-Tensor members** release themselves through their own destructors: `TeacherLogits::Buffer`, `std::unique_ptr<GradNormScratch>`, and `CublasHandleOwner`.
+- **RAII non-Tensor members** release themselves through their own destructors: `TeacherLogits::Buffer`, `std::unique_ptr<GradClip::ClipScratch>`, and `CublasHandleOwner`.
 
 `TrainingState::~TrainingState()` is defaulted. Do not add a central destructor cleanup list; resource ownership must live on the field type itself.
 

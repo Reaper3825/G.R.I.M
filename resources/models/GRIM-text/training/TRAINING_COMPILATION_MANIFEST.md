@@ -1251,11 +1251,6 @@ For each encoding layer (Layer 0 → Layer 11):
   - Pattern to check: Verify proper CPU-GPU synchronization
   - Pattern to check: Verify no unnecessary CPU-GPU copies
 
-- [ ] **Shared/GradNorm/GradNormGPU.cu**
-  - Computes total gradient norm across all parameters
-  - **Issue #24**: cudaStreamSynchronize() overhead (7+ seconds/batch) - VERIFY `sync_for_host_read=false` used
-  - Pattern to check: Verify sync_for_host_read parameter passed correctly (false except every 10 iterations)
-
 - [ ] **Shared/Gradients/GradStatsCollector.cu**
   - Collects per-layer, per-component gradient norms and cosine similarities
   - Pattern to check: Verify includes all components: text_ce, attention, ffn, embedding, lm_head, numeric
@@ -1401,7 +1396,7 @@ Use this section to track stale code patterns found during audit:
 | PositionalBiasMethod.cu | #78 | ALiBi max bias | Check |
 | Phase2_TrainingLoop.cu | #85 | Validation token budget | Check |
 | Phase2_TrainingLoop.cu | #115 | Diagnostic buffer select | Check |
-| GradNormGPU.cu | #24 | Sync overhead | Check |
+| GradientCC_GPU.cu | #24 | Gradient norm sync overhead | Check |
 
 ---
 

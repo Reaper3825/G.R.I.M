@@ -135,25 +135,13 @@ void populateAdamCausationStreams(float* obs, const TelemetryBatchInput& input,
 }
 
 //------------------------------------------------------
-// Streams 14-20: Execution Block health tracking
+// Streams 14-15 reserved; streams 16-20: Execution Block health tracking
 //------------------------------------------------------
 void populateExecBlockHealthStreams(
     float* obs,
-    const GRIM::GradNorm::GradMetrics& gm,
     const TelemetryBatchInput& input) {
-
-    float exec_grad_norm = 0.0f;
-    float exec_grad_ratio = 0.0f;
-
-    if (gm.execution_block_count > 0) {
-        exec_grad_norm = static_cast<float>(std::sqrt(gm.execution_block_sum_sq / static_cast<double>(gm.execution_block_count)));
-        if (input.enc_rms_pre > 1e-12f) {
-            exec_grad_ratio = exec_grad_norm / input.enc_rms_pre;
-        }
-    }
-
-    obs[14] = exec_grad_norm;
-    obs[15] = exec_grad_ratio;
+    obs[14] = 0.0f;
+    obs[15] = 0.0f;
     obs[16] = input.exec_selection_entropy;
     obs[17] = input.exec_op_entropy;
     obs[18] = input.exec_div_clamp_rate;
@@ -261,8 +249,7 @@ void updateTelemetryObservations(
     const GRIM::TrainingState& training_state,
     const GRIMText::Training::Startup::GpuModelState& gpu_model,
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const TelemetryBatchInput& input,
-    const GRIM::GradNorm::GradMetrics& gm) {
+    const TelemetryBatchInput& input) {
 
     if (!ctx.telemetry.lattice || !ctx.telemetry.enabled) return;
 
@@ -290,8 +277,8 @@ void updateTelemetryObservations(
     // Streams 9-13 plus stream 60: optimizer causation
     populateAdamCausationStreams(obs, input, ctx.telemetry.adam_cumulative_disp);
 
-    // Streams 14-20: Execution Block health
-    populateExecBlockHealthStreams(obs, gm, input);
+    // Streams 14-15 reserved; streams 16-20: Execution Block health
+    populateExecBlockHealthStreams(obs, input);
 
     // Streams 21-26: EB injection diagnostics
     populateEBInjectionStreams(obs, training_state, input, gpu_model);
