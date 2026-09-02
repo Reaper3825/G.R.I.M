@@ -263,6 +263,63 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     ey += (structuredEditorMode ? areaH : areaH * 2.0f) + 16.0f;
 
     if (structuredEditorMode) {
+    // ─── Known / unknown concept entries ───────────────
+    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+    ey += sectionGap;
+    {
+        const float knowledgeStartY = ey;
+        const float innerLeft = editorX + ePad + sectionPad;
+        const float innerW = eInnerW - 2.0f * sectionPad;
+        const float entryAreaH = 44.0f;
+        const float entryBlockH = 76.0f;
+        const float knowledgeSectionH = sectionPad + 22.0f
+            + entryBlockH * static_cast<float>(cbKnownAreas_.size())
+            + 32.0f + 10.0f + 22.0f
+            + entryBlockH * static_cast<float>(cbUnknownAreas_.size())
+            + 32.0f + sectionPad;
+
+        renderer.drawRoundedRect({editorX + ePad, knowledgeStartY},
+                                 {eInnerW, knowledgeSectionH}, 0x0CFFFFFF, sectionRad);
+
+        ey += sectionPad;
+        renderer.drawText({innerLeft, ey}, "KNOWNS",
+                          UITheme::Colors::TextSecondary);
+        ey += 22.0f;
+        for (size_t i = 0; i < cbKnownAreas_.size(); ++i) {
+            renderer.drawText({innerLeft, ey},
+                              "Known " + std::to_string(i + 1),
+                              UITheme::Colors::TextMuted);
+            ey += 20.0f;
+            cbKnownAreas_[i]->setPosition(innerLeft, ey);
+            cbKnownAreas_[i]->setSize(innerW, entryAreaH);
+            cbKnownAreas_[i]->drawOverlay(renderer, position);
+            ey += entryAreaH + 12.0f;
+        }
+        knownsActionMenu_->setPosition(innerLeft, ey);
+        knownsActionMenu_->setSize(100.0f, 26.0f);
+        knownsActionMenu_->drawOverlay(renderer, position);
+        ey += 32.0f + 10.0f;
+
+        renderer.drawText({innerLeft, ey}, "UNKNOWNS",
+                          UITheme::Colors::TextSecondary);
+        ey += 22.0f;
+        for (size_t i = 0; i < cbUnknownAreas_.size(); ++i) {
+            renderer.drawText({innerLeft, ey},
+                              "Unknown " + std::to_string(i + 1),
+                              UITheme::Colors::TextMuted);
+            ey += 20.0f;
+            cbUnknownAreas_[i]->setPosition(innerLeft, ey);
+            cbUnknownAreas_[i]->setSize(innerW, entryAreaH);
+            cbUnknownAreas_[i]->drawOverlay(renderer, position);
+            ey += entryAreaH + 12.0f;
+        }
+        unknownsActionMenu_->setPosition(innerLeft, ey);
+        unknownsActionMenu_->setSize(110.0f, 26.0f);
+        unknownsActionMenu_->drawOverlay(renderer, position);
+        ey += 32.0f + sectionPad;
+    }
+    ey += 16.0f;
+
     // ─── Goal identifier ────────────────────────────────
     renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
     ey += sectionGap;
@@ -659,6 +716,8 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
         cb.goal.has_value() ? static_cast<int>(cb.goal->success_criteria.size()) : 0);
     syncConstraintAreas(
         cb.goal.has_value() ? static_cast<int>(cb.goal->constraints.size()) : 0);
+    syncKnownAreas(static_cast<int>(cb.knowns.size()));
+    syncUnknownAreas(static_cast<int>(cb.unknowns.size()));
     if (cb.goal.has_value()) {
         for (size_t i = 0; i < cb.goal->success_criteria.size(); ++i) {
             cbSuccessCriterionRows_[i].criterionArea->setText(
@@ -669,6 +728,12 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
         for (size_t i = 0; i < cb.goal->constraints.size(); ++i) {
             cbConstraintAreas_[i]->setText(cb.goal->constraints[i]);
         }
+    }
+    for (size_t i = 0; i < cb.knowns.size(); ++i) {
+        cbKnownAreas_[i]->setText(cb.knowns[i]);
+    }
+    for (size_t i = 0; i < cb.unknowns.size(); ++i) {
+        cbUnknownAreas_[i]->setText(cb.unknowns[i]);
     }
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
 
@@ -723,6 +788,8 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
     cbSuccessCriterionRows_.clear();
     cbConstraintAreas_.clear();
+    cbKnownAreas_.clear();
+    cbUnknownAreas_.clear();
     cbIntermediateAreas_.clear();
     cbExecStepRows_.clear();
     cbEditorScrollOffset_ = 0.0f;
@@ -753,6 +820,28 @@ void UIDataHubPanel::syncConstraintAreas(int count) {
     }
     while (static_cast<int>(cbConstraintAreas_.size()) > count) {
         cbConstraintAreas_.pop_back();
+    }
+}
+
+void UIDataHubPanel::syncKnownAreas(int count) {
+    if (count < 0) count = 0;
+    while (static_cast<int>(cbKnownAreas_.size()) < count) {
+        cbKnownAreas_.push_back(std::make_shared<UITextArea>(
+            "", "", [](const std::string&) {}));
+    }
+    while (static_cast<int>(cbKnownAreas_.size()) > count) {
+        cbKnownAreas_.pop_back();
+    }
+}
+
+void UIDataHubPanel::syncUnknownAreas(int count) {
+    if (count < 0) count = 0;
+    while (static_cast<int>(cbUnknownAreas_.size()) < count) {
+        cbUnknownAreas_.push_back(std::make_shared<UITextArea>(
+            "", "", [](const std::string&) {}));
+    }
+    while (static_cast<int>(cbUnknownAreas_.size()) > count) {
+        cbUnknownAreas_.pop_back();
     }
 }
 
@@ -807,6 +896,26 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     };
     const std::string target_state = cbTargetStateArea_
         ? trim(cbTargetStateArea_->getText()) : std::string{};
+    for (size_t i = 0; i < cbKnownAreas_.size(); ++i) {
+        const std::string known = cbKnownAreas_[i]
+            ? trim(cbKnownAreas_[i]->getText()) : std::string{};
+        if (known.empty()) {
+            validation_error = "Known " + std::to_string(i + 1)
+                + " cannot be empty";
+            return false;
+        }
+        out.knowns.push_back(known);
+    }
+    for (size_t i = 0; i < cbUnknownAreas_.size(); ++i) {
+        const std::string unknown = cbUnknownAreas_[i]
+            ? trim(cbUnknownAreas_[i]->getText()) : std::string{};
+        if (unknown.empty()) {
+            validation_error = "Unknown " + std::to_string(i + 1)
+                + " cannot be empty";
+            return false;
+        }
+        out.unknowns.push_back(unknown);
+    }
     if (!target_state.empty() || !cbSuccessCriterionRows_.empty()
         || !cbConstraintAreas_.empty()) {
         GRIM::ConceptBlockGoal goal;

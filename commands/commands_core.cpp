@@ -85,10 +85,14 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
 // User-input boundary. Raw user text is never interpreted as an application
 // command; the reasoning model owns that decision.
 void handleCommand(const std::string& line) {
+    handleCommand(line, kDefaultSession);
+}
+
+void handleCommand(const std::string& line, const std::string& session_id) {
     LOG_TRACE("HandleCommand", "START raw model input");
 
     history.push("> " + line, Colors::Default.toUInt());
-    CommandResult result = ai_process(line);
+    CommandResult result = ai_process(line, session_id);
 
     if (result.message.empty()) {
         result.message = "[AI] Failed to process request";

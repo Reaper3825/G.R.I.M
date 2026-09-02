@@ -41,6 +41,10 @@ struct RenderResult {
     // Each constraint owns an independent logical <constraints> span. There
     // is intentionally no outer span covering the full collection.
     std::vector<LogicalByteSpan> constraints;
+    // Top-level ConceptBlock collections. Each entry owns an independent span;
+    // neither collection has an outer span.
+    std::vector<LogicalByteSpan> knowns;
+    std::vector<LogicalByteSpan> unknowns;
     // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
     // and are never emitted into model-visible text.
     size_t prompt_byte_begin = 0;
@@ -78,6 +82,11 @@ inline RenderResult render(const nlohmann::json& j) {
          (j["goal"].contains("constraints") &&
           j["goal"]["constraints"].is_array() &&
           !j["goal"]["constraints"].empty()));
+    const bool has_concept_entries =
+        (j.contains("knowns") && j["knowns"].is_array() &&
+         !j["knowns"].empty()) ||
+        (j.contains("unknowns") && j["unknowns"].is_array() &&
+         !j["unknowns"].empty());
 
     if (j.contains("prompt") && j["prompt"].is_string()
         && !j["prompt"].get<std::string>().empty()) {
@@ -86,7 +95,30 @@ inline RenderResult render(const nlohmann::json& j) {
         result.prompt_byte_end = static_cast<size_t>(out.tellp());
         // Keep the pinned prompt visually separate from goal decomposition
         // while leaving the separator outside the logical prompt span.
-        out << (has_goal_decomposition ? "\n\n" : "\n");
+        out << ((has_goal_decomposition || has_concept_entries) ? "\n\n" : "\n");
+    }
+
+    auto append_entry_collection = [&out](
+        const nlohmann::json& source,
+        std::vector<LogicalByteSpan>& spans) {
+        spans.reserve(source.size());
+        for (const auto& source_entry : source) {
+            LogicalByteSpan entry;
+            if (source_entry.is_string()) {
+                appendLogicalSpan(
+                    out, source_entry.get<std::string>(), entry);
+                if (entry.present) {
+                    out << "\n\n";
+                }
+            }
+            spans.push_back(entry);
+        }
+    };
+    if (j.contains("knowns") && j["knowns"].is_array()) {
+        append_entry_collection(j["knowns"], result.knowns);
+    }
+    if (j.contains("unknowns") && j["unknowns"].is_array()) {
+        append_entry_collection(j["unknowns"], result.unknowns);
     }
 
     if (j.contains("goal") && j["goal"].is_object()) {
@@ -229,6 +261,8 @@ inline std::string renderPlainText(const nlohmann::json& j) {
 inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
     nlohmann::json j{
         {"prompt", cb.prompt},
+        {"knowns", cb.knowns},
+        {"unknowns", cb.unknowns},
         {"explanation", cb.explanation.empty() ? cb.intermediates : cb.explanation},
         {"answer", cb.answer},
         {"raw", cb.raw}
@@ -273,6 +307,17 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
 
     if (!cb.prompt.empty()) {
         out << "<prompt>\n" << cb.prompt << "\n</prompt>\n\n";
+    }
+
+    for (const auto& known : cb.knowns) {
+        out << "<knowns>\n"
+            << known
+            << "\n</knowns>\n\n";
+    }
+    for (const auto& unknown : cb.unknowns) {
+        out << "<unknowns>\n"
+            << unknown
+            << "\n</unknowns>\n\n";
     }
 
     if (cb.goal.has_value()) {

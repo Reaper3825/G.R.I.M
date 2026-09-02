@@ -41,6 +41,8 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.id = stringValue(source.id());
     block.name = stringValue(source.name());
     block.prompt = stringValue(source.prompt());
+    block.knowns = stringVectorValue(source.knowns());
+    block.unknowns = stringVectorValue(source.unknowns());
     block.intermediates = stringVectorValue(source.intermediates());
     block.answer = stringValue(source.answer());
     block.raw = stringValue(source.raw());
@@ -100,6 +102,8 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     const auto id = builder.CreateString(block.id);
     const auto name = builder.CreateString(block.name);
     const auto prompt = builder.CreateString(block.prompt);
+    const auto knowns = createStringVector(builder, block.knowns);
+    const auto unknowns = createStringVector(builder, block.unknowns);
     const auto intermediates = createStringVector(builder, block.intermediates);
     const auto answer = builder.CreateString(block.answer);
     const auto raw = builder.CreateString(block.raw);
@@ -152,7 +156,9 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
         source_sequence_id,
         block.timestamp,
         goal,
-        raw);
+        raw,
+        knowns,
+        unknowns);
 }
 
 size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
@@ -171,6 +177,8 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
         add(256 + block.id.size() + block.name.size() + block.prompt.size()
             + block.answer.size() + block.raw.size() + block.format_type.size()
             + block.source_sequence_id.size());
+        for (const auto& text : block.knowns) add(8 + text.size());
+        for (const auto& text : block.unknowns) add(8 + text.size());
         for (const auto& text : block.intermediates) add(8 + text.size());
         for (const auto& text : block.explanation) add(8 + text.size());
         if (block.goal.has_value()) {

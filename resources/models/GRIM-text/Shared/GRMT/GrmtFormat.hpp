@@ -14,6 +14,10 @@ namespace GRIM {
 
 // Current GRMT training tensor stream version.
 //
+// v23 adds top-level ConceptBlock known/unknown token IDs and one invisible
+// logical token span per ordered entry. These collections remain independent
+// of row-level Goal metadata.
+//
 // v22 adds the independent sequence-local typed atom table and the opening-only
 // local index channel. Local addresses are (AtomType, local_index) and do not
 // reuse durable AtomTable entry IDs.
@@ -38,7 +42,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 22;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 23;
 
 } // namespace GRIM
 

@@ -49,6 +49,10 @@ struct ConceptBlock {
     std::string name;
 
     std::string prompt;
+    // Explicit information available to and missing from this concept. These
+    // are top-level ConceptBlock fields, independent of the optional goal.
+    std::vector<std::string> knowns;
+    std::vector<std::string> unknowns;
     std::vector<std::string> intermediates;
     std::string answer;
     // Unstructured model-visible text. Raw blocks use this field instead of

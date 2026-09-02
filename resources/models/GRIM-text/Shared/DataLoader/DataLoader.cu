@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 #include "../../../../../DataCollection/concept_block_generated.h"
 #include "../../../../../DataCollection/concept_block_canonical.hpp"
+#include "../ConceptBlock/ConceptBlockSpans.hpp"
 #include "../Goal/Goal.hpp"
 #include "../Curriculum/CurriculumMetadata.hpp"
 #include "../GRMT/GrmtFormat.hpp"
@@ -159,6 +160,14 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	j["source_sequence_id"] = fbString(source.source_sequence_id());
 	j["timestamp"] = source.timestamp();
 	j["intermediate_count"] = source.intermediate_count();
+	j["knowns"] = json::array();
+	if (const auto* values = source.knowns()) {
+		for (const auto* value : *values) j["knowns"].push_back(fbString(value));
+	}
+	j["unknowns"] = json::array();
+	if (const auto* values = source.unknowns()) {
+		for (const auto* value : *values) j["unknowns"].push_back(fbString(value));
+	}
 	if (const auto* goal = source.goal()) {
 		json goal_json{{"target_state", fbString(goal->target_state())}};
 		goal_json["success_criteria"] = json::array();
@@ -524,6 +533,12 @@ bool PrepareTrainingDataFromCache(
 		for (const auto& constraint : rendered.constraints) {
 			add_span(constraint);
 		}
+		for (const auto& known : rendered.knowns) {
+			add_span(known);
+		}
+		for (const auto& unknown : rendered.unknowns) {
+			add_span(unknown);
+		}
 		if (rendered.prompt_byte_end > rendered.prompt_byte_begin) {
 			boundaries.push_back(rendered.prompt_byte_begin);
 			boundaries.push_back(rendered.prompt_byte_end);
@@ -732,6 +747,63 @@ bool PrepareTrainingDataFromCache(
 		return goal;
 	};
 
+	auto materialize_concept_block_spans = [&token_span, &span_token_ids](
+		const json& concept,
+		const GRIM::ConceptCanonical::RenderResult& rendered,
+		const std::vector<size_t>& boundaries,
+		const std::vector<size_t>& token_counts,
+		const TokenizedSequence& sequence)
+		-> std::shared_ptr<const GRIM::ConceptBlockSpans> {
+		auto spans = std::make_shared<GRIM::ConceptBlockSpans>();
+		auto materialize_entries = [&](
+			const char* field,
+			const std::vector<GRIM::ConceptCanonical::LogicalByteSpan>& rendered_entries,
+			std::vector<GRIM::ConceptBlockSpanEntry>& destination) {
+			if (!concept.contains(field)) {
+				if (!rendered_entries.empty()) {
+					throw std::runtime_error(
+						std::string("[DataLoader] rendered ") + field +
+						" exist without source entries");
+				}
+				return;
+			}
+			if (!concept[field].is_array()) {
+				throw std::runtime_error(
+					std::string("[DataLoader] ") + field + " must be an array");
+			}
+			const auto& source_entries = concept[field];
+			if (source_entries.size() != rendered_entries.size()) {
+				throw std::runtime_error(
+					std::string("[DataLoader] rendered ") + field +
+					" count mismatch");
+			}
+			destination.reserve(source_entries.size());
+			for (std::size_t index = 0; index < source_entries.size(); ++index) {
+				if (!source_entries[index].is_string()) {
+					throw std::runtime_error(
+						std::string("[DataLoader] ") + field + "[" +
+						std::to_string(index) + "] must be a string");
+				}
+				const std::string prefix =
+					std::string(field) + "[" + std::to_string(index) + "]";
+				GRIM::ConceptBlockSpanEntry entry;
+				entry.span = token_span(
+					rendered_entries[index], boundaries, token_counts, prefix);
+				entry.token_ids = span_token_ids(sequence, entry.span, prefix);
+				destination.push_back(std::move(entry));
+			}
+		};
+
+		materialize_entries("knowns", rendered.knowns, spans->knowns);
+		materialize_entries("unknowns", rendered.unknowns, spans->unknowns);
+		if (spans->empty()) {
+			return nullptr;
+		}
+		std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
+			std::move(spans);
+		return immutable_spans;
+	};
+
 	std::cout << "[DataLoader] Encoding " << concept_json_entries.size()
 	          << " concept sequences..." << std::endl << std::flush;
 	std::vector<TokenizedSequence> all_tokens;
@@ -782,6 +854,8 @@ bool PrepareTrainingDataFromCache(
 			seq->execution_gate_target =
 				GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
 			assign_prompt_span(*seq, rendered, boundaries, token_counts);
+			seq->concept_block_spans = materialize_concept_block_spans(
+				cj, rendered, boundaries, token_counts, *seq);
 			seq->goal = materialize_goal(
 				cj, rendered, boundaries, token_counts, *seq);
 

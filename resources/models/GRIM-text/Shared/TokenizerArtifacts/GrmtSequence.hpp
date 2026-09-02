@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace GRIM { struct Goal; }
+namespace GRIM { struct ConceptBlockSpans; }
 
 namespace GRIM::TokenizerArtifacts {
 
@@ -53,6 +54,10 @@ struct GrmtSequence {
     // Authored row-level goal metadata. Shared ownership lets sliding-window
     // rows retain one immutable Goal without copying its runtime Tensor state.
     std::shared_ptr<const GRIM::Goal> goal;
+
+    // Authored top-level ConceptBlock known/unknown metadata. This remains
+    // independent of Goal while sharing the same immutable row lifetime.
+    std::shared_ptr<const GRIM::ConceptBlockSpans> concept_block_spans;
 
     bool hasAnyValidTarget() const;
     void validateForWrite(const std::string& source) const;

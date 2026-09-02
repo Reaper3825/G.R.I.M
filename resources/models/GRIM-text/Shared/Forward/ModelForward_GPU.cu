@@ -193,6 +193,15 @@ GoalSpanView ModelForwardRequest::goalSpansForRow(std::size_t row) const {
     return payload->goalSpansForRow(row);
 }
 
+ConceptBlockSpanView ModelForwardRequest::conceptBlockSpansForRow(
+    std::size_t row) const {
+    if (!payload) {
+        throw std::runtime_error(
+            "ModelForwardRequest::conceptBlockSpansForRow: payload is NULL");
+    }
+    return payload->conceptBlockSpansForRow(row);
+}
+
 void ModelForwardRequest::validate(const char* caller) const {
     if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
     if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
@@ -336,6 +345,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     ModelForwardOutputs forward_outputs;
     forward_outputs.setGoalMetadata(
         static_cast<std::size_t>(payload.batch_size), payload.goals);
+    forward_outputs.setConceptBlockSpanMetadata(
+        static_cast<std::size_t>(payload.batch_size),
+        payload.concept_block_spans);
     const auto* bindings = request.bindings;
     const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");

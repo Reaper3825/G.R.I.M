@@ -18,6 +18,7 @@
 #pragma once
 
 #include "../AtomInsertion/AtomInsertionDecisionLayout.hpp"
+#include "../ConceptBlock/ConceptBlockSpanView.hpp"
 #include "../Goal/GoalSpanView.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
@@ -107,6 +108,10 @@ struct BatchPayload {
     // Immutable authored Goal metadata aligned one-to-one with training rows.
     // Entries may be null when a source row has no goal identifier.
     std::vector<std::shared_ptr<const GRIM::Goal>> goals; // [batch_size]
+    // Top-level ConceptBlock known/unknown spans, aligned one-to-one with
+    // training rows and intentionally independent of Goal.
+    std::vector<std::shared_ptr<const GRIM::ConceptBlockSpans>>
+        concept_block_spans; // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)
@@ -270,6 +275,7 @@ struct BatchPayload {
     }
 
     GRIM::GoalSpanView goalSpansForRow(std::size_t row) const;
+    GRIM::ConceptBlockSpanView conceptBlockSpansForRow(std::size_t row) const;
     const uint8_t* atomAuxTargetMaskForRow(std::size_t row) const;
 
     void validate(const char* caller) const {
@@ -345,6 +351,20 @@ struct BatchPayload {
             throw std::runtime_error(
                 std::string(caller) +
                 ": inference BatchPayload must not carry training-row goal metadata");
+        }
+        if (isTraining() &&
+            static_cast<int>(concept_block_spans.size()) != batch_size) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": BatchPayload.concept_block_spans.size()=" +
+                std::to_string(concept_block_spans.size()) +
+                " != batch_size=" + std::to_string(batch_size));
+        }
+        if (isInference() && !concept_block_spans.empty()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": inference BatchPayload must not carry training-row "
+                "ConceptBlock span metadata");
         }
         if (!prompt_lengths.empty() || !prompt_end_positions.empty()) {
             if (static_cast<int>(prompt_lengths.size()) != batch_size ||

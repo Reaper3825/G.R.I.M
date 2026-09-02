@@ -442,6 +442,8 @@ private:
     };
     std::vector<CBSuccessCriterionRow> cbSuccessCriterionRows_;
     std::vector<std::shared_ptr<UITextArea>> cbConstraintAreas_;
+    std::vector<std::shared_ptr<UITextArea>> cbKnownAreas_;
+    std::vector<std::shared_ptr<UITextArea>> cbUnknownAreas_;
     std::shared_ptr<UITextArea>  cbAnswerArea_;
     std::shared_ptr<UITextArea>  cbCustomPromptArea_;
     std::vector<std::shared_ptr<UITextArea>> cbIntermediateAreas_;
@@ -459,6 +461,8 @@ private:
     std::shared_ptr<UIButton>    btnCBGenerate_;
     std::shared_ptr<UIActionMenu> successCriteriaActionMenu_; // + / - criterion
     std::shared_ptr<UIActionMenu> constraintsActionMenu_; // + / - constraint
+    std::shared_ptr<UIActionMenu> knownsActionMenu_;      // + / - known
+    std::shared_ptr<UIActionMenu> unknownsActionMenu_;    // + / - unknown
     std::shared_ptr<UIActionMenu> stepActionMenu_;       // + Step / - Step
     std::shared_ptr<UIActionMenu> execStepActionMenu_;   // + Exec Step / - Exec Step
     std::shared_ptr<UIActionMenu> blockActionMenu_;      // New / Save / Delete
@@ -577,6 +581,8 @@ private:
     void clearCBEditor();
     void syncSuccessCriterionRows(int count);
     void syncConstraintAreas(int count);
+    void syncKnownAreas(int count);
+    void syncUnknownAreas(int count);
     void syncIntermediateAreas(int count);
     void syncExecStepRows(int count);
     bool buildConceptBlockFromEditor(GRIM::ConceptBlock& out,

@@ -16,6 +16,7 @@
 #include "../Shared/UnigramByte/SequenceLocalAtomTable.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Batching/LocalAtomSelectionData.hpp"
+#include "../Shared/ConceptBlock/ConceptBlockSpans.hpp"
 #include "../Shared/UnigramByte/Detectors/DetectorRegistry.hpp"
 #include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
@@ -2719,6 +2720,14 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
     sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
     sequence.token_exec_slot_indices.assign(n, -1);
+    auto concept_spans = std::make_shared<GRIM::ConceptBlockSpans>();
+    concept_spans->knowns.push_back(GRIM::ConceptBlockSpanEntry{
+        {sequence.token_ids[0], sequence.token_ids[1]},
+        GRIM::GoalTokenSpan{0, 2}});
+    concept_spans->unknowns.push_back(GRIM::ConceptBlockSpanEntry{
+        {sequence.token_ids[2], sequence.token_ids[3]},
+        GRIM::GoalTokenSpan{2, 4}});
+    sequence.concept_block_spans = std::move(concept_spans);
 
     const uint32_t entry_id = registerSelfTestAtom(
         *sequence.atom_table, AtomType::ATOM_INT, "42");
@@ -2776,6 +2785,22 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
                     ->getRawText(AtomType::ATOM_INT, 0)
                     .value_or("") == "42",
                 "Round-tripped local atom address must retain its value");
+    ASSERT_TRUE(round_trip.sequences[0].concept_block_spans != nullptr,
+                "Top-level ConceptBlock spans must survive GRMT round-trip");
+    ASSERT_EQ(round_trip.sequences[0].concept_block_spans->knowns.size(),
+              static_cast<std::size_t>(1),
+              "Known entry count must survive GRMT round-trip");
+    ASSERT_EQ(round_trip.sequences[0].concept_block_spans->unknowns.size(),
+              static_cast<std::size_t>(1),
+              "Unknown entry count must survive GRMT round-trip");
+    ASSERT_TRUE(
+        round_trip.sequences[0].concept_block_spans->knowns[0].token_ids ==
+            valid.concept_block_spans->knowns[0].token_ids,
+        "Known token IDs must survive GRMT round-trip");
+    ASSERT_TRUE(
+        round_trip.sequences[0].concept_block_spans->unknowns[0].span.begin == 2 &&
+            round_trip.sequences[0].concept_block_spans->unknowns[0].span.end == 4,
+        "Unknown logical span must survive GRMT round-trip");
 
     auto validationRejects = [](const TokenizerArtifacts::GrmtSequence& sequence) {
         try {

@@ -8,10 +8,23 @@
 #include "commands/commands_core.hpp"
 #include "helpers/key.hpp"
 #include "core/grim_platform.h"
+#include "MMO/Core/SessionContextManager.hpp"
 #include <chrono>
 #include <algorithm>
 #include <iomanip>
+#include <random>
 #include <sstream>
+#include <stdexcept>
+
+namespace {
+constexpr float kSessionRowHeight = 30.0f;
+constexpr float kSessionRowGap = 6.0f;
+
+float sessionSidebarWidth(float panelWidth)
+{
+    return std::clamp(panelWidth * 0.28f, 170.0f, 210.0f);
+}
+}
 
 ConsolePanel::ConsolePanel()
     : UIPanel("Console", true),  // Enable dragging
@@ -78,7 +91,11 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "GeoSpatial panel not found");
           }
-      }))
+      })),
+      addSessionButton(std::make_shared<UIButton>("+", [this]() {
+          addTemporarySession();
+      })),
+      sessionScrollBox(std::make_shared<UIScrollBox>())
 {
     position = { 100, 300 };
     size = { 900, 500 };
@@ -90,10 +107,18 @@ ConsolePanel::ConsolePanel()
     consoleInput->setClearOnSubmit(true);
     consoleInput->setVisible(true);
     
-    // ✅ Bind the OnTextSubmitted delegate to handle command execution
     consoleInput->OnTextSubmitted.Bind([this](const std::string& submittedText) {
         if (!submittedText.empty()) {
             LOG_DEBUG("ConsolePanel", "Executing command via delegate: " + submittedText);
+
+            auto& session = activeSession();
+            const std::string turnId = std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count());
+            GRIM::MMO::SessionContextManager::instance().beginTurn(
+                session.id, turnId, submittedText, submittedText);
+            if (!session.committed) {
+                session.committed = true;
+            }
             
             auto& history = getConsoleHistory();
             
@@ -101,7 +126,7 @@ ConsolePanel::ConsolePanel()
             history.push("", UITheme::Colors::Background);
             history.push("  " + timestamp + " > " + submittedText, UITheme::Colors::PrimaryLight);
             
-            handleCommand(submittedText);
+            handleCommand(submittedText, session.id);
             
             history.push("", UITheme::Colors::Background);
         }
@@ -120,6 +145,7 @@ ConsolePanel::ConsolePanel()
     if (cameraButton)   cameraButton->setSize(btnW, btnH);
     if (digitalButton)  digitalButton->setSize(btnW, btnH);
     if (geoSpatialButton) geoSpatialButton->setSize(120.0f, btnH);
+    addSessionButton->setSize(26.0f, 26.0f);
     
     toolbarBox = std::make_shared<UIHBox>(LayoutDirection::Horizontal, 8.0f);
     toolbarBox->addWidget(DCButton);
@@ -130,16 +156,8 @@ ConsolePanel::ConsolePanel()
     toolbarBox->addWidget(geoSpatialButton);
     toolbarBox->addWidget(settingsButton);
     toolbarBox->layout();
-    
-    auto& history = getConsoleHistory();
-    history.push("", UITheme::Colors::Background);
-    history.push("  G.R.I.M - General Responsive Interface", UITheme::Colors::TextHeader);
-    history.push("  Machine Intelligence Console", UITheme::Colors::PrimaryLight);
-    history.push("", UITheme::Colors::Background);
-    history.push("  System Status: ONLINE", UITheme::Colors::Success);
-    history.push("  Type 'help' for available commands", UITheme::Colors::TextSecondary);
-    history.push("  Press ESC to close | Click console to focus", UITheme::Colors::TextDisabled);
-    history.push("", UITheme::Colors::Background);
+
+    addTemporarySession();
 }
 
 void ConsolePanel::update(const InputState& input, float dt)
@@ -158,11 +176,54 @@ void ConsolePanel::update(const InputState& input, float dt)
     }
 
     if (!isVisible()) return;
+
+    const float sidebarX = position.x + 12.0f;
+    const float sidebarWidth = sessionSidebarWidth(size.x);
+    const float sidebarTop = position.y + titleBarHeight + 10.0f;
+    const float inputY = position.y + size.y - 56.0f;
+    const float sessionListTop = sidebarTop + 32.0f;
+    const float sessionListHeight = std::max(40.0f, inputY - sessionListTop - 8.0f);
+
+    addSessionButton->setPosition(
+        sidebarX + sidebarWidth - addSessionButton->getSize().x,
+        sidebarTop - 4.0f);
+    addSessionButton->update(input, dt);
+
+    sessionScrollBox->setPosition(sidebarX, sessionListTop);
+    sessionScrollBox->setSize(sidebarWidth, sessionListHeight);
+    for (size_t index = 0; index < sessionSelectButtons.size(); ++index) {
+        const float rowY = 6.0f + static_cast<float>(index) *
+            (kSessionRowHeight + kSessionRowGap);
+        sessionSelectButtons[index]->setPosition(6.0f, rowY);
+        sessionSelectButtons[index]->setSize(
+            sidebarWidth - 48.0f, kSessionRowHeight);
+        sessionDeleteButtons[index]->setPosition(
+            sidebarWidth - 36.0f, rowY);
+        sessionDeleteButtons[index]->setSize(28.0f, kSessionRowHeight);
+    }
+    sessionScrollBox->setContentHeight(
+        12.0f + static_cast<float>(sessions.size()) *
+            (kSessionRowHeight + kSessionRowGap));
+    sessionScrollBox->update(input, dt);
+
+    if (!pendingSessionSelection.empty()) {
+        activeSessionId = std::move(pendingSessionSelection);
+        pendingSessionSelection.clear();
+        activeSession();
+        rebuildSessionWidgets();
+    }
+    if (!pendingSessionDeletion.empty()) {
+        const std::string sessionId = std::move(pendingSessionDeletion);
+        pendingSessionDeletion.clear();
+        deleteSession(sessionId);
+    }
     
     if (consoleInput) {
-        float inputY = position.y + size.y - 52;
-        consoleInput->setPosition(position.x + 38, inputY);
-        consoleInput->setSize(size.x - 56, 30);
+        const float mainContentX = sidebarX + sidebarWidth + 16.0f;
+        consoleInput->setPosition(mainContentX + 26.0f, inputY + 4.0f);
+        consoleInput->setSize(
+            std::max(20.0f, position.x + size.x - 16.0f - (mainContentX + 26.0f)),
+            30.0f);
         consoleInput->update(input, dt);
     }
 
@@ -181,39 +242,83 @@ bool ConsolePanel::drawOverlay(OverlayRenderer& renderer)
     renderer.drawRect({position.x + 16, position.y + titleBarHeight + 1}, 
                      {size.x - 32, 1}, UITheme::Colors::DividerFaint);
 
+    const float sidebarX = position.x + 12.0f;
+    const float sidebarWidth = sessionSidebarWidth(size.x);
+    const float sidebarTop = position.y + titleBarHeight + 10.0f;
+    const float mainContentX = sidebarX + sidebarWidth + 16.0f;
+    const float mainContentWidth = position.x + size.x - 12.0f - mainContentX;
+
+    renderer.drawText(
+        {sidebarX + 4.0f, sidebarTop},
+        "Session History",
+        UITheme::Colors::TextHeader);
+    addSessionButton->drawOverlay(renderer, position);
+    sessionScrollBox->drawOverlay(renderer, position);
+    renderer.drawRect(
+        {mainContentX - 8.0f, position.y + titleBarHeight + 10.0f},
+        {1.0f, size.y - titleBarHeight - 76.0f},
+        UITheme::Colors::DividerLine);
+
     auto& history = getConsoleHistory();
     
-    float maxTextWidth = size.x - 60.0f;
+    float maxTextWidth = mainContentWidth - 28.0f;
     history.ensureWrapped(maxTextWidth);
     
     float y = position.y + titleBarHeight + 14;
     auto lines = history.wrapped();
-    
-    float scrollAreaHeight = size.y - titleBarHeight - 76;
-    int maxLines = static_cast<int>(scrollAreaHeight / 20.0f);
-    int startIdx = std::max(0, static_cast<int>(lines.size()) - maxLines);
-    
-    for (int i = startIdx; i < static_cast<int>(lines.size()); ++i)
-    {
-        if (y >= position.y + size.y - 76) break;
-        renderer.drawText({position.x + 18, y}, lines[i].text, lines[i].color);
-        y += 20.0f;
+
+    if (history.rawCount() == 0) {
+        const std::string title = "G.R.I.M";
+        const std::string readyMessage = "Ready to begin.";
+        constexpr float titleScale = 2.5f;
+        constexpr float accentWidth = 72.0f;
+        const float contentCenterX = mainContentX + mainContentWidth * 0.5f;
+        const float contentCenterY = position.y + titleBarHeight
+            + (size.y - titleBarHeight - 56.0f) * 0.5f;
+        const float titleWidth = renderer.measureTextWidth(title) * titleScale;
+
+        renderer.drawTextScaled(
+            {contentCenterX - titleWidth * 0.5f,
+             contentCenterY - 52.0f},
+            title,
+            UITheme::Colors::TextHeader,
+            titleScale);
+        renderer.drawRect(
+            {contentCenterX - accentWidth * 0.5f, contentCenterY + 2.0f},
+            {accentWidth, 2.0f},
+            UITheme::Colors::Primary);
+        renderer.drawText(
+            {contentCenterX - renderer.measureTextWidth(readyMessage) * 0.5f,
+             contentCenterY + 18.0f},
+            readyMessage,
+            UITheme::Colors::TextSecondary);
+    } else {
+        float scrollAreaHeight = size.y - titleBarHeight - 76;
+        int maxLines = static_cast<int>(scrollAreaHeight / 20.0f);
+        int startIdx = std::max(0, static_cast<int>(lines.size()) - maxLines);
+
+        for (int i = startIdx; i < static_cast<int>(lines.size()); ++i)
+        {
+            if (y >= position.y + size.y - 76) break;
+            renderer.drawText({mainContentX, y}, lines[i].text, lines[i].color);
+            y += 20.0f;
+        }
     }
 
     // Glass input area at bottom
     float inputY = position.y + size.y - 56;
     float inputRadius = UITheme::Sizes::WidgetRadius + 4.0f;
     
-    renderer.drawRoundedRect({position.x + 12, inputY}, {size.x - 24, 40}, UITheme::Colors::ScrollboxBg, inputRadius);
-    renderer.drawRoundedBorder({position.x + 12, inputY}, {size.x - 24, 40}, UITheme::Colors::BorderSubtle, inputRadius);
+    renderer.drawRoundedRect({mainContentX - 6.0f, inputY}, {mainContentWidth + 6.0f, 40}, UITheme::Colors::ScrollboxBg, inputRadius);
+    renderer.drawRoundedBorder({mainContentX - 6.0f, inputY}, {mainContentWidth + 6.0f, 40}, UITheme::Colors::BorderSubtle, inputRadius);
     
-    renderer.drawText({position.x + 22, inputY + 11}, ">", UITheme::Colors::Primary);
+    renderer.drawText({mainContentX + 4.0f, inputY + 11}, ">", UITheme::Colors::Primary);
     
     if (consoleInput) {
         consoleInput->drawOverlay(renderer, position);
     }
     
-    renderer.drawText({position.x + 18, inputY + 30}, "ESC Close", UITheme::Colors::TextDisabled);
+    renderer.drawText({mainContentX, inputY + 30}, "ESC Close", UITheme::Colors::TextDisabled);
     renderer.drawText({position.x + size.x - 175, inputY + 30}, "Enter Execute", UITheme::Colors::TextDisabled);
     
     renderer.popClipRect();
@@ -238,7 +343,108 @@ void ConsolePanel::executeCommand(const std::string& cmd)
     history.push("> " + cmd, UITheme::Colors::PrimaryLight);
     
     // Execute via command system (adds results to history internally)
-    handleCommand(cmd);
+    auto& session = activeSession();
+    const std::string turnId = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    GRIM::MMO::SessionContextManager::instance().beginTurn(
+        session.id, turnId, cmd, cmd);
+    session.committed = true;
+    handleCommand(cmd, session.id);
+}
+
+void ConsolePanel::addTemporarySession()
+{
+    const std::string name = generateSessionName();
+    SessionEntry session;
+    session.id = "session-" + name;
+    session.name = name;
+    sessions.push_back(std::move(session));
+    activeSessionId = sessions.back().id;
+    rebuildSessionWidgets();
+}
+
+void ConsolePanel::deleteSession(const std::string& sessionId)
+{
+    const auto it = std::find_if(
+        sessions.begin(), sessions.end(),
+        [&](const SessionEntry& session) { return session.id == sessionId; });
+    if (it == sessions.end()) {
+        throw std::runtime_error("ConsolePanel cannot delete unknown session: " + sessionId);
+    }
+
+    const bool wasActive = activeSessionId == sessionId;
+    if (it->committed) {
+        GRIM::MMO::SessionContextManager::instance().destroySession(sessionId);
+    }
+    sessions.erase(it);
+
+    if (sessions.empty()) {
+        addTemporarySession();
+        return;
+    }
+    if (wasActive) {
+        activeSessionId = sessions.back().id;
+    }
+    rebuildSessionWidgets();
+}
+
+void ConsolePanel::rebuildSessionWidgets()
+{
+    sessionScrollBox->clearChildren();
+    sessionSelectButtons.clear();
+    sessionDeleteButtons.clear();
+
+    for (const auto& session : sessions) {
+        const std::string sessionId = session.id;
+        auto selectButton = std::make_shared<UIButton>(
+            session.name,
+            [this, sessionId]() { pendingSessionSelection = sessionId; });
+        auto deleteButton = std::make_shared<UIButton>(
+            "x",
+            [this, sessionId]() { pendingSessionDeletion = sessionId; });
+        if (session.id == activeSessionId) {
+            selectButton->setColors(
+                UITheme::Colors::RowSelected,
+                UITheme::Colors::RowHover,
+                UITheme::Colors::WidgetBgActive);
+        }
+        deleteButton->setColors(
+            UITheme::Colors::WidgetBg,
+            UITheme::Colors::DangerBg,
+            UITheme::Colors::DangerBright);
+        sessionScrollBox->addChild(selectButton);
+        sessionScrollBox->addChild(deleteButton);
+        sessionSelectButtons.push_back(std::move(selectButton));
+        sessionDeleteButtons.push_back(std::move(deleteButton));
+    }
+}
+
+ConsolePanel::SessionEntry& ConsolePanel::activeSession()
+{
+    const auto it = std::find_if(
+        sessions.begin(), sessions.end(),
+        [&](const SessionEntry& session) { return session.id == activeSessionId; });
+    if (it == sessions.end()) {
+        throw std::runtime_error("ConsolePanel active session is missing: " + activeSessionId);
+    }
+    return *it;
+}
+
+std::string ConsolePanel::generateSessionName() const
+{
+    static std::mt19937 generator(std::random_device{}());
+    static std::uniform_int_distribution<int> distribution(100000, 999999);
+
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const std::string candidate = std::to_string(distribution(generator));
+        const bool duplicate = std::any_of(
+            sessions.begin(), sessions.end(),
+            [&](const SessionEntry& session) { return session.name == candidate; });
+        if (!duplicate) {
+            return candidate;
+        }
+    }
+    throw std::runtime_error("ConsolePanel failed to generate a unique session name");
 }
 
 std::string ConsolePanel::getCurrentTime() const

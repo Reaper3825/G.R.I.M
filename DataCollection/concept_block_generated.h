@@ -283,7 +283,9 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_SOURCE_SEQUENCE_ID = 24,
     VT_TIMESTAMP = 26,
     VT_GOAL = 28,
-    VT_RAW = 30
+    VT_RAW = 30,
+    VT_KNOWNS = 32,
+    VT_UNKNOWNS = 34
   };
   const ::flatbuffers::String *id() const {
     return GetPointer<const ::flatbuffers::String *>(VT_ID);
@@ -327,6 +329,12 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *raw() const {
     return GetPointer<const ::flatbuffers::String *>(VT_RAW);
   }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *knowns() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_KNOWNS);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *unknowns() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_UNKNOWNS);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_ID) &&
@@ -358,6 +366,12 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(goal()) &&
            VerifyOffset(verifier, VT_RAW) &&
            verifier.VerifyString(raw()) &&
+           VerifyOffset(verifier, VT_KNOWNS) &&
+           verifier.VerifyVector(knowns()) &&
+           verifier.VerifyVectorOfStrings(knowns()) &&
+           VerifyOffset(verifier, VT_UNKNOWNS) &&
+           verifier.VerifyVector(unknowns()) &&
+           verifier.VerifyVectorOfStrings(unknowns()) &&
            verifier.EndTable();
   }
 };
@@ -408,6 +422,12 @@ struct ConceptBlockBuilder {
   void add_raw(::flatbuffers::Offset<::flatbuffers::String> raw) {
     fbb_.AddOffset(ConceptBlock::VT_RAW, raw);
   }
+  void add_knowns(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> knowns) {
+    fbb_.AddOffset(ConceptBlock::VT_KNOWNS, knowns);
+  }
+  void add_unknowns(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> unknowns) {
+    fbb_.AddOffset(ConceptBlock::VT_UNKNOWNS, unknowns);
+  }
   explicit ConceptBlockBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -434,9 +454,13 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
     ::flatbuffers::Offset<::flatbuffers::String> source_sequence_id = 0,
     int64_t timestamp = 0,
     ::flatbuffers::Offset<GRIMConcept::Goal> goal = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> raw = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> raw = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> knowns = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> unknowns = 0) {
   ConceptBlockBuilder builder_(_fbb);
   builder_.add_timestamp(timestamp);
+  builder_.add_unknowns(unknowns);
+  builder_.add_knowns(knowns);
   builder_.add_raw(raw);
   builder_.add_goal(goal);
   builder_.add_source_sequence_id(source_sequence_id);
@@ -468,7 +492,9 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
     const char *source_sequence_id = nullptr,
     int64_t timestamp = 0,
     ::flatbuffers::Offset<GRIMConcept::Goal> goal = 0,
-    const char *raw = nullptr) {
+    const char *raw = nullptr,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *knowns = nullptr,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *unknowns = nullptr) {
   auto id__ = id ? _fbb.CreateString(id) : 0;
   auto name__ = name ? _fbb.CreateString(name) : 0;
   auto prompt__ = prompt ? _fbb.CreateString(prompt) : 0;
@@ -480,6 +506,8 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
   auto format_type__ = format_type ? _fbb.CreateString(format_type) : 0;
   auto source_sequence_id__ = source_sequence_id ? _fbb.CreateString(source_sequence_id) : 0;
   auto raw__ = raw ? _fbb.CreateString(raw) : 0;
+  auto knowns__ = knowns ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*knowns) : 0;
+  auto unknowns__ = unknowns ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*unknowns) : 0;
   return GRIMConcept::CreateConceptBlock(
       _fbb,
       id__,
@@ -495,7 +523,9 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
       source_sequence_id__,
       timestamp,
       goal,
-      raw__);
+      raw__,
+      knowns__,
+      unknowns__);
 }
 
 struct ConceptBlockDataset FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

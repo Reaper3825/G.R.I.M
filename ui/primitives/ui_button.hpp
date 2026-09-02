@@ -19,6 +19,11 @@ public:
     // Mutators
     void setText(const std::string& text) { label = text; }
     std::string getText() const { return label; }
+    void setColors(uint32_t base, uint32_t hover, uint32_t press) {
+        baseColor = base;
+        hoverColor = hover;
+        pressColor = press;
+    }
 
 private:
     std::string label;

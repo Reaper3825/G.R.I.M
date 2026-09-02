@@ -243,8 +243,25 @@ void OverlayRenderer::rebuildAtlas()
 
 void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_t color)
 {
-    float textW = measureTextWidth(text);
-    expandDirtyRect((int)pos.x, (int)pos.y, (int)textW + 2, (int)m_fontSize + 2);
+    drawTextScaled(pos, text, color, 1.0f);
+}
+
+void OverlayRenderer::drawTextScaled(
+    const Vec2& pos,
+    const std::string& text,
+    uint32_t color,
+    float scale)
+{
+    if (scale <= 0.0f) {
+        throw std::invalid_argument("OverlayRenderer::drawTextScaled requires scale > 0");
+    }
+
+    float textW = measureTextWidth(text) * scale;
+    expandDirtyRect(
+        static_cast<int>(pos.x),
+        static_cast<int>(pos.y),
+        static_cast<int>(std::ceil(textW)) + 2,
+        static_cast<int>(std::ceil(m_fontSize * scale)) + 2);
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     if (!m_pixels || !m_fontLoaded || text.empty())
@@ -268,7 +285,7 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
 
         if (cp == '\n') {
             cursorX = pos.x;
-            cursorY += m_fontSize;
+            cursorY += m_fontSize * scale;
             continue;
         }
 
@@ -283,22 +300,32 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
         int glyphW = bc.x1 - bc.x0;
         int glyphH = bc.y1 - bc.y0;
         if (glyphW <= 0 || glyphH <= 0) {
-            cursorX += bc.xadvance;
+            cursorX += bc.xadvance * scale;
             continue;
         }
 
-        int dstX0 = (int)std::floor(cursorX + bc.xoff);
-        int dstY0 = (int)std::floor(cursorY + bc.yoff + m_fontSize);
+        int dstX0 = static_cast<int>(std::floor(cursorX + bc.xoff * scale));
+        int dstY0 = static_cast<int>(
+            std::floor(cursorY + (bc.yoff + m_fontSize) * scale));
+        int dstGlyphW = static_cast<int>(std::ceil(glyphW * scale));
+        int dstGlyphH = static_cast<int>(std::ceil(glyphH * scale));
 
-        for (int gy = 0; gy < glyphH; ++gy) {
+        for (int gy = 0; gy < dstGlyphH; ++gy) {
             int dy = dstY0 + gy;
             if (dy < clip.y1 || dy >= clip.y2) continue;
+            int sourceY = std::min(
+                glyphH - 1,
+                static_cast<int>(std::floor(static_cast<float>(gy) / scale)));
 
-            for (int gx = 0; gx < glyphW; ++gx) {
+            for (int gx = 0; gx < dstGlyphW; ++gx) {
                 int dx = dstX0 + gx;
                 if (dx < clip.x1 || dx >= clip.x2) continue;
+                int sourceX = std::min(
+                    glyphW - 1,
+                    static_cast<int>(std::floor(static_cast<float>(gx) / scale)));
 
-                uint8_t coverage = m_fontAtlas[(bc.y0 + gy) * m_atlasWidth + (bc.x0 + gx)];
+                uint8_t coverage = m_fontAtlas[
+                    (bc.y0 + sourceY) * m_atlasWidth + (bc.x0 + sourceX)];
                 if (coverage == 0) continue;
 
                 uint8_t ca = (uint8_t)((a * coverage) / 255);
@@ -322,7 +349,7 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
             }
         }
 
-        cursorX += bc.xadvance;
+        cursorX += bc.xadvance * scale;
     }
 }
 

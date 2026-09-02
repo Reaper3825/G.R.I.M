@@ -7,6 +7,7 @@
 //======================================================//
 
 #include "SlidingWindow.hpp"
+#include "../../../Shared/ConceptBlock/ConceptBlockSpans.hpp"
 #include "../../../Shared/Goal/Goal.hpp"
 #include "../../../Shared/UnigramByte/TokenLayout.hpp"
 
@@ -246,6 +247,84 @@ std::shared_ptr<const GRIM::Goal> offsetGoalSpans(
     return shifted;
 }
 
+std::shared_ptr<const GRIM::ConceptBlockSpans> offsetConceptBlockSpans(
+    const std::shared_ptr<const GRIM::ConceptBlockSpans>& source,
+    std::int32_t offset) {
+    if (!source || offset == 0) {
+        return source;
+    }
+    auto shifted = std::make_shared<GRIM::ConceptBlockSpans>(*source);
+    auto shift_entries = [offset](
+        std::vector<GRIM::ConceptBlockSpanEntry>& entries) {
+        for (auto& entry : entries) {
+            entry.span.begin += offset;
+            entry.span.end += offset;
+        }
+    };
+    shift_entries(shifted->knowns);
+    shift_entries(shifted->unknowns);
+    std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
+        std::move(shifted);
+    return immutable_spans;
+}
+
+bool conceptBlockSpansFitPrefix(
+    const std::shared_ptr<const GRIM::ConceptBlockSpans>& spans,
+    size_t source_end) {
+    if (!spans) {
+        return false;
+    }
+    auto entries_fit = [source_end](
+        const std::vector<GRIM::ConceptBlockSpanEntry>& entries) {
+        return std::all_of(
+            entries.begin(), entries.end(),
+            [source_end](const GRIM::ConceptBlockSpanEntry& entry) {
+                return static_cast<size_t>(entry.span.end) <= source_end;
+            });
+    };
+    return entries_fit(spans->knowns) && entries_fit(spans->unknowns);
+}
+
+std::shared_ptr<const GRIM::ConceptBlockSpans> sliceConceptBlockSpansForSftWindow(
+    const std::shared_ptr<const GRIM::ConceptBlockSpans>& source,
+    size_t prefix_length,
+    size_t response_source_begin,
+    size_t response_source_end) {
+    if (!source) {
+        return nullptr;
+    }
+
+    auto sliced = std::make_shared<GRIM::ConceptBlockSpans>();
+    auto slice_entries = [prefix_length, response_source_begin, response_source_end](
+        const std::vector<GRIM::ConceptBlockSpanEntry>& entries,
+        std::vector<GRIM::ConceptBlockSpanEntry>& destination) {
+        destination.reserve(entries.size());
+        for (const auto& source_entry : entries) {
+            GRIM::ConceptBlockSpanEntry entry = source_entry;
+            if (entry.span.end <= static_cast<std::int32_t>(prefix_length)) {
+                destination.push_back(std::move(entry));
+                continue;
+            }
+            if (entry.span.begin >= static_cast<std::int32_t>(response_source_begin) &&
+                entry.span.end <= static_cast<std::int32_t>(response_source_end)) {
+                const std::int32_t offset = static_cast<std::int32_t>(prefix_length) -
+                    static_cast<std::int32_t>(response_source_begin);
+                entry.span.begin += offset;
+                entry.span.end += offset;
+                destination.push_back(std::move(entry));
+            }
+        }
+    };
+    slice_entries(source->knowns, sliced->knowns);
+    slice_entries(source->unknowns, sliced->unknowns);
+    if (sliced->empty()) {
+        return nullptr;
+    }
+    std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
+        std::move(sliced);
+    return immutable_spans;
+}
+
 bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
                     size_t source_end) {
     if (!goal) {
@@ -435,6 +514,11 @@ SftWindowConstruction constructSftWindows(
             } else {
                 window.atom_table = sequence.atom_table;
                 window.goal = sequence.goal;
+                window.concept_block_spans = sliceConceptBlockSpansForSftWindow(
+                    sequence.concept_block_spans,
+                    prefix_length,
+                    prefix_length + response_begin,
+                    prefix_length + response_end);
                 appendSftTokenRange(window, sequence, 0, prefix_length);
                 appendSftTokenRange(
                     window,
@@ -527,6 +611,8 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
                 seq.prompt_end_pos += 1;
             }
             seq.goal = offsetGoalSpans(seq.goal, 1);
+            seq.concept_block_spans =
+                offsetConceptBlockSpans(seq.concept_block_spans, 1);
             added_bos_out++;
         }
 
@@ -728,6 +814,10 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             // leading window when every authored logical span is present.
             if (is_first_window && goalFitsPrefix(seq.goal, end)) {
                 window.goal = seq.goal;
+            }
+            if (is_first_window &&
+                conceptBlockSpansFitPrefix(seq.concept_block_spans, end)) {
+                window.concept_block_spans = seq.concept_block_spans;
             }
 
             // For non-first windows, prepend BOS token (gated on add_bos_token config)

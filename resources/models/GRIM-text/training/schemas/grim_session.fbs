@@ -1,0 +1,73 @@
+// GRIM session metadata schema.
+//
+// Timestamps are Unix epoch milliseconds. Turn counters describe completed
+// turns; the contents of those turns will be defined in a later schema pass.
+
+namespace GRIMSession;
+
+enum SessionState : ubyte {
+  Active = 0,
+  Suspended = 1,
+  Closed = 2
+}
+
+table GoalTokenSpan {
+  begin: int32 = -1;
+  end: int32 = -1;
+}
+
+table TargetState {
+  token_ids: [int32] (required);
+  span: GoalTokenSpan (required);
+}
+
+table SuccessCriterion {
+  token_ids: [int32] (required);
+  criterion_span: GoalTokenSpan (required);
+  evidence_token_ids: [int32] (required);
+  evidence_span: GoalTokenSpan (required);
+}
+
+table SuccessCriteria {
+  span: GoalTokenSpan (required);
+  entries: [SuccessCriterion] (required);
+}
+
+table Constraint {
+  token_ids: [int32] (required);
+  constraint_span: GoalTokenSpan (required);
+}
+
+table Constraints {
+  entries: [Constraint] (required);
+}
+
+table Goal {
+  target_state: TargetState;
+  success_criteria: SuccessCriteria;
+  constraints: Constraints;
+}
+
+table Session {
+  session_id: string (required);
+  name: string (required);
+  state: SessionState = Active;
+
+  created_timestamp_ms: uint64;
+  modified_timestamp_ms: uint64;
+
+  user_turn_count: uint64;
+  grim_turn_count: uint64;
+  total_turn_count: uint64;
+
+  // Serialized reasoning-state metadata; its structure will be defined later.
+  reasoning_state: string;
+
+  goals: [Goal];
+  knowns: [string];
+  unknowns: [string];
+}
+
+root_type Session;
+file_identifier "GSES";
+file_extension "grimsession";

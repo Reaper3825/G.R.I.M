@@ -42,6 +42,9 @@ void setLastCommand(const std::string& command);
 // Core AI calls
 // ====================================================
 std::future<std::string> callAIAsync(const std::string& prompt);
+std::future<std::string> callAIAsync(
+	const std::string& prompt,
+	const std::string& session_id);
 
 // ====================================================
 // Conversation management (for KV cache optimization)
@@ -55,3 +58,6 @@ void warmupAI();
 // Synchronous + streaming AI wrappers
 // ====================================================
 CommandResult ai_process(const std::string& input);
+CommandResult ai_process(
+	const std::string& input,
+	const std::string& session_id);

@@ -614,6 +614,24 @@ UIDataHubPanel::UIDataHubPanel()
             cbConstraintAreas_.pop_back();
     }, UITheme::Colors::Danger);
 
+    knownsActionMenu_ = std::make_shared<UIActionMenu>("Knowns");
+    knownsActionMenu_->addItem("+ Known", [this]() {
+        syncKnownAreas(static_cast<int>(cbKnownAreas_.size()) + 1);
+    }, UITheme::Colors::Success);
+    knownsActionMenu_->addItem("- Known", [this]() {
+        if (!cbKnownAreas_.empty())
+            cbKnownAreas_.pop_back();
+    }, UITheme::Colors::Danger);
+
+    unknownsActionMenu_ = std::make_shared<UIActionMenu>("Unknowns");
+    unknownsActionMenu_->addItem("+ Unknown", [this]() {
+        syncUnknownAreas(static_cast<int>(cbUnknownAreas_.size()) + 1);
+    }, UITheme::Colors::Success);
+    unknownsActionMenu_->addItem("- Unknown", [this]() {
+        if (!cbUnknownAreas_.empty())
+            cbUnknownAreas_.pop_back();
+    }, UITheme::Colors::Danger);
+
     stepActionMenu_ = std::make_shared<UIActionMenu>("Steps");
     stepActionMenu_->addItem("+ Step", [this]() {
         auto area = std::make_shared<UITextArea>(
@@ -885,7 +903,8 @@ UIDataHubPanel::UIDataHubPanel()
         cbModelDropdown_, cbCurriculumDropdown_, cbTrainingStageDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbAnswerArea_, cbCustomPromptArea_,
-        btnCBGenerate_, successCriteriaActionMenu_, constraintsActionMenu_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
+        btnCBGenerate_, successCriteriaActionMenu_, constraintsActionMenu_, knownsActionMenu_, unknownsActionMenu_,
+        stepActionMenu_, execStepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_
     };
 
@@ -1386,6 +1405,10 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             }
             for (auto& area : cbConstraintAreas_)
                 if (area) area->update(input, dt);
+            for (auto& area : cbKnownAreas_)
+                if (area) area->update(input, dt);
+            for (auto& area : cbUnknownAreas_)
+                if (area) area->update(input, dt);
             for (auto& row : cbExecStepRows_) {
                 if (row.opDropdown)    row.opDropdown->update(input, dt);
                 if (row.argSlotsInput) row.argSlotsInput->update(input, dt);
@@ -1573,6 +1596,10 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         successCriteriaActionMenu_->drawExpandedList(renderer, position);
     if (constraintsActionMenu_ && constraintsActionMenu_->isExpanded())
         constraintsActionMenu_->drawExpandedList(renderer, position);
+    if (knownsActionMenu_ && knownsActionMenu_->isExpanded())
+        knownsActionMenu_->drawExpandedList(renderer, position);
+    if (unknownsActionMenu_ && unknownsActionMenu_->isExpanded())
+        unknownsActionMenu_->drawExpandedList(renderer, position);
     if (execStepActionMenu_ && execStepActionMenu_->isExpanded())
         execStepActionMenu_->drawExpandedList(renderer, position);
     if (stepActionMenu_ && stepActionMenu_->isExpanded())

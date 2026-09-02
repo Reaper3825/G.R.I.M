@@ -43,6 +43,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
 
 // Handle command from raw input line (main entry point)
 void handleCommand(const std::string& line);
+void handleCommand(const std::string& line, const std::string& session_id);
 
 // Ensure that built-in / core plugins are registered
 void ensureCorePluginsRegistered();

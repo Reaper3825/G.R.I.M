@@ -64,6 +64,16 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     cb.format_type        = j.value("format_type", std::string("chain_of_thought"));
     cb.source_sequence_id = j.value("source_sequence_id", std::string());
     cb.timestamp          = j.value("timestamp", int64_t(0));
+    if (j.contains("knowns") && j["knowns"].is_array()) {
+        for (const auto& item : j["knowns"]) {
+            if (item.is_string()) cb.knowns.push_back(item.get<std::string>());
+        }
+    }
+    if (j.contains("unknowns") && j["unknowns"].is_array()) {
+        for (const auto& item : j["unknowns"]) {
+            if (item.is_string()) cb.unknowns.push_back(item.get<std::string>());
+        }
+    }
     if (j.contains("goal") && j["goal"].is_object()) {
         GRIM::ConceptBlockGoal goal;
         goal.target_state = j["goal"].value("target_state", std::string());

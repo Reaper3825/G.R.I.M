@@ -450,6 +450,8 @@ Batching::BatchPayload buildAtomInsertionBatchPayload(
     payload.prompt_lengths.clear();
     payload.prompt_end_positions.clear();
     payload.goals.assign(static_cast<std::size_t>(batch_size), nullptr);
+    payload.concept_block_spans.assign(
+        static_cast<std::size_t>(batch_size), nullptr);
     payload.seq_atom_tables.assign(static_cast<std::size_t>(batch_size), nullptr);
 
     payload.input_ids.assign(

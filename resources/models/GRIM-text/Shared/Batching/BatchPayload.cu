@@ -67,6 +67,35 @@ GRIM::GoalSpanView BatchPayload::goalSpansForRow(std::size_t row) const {
     return GRIM::GoalSpanView(target_state, success_criteria, constraints);
 }
 
+GRIM::ConceptBlockSpanView BatchPayload::conceptBlockSpansForRow(
+    std::size_t row) const {
+    if (batch_size <= 0) {
+        throw std::runtime_error(
+            "BatchPayload::conceptBlockSpansForRow: batch_size must be > 0");
+    }
+    if (row >= static_cast<std::size_t>(batch_size)) {
+        throw std::out_of_range(
+            "BatchPayload::conceptBlockSpansForRow: row=" +
+            std::to_string(row) + " is outside batch_size=" +
+            std::to_string(batch_size));
+    }
+    if (concept_block_spans.empty()) {
+        if (isTraining()) {
+            throw std::runtime_error(
+                "BatchPayload::conceptBlockSpansForRow: training metadata "
+                "array is empty");
+        }
+        return GRIM::ConceptBlockSpanView{};
+    }
+    if (concept_block_spans.size() != static_cast<std::size_t>(batch_size)) {
+        throw std::runtime_error(
+            "BatchPayload::conceptBlockSpansForRow: metadata size=" +
+            std::to_string(concept_block_spans.size()) + " != batch_size=" +
+            std::to_string(batch_size));
+    }
+    return GRIM::ConceptBlockSpanView(concept_block_spans[row].get());
+}
+
 const uint8_t* BatchPayload::atomAuxTargetMaskForRow(std::size_t row) const {
     if (row >= static_cast<std::size_t>(batch_size)) {
         throw std::out_of_range(
@@ -241,6 +270,7 @@ BatchPayload buildBatchPayload(
     payload.prompt_lengths.resize(payload.batch_size, 0);
     payload.prompt_end_positions.resize(payload.batch_size, -1);
     payload.goals.resize(payload.batch_size);
+    payload.concept_block_spans.resize(payload.batch_size);
     payload.max_seq_len = 0;
     payload.actual_tokens = 0;
 
@@ -372,6 +402,7 @@ BatchPayload buildBatchPayload(
         payload.prompt_lengths[b] = seq->prompt_length;
         payload.prompt_end_positions[b] = seq->prompt_end_pos;
         payload.goals[b] = seq->goal;
+        payload.concept_block_spans[b] = seq->concept_block_spans;
         payload.actual_tokens += seq_len;
 
     }

@@ -14,11 +14,12 @@ serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + numeric + atoms + learned pieces.
 
-Current training_data.grmt format is GRMT v21. Rows persist atom side channels,
-per-sequence AtomTable data, row-level Goal metadata, opaque slot/transition
-lowering tables, and variable-arity transition invocations. This script reads
-the full current row layout. Typed atom boundaries decode literally; persisted
-AtomTable entries remain diagnostic side-channel data.
+Current training_data.grmt format is GRMT v23. Rows persist atom side channels,
+per-sequence AtomTable and sequence-local atom data, row-level Goal metadata,
+top-level ConceptBlock known/unknown spans, opaque slot/transition lowering
+tables, and variable-arity transition invocations. This script reads the full
+current row layout. Typed atom boundaries decode literally; persisted AtomTable
+entries remain diagnostic side-channel data.
 
 Usage:
     python decode_token_ids.py
@@ -74,7 +75,7 @@ UNIGRAM_TOKEN_START = ATOM_TOKEN_END
 KTMG_VOCAB_VERSION = 6
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 21
+GRMT_FORMAT_VERSION = 23
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
@@ -97,6 +98,8 @@ class GrmtSequenceRecord:
         tuple[list[int], tuple[int, int], list[int], tuple[int, int]]
     ]
     constraints: list[tuple[list[int], tuple[int, int]]]
+    knowns: list[tuple[list[int], tuple[int, int]]]
+    unknowns: list[tuple[list[int], tuple[int, int]]]
 
 
 # ── Binary helpers ───────────────────────────────────────────────────────────
@@ -191,6 +194,44 @@ def read_atom_table_texts(f, source: str) -> dict[int, str]:
             )
         texts[entry_id] = pool[offset:end].decode("utf-8", errors="strict")
     return texts
+
+
+def read_sequence_local_atom_table(f, source: str) -> list[list[str]]:
+    has_table = read_u8(f, source)
+    if has_table not in (0, 1):
+        raise ValueError(
+            f"Invalid SequenceLocalAtomTable presence flag in {source}: {has_table}"
+        )
+    if has_table == 0:
+        return [[] for _ in range(NUM_ATOM_TYPES)]
+    if read_exact(f, 4, source) != b"SLAT":
+        raise ValueError(f"Bad SequenceLocalAtomTable magic in {source}")
+    type_count = read_u32(f, source)
+    if type_count != NUM_ATOM_TYPES:
+        raise ValueError(
+            f"SequenceLocalAtomTable type_count={type_count} in {source}; "
+            f"expected {NUM_ATOM_TYPES}"
+        )
+    values_by_type: list[list[str]] = []
+    for _ in range(type_count):
+        value_count = read_u32(f, source)
+        values = []
+        for _ in range(value_count):
+            length = read_u32(f, source)
+            values.append(read_exact(f, length, source).decode("utf-8", errors="strict"))
+        values_by_type.append(values)
+    return values_by_type
+
+
+def read_concept_block_entry_spans(
+    f, source: str
+) -> list[tuple[list[int], tuple[int, int]]]:
+    entries = []
+    for _ in range(read_u32(f, source)):
+        token_ids = read_i32_array(f, read_u32(f, source), source)
+        span = (read_i32(f, source), read_i32(f, source))
+        entries.append((token_ids, span))
+    return entries
 
 
 # ── Token layout helpers ─────────────────────────────────────────────────────
@@ -480,7 +521,7 @@ def read_goal_metadata(
 def iter_grmt_sequences(path: Path):
     """Yield decoded GRMT rows using the current persisted row layout.
 
-    GRMT v20 per-sequence layout (must read ALL fields to stay in sync):
+    GRMT v23 per-sequence layout (must read ALL fields to stay in sync):
       uint32         seq_len
       int32[seq_len] token_ids
       int32[seq_len] targets
@@ -489,10 +530,14 @@ def iter_grmt_sequences(path: Path):
       uint32[seq_len] atom_flags
       uint32[seq_len] atom_entry_ids
       uint8 has_atom_table + optional AtomTable payload
+      uint32[seq_len] token_local_atom_indices
+      uint8 has_local_atom_table + optional SequenceLocalAtomTable payload
       uint8 execution_active, int8 execution_gate_target
       int32 prompt_end_pos, int32 prompt_length
       uint8 has_goal + optional target-state, criterion/evidence, and
           per-constraint token spans
+      uint32 known_count + known token IDs/spans
+      uint32 unknown_count + unknown token IDs/spans
       int32[seq_len] token_exec_slots
       uint32 compiled_slot_binding_count, then {uint64 SlotId, int32 SlotIndex}
       uint32 compiled_transition_binding_count, then
@@ -536,6 +581,8 @@ def iter_grmt_sequences(path: Path):
                 else atom_table_texts.get(entry_id, "")
                 for entry_id in atom_entry_ids
             ]
+            token_local_atom_indices = read_u32_array(f, seq_len, row_source)
+            local_atom_values = read_sequence_local_atom_table(f, row_source)
 
             for token_index in range(seq_len):
                 atom_text = atom_texts[token_index]
@@ -563,6 +610,24 @@ def iter_grmt_sequences(path: Path):
                         f"GRMT atom closing boundary has metadata in {row_source} "
                         f"index={token_index} token_id={token_id}"
                     )
+                local_index = token_local_atom_indices[token_index]
+                if token_is_atom_open:
+                    atom_type = token_id - ATOM_TOKEN_OFFSET
+                    if local_index == ATOM_ENTRY_NONE:
+                        raise ValueError(
+                            f"GRMT atom opening has no local index in {row_source} "
+                            f"index={token_index}"
+                        )
+                    if local_index >= len(local_atom_values[atom_type]):
+                        raise ValueError(
+                            f"GRMT local atom index is out of range in {row_source}: "
+                            f"type={atom_type} local_index={local_index}"
+                        )
+                elif local_index != ATOM_ENTRY_NONE:
+                    raise ValueError(
+                        f"GRMT local atom index exists outside an opening boundary "
+                        f"in {row_source} index={token_index}"
+                    )
 
             execution_active = (read_u8(f, row_source) != 0)
             skip_exact(f, 1, row_source)                          # execution_gate_target (int8)
@@ -575,6 +640,8 @@ def iter_grmt_sequences(path: Path):
                 success_criteria,
                 constraints,
             ) = read_goal_metadata(f, row_source)
+            knowns = read_concept_block_entry_spans(f, row_source)
+            unknowns = read_concept_block_entry_spans(f, row_source)
             skip_exact(f, 4 * seq_len, row_source)                # token_exec_slots (int32)
 
             csb_count = read_u32(f, row_source)
@@ -609,6 +676,8 @@ def iter_grmt_sequences(path: Path):
                 criteria_span=criteria_span,
                 success_criteria=success_criteria,
                 constraints=constraints,
+                knowns=knowns,
+                unknowns=unknowns,
             )
 
 

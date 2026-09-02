@@ -11,6 +11,7 @@
 
 #ifdef USE_CUDA
 
+#include "../ConceptBlock/ConceptBlockSpanView.hpp"
 #include "../Goal/Goal.hpp"
 #include "../Goal/GoalSpanView.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -28,6 +29,8 @@ namespace Forward {
 struct ModelForwardOutputs {
 private:
     std::vector<std::shared_ptr<const Goal>> row_goals_;
+    std::vector<std::shared_ptr<const ConceptBlockSpans>>
+        row_concept_block_spans_;
 
     static int countGradFns(const std::vector<Tensor>& tensors) {
         int count = 0;
@@ -126,6 +129,41 @@ public:
             ? &*goal->constraints
             : nullptr;
         return GoalSpanView(target_state, success_criteria, constraints);
+    }
+
+    void setConceptBlockSpanMetadata(
+        std::size_t batch_size,
+        const std::vector<std::shared_ptr<const ConceptBlockSpans>>& spans) {
+        if (batch_size == 0) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::setConceptBlockSpanMetadata: "
+                "batch_size must be > 0");
+        }
+        if (spans.empty()) {
+            row_concept_block_spans_.assign(batch_size, nullptr);
+            return;
+        }
+        if (spans.size() != batch_size) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::setConceptBlockSpanMetadata: spans.size()=" +
+                std::to_string(spans.size()) + " != batch_size=" +
+                std::to_string(batch_size));
+        }
+        row_concept_block_spans_ = spans;
+    }
+
+    std::size_t conceptBlockSpanRowCount() const noexcept {
+        return row_concept_block_spans_.size();
+    }
+
+    ConceptBlockSpanView conceptBlockSpansForRow(std::size_t row) const {
+        if (row >= row_concept_block_spans_.size()) {
+            throw std::out_of_range(
+                "ModelForwardOutputs::conceptBlockSpansForRow: row=" +
+                std::to_string(row) + " is outside row count=" +
+                std::to_string(row_concept_block_spans_.size()));
+        }
+        return ConceptBlockSpanView(row_concept_block_spans_[row].get());
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -379,6 +417,7 @@ public:
 
     void clear() {
         row_goals_.clear();
+        row_concept_block_spans_.clear();
         clearRetainedLayerOutputs();
         embedding_tensor = Tensor();
         embedding_structured_state = Tensor();

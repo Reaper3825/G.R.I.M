@@ -40,6 +40,8 @@ table ConceptBlock {
     timestamp: long;
     goal: Goal;
     raw: string;
+    knowns: [string];
+    unknowns: [string];
 }
 
 table ConceptBlockDataset {

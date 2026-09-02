@@ -117,9 +117,10 @@ void clearConversationHistory() {
 // =========================================================
 // callOllamaDirect -- bypass orchestrator for Ollama backend
 // =========================================================
-static std::vector<GRIM::MMO::HistoryEntry> buildDirectHistory() {
+static std::vector<GRIM::MMO::HistoryEntry> buildDirectHistory(
+    const std::string& session_id) {
     auto& scm = GRIM::MMO::SessionContextManager::instance();
-    auto messages = scm.getMessages(kDefaultSessionId);
+    auto messages = scm.getMessages(session_id);
 
     std::vector<GRIM::MMO::HistoryEntry> history;
     history.reserve(messages.size());
@@ -189,13 +190,15 @@ static void ensureGrimTextServerReady(const std::string& server_url) {
     }
 }
 
-static std::string callOllamaDirect(const std::string& prompt) {
+static std::string callOllamaDirect(
+    const std::string& prompt,
+    const std::string& session_id) {
     std::string url   = aiConfig.value("ollama_url", "http://127.0.0.1:11434");
     std::string model = aiConfig.value("default_model", "llama3.1:8b");
 
     GRIM::MMO::OllamaBackend backend(url, "ollama-direct", model);
 
-    std::vector<GRIM::MMO::HistoryEntry> history = buildDirectHistory();
+    std::vector<GRIM::MMO::HistoryEntry> history = buildDirectHistory(session_id);
 
     GRIM::MMO::GenerationOptions opts;
     opts.timeout_ms = 60000;
@@ -209,12 +212,14 @@ static std::string callOllamaDirect(const std::string& prompt) {
     return "[AI] Backend call failed: " + gen.error;
 }
 
-static std::string callGrimTextDirect(const std::string& prompt) {
+static std::string callGrimTextDirect(
+    const std::string& prompt,
+    const std::string& session_id) {
     std::string url = aiConfig.value("grim_text_url", "http://127.0.0.1:11435");
     ensureGrimTextServerReady(url);
 
     GRIM::MMO::GrimNativeBackend backend(url, "grim-text-direct");
-    std::vector<GRIM::MMO::HistoryEntry> history = buildDirectHistory();
+    std::vector<GRIM::MMO::HistoryEntry> history = buildDirectHistory(session_id);
 
     GRIM::MMO::GenerationOptions opts;
     opts.timeout_ms = resolveGrimTextRequestTimeoutMs();
@@ -228,17 +233,25 @@ static std::string callGrimTextDirect(const std::string& prompt) {
     return "[AI] Backend call failed: " + gen.error;
 }
 
-static std::string callActiveModelDirect(const std::string& prompt) {
+static std::string callActiveModelDirect(
+    const std::string& prompt,
+    const std::string& session_id) {
     std::string active_model = aiConfig.value("default_model", "llama3.1:8b");
     LOG_DEBUG("AI", "Direct model path hit: active_model=" + active_model + ", " + formatMMORouteState());
     if (isGrimTextModelName(active_model)) {
-        return callGrimTextDirect(prompt);
+        return callGrimTextDirect(prompt, session_id);
     }
-    return callOllamaDirect(prompt);
+    return callOllamaDirect(prompt, session_id);
 }
 
 std::future<std::string> callAIAsync(const std::string& prompt) {
-    return std::async(std::launch::async, [prompt]() -> std::string {
+    return callAIAsync(prompt, kDefaultSessionId);
+}
+
+std::future<std::string> callAIAsync(
+    const std::string& prompt,
+    const std::string& session_id) {
+    return std::async(std::launch::async, [prompt, session_id]() -> std::string {
         // Check aiConfig["backend"] to decide routing
         std::string backend = aiConfig.value("backend", "auto");
 
@@ -246,7 +259,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
         if (backend == "grim_native") {
         LOG_DEBUG("AI", "backend=grim_native direct dispatch selected; " + formatMMORouteState());
-        return callGrimTextDirect(prompt);
+        return callGrimTextDirect(prompt, session_id);
         }
 
 
@@ -254,7 +267,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         // Direct Ollama path -- no orchestrator needed
         if (backend == "ollama") {
             LOG_DEBUG("AI", "backend=ollama direct dispatch selected; " + formatMMORouteState());
-            return callActiveModelDirect(prompt);
+            return callActiveModelDirect(prompt, session_id);
         }
 
 
@@ -269,12 +282,12 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         auto& registry = GRIM::MMO::ModelRegistry::instance();
         if (!registry.isEnabled()) {
             LOG_DEBUG("AI", "MMO toggled off -- falling back to direct model dispatch; " + formatMMORouteState());
-            return callOllamaDirect(prompt);
+            return callOllamaDirect(prompt, session_id);
         }
 
         // Produce NlpAnnotation for structured routing
         auto& scm = GRIM::MMO::SessionContextManager::instance();
-        GRIM::MMO::ContextSnapshotV2 snapshot = scm.snapshot("default");
+        GRIM::MMO::ContextSnapshotV2 snapshot = scm.snapshot(session_id);
         GRIM::NlpAnnotation annotation;
         if (Settings::interventionEnabled("nlp_annotation")) {
             annotation = GRIM::annotate(prompt, snapshot);
@@ -295,7 +308,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         GRIM::MMO::RequestContext ctx;
         ctx.request_id = std::to_string(
             std::chrono::steady_clock::now().time_since_epoch().count());
-        ctx.session_id = kDefaultSessionId;
+        ctx.session_id = session_id;
         ctx.turn_id = ctx.request_id;
         ctx.prompt = prompt;
         ctx.metadata_json = meta.toJson().dump();
@@ -303,7 +316,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
         // Carry the same prior conversation used by direct backends into MMO
         // requests. The current prompt is intentionally not in this history.
-        for (const auto& message : scm.getMessages(kDefaultSessionId)) {
+        for (const auto& message : scm.getMessages(session_id)) {
             if (message.role == "system") {
                 ctx.system_prompt = message.content;
                 continue;
@@ -329,6 +342,12 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 // Blocking AI call -> returns CommandResult (with retry)
 // =========================================================
 CommandResult ai_process(const std::string& input) {
+    return ai_process(input, kDefaultSessionId);
+}
+
+CommandResult ai_process(
+    const std::string& input,
+    const std::string& session_id) {
     CommandResult result;
     result.category  = "routine";
     result.color     = Colors::Cyan;
@@ -343,7 +362,7 @@ CommandResult ai_process(const std::string& input) {
         const auto& personality = aiConfig["personality"];
         if (personality.value("use_custom_prompt", false)) {
             session.setSystemPrompt(
-                kDefaultSessionId,
+                session_id,
                 personality.value("custom_prompt", "You are GRIM. Be brief and direct."));
         }
     }
@@ -351,7 +370,7 @@ CommandResult ai_process(const std::string& input) {
     const size_t maxHistory = aiConfig.value("conversation_history_size", 10);
     // Only prior turns belong in the history for this request. Recording the
     // current input before inference would duplicate it beside the prompt.
-    session.trimHistory(kDefaultSessionId, maxHistory);
+    session.trimHistory(session_id, maxHistory);
 
     for (int attempt = 1; attempt <= maxRetries; ++attempt) {
         try {
@@ -377,7 +396,9 @@ CommandResult ai_process(const std::string& input) {
                 locationContext = " [USER LOCATION: " + g_location.fullAddress() + "]";
             }
             
-            auto future = callAIAsync(prefix + locationContext + " " + input);
+            auto future = callAIAsync(
+                prefix + locationContext + " " + input,
+                session_id);
             reply = future.get();
 
 
@@ -404,11 +425,11 @@ CommandResult ai_process(const std::string& input) {
 
     // ai_process is the owner of raw conversational history. Persist exactly
     // one user turn and, when inference succeeded, its assistant response.
-    session.addMessage(kDefaultSessionId, "user", input);
+    session.addMessage(session_id, "user", input);
     if (result.success) {
-        session.addMessage(kDefaultSessionId, "assistant", result.message);
+        session.addMessage(session_id, "assistant", result.message);
     }
-    session.trimHistory(kDefaultSessionId, maxHistory);
+    session.trimHistory(session_id, maxHistory);
 
     return result;
 }
