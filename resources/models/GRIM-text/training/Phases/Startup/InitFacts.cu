@@ -70,7 +70,6 @@ const char* paramGroupTypeName(GRIM::ParamGroupType type) {
         case GRIM::ParamGroupType::FFN: return "FFN";
         case GRIM::ParamGroupType::RMSNORM: return "RMSNORM";
 
-        case GRIM::ParamGroupType::EXECUTION_BLOCK: return "EXECUTION_BLOCK";
         case GRIM::ParamGroupType::NUMBER_ENCODER: return "NUMBER_ENCODER";
         case GRIM::ParamGroupType::ARG_SELECTOR: return "ARG_SELECTOR";
         case GRIM::ParamGroupType::SLOT_SEED_ENCODER: return "SLOT_SEED_ENCODER";

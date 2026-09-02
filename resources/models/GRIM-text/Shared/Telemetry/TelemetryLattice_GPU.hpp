@@ -153,8 +153,8 @@ enum class MetricStream : int {
     // EB/SB injection diagnostics (poisoning hypothesis)
     EB_INJECT_GATE = 21,             // mean sigmoid inject gate across active rows*steps
     EB_READ_GATE_MEAN = 22,          // mean sigmoid cross-attn read gate across tokens*layers
-    EB_INJECT_WEIGHT_NORM = 23,      // RMS(w_inject_gate) — gate parameter evolution
-    EB_READ_WEIGHT_NORM = 24,        // RMS(W_gate_read) — read gate parameter evolution
+    RESERVED_23 = 23,
+    RESERVED_24 = 24,
     EB_LOSS_FRAC = 25,               // execution_loss / total_loss
     RESERVED_26 = 26,
     // PBM (Positional Bias Method) diagnostics

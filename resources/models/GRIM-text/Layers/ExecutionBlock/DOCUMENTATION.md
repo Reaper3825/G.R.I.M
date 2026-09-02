@@ -11,10 +11,10 @@ Shared forward now stops at contextual argument bootstrap seeding:
    without an execution gate, register bootstrap, op/arg/write/stop steps, or
    execution-memory readback.
 
-The retained `execution_block_GPU.hpp` contains only a lightweight
-`ExecutionMemory` storage view. Registry-owned parameter tensors and config
-fields remain temporarily as migration plumbing; they are not invoked by
-shared forward, training loss, or inference.
+The `ExecutionMemory` storage view and registry-owned ExecutionBlock parameter
+tensors are deleted. The `execution_block_enabled` config field remains only
+as migration plumbing and is not consumed by shared forward, training loss,
+or inference.
 
 The replacement architecture must introduce explicit
 Generator/Agent → Candidate → Verifier decisions with

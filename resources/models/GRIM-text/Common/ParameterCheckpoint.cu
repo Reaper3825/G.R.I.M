@@ -314,7 +314,6 @@ GRIMCheckpoint::ParameterGroupType checkpointGroupType(ParamGroupType type) {
         case ParamGroupType::ATTENTION: return GRIMCheckpoint::ParameterGroupType_ATTENTION;
         case ParamGroupType::FFN: return GRIMCheckpoint::ParameterGroupType_FFN;
         case ParamGroupType::RMSNORM: return GRIMCheckpoint::ParameterGroupType_RMSNORM;
-        case ParamGroupType::EXECUTION_BLOCK: return GRIMCheckpoint::ParameterGroupType_EXECUTION_BLOCK;
         case ParamGroupType::NUMBER_ENCODER: return GRIMCheckpoint::ParameterGroupType_NUMBER_ENCODER;
         case ParamGroupType::ARG_SELECTOR: return GRIMCheckpoint::ParameterGroupType_ARG_SELECTOR;
         case ParamGroupType::SLOT_SEED_ENCODER: return GRIMCheckpoint::ParameterGroupType_SLOT_SEED_ENCODER;

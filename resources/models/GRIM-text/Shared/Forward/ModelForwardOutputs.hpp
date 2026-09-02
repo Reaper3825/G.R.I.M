@@ -14,7 +14,6 @@
 #include "../Goal/Goal.hpp"
 #include "../Goal/GoalSpanView.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 #include <cstddef>
 #include <memory>

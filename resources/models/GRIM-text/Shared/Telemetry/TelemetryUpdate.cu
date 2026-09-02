@@ -168,8 +168,7 @@ void populateEBInjectionStreams(
     float* obs,
     const GRIM::TrainingState& training_state,
     const TelemetryBatchInput& input,
-    const GRIMText::Training::Startup::GpuModelState& gpu_model,
-    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
+    const GRIMText::Training::Startup::GpuModelState& gpu_model) {
 
     // Stream 21: EB_INJECT_GATE
     obs[21] = input.inject_gate_mean;
@@ -177,20 +176,8 @@ void populateEBInjectionStreams(
     // Stream 22: EB_READ_GATE_MEAN (Category 2 telemetry snapshot on TrainingState)
     obs[22] = training_state.h_read_gate_mean;
 
-    // Streams 23-24: Gate weight norms
-    float inject_w_rms = 0.0f;
-    float read_w_rms = 0.0f;
-    auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
-    if (execution_block_parameters) {
-        inject_w_rms = gpuBufferRMS(execution_block_parameters->w_inject_gate.data,
-                                    execution_block_parameters->w_inject_gate.numel(),
-                                    "execution_block_parameters.w_inject_gate");
-        read_w_rms = gpuBufferRMS(execution_block_parameters->W_gate_read.data,
-                                  execution_block_parameters->W_gate_read.numel(),
-                                  "execution_block_parameters.W_gate_read");
-    }
-    obs[23] = inject_w_rms;
-    obs[24] = read_w_rms;
+    obs[23] = 0.0f;
+    obs[24] = 0.0f;
 
     // Stream 25: EB_LOSS_FRAC
     obs[25] = 0.0f;
@@ -307,7 +294,7 @@ void updateTelemetryObservations(
     populateExecBlockHealthStreams(obs, gm, input);
 
     // Streams 21-26: EB injection diagnostics
-    populateEBInjectionStreams(obs, training_state, input, gpu_model, parameter_registry);
+    populateEBInjectionStreams(obs, training_state, input, gpu_model);
 
     // streams 25-26: explicit non-text loss fractions
     if (input.loss > 1e-12f) {

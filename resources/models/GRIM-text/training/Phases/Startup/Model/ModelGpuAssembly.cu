@@ -146,25 +146,6 @@ void verifyEncoderLayersConstructed(GRIM::GPUGrimEncoder& encoder,
     }
 }
 
-void initializeExecutionSubsystems(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::Config::AiConfigSnapshot& model_cfg,
-    uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
-    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_cfg);
-    if (!execution_hp.enabled) {
-        return;
-    }
-
-    const uint64_t execution_seed = weight_init_seed + 20;
-    GRIMText::Training::Startup::ModelRegistration::initializeExecutionBlockParameterTensors(
-        parameter_registry,
-        execution_hp,
-        execution_seed,
-        init_stream);
-    std::cout << "✓ ExecutionBlock parameters created\n";
-}
-
 void initializeNumberEncoderSubsystem(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
@@ -396,10 +377,6 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     (void)requireEmbeddingParametersReady(parameter_registry, caller);
     (void)requireLmHeadParametersReady(parameter_registry, caller);
 
-    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_cfg);
-    if (execution_hp.enabled && !parameter_registry.getExecutionBlockParameters()) {
-        throw std::runtime_error(std::string("[") + caller + "] ExecutionBlock parameters not assembled by Startup::assembleGpuModel() while execution_block is enabled.");
-    }
     const auto number_encoder_hp =
         GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
     if (number_encoder_hp.enabled &&
@@ -598,13 +575,6 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             model_cfg,
             weight_init_seed,
             init_stream);
-
-        initializeExecutionSubsystems(
-            parameter_registry,
-            model_cfg,
-            weight_init_seed,
-            init_stream);
-
 
         std::cout << "✓ GPU model layer assembly complete\n";
         std::cout << "  - Attention: GPU-accelerated\n";

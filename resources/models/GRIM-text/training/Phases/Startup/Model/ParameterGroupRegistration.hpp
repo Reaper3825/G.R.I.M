@@ -91,12 +91,6 @@ void initializeAtomInsertionBoundaryParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 
-void initializeExecutionBlockParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::ExecutionBlockConstructionHP& execution_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
-
 void initializeNumberEncoderParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp,

@@ -112,44 +112,6 @@ struct SlotSeedEncoderParameterTensors {
     Tensor type_embeddings; // [kAtomTypeCount, d_model] when enabled
 };
 
-struct ExecutionBlockParameterTensors {
-    Tensor w_decode_1;
-    Tensor b_decode_1;
-    Tensor w_decode_2;
-    Tensor w_arg1_select;
-    Tensor w_arg2_select;
-    Tensor W_arg1_to_arg2;
-    Tensor W_op_select;
-    Tensor W_key_proj;
-    Tensor W_write_query;
-    Tensor W_write_key;
-    Tensor alpha;
-    Tensor beta;
-    Tensor step_embeddings;
-    Tensor type_num_embed;
-    Tensor W_value_to_emb;
-    Tensor b_value_to_emb;
-    Tensor w_inject_gate;
-    Tensor W_Q_read;
-    Tensor W_K_read;
-    Tensor W_V_read;
-    Tensor W_O_read;
-    Tensor W_gate_read;
-    Tensor tau;
-    Tensor E_slot;
-    Tensor E_op;
-    Tensor W_scal;
-    Tensor b_scal;
-    Tensor W_trace;
-    Tensor b_trace;
-    Tensor W_reason_gate;
-    Tensor W_trace_gate;
-    Tensor W_execute;
-    Tensor b_execute;
-    Tensor W_stop;
-    Tensor b_stop;
-};
-
 struct AttentionResidualGateParameterTensors {
     Tensor W_gate;  // [d_model, 1] when config.attention_residual_gate_enabled=true
     Tensor b_gate;  // [1] when config.attention_residual_gate_enabled=true
@@ -189,7 +151,6 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::LocalAtomRetrievalParameterTensors>
         local_atom_retrieval_parameters;
     std::unique_ptr<GRIM::SlotSeedEncoderParameterTensors> slot_seed_encoder_parameters;
-    std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     // Single durable optimizer/autograd parameter inventory owner.
     // ParameterGroup entries are non-owning views into the tensor owners in
@@ -325,14 +286,6 @@ struct StartupParameterRegistry {
         return gate_parameters;
     }
 
-    GRIM::ExecutionBlockParameterTensors* getExecutionBlockParameters() {
-        return execution_block_parameters.get();
-    }
-
-    const GRIM::ExecutionBlockParameterTensors* getExecutionBlockParameters() const {
-        return execution_block_parameters.get();
-    }
-
     GRIM::NumberEncoderParameterTensors* getNumberEncoderParameters() {
         return number_encoder_parameters.get();
     }
@@ -429,20 +382,6 @@ struct StartupParameterRegistry {
         return *slot_seed_encoder_parameters;
     }
 
-    GRIM::ExecutionBlockParameterTensors& requireExecutionBlockParameters(const char* caller) {
-        if (!execution_block_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.execution_block_parameters is NULL");
-        }
-        return *execution_block_parameters;
-    }
-
-    const GRIM::ExecutionBlockParameterTensors& requireExecutionBlockParameters(const char* caller) const {
-        if (!execution_block_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.execution_block_parameters is NULL");
-        }
-        return *execution_block_parameters;
-    }
-
     std::vector<GRIM::FeedForwardParameterTensors>& feedForwardParameterTensors() {
         return feed_forward_parameter_tensors;
     }
@@ -517,9 +456,6 @@ struct TensorParameterSpec {
     GRIM::ParamStatsBucket stats_bucket;
     int layer = -1;
 };
-
-using ExecutionBlockTensorParameterSpec =
-    TensorParameterSpec<GRIM::ExecutionBlockParameterTensors>;
 
 using NumberEncoderTensorParameterSpec =
     TensorParameterSpec<GRIM::NumberEncoderParameterTensors>;
@@ -623,80 +559,6 @@ inline constexpr std::array<SlotSeedEncoderTensorParameterSpec, 5>
          GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
     }};
 
-inline constexpr std::array<ExecutionBlockTensorParameterSpec, 35>
-    kExecutionBlockTensorParameters = {{
-        {"exec_block_w_decode_1", &GRIM::ExecutionBlockParameterTensors::w_decode_1,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_b_decode_1", &GRIM::ExecutionBlockParameterTensors::b_decode_1,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_w_decode_2", &GRIM::ExecutionBlockParameterTensors::w_decode_2,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_w_arg1_select", &GRIM::ExecutionBlockParameterTensors::w_arg1_select,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_w_arg2_select", &GRIM::ExecutionBlockParameterTensors::w_arg2_select,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_arg1_to_arg2", &GRIM::ExecutionBlockParameterTensors::W_arg1_to_arg2,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_op_select", &GRIM::ExecutionBlockParameterTensors::W_op_select,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_key_proj", &GRIM::ExecutionBlockParameterTensors::W_key_proj,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_write_query", &GRIM::ExecutionBlockParameterTensors::W_write_query,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_write_key", &GRIM::ExecutionBlockParameterTensors::W_write_key,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_alpha", &GRIM::ExecutionBlockParameterTensors::alpha,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_beta", &GRIM::ExecutionBlockParameterTensors::beta,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_step_embeddings", &GRIM::ExecutionBlockParameterTensors::step_embeddings,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_type_num_embed", &GRIM::ExecutionBlockParameterTensors::type_num_embed,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_value_to_emb", &GRIM::ExecutionBlockParameterTensors::W_value_to_emb,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_b_value_to_emb", &GRIM::ExecutionBlockParameterTensors::b_value_to_emb,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_w_inject_gate", &GRIM::ExecutionBlockParameterTensors::w_inject_gate,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_Q_read", &GRIM::ExecutionBlockParameterTensors::W_Q_read,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_K_read", &GRIM::ExecutionBlockParameterTensors::W_K_read,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_V_read", &GRIM::ExecutionBlockParameterTensors::W_V_read,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_O_read", &GRIM::ExecutionBlockParameterTensors::W_O_read,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_gate_read", &GRIM::ExecutionBlockParameterTensors::W_gate_read,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_tau", &GRIM::ExecutionBlockParameterTensors::tau,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_E_slot", &GRIM::ExecutionBlockParameterTensors::E_slot,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_E_op", &GRIM::ExecutionBlockParameterTensors::E_op,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_scal", &GRIM::ExecutionBlockParameterTensors::W_scal,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_b_scal", &GRIM::ExecutionBlockParameterTensors::b_scal,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_trace", &GRIM::ExecutionBlockParameterTensors::W_trace,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_b_trace", &GRIM::ExecutionBlockParameterTensors::b_trace,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_reason_gate", &GRIM::ExecutionBlockParameterTensors::W_reason_gate,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_trace_gate", &GRIM::ExecutionBlockParameterTensors::W_trace_gate,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_execute", &GRIM::ExecutionBlockParameterTensors::W_execute,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_b_execute", &GRIM::ExecutionBlockParameterTensors::b_execute,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_W_stop", &GRIM::ExecutionBlockParameterTensors::W_stop,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"exec_block_b_stop", &GRIM::ExecutionBlockParameterTensors::b_stop,
-         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
-    }};
-
 inline constexpr std::array<EncodingLayerTensorParameterSpec, 8>
     kEncodingLayerTensorParameters = {{
         {"qkv_weight", &GRIM::EncodingLayerParameterTensors::W_qkv,
@@ -757,43 +619,6 @@ inline void registerAtomInsertionBoundaryParameters(
     for (const auto& spec : kAtomInsertionBoundaryTensorParameters) {
         registrar.addTensor(spec.name,
                             parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerExecutionBlockParameters(
-    GRIM::ExecutionBlockParameterTensors& execution_block_parameters,
-    const GRIM::HyperParameters::ExecutionBlockConstructionHP& hp,
-    RegistrarT& registrar) {
-    for (const auto& spec : kExecutionBlockTensorParameters) {
-        bool enabled = true;
-        if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_decode_1) {
-            enabled = hp.decode_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_value_to_emb) {
-            enabled = hp.value_embedding_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_scal) {
-            enabled = hp.scalar_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_trace) {
-            enabled = hp.trace_bias_enabled;
-        }
-        if (!enabled || spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_decode_1 ||
-            spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_value_to_emb ||
-            spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_scal ||
-            spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_trace) {
-            registrar.addConfigGatedTensor(spec.name,
-                                           execution_block_parameters.*(spec.tensor_member),
-                                           spec.type,
-                                           spec.stats_bucket,
-                                           spec.layer,
-                                           enabled,
-                                           "corresponding execution-block bias gate is false");
-            continue;
-        }
-        registrar.addTensor(spec.name,
-                            execution_block_parameters.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);

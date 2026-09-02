@@ -27,7 +27,8 @@
 | Conventional MTP and LatentTrajectoryPreset | Removed end-to-end: config, shifted targets, heads, auxiliary loss, diagnostics, speculative decode, parameter groups, and sidecar checkpoint I/O. The legacy FlatBuffer field remains reserved for checkpoint wire compatibility and is never populated. |
 | `DataLoadInputs` | Deleted local Phase1 data-load mirror; `LoadTrainingData()` consumes `TokenizerHP` / `DataLoadingHP` and reads `StartupConfig.max_seq_len` directly, while `DataInfo` remains only the durable GRMT/data summary fact stored on `TrainingContext`. |
 | `Layers/ReasoningHead/reasoning_head_GPU.{hpp,cu}`, `Forward::ReasoningHeadOutput`, `ParamGroupType::REASONING_HEAD` | Dead architecture. ExecutionBlock owns live structured reasoning, ScratchBlock owns atom detection/injection, and the old ReasoningHead had no active training loss or runtime path when execution was enabled. Do not recreate atom-op logits as a parallel subsystem. |
-| `ExecutionBlockLayer` | Deleted runtime shell. Execution-block math is now exposed only as free ops consuming explicit HP, registry-owned parameter tensors, and runtime-owned diagnostics/workspace. Do not recreate a presence-sentinel class around it. |
+| `ExecutionBlockLayer` | Deleted runtime shell for the removed register-machine execution path. Do not recreate a presence-sentinel class around it. |
+| `ExecutionBlockParameterTensors`, `ExecutionMemory`, `ParamGroupType::EXECUTION_BLOCK` | Dead register-machine parameters and storage. The gate/op/arg/write/stop/readback math was already removed, leaving these tensors allocated, checkpointed, and optimized without a forward or gradient path. |
 | `DecodeTimeNumPolicy` class | Replaced by free decode-time selector ops, which were themselves later deleted (see decode-time slot selector row). |
 | `DecodeTimeSlotSelectorLayer` class | Replaced by the startup-owned selector tensor struct, which was itself later deleted (see decode-time slot selector row). |
 

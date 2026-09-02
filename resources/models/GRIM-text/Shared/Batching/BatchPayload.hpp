@@ -197,8 +197,8 @@ struct BatchPayload {
     //
     // The "menu" of options the selector chooses among: every row's AtomTable
     // entries, merged into ONE batch-global pool so the device selector can score
-    // candidates. Execution-INDEPENDENT (data only; never derived from
-    // ExecutionMemory — see GRIM/Docs/DeletedCode.md). Row r's candidate window is
+    // candidates. This pool is data-only and independent of the deleted
+    // register-machine execution path. Row r's candidate window is
     // [row_atom_offset[r], row_atom_offset[r+1]); a token's own entry maps to the
     // batch-global pool index row_atom_offset[row] + <row-local atom_entry_id>.
     //

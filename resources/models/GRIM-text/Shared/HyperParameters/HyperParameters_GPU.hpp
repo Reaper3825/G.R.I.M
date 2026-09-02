@@ -363,7 +363,6 @@ struct LanguageModelConfig {
     ParameterGroupPrecision parameter_precision_attention = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_ffn = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
-    ParameterGroupPrecision parameter_precision_execution_block = ParameterGroupPrecision::UNSPECIFIED;
 
     // Separate full-context byte-gap atom-insertion model. This compiled model
     // semantic is distinct from use_atom_data, which feeds ExecutionBlock.
@@ -1443,7 +1442,6 @@ inline void validateRootConfigDocument(
     validateParameterGroupPrecision(params.parameter_precision_attention, "parameter_precision_attention", caller);
     validateParameterGroupPrecision(params.parameter_precision_ffn, "parameter_precision_ffn", caller);
     validateParameterGroupPrecision(params.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", caller);
-    validateParameterGroupPrecision(params.parameter_precision_execution_block, "parameter_precision_execution_block", caller);
 
     validateNonNegativeFiniteFields(params, {
         validationField("loss_focal_gamma", &LanguageModelConfig::loss_focal_gamma),
@@ -1967,7 +1965,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_attention);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_ffn);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_rmsnorm);
-    GRIM_LOAD_CONFIG_FIELD(parameter_precision_execution_block);
 
     GRIM_LOAD_CONFIG_FIELD(soft_restart_enabled);
     GRIM_LOAD_CONFIG_FIELD(soft_restart_loss_increase_threshold);
@@ -2543,7 +2540,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_attention);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_ffn);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_insertion_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(local_atom_retrieval_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);

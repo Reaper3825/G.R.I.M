@@ -145,10 +145,6 @@ GradNormStatus accumulateGroupMetrics(
             m.rmsnorm_sum_sq += sum_sq;
             m.rmsnorm_count += count;
             return GradNormStatus::SUCCESS;
-        case GRIM::ParamGroupType::EXECUTION_BLOCK:
-            m.execution_block_sum_sq += sum_sq;
-            m.execution_block_count += count;
-            return GradNormStatus::SUCCESS;
         case GRIM::ParamGroupType::NUMBER_ENCODER:
             m.number_encoder_sum_sq += sum_sq;
             m.number_encoder_count += count;

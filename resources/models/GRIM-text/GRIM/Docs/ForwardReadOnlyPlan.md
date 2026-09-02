@@ -237,20 +237,13 @@ Use this section as the implementation queue. The order below is the architectur
 ### Patch 4 — ExecutionBlock workspace / baseline ownership (`execution-runtime` agent) — resolved
 
 - **Primary files:**
-  - `Layers/ExecutionBlock/execution_block_GPU.hpp`
-  - `Layers/ExecutionBlock/execution_block_GPU.cu`
-  - `Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu`
-  - `Layers/ExecutionBlock/execution_block_data_stream_GPU.cu`
+  - `Layers/ExecutionBlock/DOCUMENTATION.md`
 - **Violation class:** per-step workspace parked on durable layer
 - **Implemented result:**
-  - deleted `ExecutionBlockLayer` entirely after first moving its scratch into
-    `ExecutionBlockDiagnosticsBuffers`
-  - moved step scratch / error flags / execution-record buffers to explicit
-    runtime ownership on `ModelForwardExecutionRuntime::execution_diag`
-  - converted public execution-block entry points into free functions that take
-    explicit `ExecutionBlockConstructionHP` and runtime payloads
+  - deleted the ExecutionBlock layer, operations, workspace, storage view, and
+    parameter tensors
 - **Exit signal (achieved):**
-  - execution-block forward math no longer mutates hidden raw device buffers stored on the durable layer object
+  - no ExecutionBlock allocation, runtime, or parameter owner remains
 
 ### Patch 5 — LM head metadata + effective-weight lifetime (`lmhead-boundary` agent)
 
@@ -326,7 +319,6 @@ Use this section as the implementation queue. The order below is the architectur
   - `Layers/LMHead/lm_head_GPU.hpp`
   - `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp`
   - `Layers/ReasoningHead/reasoning_head_GPU.hpp`
-  - `Layers/ExecutionBlock/execution_block_GPU.hpp`
 - **Violation class:** boundary not enforced by the type system
 - **Concrete offenders:**
   - unconditional mutable `Tensor&` parameter accessors for read-only consumers
@@ -452,7 +444,6 @@ Goal: make the type system reflect the boundary instead of relying on call-site 
   - `Layers/LMHead/lm_head_GPU.hpp`
   - `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp`
   - `Layers/ReasoningHead/reasoning_head_GPU.hpp`
-  - `Layers/ExecutionBlock/execution_block_GPU.hpp` (now mostly resolved here: it exports free ops + explicit runtime workspace, and must not regrow layer-owned parameter/scratch accessors)
 
 ### Exit criteria
 
@@ -498,10 +489,6 @@ Goal: make the read-only forward boundary enforceable at build time, not just by
 | `Layers/Encoding/Encoding_GPU.hpp` | Add const/read-only parameter accessors and/or view payload entry points |
 | `Layers/FlashAttention/EncoderSelfAttention_GPU.cu` | Consume read-only attention-weight views in prefill path and remove forward-local static logging state |
 | `Layers/FlashAttention/EncoderSelfAttention_GPU.hpp` | Carry read-only attention parameter-view contracts |
-| `Layers/ExecutionBlock/execution_block_GPU.cu` | Already converted to thin free-op wrappers + diagnostics-buffer alloc/destroy; keep runtime ownership explicit and do not reintroduce layer shells |
-| `Layers/ExecutionBlock/execution_block_GPU.hpp` | Already reduced to public memory structs, explicit diagnostics workspace, and free-op declarations; do not resurrect layer-owned scratch or parameter accessors |
-| `Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu` | Write per-step scratch only through caller-owned runtime workspace buffers |
-| `Layers/ExecutionBlock/execution_block_data_stream_GPU.cu` | Move execution records and flags behind explicit runtime owners |
 | `Layers/FeedForward/Feed_Forward_GPU.cu` | Reuse FFN math with read-only parameter views |
 | `Layers/FeedForward/Feed_Forward_GPU.hpp` | Keep mutable access narrow; expose const/read-only FFN parameter reads |
 | `Layers/LMHead/lm_head_GPU.cu` | Remove metadata mutation; move `W_eff` out of durable layer state |

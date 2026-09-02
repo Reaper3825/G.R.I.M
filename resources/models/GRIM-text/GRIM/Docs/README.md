@@ -22,7 +22,6 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [LMHead.md](LMHead.md) | Tied embeddings, γ_final, hidden-state centering |
 | [Encoder.md](Encoder.md) | Encoder layer, bias autograd, FFN cache, LayerScale |
 | [ScratchBlock.md](ScratchBlock.md) | ScratchBlock forward/backward and buffer sync |
-| [ExecutionBlock.md](ExecutionBlock.md) | Row-final execution memory and causal readback contract |
 | [PositionEncoding.md](PositionEncoding.md) | ALiBi & RoPE NTK |
 | [Tokenizer.md](Tokenizer.md) | Unigram+byte fallback, AtomTable, sliding window |
 | [AtomTableEntryLogAudit.md](AtomTableEntryLogAudit.md) | Audit of AtomTable entry failures from tokenizer log, including fail-loud requirements for sign and `arg_number` handling |

@@ -327,8 +327,8 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::EXEC_ACTIVE_RATIO: return "exec_active_ratio";
         case MetricStream::EB_INJECT_GATE: return "eb_inject_gate";
         case MetricStream::EB_READ_GATE_MEAN: return "eb_read_gate_mean";
-        case MetricStream::EB_INJECT_WEIGHT_NORM: return "eb_inject_weight_norm";
-        case MetricStream::EB_READ_WEIGHT_NORM: return "eb_read_weight_norm";
+        case MetricStream::RESERVED_23: return "reserved_23";
+        case MetricStream::RESERVED_24: return "reserved_24";
         case MetricStream::EB_LOSS_FRAC: return "eb_loss_frac";
         case MetricStream::RESERVED_26: return "reserved_26";
         case MetricStream::PBM_ALIBI_SLOPE_RMS: return "pbm_alibi_slope_rms";
