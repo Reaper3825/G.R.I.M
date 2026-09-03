@@ -41,9 +41,9 @@ std::pair<std::string, std::string> parseInput(const std::string& input);
 // Dispatch a specific command by name
 CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
 
-// Handle command from raw input line (main entry point)
-void handleCommand(const std::string& line);
-void handleCommand(const std::string& line, const std::string& session_id);
+// Process raw model input and return the response to the owning surface.
+CommandResult handleCommand(const std::string& line);
+CommandResult handleCommand(const std::string& line, const std::string& session_id);
 
 // Ensure that built-in / core plugins are registered
 void ensureCorePluginsRegistered();
@@ -61,5 +61,3 @@ std::string normalizeLine(const std::string& line);
 // Check if feedback is currently pending
 bool hasPendingFeedback();
 
-// Set whether this command came from voice (for feedback control)
-void setVoiceCommand(bool isVoice);

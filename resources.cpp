@@ -1,5 +1,4 @@
 #include "resources.hpp"
-#include "console_history.hpp"
 #include "logger.hpp"
 #include "control/training_paths.hpp"
 #include "settings/runtime_ai_config.hpp"
@@ -26,7 +25,6 @@ namespace fs = std::filesystem;
 nlohmann::json longTermMemory;
 nlohmann::json aiConfig;
 
-ConsoleHistory history;
 std::vector<Timer> timers;
 std::filesystem::path g_currentDir;
 

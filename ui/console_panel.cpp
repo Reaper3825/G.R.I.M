@@ -114,19 +114,24 @@ ConsolePanel::ConsolePanel()
             auto& session = activeSession();
             const std::string turnId = std::to_string(
                 std::chrono::steady_clock::now().time_since_epoch().count());
-            GRIM::MMO::SessionContextManager::instance().beginTurn(
+            auto& sessionManager = GRIM::MMO::SessionContextManager::instance();
+            sessionManager.beginTurn(
                 session.id, turnId, submittedText, submittedText);
             if (!session.committed) {
                 session.committed = true;
             }
             
-            auto& history = getConsoleHistory();
+            auto& history = sessionManager.displayHistory(session.id);
             
             std::string timestamp = "[" + getCurrentTime() + "]";
             history.push("", UITheme::Colors::Background);
             history.push("  " + timestamp + " > " + submittedText, UITheme::Colors::PrimaryLight);
             
-            handleCommand(submittedText, session.id);
+            const CommandResult result = handleCommand(submittedText, session.id);
+            history.push(
+                result.message,
+                (result.color.a << 24) | (result.color.b << 16) |
+                (result.color.g << 8) | result.color.r);
             
             history.push("", UITheme::Colors::Background);
         }
@@ -259,7 +264,8 @@ bool ConsolePanel::drawOverlay(OverlayRenderer& renderer)
         {1.0f, size.y - titleBarHeight - 76.0f},
         UITheme::Colors::DividerLine);
 
-    auto& history = getConsoleHistory();
+    auto& history = GRIM::MMO::SessionContextManager::instance()
+        .displayHistory(activeSessionId);
     
     float maxTextWidth = mainContentWidth - 28.0f;
     history.ensureWrapped(maxTextWidth);
@@ -337,19 +343,21 @@ void ConsolePanel::executeCommand(const std::string& cmd)
     
     LOG_DEBUG("ConsolePanel", "Executing: " + cmd);
     
-    auto& history = getConsoleHistory();
-    
-    // Add to history display
-    history.push("> " + cmd, UITheme::Colors::PrimaryLight);
-    
-    // Execute via command system (adds results to history internally)
     auto& session = activeSession();
+    auto& sessionManager = GRIM::MMO::SessionContextManager::instance();
+    auto& history = sessionManager.displayHistory(session.id);
+
+    history.push("> " + cmd, UITheme::Colors::PrimaryLight);
+
     const std::string turnId = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
-    GRIM::MMO::SessionContextManager::instance().beginTurn(
-        session.id, turnId, cmd, cmd);
+    sessionManager.beginTurn(session.id, turnId, cmd, cmd);
     session.committed = true;
-    handleCommand(cmd, session.id);
+    const CommandResult result = handleCommand(cmd, session.id);
+    history.push(
+        result.message,
+        (result.color.a << 24) | (result.color.b << 16) |
+        (result.color.g << 8) | result.color.r);
 }
 
 void ConsolePanel::addTemporarySession()
@@ -373,9 +381,7 @@ void ConsolePanel::deleteSession(const std::string& sessionId)
     }
 
     const bool wasActive = activeSessionId == sessionId;
-    if (it->committed) {
-        GRIM::MMO::SessionContextManager::instance().destroySession(sessionId);
-    }
+    GRIM::MMO::SessionContextManager::instance().destroySession(sessionId);
     sessions.erase(it);
 
     if (sessions.empty()) {
@@ -428,6 +434,12 @@ ConsolePanel::SessionEntry& ConsolePanel::activeSession()
         throw std::runtime_error("ConsolePanel active session is missing: " + activeSessionId);
     }
     return *it;
+}
+
+ConsoleHistory& ConsolePanel::getHistory()
+{
+    return GRIM::MMO::SessionContextManager::instance()
+        .displayHistory(activeSessionId);
 }
 
 std::string ConsolePanel::generateSessionName() const

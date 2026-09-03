@@ -3,7 +3,6 @@
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
 #include "ai/ai.hpp"
-#include "console_history.hpp"
 #include "core/plugin.hpp"
 #include "error_manager.hpp"
 #include "helpers/color.hpp"
@@ -14,8 +13,6 @@ namespace {
 constexpr const char* kDefaultSession = "default";
 }
 
-#define history getConsoleHistory()
-
 // Forward declaration (defined in core_plugin.cpp).
 extern void registerCorePlugin();
 
@@ -23,11 +20,6 @@ bool hasPendingFeedback() {
     return GRIM::MMO::SessionContextManager::instance()
         .getPending(kDefaultSession)
         .has_value();
-}
-
-void setVoiceCommand(bool isVoice) {
-    GRIM::MMO::SessionContextManager::instance()
-        .setVoiceCommand(kDefaultSession, isVoice);
 }
 
 void ensureCorePluginsRegistered() {
@@ -84,14 +76,15 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
 
 // User-input boundary. Raw user text is never interpreted as an application
 // command; the reasoning model owns that decision.
-void handleCommand(const std::string& line) {
-    handleCommand(line, kDefaultSession);
+CommandResult handleCommand(const std::string& line) {
+    return handleCommand(line, kDefaultSession);
 }
 
-void handleCommand(const std::string& line, const std::string& session_id) {
+CommandResult handleCommand(
+    const std::string& line,
+    const std::string& session_id) {
     LOG_TRACE("HandleCommand", "START raw model input");
 
-    history.push("> " + line, Colors::Default.toUInt());
     CommandResult result = ai_process(line, session_id);
 
     if (result.message.empty()) {
@@ -103,10 +96,6 @@ void handleCommand(const std::string& line, const std::string& session_id) {
     }
 
     Logger::logResult(result);
-    history.push(
-        result.message,
-        (result.color.a << 24) | (result.color.b << 16) |
-        (result.color.g << 8) | result.color.r);
 
     if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos) {
         Voice::speak(
@@ -115,4 +104,5 @@ void handleCommand(const std::string& line, const std::string& session_id) {
     }
 
     LOG_TRACE("HandleCommand", "END raw model input");
+    return result;
 }

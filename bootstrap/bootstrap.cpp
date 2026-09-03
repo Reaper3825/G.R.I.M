@@ -260,7 +260,7 @@ static void bootstrapConfigAndStatics(int argc, char** argv) {
     endPhaseGroup();
     LOG_PHASE("Aliases bootstrap finished", true);
 
-    std::string fontPath = findAnyFontInResources(argc, argv, &history);
+    std::string fontPath = findAnyFontInResources(argc, argv);
     if (!fontPath.empty()) {
         LOG_PHASE("Font search", true);
         LOG_DEBUG("Config", "Font found: " + fontPath);

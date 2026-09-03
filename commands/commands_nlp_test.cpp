@@ -5,7 +5,6 @@
 #include "console_history.hpp"
 #include <sstream>
 
-extern ConsoleHistory history;
 
 namespace GRIM {
     extern GrammarParser g_grammarParser;

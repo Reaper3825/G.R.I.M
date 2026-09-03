@@ -358,7 +358,6 @@ std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
     ctx_json["resource_pressure"]     = retrieval.context.resource_pressure;
     ctx_json["latest_nlp_summary"]    = retrieval.context.latest_nlp_summary;
     ctx_json["recent_turn_summaries"] = retrieval.context.recent_turn_summaries;
-    ctx_json["risk_tags"]             = retrieval.context.risk_tags;
     ctx_json["last_nlp_category"]     = retrieval.context.lastNlpCategory;
     ctx_json["consecutive_commands"]  = retrieval.context.consecutiveCommands;
     scope["context"] = std::move(ctx_json);

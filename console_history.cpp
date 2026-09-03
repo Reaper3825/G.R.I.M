@@ -102,8 +102,6 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
     flush(true);
 }
 
-// ---------------- Convenience ----------------
-
 size_t ConsoleHistory::rawCount() const
 {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -122,9 +120,3 @@ const std::vector<ConsoleHistory::WrappedLine> ConsoleHistory::wrapped() const
     return wrapped_;
 }
 
-// Thread-safe singleton instance
-ConsoleHistory& getConsoleHistory()
-{
-    static ConsoleHistory instance;
-    return instance;
-}

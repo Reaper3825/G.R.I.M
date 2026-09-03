@@ -1,12 +1,13 @@
 #include "proactive_dialogue.hpp"
 #include "voice/voice_speak.hpp"
-#include "../MMO/Core/SessionContextManager.hpp"
 #include "memory/unified_memory.hpp"
 #include "personality_manager.hpp"
 #include "logger.hpp"
-#include "console_history.hpp"
+#include "../MMO/Core/SessionContextManager.hpp"
 
-extern ConsoleHistory history;
+namespace {
+constexpr const char* kDefaultSession = "default";
+}
 
 namespace GRIM::DialogueProactive {
 
@@ -59,16 +60,7 @@ void checkAfterCommand(const std::string& input, const CommandResult& result) {
         }
     }
 
-    // 4. Comment on behavioral pattern
-    if (proactiveText.empty() && GRIM::MMO::SessionContextManager::instance().usageCount("default", "system") > 5) {
-        if (personality.mood == Mood::Playful) {
-            proactiveText = "You're on a roll with system commands! I could automate some if you want!";
-        } else {
-            proactiveText = "You've been using system commands a lot. Want me to automate any?";
-        }
-    }
-
-    // 5. Emotional tie-in
+    // 4. Emotional tie-in
     if (proactiveText.empty() && !PersonalityManager::isStable()) {
         if (personality.mood == Mood::Tired) {
             proactiveText = "I'm feeling a bit drained... Maybe we both need a break?";
@@ -79,7 +71,7 @@ void checkAfterCommand(const std::string& input, const CommandResult& result) {
         }
     }
     
-    // 6. ✅ NEW: Playful proactive suggestions when mood is high
+    // 5. ✅ NEW: Playful proactive suggestions when mood is high
     if (proactiveText.empty() && personality.mood == Mood::Playful && 
         personality.energy > 0.8f && rand() % 10 == 0) { // 10% chance
         std::vector<std::string> playfulSuggestions = {
@@ -93,7 +85,9 @@ void checkAfterCommand(const std::string& input, const CommandResult& result) {
 
     if (!proactiveText.empty()) {
         LOG_DEBUG("Dialogue", "Triggered proactive follow-up (" + PersonalityManager::moodToString(personality.mood) + "): " + proactiveText);
-        history.push(proactiveText, 0xFFFFFF00);
+        GRIM::MMO::SessionContextManager::instance()
+            .displayHistory(kDefaultSession)
+            .push(proactiveText, 0xFFFFFF00);
         Voice::speak(proactiveText, "proactive");
     }
 }

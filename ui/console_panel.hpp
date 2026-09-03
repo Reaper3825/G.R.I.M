@@ -22,8 +22,8 @@ public:
     // Execute a command programmatically
     void executeCommand(const std::string& cmd);
     
-    // Get console history for external use (returns the global history)
-    ConsoleHistory& getHistory() { return getConsoleHistory(); }
+    // Get the active session's console history.
+    ConsoleHistory& getHistory();
 
 private:
     struct SessionEntry {

@@ -32,6 +32,7 @@
 #include "resources.hpp"
 #include "logger.hpp"
 #include "core/audio_core.hpp"
+#include "MMO/Core/SessionContextManager.hpp"
 
 
 
@@ -91,7 +92,10 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
         };
     }
 
-    if (VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory)) {
+    auto& sessionHistory = GRIM::MMO::SessionContextManager::instance()
+        .displayHistory("default");
+    if (VoiceStream::start(
+            Voice::g_state.ctx, &sessionHistory, timers, longTermMemory)) {
         LOG_DEBUG("Voice", "Voice streaming started");
         return {
             true,                               // success

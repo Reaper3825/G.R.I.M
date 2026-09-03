@@ -7,7 +7,6 @@
 #include "nlp/nlp.hpp"
 #include "input_parser.hpp"
 #include "synonyms.hpp"
-#include "console_history.hpp"
 #include "voice/voice_speak.hpp"
 #include "helpers/color.hpp"
 #include <algorithm>
@@ -17,8 +16,6 @@ extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 extern nlohmann::json longTermMemory;
 extern NLP g_nlp;
 extern std::unordered_map<std::string, CommandFunc> commandMap;
-
-#define history getConsoleHistory()
 
 namespace GRIM {
 namespace CommandExecution {

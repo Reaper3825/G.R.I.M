@@ -37,7 +37,6 @@ extern "C" {
     GRIM_EXPORT_SYMBOL std::vector<Timer> timers;
     GRIM_EXPORT_SYMBOL nlohmann::json aiConfig;
     GRIM_EXPORT_SYMBOL nlohmann::json longTermMemory;
-    GRIM_EXPORT_SYMBOL ConsoleHistory history;
     GRIM_EXPORT_SYMBOL bool g_wifiConnected;
 }
 

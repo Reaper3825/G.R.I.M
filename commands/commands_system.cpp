@@ -11,7 +11,6 @@
 #include <vector>
 
 // Externals
-extern ConsoleHistory history;
 extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 
 CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {

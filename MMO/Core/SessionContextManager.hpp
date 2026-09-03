@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@
 
 #include "memory/unified_memory.hpp"
 #include "memory/context_snapshot.hpp"
+#include "console_history.hpp"
 
 namespace GRIM::MMO {
 
@@ -41,15 +43,6 @@ struct TurnRecord {
     // NLP annotation summary (compact — not the full NlpAnnotation)
     std::string nlp_summary;
 
-    // Tags produced by NLP / router
-    std::vector<std::string> router_tags;
-    std::vector<std::string> memory_tags;
-    std::vector<std::string> risk_tags;
-
-    // Outcome tracking
-    std::string selected_route;      // sub-model id or "direct"
-    std::string proposed_command;    // tool_id if action was proposed
-    std::string final_outcome;       // result summary
 };
 
 // =========================================================
@@ -85,22 +78,6 @@ struct PendingInteraction {
     std::string turn_id;             // which turn created this
     std::chrono::steady_clock::time_point created_at;
     int         expiry_seconds = 120;
-};
-
-// =========================================================
-// ActionEpisode — tracks a proposed action through its lifecycle
-// =========================================================
-struct ActionEpisode {
-    std::string tool_id;
-    std::string proposed_args;       // serialized arguments
-    float       risk     = 0.0f;
-    float       confidence = 1.0f;
-    bool        confirmation_requested = false;
-    bool        user_rejected   = false;
-    std::string correction_text;     // non-empty if user corrected
-    std::string accepted_action;     // final action after corrections
-    std::string execution_result;    // outcome
-    std::string turn_id;
 };
 
 // =========================================================
@@ -176,9 +153,6 @@ struct ContextSnapshotV2 {
     // Pending interaction
     std::optional<PendingInteraction> pending;
 
-    // Recent action outcomes
-    std::vector<ActionEpisode> recent_episodes;
-
     // Memory retrieval breadcrumbs
     std::vector<std::string> memory_breadcrumbs;
 
@@ -188,9 +162,6 @@ struct ContextSnapshotV2 {
     // Mood and resource summary
     std::string current_mood;
     std::string resource_pressure;  // "healthy", "pressured", "critical"
-
-    // Risk summary for current turn
-    std::vector<std::string> risk_tags;
 
     // Legacy compatibility projection
     std::string lastNlpCategory;
@@ -224,18 +195,6 @@ public:
     void setNlpSummary(const std::string& session_id,
                        const std::string& nlp_summary);
 
-    // Attach routing/memory/risk tags to the current turn.
-    void setTurnTags(const std::string& session_id,
-                     const std::vector<std::string>& router_tags,
-                     const std::vector<std::string>& memory_tags,
-                     const std::vector<std::string>& risk_tags);
-
-    // Record the outcome of a turn (route + command + result).
-    void recordOutcome(const std::string& session_id,
-                       const std::string& selected_route,
-                       const std::string& proposed_command,
-                       const std::string& final_outcome);
-
     // ─── Referent tracking ────────────────────────────────
 
     // Add or update a referent binding.
@@ -259,21 +218,6 @@ public:
 
     // Clear pending interaction.
     void clearPending(const std::string& session_id);
-
-    // ─── Action episodes ──────────────────────────────────
-
-    // Record a proposed action.
-    void recordProposal(const std::string& session_id,
-                        const ActionEpisode& episode);
-
-    // Update the latest episode with user response (accept/reject/correct).
-    void recordUserResponse(const std::string& session_id,
-                            bool rejected,
-                            const std::string& correction_text);
-
-    // Update the latest episode with execution result.
-    void recordExecutionResult(const std::string& session_id,
-                               const std::string& result);
 
     // ─── Visual context ───────────────────────────────────
 
@@ -304,22 +248,6 @@ public:
     // Set resource pressure (from ResourceSignal bridge).
     void setResourcePressure(const std::string& session_id,
                              const std::string& pressure);
-
-    // ─── Voice / multi-command flags ──────────────────────
-
-    // Track whether the current command came from voice input.
-    void setVoiceCommand(const std::string& session_id, bool is_voice);
-    bool isVoiceCommand(const std::string& session_id) const;
-
-    // Track whether we are inside a multi-command batch.
-    void setMultiCommandContext(const std::string& session_id, bool is_multi);
-    bool isMultiCommandContext(const std::string& session_id) const;
-
-    // ─── Usage tracking ───────────────────────────────────
-
-    // Increment usage counter for a command/category.
-    void recordUsage(const std::string& session_id, const std::string& category);
-    int usageCount(const std::string& session_id, const std::string& category) const;
 
     // ─── Context memory (replaces ContextManager statics) ─
 
@@ -361,6 +289,9 @@ public:
     // Trim history to at most `max_messages` (preserving system prompt).
     void trimHistory(const std::string& session_id, size_t max_messages);
 
+    // Session-owned display history used by console surfaces.
+    ConsoleHistory& displayHistory(const std::string& session_id);
+
     // ─── Legacy V1 snapshot projection ────────────────────
 
     // Build a ContextSnapshot (legacy V1 type) for callers that
@@ -376,19 +307,11 @@ private:
         std::vector<TurnRecord> turns;
         std::vector<ReferentBinding> referents;
         std::optional<PendingInteraction> pending;
-        std::vector<ActionEpisode> episodes;
         VisualContext visual;
         std::string mood;
         std::string resource_pressure;
         int consecutive_commands = 0;
         std::string last_nlp_category;
-
-        // Voice / multi-command session flags
-        bool is_voice_command = false;
-        bool is_multi_command_context = false;
-
-        // Usage counters per category
-        std::unordered_map<std::string, int> usage_counts;
 
         // Short-term context objects for recall
         std::vector<UnifiedMemoryObject> recent_context;
@@ -396,13 +319,15 @@ private:
         // Conversation history for multi-turn API requests
         std::vector<ChatMessage> conversation_history;
         bool system_prompt_set = false;
+
+        std::unique_ptr<ConsoleHistory> display_history =
+            std::make_unique<ConsoleHistory>();
     };
 
     SessionState& getOrCreate(const std::string& session_id);
     const SessionState* get(const std::string& session_id) const;
 
     static constexpr int kMaxTurnsPerSession = 100;
-    static constexpr int kMaxEpisodes = 20;
     static constexpr int kMaxReferents = 50;
 
     mutable std::mutex mutex_;

@@ -1,7 +1,7 @@
 // GRIM session metadata schema.
 //
-// Timestamps are Unix epoch milliseconds. Turn counters describe completed
-// turns; the contents of those turns will be defined in a later schema pass.
+// Timestamps are Unix epoch milliseconds. Only durable conversation state
+// belongs here; command registry, routing, and preprompt metadata are excluded.
 
 namespace GRIMSession;
 
@@ -9,6 +9,18 @@ enum SessionState : ubyte {
   Active = 0,
   Suspended = 1,
   Closed = 2
+}
+
+enum TurnAuthor : ubyte {
+  User = 0,
+  Grim = 1
+}
+
+table Turn {
+  turn_id: string (required);
+  author: TurnAuthor;
+  timestamp_ms: uint64;
+  content: string (required);
 }
 
 table GoalTokenSpan {
@@ -63,6 +75,7 @@ table Session {
   // Serialized reasoning-state metadata; its structure will be defined later.
   reasoning_state: string;
 
+  turns: [Turn] (required);
   goals: [Goal];
   knowns: [string];
   unknowns: [string];

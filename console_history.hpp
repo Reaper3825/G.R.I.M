@@ -35,4 +35,3 @@ private:
     float lastWrapWidth_ = 0.0f;
 };
 
-ConsoleHistory& getConsoleHistory();

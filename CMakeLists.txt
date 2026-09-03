@@ -311,6 +311,35 @@ include(${CMAKE_SOURCE_DIR}/cmake/Dependencies.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/Resources.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/Shaders.cmake)
 
+if(NOT TARGET flatbuffers::flatc)
+  message(FATAL_ERROR
+    "GRIM session schema generation requires the flatc executable target.")
+endif()
+
+set(GRIM_SESSION_SCHEMA
+    ${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/training/schemas/grim_session.fbs)
+set(GRIM_SESSION_GENERATED_DIR
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/session)
+set(GRIM_SESSION_GENERATED_HEADER
+    ${GRIM_SESSION_GENERATED_DIR}/grim_session_generated.h)
+
+add_custom_command(
+  OUTPUT ${GRIM_SESSION_GENERATED_HEADER}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${GRIM_SESSION_GENERATED_DIR}
+  COMMAND $<TARGET_FILE:flatbuffers::flatc>
+          --cpp --gen-object-api
+          -o ${GRIM_SESSION_GENERATED_DIR}
+          ${GRIM_SESSION_SCHEMA}
+  DEPENDS flatbuffers::flatc ${GRIM_SESSION_SCHEMA}
+  COMMENT "Generating GRIM session FlatBuffer object API"
+  VERBATIM
+)
+add_custom_target(generate_grim_session_schema
+  DEPENDS ${GRIM_SESSION_GENERATED_HEADER})
+add_dependencies(GRIM generate_grim_session_schema)
+target_sources(GRIM PRIVATE ${GRIM_SESSION_GENERATED_HEADER})
+target_include_directories(GRIM PRIVATE ${GRIM_SESSION_GENERATED_DIR})
+
 set_target_properties(GRIM PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON

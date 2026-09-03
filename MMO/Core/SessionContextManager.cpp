@@ -1,5 +1,4 @@
 #include "SessionContextManager.hpp"
-#include "CorrectionTuple.hpp"
 
 #include <algorithm>
 #include <ctime>
@@ -74,43 +73,6 @@ void SessionContextManager::setNlpSummary(
     if (s.turns.empty()) return;
     s.turns.back().nlp_summary = nlp_summary;
     s.last_nlp_category = nlp_summary;
-}
-
-void SessionContextManager::setTurnTags(
-    const std::string& session_id,
-    const std::vector<std::string>& router_tags,
-    const std::vector<std::string>& memory_tags,
-    const std::vector<std::string>& risk_tags)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& s = getOrCreate(session_id);
-    if (s.turns.empty()) return;
-    auto& turn = s.turns.back();
-    turn.router_tags = router_tags;
-    turn.memory_tags = memory_tags;
-    turn.risk_tags = risk_tags;
-}
-
-void SessionContextManager::recordOutcome(
-    const std::string& session_id,
-    const std::string& selected_route,
-    const std::string& proposed_command,
-    const std::string& final_outcome)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& s = getOrCreate(session_id);
-    if (s.turns.empty()) return;
-    auto& turn = s.turns.back();
-    turn.selected_route = selected_route;
-    turn.proposed_command = proposed_command;
-    turn.final_outcome = final_outcome;
-
-    // Track consecutive commands
-    if (!proposed_command.empty()) {
-        s.consecutive_commands++;
-    } else {
-        s.consecutive_commands = 0;
-    }
 }
 
 // =========================================================
@@ -215,73 +177,6 @@ void SessionContextManager::clearPending(const std::string& session_id) {
 }
 
 // =========================================================
-// Action episodes
-// =========================================================
-
-void SessionContextManager::recordProposal(
-    const std::string& session_id,
-    const ActionEpisode& episode)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& s = getOrCreate(session_id);
-    s.episodes.push_back(episode);
-
-    if (static_cast<int>(s.episodes.size()) > kMaxEpisodes) {
-        s.episodes.erase(s.episodes.begin());
-    }
-}
-
-void SessionContextManager::recordUserResponse(
-    const std::string& session_id,
-    bool rejected,
-    const std::string& correction_text)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& s = getOrCreate(session_id);
-    if (s.episodes.empty()) return;
-    auto& ep = s.episodes.back();
-    ep.user_rejected = rejected;
-    ep.correction_text = correction_text;
-    if (!rejected && correction_text.empty()) {
-        ep.accepted_action = ep.tool_id;
-    }
-
-    // Collect correction tuple when user rejects a proposal
-    if (rejected) {
-        std::string turn_id;
-        std::string raw_input;
-        std::string nlp_summary;
-        std::vector<std::string> router_tags;
-        std::string route;
-        if (!s.turns.empty()) {
-            const auto& turn = s.turns.back();
-            turn_id     = turn.turn_id;
-            raw_input   = turn.user_input.raw;
-            nlp_summary = turn.nlp_summary;
-            router_tags = turn.router_tags;
-            route       = turn.selected_route;
-        }
-        CorrectionTupleCollector::instance().collect(
-            session_id, turn_id, raw_input,
-            ep.tool_id, ep.proposed_args,
-            ep.confidence, ep.risk,
-            correction_text, "",  // resolved_tool_id filled later if correction is parsed
-            nlp_summary, router_tags, {},  // subject_tags not stored per-turn yet
-            route, s.mood);
-    }
-}
-
-void SessionContextManager::recordExecutionResult(
-    const std::string& session_id,
-    const std::string& result)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& s = getOrCreate(session_id);
-    if (s.episodes.empty()) return;
-    s.episodes.back().execution_result = result;
-}
-
-// =========================================================
 // Visual context
 // =========================================================
 
@@ -321,7 +216,6 @@ ContextSnapshotV2 SessionContextManager::snapshot(
     if (!s->turns.empty()) {
         snap.turn_id = s->turns.back().turn_id;
         snap.latest_nlp_summary = s->turns.back().nlp_summary;
-        snap.risk_tags = s->turns.back().risk_tags;
     }
 
     // Recent turn summaries (last 10)
@@ -330,12 +224,6 @@ ContextSnapshotV2 SessionContextManager::snapshot(
         for (int i = start; i < static_cast<int>(s->turns.size()); ++i) {
             const auto& t = s->turns[i];
             std::string summary = t.user_input.raw;
-            if (!t.proposed_command.empty()) {
-                summary += " -> " + t.proposed_command;
-            }
-            if (!t.final_outcome.empty()) {
-                summary += " [" + t.final_outcome + "]";
-            }
             snap.recent_turn_summaries.push_back(std::move(summary));
         }
     }
@@ -354,14 +242,6 @@ ContextSnapshotV2 SessionContextManager::snapshot(
 
     // Pending interaction
     snap.pending = s->pending;
-
-    // Recent episodes (last 5)
-    {
-        int start = std::max(0, static_cast<int>(s->episodes.size()) - 5);
-        for (int i = start; i < static_cast<int>(s->episodes.size()); ++i) {
-            snap.recent_episodes.push_back(s->episodes[i]);
-        }
-    }
 
     // Visual context
     snap.visual_context = s->visual;
@@ -423,55 +303,6 @@ void SessionContextManager::setResourcePressure(
     const std::string& session_id, const std::string& pressure) {
     std::lock_guard<std::mutex> lock(mutex_);
     getOrCreate(session_id).resource_pressure = pressure;
-}
-
-// =========================================================
-// Voice / multi-command flags
-// =========================================================
-
-void SessionContextManager::setVoiceCommand(
-    const std::string& session_id, bool is_voice) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    getOrCreate(session_id).is_voice_command = is_voice;
-}
-
-bool SessionContextManager::isVoiceCommand(
-    const std::string& session_id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto* s = get(session_id);
-    return s ? s->is_voice_command : false;
-}
-
-void SessionContextManager::setMultiCommandContext(
-    const std::string& session_id, bool is_multi) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    getOrCreate(session_id).is_multi_command_context = is_multi;
-}
-
-bool SessionContextManager::isMultiCommandContext(
-    const std::string& session_id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto* s = get(session_id);
-    return s ? s->is_multi_command_context : false;
-}
-
-// =========================================================
-// Usage tracking
-// =========================================================
-
-void SessionContextManager::recordUsage(
-    const std::string& session_id, const std::string& category) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    getOrCreate(session_id).usage_counts[category]++;
-}
-
-int SessionContextManager::usageCount(
-    const std::string& session_id, const std::string& category) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto* s = get(session_id);
-    if (!s) return 0;
-    auto it = s->usage_counts.find(category);
-    return (it != s->usage_counts.end()) ? it->second : 0;
 }
 
 // =========================================================
@@ -586,6 +417,17 @@ void SessionContextManager::trimHistory(
             s.conversation_history.begin() + static_cast<long>(sys_count),
             s.conversation_history.begin() + static_cast<long>(sys_count + to_erase));
     }
+}
+
+ConsoleHistory& SessionContextManager::displayHistory(
+    const std::string& session_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto& s = getOrCreate(session_id);
+    if (!s.display_history) {
+        throw std::runtime_error(
+            "SessionContextManager display history is NULL for session: " + session_id);
+    }
+    return *s.display_history;
 }
 
 // =========================================================

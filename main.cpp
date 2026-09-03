@@ -33,6 +33,7 @@
 #include "ui/ui_surface_renderer_bridge.hpp"
 #include "geospatial/geospatial_runtime.hpp"
 #include "control/devices/server/device_comm_server.hpp"
+#include "MMO/Core/SessionContextManager.hpp"
 #include "resources.hpp"
 #include "timer.hpp"
 #include "perception/perception.hpp"
@@ -523,7 +524,9 @@ int main(int argc, char* argv[])
     // ======================================================
     static std::vector<Timer> emptyTimers;
     static nlohmann::json emptyMemory;
-    WakeKey::start(&history, emptyTimers, emptyMemory);
+    auto& defaultSessionHistory = GRIM::MMO::SessionContextManager::instance()
+        .displayHistory("default");
+    WakeKey::start(&defaultSessionHistory, emptyTimers, emptyMemory);
     LOG_PHASE("WakeKey listener started", true);
 
     WakeVoice::start(nullptr, emptyTimers, emptyMemory);

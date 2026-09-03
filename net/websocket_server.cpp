@@ -94,22 +94,10 @@ bool WebSocketServer::start(uint16_t port) {
 
     try {
         std::string input = std::string(message);
-
-        // Capture what handleCommand prints
-        std::ostringstream capture;
-        std::streambuf* oldBuf = std::cout.rdbuf(capture.rdbuf());
-
-        handleCommand(input);  // your existing void version
-
-        // Restore output
-        std::cout.rdbuf(oldBuf);
-
-        std::string output = capture.str();
-        if (output.empty())
-            output = " "; // send at least one character to keep the socket open
+        const CommandResult result = handleCommand(input, data->sessionId);
 
         // ✅ Send only GRIM’s response text — nothing else
-        ws->send(output, uWS::OpCode::TEXT);
+        ws->send(result.message, uWS::OpCode::TEXT);
 
         LOG_DEBUG("WebSocket", "Raw GRIM response sent to client");
 

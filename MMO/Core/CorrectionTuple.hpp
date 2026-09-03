@@ -9,10 +9,8 @@
 // These tuples are exported in JSONL format for LoRA fine-tuning,
 // teaching the router to avoid rejected actions and prefer corrections.
 //
-// Flow:
-//   ActionEpisode.user_rejected = true
-//     → CorrectionTupleCollector::collect(session_id)
-//       → writes to correction_tuples.jsonl
+// The tool/policy layer supplies rejected proposal metadata directly to this
+// collector. These training artifacts are not part of durable session state.
 //
 // Thread-safe: collector serialized under mutex.
 //======================================================//
@@ -84,8 +82,8 @@ class CorrectionTupleCollector {
 public:
     static CorrectionTupleCollector& instance();
 
-    // Build a CorrectionTuple from an ActionEpisode that was rejected.
-    // Caller provides the NLP/routing context at the time.
+    // Build a tuple from rejected proposal and routing metadata supplied by the
+    // tool/policy layer.
     void collect(const std::string& session_id,
                  const std::string& turn_id,
                  const std::string& raw_input,

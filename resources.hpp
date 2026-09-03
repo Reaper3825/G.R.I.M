@@ -39,7 +39,6 @@ nlohmann::json saveGrimRuntimeAiConfig(const nlohmann::json& pending);
 // ====================================================
 // Global runtime state
 // ====================================================
-extern ConsoleHistory history;             // Console + speech log
 extern std::vector<Timer> timers;          // Active timers
 extern std::filesystem::path g_currentDir; // Filesystem current working dir
 

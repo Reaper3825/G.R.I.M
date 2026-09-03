@@ -46,7 +46,6 @@
 extern std::unordered_map<std::string, CommandFunc> commandMap;
 extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 extern GRIM::MMO::HardwareInventory g_hardwareInventory;
-extern ConsoleHistory history;
 extern std::vector<Timer> timers;
 
 namespace PluginAPI {
