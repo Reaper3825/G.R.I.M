@@ -8,12 +8,21 @@
 class ConsoleHistory
 {
 public:
+    enum class Alignment : uint8_t {
+        Left,
+        Right
+    };
+
     struct WrappedLine {
         std::string text;
         uint32_t color; // ABGR (BGFX-compatible)
+        Alignment alignment = Alignment::Left;
+        uint64_t message_id = 0;
     };
 
-    void push(const std::string& line, uint32_t color = 0xFFFFFFFF);
+    void push(const std::string& line,
+              uint32_t color = 0xFFFFFFFF,
+              Alignment alignment = Alignment::Left);
     void ensureWrapped(float maxWidth);
     void clear();
 
@@ -33,5 +42,6 @@ private:
     std::vector<WrappedLine> wrapped_;
     bool dirty_ = true;
     float lastWrapWidth_ = 0.0f;
+    uint64_t next_message_id_ = 1;
 };
 

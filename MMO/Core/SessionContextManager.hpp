@@ -21,7 +21,6 @@
 #include <vector>
 
 #include "memory/unified_memory.hpp"
-#include "memory/context_snapshot.hpp"
 #include "console_history.hpp"
 
 namespace GRIM::MMO {
@@ -291,12 +290,6 @@ public:
 
     // Session-owned display history used by console surfaces.
     ConsoleHistory& displayHistory(const std::string& session_id);
-
-    // ─── Legacy V1 snapshot projection ────────────────────
-
-    // Build a ContextSnapshot (legacy V1 type) for callers that
-    // still consume the old format (IntentGate, FastClassifier).
-    GRIM::ContextSnapshot legacySnapshot(const std::string& session_id) const;
 
 private:
     SessionContextManager() = default;

@@ -110,30 +110,7 @@ ConsolePanel::ConsolePanel()
     consoleInput->OnTextSubmitted.Bind([this](const std::string& submittedText) {
         if (!submittedText.empty()) {
             LOG_DEBUG("ConsolePanel", "Executing command via delegate: " + submittedText);
-
-            auto& session = activeSession();
-            const std::string turnId = std::to_string(
-                std::chrono::steady_clock::now().time_since_epoch().count());
-            auto& sessionManager = GRIM::MMO::SessionContextManager::instance();
-            sessionManager.beginTurn(
-                session.id, turnId, submittedText, submittedText);
-            if (!session.committed) {
-                session.committed = true;
-            }
-            
-            auto& history = sessionManager.displayHistory(session.id);
-            
-            std::string timestamp = "[" + getCurrentTime() + "]";
-            history.push("", UITheme::Colors::Background);
-            history.push("  " + timestamp + " > " + submittedText, UITheme::Colors::PrimaryLight);
-            
-            const CommandResult result = handleCommand(submittedText, session.id);
-            history.push(
-                result.message,
-                (result.color.a << 24) | (result.color.b << 16) |
-                (result.color.g << 8) | result.color.r);
-            
-            history.push("", UITheme::Colors::Background);
+            submitPrompt(submittedText);
         }
     });
     
@@ -169,6 +146,7 @@ void ConsolePanel::update(const InputState& input, float dt)
 {
     // Call base panel update to handle drag/resize
     UIPanel::update(input, dt);
+    processCompletedRequest();
 
     if (toolbarBox) {
         toolbarBox->layout();
@@ -267,7 +245,12 @@ bool ConsolePanel::drawOverlay(OverlayRenderer& renderer)
     auto& history = GRIM::MMO::SessionContextManager::instance()
         .displayHistory(activeSessionId);
     
-    float maxTextWidth = mainContentWidth - 28.0f;
+    constexpr float bubblePadX = 9.0f;
+    constexpr float bubblePadY = 5.0f;
+    constexpr float bubbleRadius = 7.0f;
+    constexpr float lineHeight = 20.0f;
+    const float maxBubbleWidth = mainContentWidth - 20.0f;
+    const float maxTextWidth = maxBubbleWidth - bubblePadX * 2.0f;
     history.ensureWrapped(maxTextWidth);
     
     float y = position.y + titleBarHeight + 14;
@@ -299,15 +282,96 @@ bool ConsolePanel::drawOverlay(OverlayRenderer& renderer)
             readyMessage,
             UITheme::Colors::TextSecondary);
     } else {
-        float scrollAreaHeight = size.y - titleBarHeight - 76;
-        int maxLines = static_cast<int>(scrollAreaHeight / 20.0f);
-        int startIdx = std::max(0, static_cast<int>(lines.size()) - maxLines);
+        const float historyBottom = position.y + size.y - 76.0f;
+        const float scrollAreaHeight = historyBottom - y;
+        int startIdx = static_cast<int>(lines.size());
+        float usedHeight = 0.0f;
+        while (startIdx > 0) {
+            const int groupEnd = startIdx;
+            int groupStart = groupEnd - 1;
+            float groupHeight = lineHeight;
+            if (!lines[groupStart].text.empty()) {
+                while (groupStart > 0 &&
+                       lines[groupStart - 1].message_id == lines[groupStart].message_id) {
+                    --groupStart;
+                }
+                groupHeight = static_cast<float>(groupEnd - groupStart) * lineHeight
+                    + bubblePadY * 3.0f;
+            }
 
-        for (int i = startIdx; i < static_cast<int>(lines.size()); ++i)
-        {
-            if (y >= position.y + size.y - 76) break;
-            renderer.drawText({mainContentX, y}, lines[i].text, lines[i].color);
-            y += 20.0f;
+            if (usedHeight + groupHeight > scrollAreaHeight) {
+                if (usedHeight == 0.0f && !lines[groupStart].text.empty()) {
+                    const int fittingLines = std::max(
+                        1,
+                        static_cast<int>(
+                            (scrollAreaHeight - bubblePadY * 3.0f) / lineHeight));
+                    startIdx = std::max(groupStart, groupEnd - fittingLines);
+                }
+                break;
+            }
+
+            usedHeight += groupHeight;
+            startIdx = groupStart;
+        }
+
+        for (int i = startIdx; i < static_cast<int>(lines.size());) {
+            if (y >= historyBottom) break;
+
+            if (lines[i].text.empty()) {
+                y += lineHeight;
+                ++i;
+                continue;
+            }
+
+            int groupEnd = i + 1;
+            float widestText = renderer.measureTextWidth(lines[i].text);
+            while (groupEnd < static_cast<int>(lines.size()) &&
+                   lines[groupEnd].message_id == lines[i].message_id) {
+                widestText = std::max(
+                    widestText,
+                    renderer.measureTextWidth(lines[groupEnd].text));
+                ++groupEnd;
+            }
+
+            const int visibleGroupEnd = std::min(
+                groupEnd,
+                i + static_cast<int>((historyBottom - y) / lineHeight));
+            if (visibleGroupEnd <= i) break;
+
+            const float bubbleWidth = std::min(
+                maxBubbleWidth, widestText + bubblePadX * 2.0f);
+            const float bubbleHeight =
+                static_cast<float>(visibleGroupEnd - i) * lineHeight + bubblePadY * 2.0f;
+            const bool isUser =
+                lines[i].alignment == ConsoleHistory::Alignment::Right;
+            const float bubbleX = isUser
+                ? mainContentX + maxBubbleWidth - bubbleWidth
+                : mainContentX;
+            const uint32_t bubbleColor = isUser
+                ? UITheme::Colors::RowSelected
+                : UITheme::Colors::WidgetBg;
+
+            renderer.drawRoundedRect(
+                {bubbleX, y - bubblePadY},
+                {bubbleWidth, bubbleHeight},
+                bubbleColor,
+                bubbleRadius);
+            renderer.drawRoundedBorder(
+                {bubbleX, y - bubblePadY},
+                {bubbleWidth, bubbleHeight},
+                UITheme::Colors::BorderSubtle,
+                bubbleRadius);
+
+            for (int lineIndex = i; lineIndex < visibleGroupEnd; ++lineIndex) {
+                renderer.drawText(
+                    {bubbleX + bubblePadX,
+                     y + static_cast<float>(lineIndex - i) * lineHeight},
+                    lines[lineIndex].text,
+                    lines[lineIndex].color);
+            }
+
+            y += bubbleHeight + bubblePadY;
+            i = groupEnd;
         }
     }
 
@@ -340,24 +404,80 @@ bool ConsolePanel::drawOverlay(OverlayRenderer& renderer)
 void ConsolePanel::executeCommand(const std::string& cmd)
 {
     if (cmd.empty()) return;
-    
     LOG_DEBUG("ConsolePanel", "Executing: " + cmd);
-    
+    submitPrompt(cmd);
+}
+
+void ConsolePanel::submitPrompt(const std::string& prompt)
+{
     auto& session = activeSession();
     auto& sessionManager = GRIM::MMO::SessionContextManager::instance();
     auto& history = sessionManager.displayHistory(session.id);
 
-    history.push("> " + cmd, UITheme::Colors::PrimaryLight);
+    const std::string timestamp = "[" + getCurrentTime() + "]";
+    history.push("", UITheme::Colors::Background);
+    history.push(
+        timestamp + "  " + prompt,
+        UITheme::Colors::PrimaryLight,
+        ConsoleHistory::Alignment::Right);
 
     const std::string turnId = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
-    sessionManager.beginTurn(session.id, turnId, cmd, cmd);
+    sessionManager.beginTurn(session.id, turnId, prompt, prompt);
     session.committed = true;
-    const CommandResult result = handleCommand(cmd, session.id);
-    history.push(
-        result.message,
-        (result.color.a << 24) | (result.color.b << 16) |
-        (result.color.g << 8) | result.color.r);
+
+    pendingRequests.push_back({session.id, prompt});
+    startNextRequest();
+}
+
+void ConsolePanel::startNextRequest()
+{
+    if (activeRequest.has_value() || pendingRequests.empty()) return;
+
+    PendingRequest request = std::move(pendingRequests.front());
+    pendingRequests.pop_front();
+    const std::string sessionId = request.sessionId;
+    const std::string prompt = request.prompt;
+
+    activeRequest.emplace(ActiveRequest{
+        sessionId,
+        std::async(std::launch::async, [sessionId, prompt]() {
+            return handleCommand(prompt, sessionId);
+        }),
+        false
+    });
+}
+
+void ConsolePanel::processCompletedRequest()
+{
+    if (!activeRequest.has_value()) {
+        startNextRequest();
+        return;
+    }
+
+    if (activeRequest->result.wait_for(std::chrono::seconds(0)) !=
+        std::future_status::ready) {
+        return;
+    }
+
+    const CommandResult result = activeRequest->result.get();
+    const std::string sessionId = activeRequest->sessionId;
+    const bool destroySession = activeRequest->destroySessionWhenDone;
+    activeRequest.reset();
+
+    auto& sessionManager = GRIM::MMO::SessionContextManager::instance();
+    if (destroySession) {
+        sessionManager.destroySession(sessionId);
+    } else {
+        auto& history = sessionManager.displayHistory(sessionId);
+        history.push(
+            result.message,
+            (result.color.a << 24) | (result.color.b << 16) |
+            (result.color.g << 8) | result.color.r);
+        history.push("", UITheme::Colors::Background);
+    }
+
+    startNextRequest();
 }
 
 void ConsolePanel::addTemporarySession()
@@ -381,7 +501,21 @@ void ConsolePanel::deleteSession(const std::string& sessionId)
     }
 
     const bool wasActive = activeSessionId == sessionId;
-    GRIM::MMO::SessionContextManager::instance().destroySession(sessionId);
+    pendingRequests.erase(
+        std::remove_if(
+            pendingRequests.begin(), pendingRequests.end(),
+            [&](const PendingRequest& request) {
+                return request.sessionId == sessionId;
+            }),
+        pendingRequests.end());
+
+    const bool requestActive = activeRequest.has_value() &&
+        activeRequest->sessionId == sessionId;
+    if (requestActive) {
+        activeRequest->destroySessionWhenDone = true;
+    } else {
+        GRIM::MMO::SessionContextManager::instance().destroySession(sessionId);
+    }
     sessions.erase(it);
 
     if (sessions.empty()) {

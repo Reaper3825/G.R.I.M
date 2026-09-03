@@ -16,13 +16,16 @@ static float measureTextWidth(const std::string& text, float charWidth = 9.0f)
 }
 // -------------------------------------------------------------
 
-void ConsoleHistory::push(const std::string& line, uint32_t color)
+void ConsoleHistory::push(
+    const std::string& line,
+    uint32_t color,
+    Alignment alignment)
 {
     std::lock_guard<std::mutex> lock(mtx_);
     if (raw_.size() >= kMaxHistory)
         raw_.pop_front();
 
-    raw_.push_back({ line, color });
+    raw_.push_back({ line, color, alignment, next_message_id_++ });
     dirty_ = true;
     CHECK_HEAP();
 }
@@ -58,7 +61,7 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
                               std::vector<WrappedLine>& out)
 {
     if (ln.text.empty()) {
-        out.push_back({ "", ln.color });
+        out.push_back({ "", ln.color, ln.alignment, ln.message_id });
         return;
     }
 
@@ -67,7 +70,7 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
 
     auto flush = [&](bool force = false) {
         if (force || !current.empty()) {
-            out.push_back({ current, ln.color });
+            out.push_back({ current, ln.color, ln.alignment, ln.message_id });
             current.clear();
         }
     };
@@ -87,14 +90,14 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
                         accum = temp;
                     } else {
                         if (!accum.empty())
-                            out.push_back({ accum, ln.color });
+                            out.push_back({ accum, ln.color, ln.alignment, ln.message_id });
                         accum = std::string(1, c);
                     }
                 }
                 if (!accum.empty())
                     current = accum;
             } else {
-                out.push_back({ current, ln.color });
+                out.push_back({ current, ln.color, ln.alignment, ln.message_id });
                 current = word;
             }
         }

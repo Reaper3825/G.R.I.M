@@ -103,11 +103,6 @@ public:
     // Store a memory directly into short-term storage.
     void storeShortTerm(const UnifiedMemoryObject& obj);
 
-    // ─── Session context passthrough ──────────────────────
-
-    // Get a snapshot of the current session state.
-    ContextSnapshot getContextSnapshot() const;
-
     // Record a context memory for session-scoped recall.
     void rememberContext(const UnifiedMemoryObject& obj);
 

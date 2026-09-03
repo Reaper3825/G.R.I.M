@@ -142,11 +142,6 @@ void MemoryFacade::storeShortTerm(const UnifiedMemoryObject& obj)
 // Session context passthrough
 // =========================================================
 
-ContextSnapshot MemoryFacade::getContextSnapshot() const
-{
-    return SessionContextManager::instance().legacySnapshot(kDefaultSession);
-}
-
 void MemoryFacade::rememberContext(const UnifiedMemoryObject& obj)
 {
     SessionContextManager::instance().rememberContextObject(kDefaultSession, obj);

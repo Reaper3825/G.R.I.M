@@ -6,8 +6,11 @@
 #include "primitives/ui_scrollbox.hpp"
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"
+#include <deque>
+#include <future>
 #include <string>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class OverlayRenderer;
@@ -55,6 +58,23 @@ private:
     std::vector<std::shared_ptr<UIButton>> sessionSelectButtons;
     std::vector<std::shared_ptr<UIButton>> sessionDeleteButtons;
 
+    struct PendingRequest {
+        std::string sessionId;
+        std::string prompt;
+    };
+
+    struct ActiveRequest {
+        std::string sessionId;
+        std::future<CommandResult> result;
+        bool destroySessionWhenDone = false;
+    };
+
+    std::deque<PendingRequest> pendingRequests;
+    std::optional<ActiveRequest> activeRequest;
+
+    void submitPrompt(const std::string& prompt);
+    void startNextRequest();
+    void processCompletedRequest();
     void addTemporarySession();
     void deleteSession(const std::string& sessionId);
     void rebuildSessionWidgets();

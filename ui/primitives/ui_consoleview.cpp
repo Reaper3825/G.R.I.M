@@ -33,7 +33,15 @@ void UIConsoleView::draw(UIRenderer& renderer) {
     int start = (std::max)(0, (int)lines.size() - visibleLines - (int)scrollOffset);
     for (int i = start; i < (int)lines.size(); ++i) {
         const auto& ln = lines[i];
-        renderer.drawText({position.x + 4, y}, ln.text, ln.color);
+        float lineX = position.x + 4;
+        if (ln.alignment == ConsoleHistory::Alignment::Right) {
+            constexpr float kApproximateCharacterWidth = 9.0f;
+            lineX = std::max(
+                position.x + 4,
+                position.x + size.x - 4
+                    - static_cast<float>(ln.text.size()) * kApproximateCharacterWidth);
+        }
+        renderer.drawText({lineX, y}, ln.text, ln.color);
         y -= lineHeight;
         if (y < position.y) break;
     }
