@@ -603,40 +603,42 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
 }
 
 void logPostBackwardGradientSamples(AutogradContext& ctx, bool accumulate) {
-    if constexpr (!VerboseLogging::ENABLE_AUTOGRAD_TRAINING_LOGS) return;
+    (void)ctx;
+    (void)accumulate;
+    if constexpr (VerboseLogging::ENABLE_AUTOGRAD_TRAINING_LOGS) {
+        GD_CUDA_CHECK(cudaStreamSynchronize(ctx.stream));
+        auto& embedding = ctx.parameter_registry->requireEmbeddingParameters(
+            "logPostBackwardGradientSamples");
+        auto& lm_head = ctx.parameter_registry->requireLmHeadParameters(
+            "logPostBackwardGradientSamples");
+        const auto model_hp = HyperParameters::modelHP(*ctx.config);
 
-    GD_CUDA_CHECK(cudaStreamSynchronize(ctx.stream));
-    auto& embedding = ctx.parameter_registry->requireEmbeddingParameters(
-        "logPostBackwardGradientSamples");
-    auto& lm_head = ctx.parameter_registry->requireLmHeadParameters(
-        "logPostBackwardGradientSamples");
-    const auto model_hp = HyperParameters::modelHP(*ctx.config);
+        auto readFirst = [](Tensor& tensor) {
+            float sample = 0.0f;
+            if (tensor.grad_data()) {
+                GD_CUDA_CHECK(cudaMemcpy(
+                    &sample, tensor.grad_data(), sizeof(float), cudaMemcpyDeviceToHost));
+            }
+            return sample;
+        };
 
-    auto readFirst = [](Tensor& tensor) {
-        float sample = 0.0f;
-        if (tensor.grad_data()) {
-            GD_CUDA_CHECK(cudaMemcpy(
-                &sample, tensor.grad_data(), sizeof(float), cudaMemcpyDeviceToHost));
+        float encoder_sample = 0.0f;
+        float rms_sample = 0.0f;
+        if (model_hp.encoder_num_layers > 0) {
+            auto& encoder = ctx.parameter_registry->requireEncodingLayerParameters(
+                0, "logPostBackwardGradientSamples");
+            encoder_sample = readFirst(encoder.W_qkv);
+            rms_sample = readFirst(encoder.rms1_gamma);
         }
-        return sample;
-    };
 
-    float encoder_sample = 0.0f;
-    float rms_sample = 0.0f;
-    if (model_hp.encoder_num_layers > 0) {
-        auto& encoder = ctx.parameter_registry->requireEncodingLayerParameters(
-            0, "logPostBackwardGradientSamples");
-        encoder_sample = readFirst(encoder.W_qkv);
-        rms_sample = readFirst(encoder.rms1_gamma);
+        std::fprintf(stderr,
+            "[GRAD_DIAG] POST-BACKWARD accumulate=%d "
+            "emb_grad[0]=%.10e lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e "
+            "enc0_rms1_gamma_grad[0]=%.10e lm_ptr=%p\n",
+            static_cast<int>(accumulate),
+            readFirst(embedding.token_weights), readFirst(lm_head.weights),
+            encoder_sample, rms_sample, static_cast<void*>(lm_head.weights.grad_data()));
     }
-
-    std::fprintf(stderr,
-        "[GRAD_DIAG] POST-BACKWARD accumulate=%d "
-        "emb_grad[0]=%.10e lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e "
-        "enc0_rms1_gamma_grad[0]=%.10e lm_ptr=%p\n",
-        static_cast<int>(accumulate),
-        readFirst(embedding.token_weights), readFirst(lm_head.weights),
-        encoder_sample, rms_sample, static_cast<void*>(lm_head.weights.grad_data()));
 }
 
 bool verifyGradientsAreConnected(AutogradContext& ctx) {

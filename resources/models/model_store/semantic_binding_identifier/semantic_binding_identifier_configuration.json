@@ -1,0 +1,8 @@
+{
+  "assigned_sequence_ids": [],
+  "assigned_curriculum_ids": [
+    "curr_semantic_binding_v1"
+  ],
+  "curriculum_phases": [],
+  "model_id": "semantic_binding_identifier"
+}

@@ -467,6 +467,32 @@ inline constexpr std::array<FeedForwardTensorParameterSpec, 4>
     }};
 
 template <typename RegistrarT>
+inline void registerEmbeddingParameters(
+    GRIM::EmbeddingParameterTensors& embedding_parameters,
+    RegistrarT& registrar) {
+    for (const auto& spec : kEmbeddingTensorParameters) {
+        registrar.addTensor(spec.name,
+                            embedding_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            spec.layer);
+    }
+}
+
+template <typename RegistrarT>
+inline void registerAtomInsertionBoundaryParameters(
+    GRIM::AtomInsertionBoundaryParameterTensors& parameters,
+    RegistrarT& registrar) {
+    for (const auto& spec : kAtomInsertionBoundaryTensorParameters) {
+        registrar.addTensor(spec.name,
+                            parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            spec.layer);
+    }
+}
+
+template <typename RegistrarT>
 inline void registerSelectorParameters(
     GRIM::SelectorParameterTensors& selector_parameters,
     RegistrarT& registrar) {
