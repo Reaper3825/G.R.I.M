@@ -1,0 +1,112 @@
+// Resumable GRIM-text LoRA training checkpoint.
+//
+// This is distinct from a deployable adapter artifact. It contains the full
+// durable training state required to continue the next microbatch exactly and
+// never contains frozen base-model tensors or transient autograd state.
+
+namespace GRIMLoRACheckpoint;
+
+enum MatrixClass : ubyte {
+  QKV = 0,
+  ATTENTION_OUTPUT = 1,
+  FFN_GATE = 2,
+  FFN_UP = 3,
+  FFN_DOWN = 4
+}
+
+enum MatrixOrientation : ubyte {
+  TRANSPOSED_WEIGHT = 0,
+  DIRECT_WEIGHT = 1
+}
+
+enum TensorStorageType : ubyte {
+  FP32 = 0
+}
+
+table TensorState {
+  shape: [uint32] (required);
+  storage_type: TensorStorageType = FP32;
+  data: [ubyte] (required);
+  data_xxhash64: uint64;
+}
+
+table AdapterTargetState {
+  target_identity: string (required);
+  layer_index: uint32;
+  matrix_class: MatrixClass;
+  base_shape: [uint32] (required);
+  orientation: MatrixOrientation;
+  rank: uint32;
+  alpha: float;
+  a: TensorState (required);
+  b: TensorState (required);
+  a_gradient: TensorState;
+  b_gradient: TensorState;
+  a_first_moment: TensorState (required);
+  a_second_moment: TensorState (required);
+  b_first_moment: TensorState (required);
+  b_second_moment: TensorState (required);
+}
+
+table ArchitectureMetadata {
+  d_model: uint32;
+  num_layers: uint32;
+  num_heads: uint32;
+  num_kv_heads: uint32;
+  qkv_dim: uint32;
+  d_ff: uint32;
+}
+
+table OptimizerState {
+  family: string (required);
+  canonical_config: string (required);
+  optimizer_step: uint64;
+  learning_rate_lora: float;
+  lr_scheduler_state: [ubyte] (required);
+  soft_restart_state: [ubyte] (required);
+}
+
+table TrainingProgressState {
+  global_step: uint64;
+  epochs_completed: uint64;
+  batch_cursor: uint64;
+  accumulation_cursor: uint32;
+  best_validation_loss: float;
+  data_order: [uint64] (required);
+}
+
+table RngState {
+  base_seed: uint64;
+  data_seed: uint64;
+  init_seed: uint64;
+  cuda_seed: uint64;
+  data_rng_state: string (required);
+  cuda_rng_state: [ubyte] (required);
+}
+
+table LoRATrainingCheckpoint {
+  format_version: uint32;
+  checkpoint_id: string (required);
+  creation_timestamp_ms: uint64;
+
+  adapter_id: string (required);
+  has_parent_adapter_revision: bool;
+  parent_adapter_revision: uint64;
+  output_adapter_revision: uint64;
+
+  base_checkpoint_identity: string (required);
+  base_checkpoint_sha256: [ubyte] (required);
+  architecture: ArchitectureMetadata (required);
+
+  training_config_canonical: string (required);
+  training_config_sha256: [ubyte] (required);
+
+  targets: [AdapterTargetState] (required);
+  optimizer: OptimizerState (required);
+  progress: TrainingProgressState (required);
+  rng: RngState (required);
+}
+
+root_type LoRATrainingCheckpoint;
+file_identifier "GLTC";
+file_extension "grimlorackpt";

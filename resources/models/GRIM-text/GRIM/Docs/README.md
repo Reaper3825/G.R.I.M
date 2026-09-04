@@ -15,6 +15,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [ForwardMemoryAllocationAnalysis.md](ForwardMemoryAllocationAnalysis.md) | Analysis report for batch-size-12 and batch-size-1 forward allocation, retained output, and GPU memory samples |
 | [InferenceBoundary.md](InferenceBoundary.md) | Inference/training forward split TODO |
 | [ForwardReadOnlyPlan.md](ForwardReadOnlyPlan.md) | Plan to make shared forward read-only over durable parameter state |
+| [LoRAPlan.md](LoRAPlan.md) | Living model-side LoRA target, ownership, and implementation plan |
 | [Autograd.md](Autograd.md) | TensorContract, GradFn, intermediates lifetime |
 | [Loss.md](Loss.md) | Unified loss, registered global gradient clipping |
 | [GQA.md](GQA.md) | Grouped Query Attention shapes & backward scaling |

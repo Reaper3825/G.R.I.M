@@ -567,6 +567,57 @@ target_compile_options(grim_parameter_checkpoint PRIVATE
 )
 target_compile_definitions(grim_parameter_checkpoint PRIVATE USE_CUDA)
 
+# Resumable LoRA training-checkpoint schema and host-only load I/O. This target
+# is linked into train_gpu so startup can call it beside base-weight loading,
+# but the call is intentionally not wired until LoRA durable owners exist.
+set(GRIM_LORA_TRAINING_CHECKPOINT_SCHEMA
+    ${CMAKE_CURRENT_SOURCE_DIR}/../schemas/grim_lora_training_checkpoint.fbs
+)
+set(GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_DIR
+    ${CMAKE_CURRENT_BINARY_DIR}/grim_lora_training_checkpoint_schema
+)
+set(GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_HEADER
+    ${GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_DIR}/grim_lora_training_checkpoint_generated.h
+)
+
+add_custom_command(
+    OUTPUT ${GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_HEADER}
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_DIR}
+    COMMAND $<TARGET_FILE:flatbuffers::flatc>
+            -o ${GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_DIR}
+            -c ${GRIM_LORA_TRAINING_CHECKPOINT_SCHEMA}
+    DEPENDS
+        flatbuffers::flatc
+        ${GRIM_LORA_TRAINING_CHECKPOINT_SCHEMA}
+    COMMENT "Generating GRIM LoRA training checkpoint FlatBuffer header"
+    VERBATIM
+)
+add_custom_target(generate_grim_lora_training_checkpoint_schema
+    DEPENDS ${GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_HEADER}
+)
+
+add_library(grim_lora_training_checkpoint STATIC
+    ../../Common/LoRATrainingCheckpoint.cpp
+    ../../Common/LoRATrainingCheckpoint.hpp
+    ${GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_HEADER}
+)
+add_dependencies(grim_lora_training_checkpoint
+    generate_grim_lora_training_checkpoint_schema
+)
+target_include_directories(grim_lora_training_checkpoint PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
+    ${GRIM_LORA_TRAINING_CHECKPOINT_GENERATED_DIR}
+)
+target_link_libraries(grim_lora_training_checkpoint PRIVATE
+    flatbuffers::flatbuffers
+    nlohmann_json::nlohmann_json
+)
+
 # Main GPU training executable (three-phase architecture)
 add_executable(train_gpu 
     ../train_gpu.cu
@@ -704,6 +755,7 @@ target_link_libraries(train_gpu PRIVATE
     grim_cuda_kernels
     grim_language_model_gpu_impl
     grim_parameter_checkpoint
+    grim_lora_training_checkpoint
     grim_unigrambyte_tokenizer
     grim_log_recorder
     $<$<PLATFORM_ID:Windows>:ws2_32>
