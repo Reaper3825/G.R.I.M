@@ -457,11 +457,11 @@ LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
     result.rng.cuda_rng_state.assign(rng->cuda_rng_state()->begin(), rng->cuda_rng_state()->end());
 
     std::unordered_set<std::string> identities;
-    std::array<std::vector<bool>, 5> class_layers;
+    std::array<std::vector<std::uint8_t>, 5> class_layers;
     std::array<std::optional<std::uint32_t>, 5> class_ranks;
     std::array<std::optional<float>, 5> class_alphas;
     for (auto& layers : class_layers) {
-        layers.assign(result.architecture.num_layers, false);
+        layers.assign(result.architecture.num_layers, 0);
     }
     result.targets.reserve(root->targets()->size());
     for (const auto* target : *root->targets()) {
@@ -479,7 +479,7 @@ LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
         if (seen_layer) {
             throw std::runtime_error("LoRA training checkpoint contains a duplicate layer/matrix-class target");
         }
-        seen_layer = true;
+        seen_layer = 1;
         if (target->orientation() < GRIMLoRACheckpoint::MatrixOrientation_TRANSPOSED_WEIGHT ||
             target->orientation() > GRIMLoRACheckpoint::MatrixOrientation_DIRECT_WEIGHT) {
             throw std::runtime_error("LoRA training checkpoint target has an unknown matrix orientation");
