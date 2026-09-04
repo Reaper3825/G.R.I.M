@@ -13,6 +13,7 @@
 #include <string>
 
 #ifdef USE_CUDA
+#include <cuda_runtime.h>
 #include <curand.h>
 #endif
 
@@ -103,12 +104,35 @@ RNGContext initializeRNG(
     ctx.data_rng = std::mt19937_64(ctx.data_seed);
 
 #ifdef USE_CUDA
+    // cuRAND lazily initializes CUDA when it creates the first host generator.
+    // Bring the runtime up explicitly so failures retain the actionable CUDA
+    // error instead of being collapsed into CURAND_STATUS_INITIALIZATION_FAILED.
+    cudaError_t cuda_status = cudaSetDevice(0);
+    if (cuda_status != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("FATAL: CUDA device selection failed before RNG initialization: ") +
+            cudaGetErrorString(cuda_status) + " (cudaError=" +
+            std::to_string(static_cast<int>(cuda_status)) + ").");
+    }
+
+    cuda_status = cudaFree(nullptr);
+    if (cuda_status != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("FATAL: CUDA context creation failed before RNG initialization: ") +
+            cudaGetErrorString(cuda_status) + " (cudaError=" +
+            std::to_string(static_cast<int>(cuda_status)) + ").");
+    }
+
     // Rule 20: throw on failure, no silent degradation
-    curandGenerator_t cuda_gen;
+    curandGenerator_t cuda_gen = nullptr;
     curandStatus_t status = curandCreateGenerator(&cuda_gen, CURAND_RNG_PSEUDO_DEFAULT);
     if (status != CURAND_STATUS_SUCCESS) {
+        const cudaError_t runtime_status = cudaPeekAtLastError();
         throw std::runtime_error("FATAL: Failed to create CUDA RNG generator (curandStatus=" +
-                                 std::to_string(status) + "). Training requires controlled GPU randomness.");
+                                 std::to_string(status) + ", cudaError=" +
+                                 std::to_string(static_cast<int>(runtime_status)) + ": " +
+                                 cudaGetErrorString(runtime_status) +
+                                 "). Training requires controlled GPU randomness.");
     }
     status = curandSetPseudoRandomGeneratorSeed(cuda_gen, ctx.cuda_seed);
     if (status != CURAND_STATUS_SUCCESS) {
