@@ -641,6 +641,9 @@ inline LearningRateScheduleInputs learningRateScheduleInputs(
 {
     LearningRateScheduleInputs inputs;
     inputs.learning_rate = hp.learning_rate;
+    if (hp.lora_model) {
+        inputs.learning_rate = hp.learning_rate_lora;
+    }
     inputs.cosine_decay_min_lr = hp.cosine_decay_min_lr;
     inputs.warmup_steps = hp.warmup_steps;
     inputs.cosine_decay_enabled = hp.cosine_decay_enabled;
@@ -653,6 +656,10 @@ inline LearningRateScheduleInputs learningRateScheduleInputs(
 {
     LearningRateScheduleInputs inputs;
     inputs.learning_rate = snapshotTrainingConfigField<float>(snapshot, "learning_rate");
+    if (snapshotTrainingConfigField<bool>(snapshot, "lora_model")) {
+        inputs.learning_rate = snapshotTrainingConfigField<float>(
+            snapshot, "learning_rate_lora");
+    }
     inputs.cosine_decay_min_lr = snapshotTrainingConfigField<float>(snapshot, "cosine_decay_min_lr");
     inputs.warmup_steps = snapshotTrainingConfigField<int>(snapshot, "warmup_steps");
     inputs.cosine_decay_enabled = snapshotTrainingConfigField<bool>(snapshot, "cosine_decay_enabled");

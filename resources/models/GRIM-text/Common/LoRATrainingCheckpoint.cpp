@@ -6,6 +6,7 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 
 #include <flatbuffers/flatbuffers.h>
@@ -172,8 +173,8 @@ std::vector<std::uint32_t> expectedBaseShape(
         case LoRAMatrixClass::QKV: return {architecture.qkv_dim, architecture.d_model};
         case LoRAMatrixClass::ATTENTION_OUTPUT: return {architecture.d_model, architecture.d_model};
         case LoRAMatrixClass::FFN_GATE:
-        case LoRAMatrixClass::FFN_UP: return {architecture.d_model, architecture.d_ff};
-        case LoRAMatrixClass::FFN_DOWN: return {architecture.d_ff, architecture.d_model};
+        case LoRAMatrixClass::FFN_UP: return {architecture.d_ff, architecture.d_model};
+        case LoRAMatrixClass::FFN_DOWN: return {architecture.d_model, architecture.d_ff};
     }
     throw std::runtime_error("LoRA training checkpoint contains an unknown matrix class");
 }
@@ -215,6 +216,50 @@ std::vector<std::uint8_t> readCheckpointBytes(const fs::path& path) {
     return bytes;
 }
 
+flatbuffers::Offset<GRIMLoRACheckpoint::TensorState> encodeTensor(
+    flatbuffers::FlatBufferBuilder& builder,
+    const LoRAHostTensorState& tensor,
+    const std::string& name)
+{
+    if (tensor.shape.size() != 2 || tensor.shape[0] == 0 || tensor.shape[1] == 0) {
+        throw std::runtime_error(name + ": tensor shape must contain exactly two positive dimensions");
+    }
+    const std::uint64_t element_count =
+        static_cast<std::uint64_t>(tensor.shape[0]) * tensor.shape[1];
+    if (element_count != tensor.values.size()) {
+        throw std::runtime_error(name + ": tensor value count does not match shape");
+    }
+    if (!std::all_of(tensor.values.begin(), tensor.values.end(), [](float value) {
+            return std::isfinite(value);
+        })) {
+        throw std::runtime_error(name + ": tensor contains a non-finite value");
+    }
+    std::vector<std::uint8_t> bytes(tensor.values.size() * sizeof(float));
+    std::memcpy(bytes.data(), tensor.values.data(), bytes.size());
+    return GRIMLoRACheckpoint::CreateTensorStateDirect(
+        builder,
+        &tensor.shape,
+        GRIMLoRACheckpoint::TensorStorageType_FP32,
+        &bytes,
+        xxhash64(bytes.data(), bytes.size()));
+}
+
+void writeCheckpointBytes(const fs::path& path, const std::uint8_t* data, std::size_t size) {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream) {
+        throw std::runtime_error("Cannot create LoRA training checkpoint: " + path.string());
+    }
+    stream.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+    stream.flush();
+    if (!stream) {
+        throw std::runtime_error("Failed writing LoRA training checkpoint: " + path.string());
+    }
+    stream.close();
+    if (!stream) {
+        throw std::runtime_error("Failed closing LoRA training checkpoint: " + path.string());
+    }
+}
+
 } // namespace
 
 fs::path resolveLoRATrainingCheckpointPath(
@@ -237,11 +282,62 @@ fs::path resolveLoRATrainingCheckpointPath(
     return (model_directory / "lora_checkpoints" / requested).lexically_normal();
 }
 
+std::optional<std::string> findLatestLoRATrainingCheckpointName(
+    const Config::AiConfigSnapshot& config)
+{
+    if (!config.model_config) {
+        throw std::runtime_error("findLatestLoRATrainingCheckpointName: selected model.grimcfg is unavailable");
+    }
+    const fs::path directory =
+        config.model_config->source_path.parent_path().lexically_normal() /
+        "lora_checkpoints";
+    std::error_code error;
+    if (!fs::exists(directory, error)) {
+        if (error) {
+            throw std::runtime_error(
+                "findLatestLoRATrainingCheckpointName: cannot inspect model store: " +
+                error.message());
+        }
+        return std::nullopt;
+    }
+    if (!fs::is_directory(directory, error) || error) {
+        throw std::runtime_error(
+            "findLatestLoRATrainingCheckpointName: model checkpoint store is not a directory: " +
+            directory.string());
+    }
+
+    std::optional<fs::directory_entry> latest;
+    for (const auto& entry : fs::directory_iterator(directory)) {
+        const std::string filename = entry.path().filename().string();
+        constexpr std::string_view temporary_suffix = ".writing.grimlorackpt";
+        const bool is_temporary = filename.size() >= temporary_suffix.size() &&
+            filename.compare(filename.size() - temporary_suffix.size(), temporary_suffix.size(), temporary_suffix) == 0;
+        if (!entry.is_regular_file() || entry.path().extension() != ".grimlorackpt" || is_temporary) {
+            continue;
+        }
+        if (entry.file_size() == 0) {
+            throw std::runtime_error(
+                "findLatestLoRATrainingCheckpointName: empty checkpoint in model store: " +
+                entry.path().string());
+        }
+        if (!latest || entry.last_write_time() > latest->last_write_time() ||
+            (entry.last_write_time() == latest->last_write_time() &&
+             entry.path().filename().string() > latest->path().filename().string())) {
+            latest = entry;
+        }
+    }
+    if (!latest) {
+        return std::nullopt;
+    }
+    return latest->path().filename().string();
+}
+
 LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
     const Config::AiConfigSnapshot& config,
     const std::string& checkpoint_name,
     const std::string& expected_base_checkpoint_identity,
     const std::array<std::uint8_t, 32>& expected_base_checkpoint_sha256,
+    const std::string& expected_training_config_canonical,
     const std::array<std::uint8_t, 32>& expected_training_config_sha256)
 {
     if (expected_base_checkpoint_identity.empty()) {
@@ -250,6 +346,9 @@ LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
     if (isZeroDigest(expected_base_checkpoint_sha256) ||
         isZeroDigest(expected_training_config_sha256)) {
         throw std::runtime_error("loadLoRATrainingCheckpoint: expected SHA-256 digests must not be all zero");
+    }
+    if (expected_training_config_canonical.empty()) {
+        throw std::runtime_error("loadLoRATrainingCheckpoint: expected canonical training config is empty");
     }
     const fs::path path = resolveLoRATrainingCheckpointPath(config, checkpoint_name);
     std::vector<std::uint8_t> bytes = readCheckpointBytes(path);
@@ -267,6 +366,9 @@ LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
     result.source_path = fs::absolute(path).lexically_normal();
     result.checkpoint_id = requiredString(root->checkpoint_id(), "checkpoint_id");
     result.creation_timestamp_ms = root->creation_timestamp_ms();
+    if (result.creation_timestamp_ms == 0) {
+        throw std::runtime_error("LoRA training checkpoint creation timestamp is missing");
+    }
     result.adapter_id = requiredString(root->adapter_id(), "adapter_id");
     if (root->has_parent_adapter_revision()) {
         result.parent_adapter_revision = root->parent_adapter_revision();
@@ -290,7 +392,8 @@ LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
         root->training_config_canonical(), "training_config_canonical");
     result.training_config_sha256 = requiredSha256(
         root->training_config_sha256(), "training_config_sha256");
-    if (isZeroDigest(result.training_config_sha256) ||
+    if (result.training_config_canonical != expected_training_config_canonical ||
+        isZeroDigest(result.training_config_sha256) ||
         result.training_config_sha256 != expected_training_config_sha256) {
         throw std::runtime_error("LoRA training checkpoint does not match the authoritative LoRA training configuration");
     }
@@ -435,6 +538,178 @@ LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
         }
     }
     return result;
+}
+
+fs::path saveLoRATrainingCheckpoint(
+    const Config::AiConfigSnapshot& config,
+    const std::string& checkpoint_name,
+    const LoRATrainingCheckpointSnapshot& snapshot)
+{
+    const fs::path destination = resolveLoRATrainingCheckpointPath(config, checkpoint_name);
+    if (snapshot.checkpoint_id.empty() || snapshot.creation_timestamp_ms == 0 ||
+        snapshot.adapter_id.empty() || snapshot.output_adapter_revision == 0 ||
+        snapshot.base_checkpoint_identity.empty() || snapshot.training_config_canonical.empty()) {
+        throw std::runtime_error("saveLoRATrainingCheckpoint: required checkpoint metadata is missing");
+    }
+    if ((snapshot.parent_adapter_revision && *snapshot.parent_adapter_revision == 0) ||
+        (snapshot.parent_adapter_revision &&
+         snapshot.output_adapter_revision <= *snapshot.parent_adapter_revision)) {
+        throw std::runtime_error("saveLoRATrainingCheckpoint: invalid adapter revision lineage");
+    }
+    if (isZeroDigest(snapshot.base_checkpoint_sha256) ||
+        isZeroDigest(snapshot.training_config_sha256)) {
+        throw std::runtime_error("saveLoRATrainingCheckpoint: SHA-256 digests must not be all zero");
+    }
+    if (snapshot.targets.empty()) {
+        throw std::runtime_error("saveLoRATrainingCheckpoint: target inventory is empty");
+    }
+
+    flatbuffers::FlatBufferBuilder builder;
+    std::vector<flatbuffers::Offset<GRIMLoRACheckpoint::AdapterTargetState>> targets;
+    targets.reserve(snapshot.targets.size());
+    for (const auto& target : snapshot.targets) {
+        const std::string prefix = "target " + target.target_identity;
+        if (target.target_identity.empty()) {
+            throw std::runtime_error("saveLoRATrainingCheckpoint: target identity is empty");
+        }
+        const bool gradients_required = snapshot.progress.accumulation_cursor != 0;
+        if (target.A_gradient.has_value() != gradients_required ||
+            target.B_gradient.has_value() != gradients_required) {
+            throw std::runtime_error(prefix + ": gradient presence does not match accumulation cursor");
+        }
+        const auto a = encodeTensor(builder, target.A, prefix + ".A");
+        const auto b = encodeTensor(builder, target.B, prefix + ".B");
+        flatbuffers::Offset<GRIMLoRACheckpoint::TensorState> a_gradient;
+        flatbuffers::Offset<GRIMLoRACheckpoint::TensorState> b_gradient;
+        if (gradients_required) {
+            a_gradient = encodeTensor(builder, *target.A_gradient, prefix + ".A_gradient");
+            b_gradient = encodeTensor(builder, *target.B_gradient, prefix + ".B_gradient");
+        }
+        const auto a_first_moment = encodeTensor(
+            builder, target.A_first_moment, prefix + ".A_first_moment");
+        const auto a_second_moment = encodeTensor(
+            builder, target.A_second_moment, prefix + ".A_second_moment");
+        const auto b_first_moment = encodeTensor(
+            builder, target.B_first_moment, prefix + ".B_first_moment");
+        const auto b_second_moment = encodeTensor(
+            builder, target.B_second_moment, prefix + ".B_second_moment");
+        targets.push_back(GRIMLoRACheckpoint::CreateAdapterTargetStateDirect(
+            builder,
+            target.target_identity.c_str(),
+            target.layer_index,
+            static_cast<GRIMLoRACheckpoint::MatrixClass>(target.matrix_class),
+            &target.base_shape,
+            static_cast<GRIMLoRACheckpoint::MatrixOrientation>(target.orientation),
+            target.rank,
+            target.alpha,
+            a,
+            b,
+            a_gradient,
+            b_gradient,
+            a_first_moment,
+            a_second_moment,
+            b_first_moment,
+            b_second_moment));
+    }
+
+    const auto architecture = GRIMLoRACheckpoint::CreateArchitectureMetadata(
+        builder,
+        snapshot.architecture.d_model,
+        snapshot.architecture.num_layers,
+        snapshot.architecture.num_heads,
+        snapshot.architecture.num_kv_heads,
+        snapshot.architecture.qkv_dim,
+        snapshot.architecture.d_ff);
+    const auto optimizer = GRIMLoRACheckpoint::CreateOptimizerStateDirect(
+        builder,
+        snapshot.optimizer.family.c_str(),
+        snapshot.optimizer.canonical_config.c_str(),
+        snapshot.optimizer.optimizer_step,
+        snapshot.optimizer.learning_rate_lora,
+        &snapshot.optimizer.lr_scheduler_state,
+        &snapshot.optimizer.soft_restart_state);
+    const auto progress = GRIMLoRACheckpoint::CreateTrainingProgressStateDirect(
+        builder,
+        snapshot.progress.global_step,
+        snapshot.progress.epochs_completed,
+        snapshot.progress.batch_cursor,
+        snapshot.progress.accumulation_cursor,
+        snapshot.progress.best_validation_loss,
+        &snapshot.progress.data_order);
+    const auto rng = GRIMLoRACheckpoint::CreateRngStateDirect(
+        builder,
+        snapshot.rng.base_seed,
+        snapshot.rng.data_seed,
+        snapshot.rng.init_seed,
+        snapshot.rng.cuda_seed,
+        snapshot.rng.data_rng_state.c_str(),
+        &snapshot.rng.cuda_rng_state);
+    const std::vector<std::uint8_t> base_digest(
+        snapshot.base_checkpoint_sha256.begin(), snapshot.base_checkpoint_sha256.end());
+    const std::vector<std::uint8_t> config_digest(
+        snapshot.training_config_sha256.begin(), snapshot.training_config_sha256.end());
+    const auto root = GRIMLoRACheckpoint::CreateLoRATrainingCheckpointDirect(
+        builder,
+        kFormatVersion,
+        snapshot.checkpoint_id.c_str(),
+        snapshot.creation_timestamp_ms,
+        snapshot.adapter_id.c_str(),
+        snapshot.parent_adapter_revision.has_value(),
+        snapshot.parent_adapter_revision.value_or(0),
+        snapshot.output_adapter_revision,
+        snapshot.base_checkpoint_identity.c_str(),
+        &base_digest,
+        architecture,
+        snapshot.training_config_canonical.c_str(),
+        &config_digest,
+        &targets,
+        optimizer,
+        progress,
+        rng);
+    GRIMLoRACheckpoint::FinishLoRATrainingCheckpointBuffer(builder, root);
+    if (builder.GetSize() == 0 || builder.GetSize() > kMaximumCheckpointBytes) {
+        throw std::runtime_error("saveLoRATrainingCheckpoint: encoded checkpoint size is outside the supported range");
+    }
+
+    std::error_code error;
+    if (fs::exists(destination, error) || error) {
+        throw std::runtime_error(
+            "saveLoRATrainingCheckpoint: immutable destination already exists or cannot be inspected: " +
+            destination.string() + (error ? ": " + error.message() : ""));
+    }
+    fs::create_directories(destination.parent_path(), error);
+    if (error) {
+        throw std::runtime_error(
+            "saveLoRATrainingCheckpoint: cannot create checkpoint directory: " + error.message());
+    }
+    const std::string temporary_name = checkpoint_name + ".writing.grimlorackpt";
+    const fs::path temporary = resolveLoRATrainingCheckpointPath(config, temporary_name);
+    if (fs::exists(temporary, error) || error) {
+        throw std::runtime_error(
+            "saveLoRATrainingCheckpoint: temporary checkpoint already exists or cannot be inspected: " +
+            temporary.string() + (error ? ": " + error.message() : ""));
+    }
+
+    try {
+        writeCheckpointBytes(temporary, builder.GetBufferPointer(), builder.GetSize());
+        (void)loadLoRATrainingCheckpoint(
+            config,
+            temporary_name,
+            snapshot.base_checkpoint_identity,
+            snapshot.base_checkpoint_sha256,
+            snapshot.training_config_canonical,
+            snapshot.training_config_sha256);
+        fs::rename(temporary, destination, error);
+        if (error) {
+            throw std::runtime_error(
+                "saveLoRATrainingCheckpoint: atomic publish failed: " + error.message());
+        }
+    } catch (...) {
+        std::error_code cleanup_error;
+        fs::remove(temporary, cleanup_error);
+        throw;
+    }
+    return fs::absolute(destination).lexically_normal();
 }
 
 } // namespace GRIM::Checkpoint

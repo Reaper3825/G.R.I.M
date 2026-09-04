@@ -145,6 +145,9 @@ struct StartupParameterRegistry {
         local_atom_retrieval_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     std::vector<GRIM::LoRALayerParameterPairs> lora_layer_parameter_pairs;
+    // Complete base-model inventory used by .grimckpt I/O. In LoRA mode this
+    // remains distinct from parameter_groups, which contains only trainable A/B tensors.
+    std::vector<GRIM::ParameterGroup> checkpoint_parameter_groups;
     // Single durable optimizer/autograd parameter inventory owner.
     // ParameterGroup entries are non-owning views into the tensor owners in
     // this registry and startup-owned layer topology. Do not mirror this
@@ -426,6 +429,21 @@ struct StartupParameterRegistry {
             throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.parameter_groups is empty");
         }
         return parameter_groups;
+    }
+
+    std::vector<GRIM::ParameterGroup>& checkpointParameterGroups() {
+        return checkpoint_parameter_groups;
+    }
+
+    const std::vector<GRIM::ParameterGroup>& checkpointParameterGroups() const {
+        return checkpoint_parameter_groups;
+    }
+
+    const std::vector<GRIM::ParameterGroup>& requireCheckpointParameterGroups(const char* caller) const {
+        if (checkpoint_parameter_groups.empty()) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.checkpoint_parameter_groups is empty");
+        }
+        return checkpoint_parameter_groups;
     }
 
     GRIM::ParameterGroup& requireParameterGroupForTensor(

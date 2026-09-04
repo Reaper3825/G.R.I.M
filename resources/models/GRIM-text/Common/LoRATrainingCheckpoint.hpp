@@ -106,17 +106,30 @@ std::filesystem::path resolveLoRATrainingCheckpointPath(
     const Config::AiConfigSnapshot& config,
     const std::string& checkpoint_name);
 
+// Returns the newest immutable checkpoint name in the selected model store.
+// An empty result means the store contains no LoRA training checkpoint.
+std::optional<std::string> findLatestLoRATrainingCheckpointName(
+    const Config::AiConfigSnapshot& config);
+
 // Strictly reads and validates a complete resumable LoRA training checkpoint.
 // expected_base_checkpoint_identity and expected_base_checkpoint_sha256 must
 // describe the model checkpoint already loaded by startup. The config digest
-// is authored by the future LoRA grouping/config serialization boundary. This
-// function does not mutate GPU tensors or TrainingContext and is intentionally
-// not wired yet.
+// is authored by the LoRA lifecycle bridge. This format layer does not mutate
+// GPU tensors or TrainingContext.
 LoRATrainingCheckpointSnapshot loadLoRATrainingCheckpoint(
     const Config::AiConfigSnapshot& config,
     const std::string& checkpoint_name,
     const std::string& expected_base_checkpoint_identity,
     const std::array<std::uint8_t, 32>& expected_base_checkpoint_sha256,
+    const std::string& expected_training_config_canonical,
     const std::array<std::uint8_t, 32>& expected_training_config_sha256);
+
+// Strictly validates and atomically writes a complete resumable LoRA training
+// checkpoint. The destination uses create-new semantics: an existing immutable
+// checkpoint is never overwritten.
+std::filesystem::path saveLoRATrainingCheckpoint(
+    const Config::AiConfigSnapshot& config,
+    const std::string& checkpoint_name,
+    const LoRATrainingCheckpointSnapshot& snapshot);
 
 } // namespace GRIM::Checkpoint

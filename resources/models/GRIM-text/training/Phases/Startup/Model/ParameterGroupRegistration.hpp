@@ -62,13 +62,15 @@ void initializeFeedForwardParameterTensors(
     std::vector<GRIM::FeedForwardParameterTensors>& feed_forward_parameter_tensors,
     const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
+    cudaStream_t init_stream,
+    bool requires_grad);
 
 void initializeEncodingLayerParameterTensors(
     std::vector<GRIM::EncodingLayerParameterTensors>& encoding_layer_parameter_tensors,
     const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
+    cudaStream_t init_stream,
+    bool requires_grad);
 
 void initializeEmbeddingParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -83,26 +85,30 @@ void initializeLmHeadParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream,
     GRIM::Tensor* tied_embedding_weights,
-    const OutputUnigramPriorView* output_unigram_prior);
+    const OutputUnigramPriorView* output_unigram_prior,
+    bool requires_grad);
 
 void initializeAtomInsertionBoundaryParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::HyperParameters::AtomInsertionBoundaryProjectionHP& atom_hp,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
+    cudaStream_t init_stream,
+    bool requires_grad);
 
 void initializeSelectorParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     bool selector_enabled,
     int d_model,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
+    cudaStream_t init_stream,
+    bool requires_grad);
 
 void initializeLocalAtomRetrievalParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int d_model,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
+    cudaStream_t init_stream,
+    bool requires_grad);
 
 void initializeLoRAParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,

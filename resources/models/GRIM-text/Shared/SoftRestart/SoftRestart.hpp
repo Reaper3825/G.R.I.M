@@ -32,6 +32,7 @@ public:
 
     // Record that a restart was executed.
     void markRestart(int64_t global_step);
+    void restoreState(const SoftRestartState& state);
 
     const SoftRestartState& state() const { return state_; }
     SoftRestartConfig& config() { return config_; }

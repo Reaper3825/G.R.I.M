@@ -1350,7 +1350,14 @@ EpochResult runEpoch(
     // Phase1-authored payload is active each step. The hard invariant from
     // the plan is:
     //     active_batch = ctx.train_payloads[ctx.epoch_batch_order[epoch_idx][batch_idx]]
-    for (int batch_idx = 0; batch_idx < total_batches; ++batch_idx) {
+    const int first_batch_idx = epoch_idx == ctx.epochs_completed
+        ? ctx.resume_batch_cursor
+        : 0;
+    if (first_batch_idx < 0 || first_batch_idx > total_batches) {
+        throw std::runtime_error("FATAL: restored batch cursor is outside the active epoch order");
+    }
+    ctx.resume_batch_cursor = 0;
+    for (int batch_idx = first_batch_idx; batch_idx < total_batches; ++batch_idx) {
         GRIM::Batching::BatchPayload& payload =
             ctx.train_payloads[ctx.epoch_batch_order[epoch_idx][batch_idx]];
 
@@ -1474,7 +1481,11 @@ bool executePhase2(TrainingContext& ctx) {
     }
     
     try {
-        for (int epoch = 0; epoch < num_epochs; ++epoch) {
+        if (ctx.epochs_completed < 0 || ctx.epochs_completed > num_epochs) {
+            throw std::runtime_error(
+                "FATAL: restored epochs_completed is outside the configured epoch plan");
+        }
+        for (int epoch = ctx.epochs_completed; epoch < num_epochs; ++epoch) {
             EpochResult epoch_result = runEpoch(ctx, state, parameter_registry, epoch, num_epochs, accum_steps);
             ctx.epochs_completed = epoch + 1;
             

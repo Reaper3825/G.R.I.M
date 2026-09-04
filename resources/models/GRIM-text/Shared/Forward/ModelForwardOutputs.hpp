@@ -14,9 +14,14 @@
 #include "../ConceptBlock/ConceptBlockSpanView.hpp"
 #include "../Goal/Goal.hpp"
 #include "../Goal/GoalSpanView.hpp"
+#include "../../Common/LoRAMatrixClass.hpp"
+#include "../../Shared/TensorContract/LoRALinear.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
+#include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -25,6 +30,12 @@
 
 namespace GRIM {
 namespace Forward {
+
+struct LoRALayerParameterViews {
+    std::array<LoRAProjectionView, 5> projections{};
+    std::array<std::unique_ptr<Tensor>, 5> detached_A{};
+    std::array<std::unique_ptr<Tensor>, 5> detached_B{};
+};
 
 struct ModelForwardOutputs {
 private:
@@ -81,6 +92,25 @@ private:
         requireSize(ffn_silu_out_per_layer, "ffn_silu_out_per_layer");
         requireSize(ffn_linear1_out_per_layer, "ffn_linear1_out_per_layer");
         requireSize(ffn_swiglu_out_per_layer, "ffn_swiglu_out_per_layer");
+        if (lora_parameters_per_layer.size() != expected) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": per-layer LoRA parameter view count mismatch expected=" +
+                std::to_string(expected) + " actual=" +
+                std::to_string(lora_parameters_per_layer.size()));
+        }
+    }
+
+    static std::size_t loraProjectionIndex(LoRAMatrixClass matrix_class) {
+        switch (matrix_class) {
+            case LoRAMatrixClass::QKV: return 0;
+            case LoRAMatrixClass::ATTENTION_OUTPUT: return 1;
+            case LoRAMatrixClass::FFN_GATE: return 2;
+            case LoRAMatrixClass::FFN_UP: return 3;
+            case LoRAMatrixClass::FFN_DOWN: return 4;
+        }
+        throw std::runtime_error(
+            "ModelForwardOutputs: unknown LoRAMatrixClass");
     }
 
 public:
@@ -205,6 +235,7 @@ public:
     std::vector<Tensor> ffn_silu_out_per_layer;
     std::vector<Tensor> ffn_linear1_out_per_layer;
     std::vector<Tensor> ffn_swiglu_out_per_layer;
+    std::vector<LoRALayerParameterViews> lora_parameters_per_layer;
 
     void reserveLayerOutputs(size_t num_layers) {
         ln1_out_per_layer.reserve(num_layers);
@@ -228,6 +259,7 @@ public:
         ffn_silu_out_per_layer.reserve(num_layers);
         ffn_linear1_out_per_layer.reserve(num_layers);
         ffn_swiglu_out_per_layer.reserve(num_layers);
+        lora_parameters_per_layer.reserve(num_layers);
     }
 
     void pushLayerOutputs() {
@@ -252,7 +284,72 @@ public:
         ffn_silu_out_per_layer.emplace_back();
         ffn_linear1_out_per_layer.emplace_back();
         ffn_swiglu_out_per_layer.emplace_back();
+        lora_parameters_per_layer.emplace_back();
         requireConsistentLayerStorage("ModelForwardOutputs::pushLayerOutputs");
+    }
+
+    void bindLoRAProjection(
+        size_t layer_idx,
+        LoRAMatrixClass matrix_class,
+        Tensor& A,
+        Tensor& B,
+        std::uint32_t rank,
+        float scale,
+        bool connect_parameter_graph,
+        cudaStream_t stream) {
+        validateLayerIndex(layer_idx, "ModelForwardOutputs::bindLoRAProjection");
+        if (rank == 0 || !std::isfinite(scale) || scale <= 0.0f) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::bindLoRAProjection: rank and scale must be positive");
+        }
+        A.require("ModelForwardOutputs::bindLoRAProjection.A");
+        B.require("ModelForwardOutputs::bindLoRAProjection.B");
+        const size_t projection_idx = loraProjectionIndex(matrix_class);
+        auto& layer = lora_parameters_per_layer[layer_idx];
+        auto& projection = layer.projections[projection_idx];
+        if (projection.A || projection.B) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::bindLoRAProjection: projection is already bound");
+        }
+        if (connect_parameter_graph) {
+            projection.A = &A;
+            projection.B = &B;
+        } else {
+            layer.detached_A[projection_idx] =
+                std::make_unique<Tensor>(A.detach(stream));
+            layer.detached_B[projection_idx] =
+                std::make_unique<Tensor>(B.detach(stream));
+            projection.A = layer.detached_A[projection_idx].get();
+            projection.B = layer.detached_B[projection_idx].get();
+        }
+        projection.rank = rank;
+        projection.scale = scale;
+    }
+
+    LoRAProjectionView* loraProjectionOrNull(
+        size_t layer_idx,
+        LoRAMatrixClass matrix_class) {
+        validateLayerIndex(layer_idx, "ModelForwardOutputs::loraProjectionOrNull");
+        auto& projection = lora_parameters_per_layer[layer_idx]
+            .projections[loraProjectionIndex(matrix_class)];
+        if ((projection.A == nullptr) != (projection.B == nullptr)) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::loraProjectionOrNull: incomplete A/B parameter view");
+        }
+        return projection.A ? &projection : nullptr;
+    }
+
+    const LoRAProjectionView* loraProjectionOrNull(
+        size_t layer_idx,
+        LoRAMatrixClass matrix_class) const {
+        validateLayerIndex(layer_idx, "ModelForwardOutputs::loraProjectionOrNull const");
+        const auto& projection = lora_parameters_per_layer[layer_idx]
+            .projections[loraProjectionIndex(matrix_class)];
+        if ((projection.A == nullptr) != (projection.B == nullptr)) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::loraProjectionOrNull const: incomplete A/B parameter view");
+        }
+        return projection.A ? &projection : nullptr;
     }
 
     size_t layerCount() const {
@@ -291,6 +388,7 @@ public:
         clearTensorVector(ffn_silu_out_per_layer);
         clearTensorVector(ffn_linear1_out_per_layer);
         clearTensorVector(ffn_swiglu_out_per_layer);
+        lora_parameters_per_layer.clear();
     }
 
     int totalGradFnCount() const {

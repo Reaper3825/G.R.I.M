@@ -223,6 +223,23 @@ GradientVerificationSession::GradientVerificationSession(
         }
     };
 
+    const bool lora_model =
+        HyperParameters::snapshotTrainingConfigField<bool>(
+            *ctx.config, "lora_model");
+    if (lora_model) {
+        for (auto& group : ctx.parameter_registry->requireParameterGroups(
+                 "GradientVerificationSession LoRA baseline")) {
+            if (!group.tensor) {
+                throw std::runtime_error(
+                    "GradientVerificationSession: LoRA parameter group tensor is NULL");
+            }
+            capture(*group.tensor, group.name);
+        }
+        GD_INFO("Captured " << impl_->expected.size()
+                << " LoRA pre-backward gradient baselines for accumulation-slot verification");
+        return;
+    }
+
     if (activity.text_loss_active) {
         auto& lm_head = ctx.parameter_registry->requireLmHeadParameters(
             "GradientVerificationSession");
@@ -442,6 +459,41 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
                     << probe.checked << " delta_rms=" << probe.delta_rms);
         }
     };
+
+    const bool lora_model =
+        HyperParameters::snapshotTrainingConfigField<bool>(
+            *ctx.config, "lora_model");
+    if (lora_model) {
+        const auto& base_groups =
+            ctx.parameter_registry->requireCheckpointParameterGroups(
+                "GradientVerificationSession::verify LoRA base");
+        for (const auto& group : base_groups) {
+            if (!group.tensor) {
+                throw std::runtime_error(
+                    "GradientVerificationSession::verify: base checkpoint group tensor is NULL");
+            }
+            if (group.tensor->requires_grad || group.tensor->has_grad()) {
+                GD_WARN(group.name << " is a LoRA base parameter but remains trainable or owns a gradient buffer");
+                ok = false;
+            }
+        }
+
+        auto& adapter_groups =
+            ctx.parameter_registry->requireParameterGroups(
+                "GradientVerificationSession::verify LoRA adapters");
+        for (auto& group : adapter_groups) {
+            if (!group.tensor) {
+                throw std::runtime_error(
+                    "GradientVerificationSession::verify: LoRA parameter group tensor is NULL");
+            }
+            if (activity.text_loss_active) {
+                requireReceivedGradient(*group.tensor, group.name);
+            } else {
+                requireAllocatedFinite(*group.tensor, group.name);
+            }
+        }
+        return ok;
+    }
 
     auto& embedding = ctx.parameter_registry->requireEmbeddingParameters(
         "GradientVerificationSession::verify");

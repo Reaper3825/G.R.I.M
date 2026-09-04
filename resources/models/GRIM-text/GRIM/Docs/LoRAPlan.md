@@ -68,9 +68,12 @@ layerN_<projection>.lora_B  TRAINABLE
 
 The optimizer inventory contains only enabled `lora_A` and `lora_B` tensors. Any
 pre-existing base-model parameter appearing in that inventory is a startup
-validation error. Startup must set every pre-existing parameter non-trainable
-before adapter registration and must validate that no base parameter owns an
-allocated gradient buffer in LoRA training mode.
+failure. Freeze policy is applied when base tensors are allocated: LoRA startup
+must skip both `requires_grad_()` and `alloc_grad()` for every base owner. Tied
+LM-head weights alias embedding data but do not call `share_grad()` while frozen,
+because no base gradient buffer exists to share. Post-allocation registry
+validation proves this contract rather than attempting to freeze tensors after
+gradient buffers have already been created.
 
 ## V1 merge policy
 
@@ -569,17 +572,18 @@ deployable adapter state and creates a new immutable `adapter_revision`. It does
 not overwrite the parent revision or expose optimizer/training state through
 `lora_path`.
 
-The v1 host-load I/O boundary is `GRIM::Checkpoint::loadLoRATrainingCheckpoint`
-in `Common/LoRATrainingCheckpoint.hpp`. A bare `.grimlorackpt` filename resolves
+The v1 format I/O boundary is `GRIM::Checkpoint::loadLoRATrainingCheckpoint`
+in `Common/LoRATrainingCheckpoint.hpp`, with runtime orchestration owned by
+`training/LoRACheckpointLifecycle.cu`. A bare `.grimlorackpt` filename resolves
 under `<selected-model-directory>/lora_checkpoints`, where the selected model
 directory is taken directly from the loaded `model.grimcfg` source path. Absolute
 paths, parent components, alternate model directories, and non-LoRA checkpoint
-extensions are rejected. The future startup caller must pass the identity and
-SHA-256 of the base checkpoint it just loaded plus the authoritative LoRA
-training-config SHA-256. The loader returns a fully validated host snapshot and
-does not mutate `TrainingContext`, GPU tensors, optimizer state, or registry
-ownership. Caller wiring and GPU-state restoration remain part of the later
-durable-owner phase.
+extensions are rejected. Startup passes the normalized identity and exact file
+SHA-256 of the base checkpoint it just loaded plus a deterministic canonical
+digest of the authoritative LoRA fields. The format loader returns a validated
+host snapshot; the lifecycle bridge restores GPU tensors, gradients, optimizer
+moments and clocks, epoch/batch cursors, deterministic data order, CPU/CUDA RNG
+state, and soft-restart state before Phase 2 starts.
 
 ## Ownership constraints
 
@@ -892,17 +896,18 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
 
 ### Phase 1: Durable parameter ownership
 
-- [ ] Add `LoRAMatrixClass` and `LoRAParameterPair` adjacent to the corresponding
+- [x] Add `LoRAMatrixClass` and `LoRAParameterPair` adjacent to the corresponding
       encoder and FFN base tensor owners in `ParameterRegistry.hpp`.
-- [ ] Add `LoRAProjectionView` at the shared forward/TensorContract request
-      boundary as a borrowed, non-owning payload.
-- [ ] Allocate adapter pairs only for explicitly enabled target identities.
-- [ ] Register only adapter `A` and `B` tensors as optimizer parameter groups;
+- [x] Add `LoRAProjectionView` to the per-call `ModelForwardOutputs` boundary as
+      a borrowed, non-owning payload. Connected training views reference the
+      registry leaves; read-only forward owns detached aliases for the call.
+- [x] Allocate adapter pairs only for explicitly enabled target identities.
+- [x] Register only adapter `A` and `B` tensors as optimizer parameter groups;
       reject any pre-existing base-model parameter found in that inventory, and stamp
       LoRA precision from the corresponding authored matrix-class field.
 - [ ] Before adapter registration, mark every pre-existing model parameter
       non-trainable and fail if any owns an allocated gradient buffer.
-- [ ] Add fail-loud startup validation for target existence, dimensions, rank,
+- [x] Add fail-loud startup validation for target existence, dimensions, rank,
       duplicate identities, missing enabled adapters, and missing initialization
       seed state.
 - [x] Require exact base-checkpoint SHA-256 compatibility and hard-fail every
@@ -910,9 +915,10 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
 
 ### Phase 2: Forward and autograd
 
-- [ ] Add a TensorContract/autograd LoRA projection primitive with complete
-      gradients for input, `A`, and `B`; in LoRA mode it must never allocate or
-      accumulate a gradient for any base parameter.
+- [x] Add a TensorContract/autograd LoRA projection primitive with complete
+      gradients for input, `A`, and `B`; the primitive composes the existing
+      accumulating matmul/add/scalar GradFns and rejects an unfrozen adapted
+      base parameter.
 - [x] Define exact direct-FFN and transposed-attention backward equations,
       including `dX_base + dX_adapter` and `dW_base = NONE`.
 - [x] Use non-const borrowed `Tensor*` for `A` and `B` so backward can legally
@@ -920,13 +926,13 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
       read-only outside optimizer update.
 - [x] Define `lora_linear(x, W_base, lora, orientation, stream)` with explicit
       direct/transposed orientation and null meaning authored ordinary projection.
-- [ ] Integrate the primitive at the five selected projection call sites; do
+- [x] Integrate the primitive at the five selected projection call sites; do
       not fork complete encoder or FFN forward implementations.
-- [ ] Preserve the shared-forward read-only contract and Category 1 lifetime
+- [x] Preserve the shared-forward read-only contract and Category 1 lifetime
       for adapter intermediates.
 - [ ] Add Rule 21 equation diagnostics for the base projection, adapter delta,
       scaling, and combined output.
-- [ ] Verify persistent leaf gradients accumulate with `+=` or `atomicAdd` in
+- [x] Verify persistent leaf gradients accumulate with `+=` or `atomicAdd` in
       every new GradFn path.
 
 ### Phase 3: Training and optimizer policy
@@ -940,16 +946,16 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
 - [x] Stamp `weight_decay_multiplier=0.0` and `lr_multiplier=1.0` on every LoRA
       `A` and `B` parameter group.
 - [x] Require FP32 optimizer state for every v1 adapter parameter group.
-- [ ] Ensure clipping, telemetry, finite checks, and accumulation windows include
+- [x] Ensure clipping, telemetry, finite checks, and accumulation windows include
       adapter gradients exactly once.
-- [ ] Verify zeroing and optimizer-state ownership do not alias base tensors.
-- [ ] Add LoRA training-checkpoint save/resume for working `A`/`B`, FP32 moments,
+- [x] Verify zeroing and optimizer-state ownership do not alias base tensors.
+- [x] Add LoRA training-checkpoint save/resume for working `A`/`B`, FP32 moments,
       optimizer/scheduler steps, accumulation cursor and partial gradients, data
       cursor, RNG state, and exact base identity.
 - [x] Add strict host-side `.grimlorackpt` load I/O and schema validation rooted
-      in the currently selected model-store directory; leave startup caller and
-      GPU-state mutation unwired until LoRA durable owners exist.
-- [ ] Restrict training-checkpoint writes to post-backward graph boundaries and
+      in the currently selected model-store directory, with startup restore and
+      GPU-state mutation wired through the durable lifecycle bridge.
+- [x] Restrict training-checkpoint writes to post-backward graph boundaries and
       exclude all Category 1 activations, GradFns, and tape state.
 
 ### Phase 4: Serialization and inference
@@ -1017,6 +1023,14 @@ as the implementation plan is refined.
 
 ## Change log
 
+- 2026-09-04: Wired resumable LoRA checkpoints into startup and the existing
+      best/final save boundaries. Startup restores the newest immutable
+      `.grimlorackpt` from the selected model store without using deployment
+      `lora_path`; absent checkpoints start revision 1 explicitly, while present
+      invalid checkpoints fail startup. The bridge restores A/B, optional
+      accumulated gradients, FP32 moments, optimizer/LR/epoch/global/best state,
+      deterministic batch order, RNG, and soft-restart state. Base checkpoint
+      I/O now uses a full frozen-base inventory distinct from LoRA optimizer groups.
 - 2026-09-04: Added the strict host-side resumable LoRA checkpoint schema and
       load I/O. Bare `.grimlorackpt` names resolve under the selected
       `model.grimcfg` directory's `lora_checkpoints` child, and loading validates

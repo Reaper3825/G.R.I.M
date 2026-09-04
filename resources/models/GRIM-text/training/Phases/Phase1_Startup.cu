@@ -187,6 +187,7 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     TelemetryReady(ctx);
     PlannedBatchesReady(ctx);
     EpochPlanReady(ctx);
+    initializeLoRACheckpointLifecycle(ctx);
     StartupValidated(ctx);
     Phase2HandoffReady(ctx);
 

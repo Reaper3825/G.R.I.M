@@ -314,8 +314,10 @@ void throwUntrainableTensor(const std::string& name, const Tensor& tensor, int l
 class Registrar {
 public:
     Registrar(std::vector<ParameterGroup>& groups,
-              const GRIM::Config::AiConfigSnapshot& config)
-    : groups_(groups), config_(config), optimizer_hp_(GRIM::HyperParameters::optimizerUpdateHP(config)) {}
+                            const GRIM::Config::AiConfigSnapshot& config,
+                            bool require_trainable = true)
+        : groups_(groups), config_(config), optimizer_hp_(GRIM::HyperParameters::optimizerUpdateHP(config)),
+            require_trainable_(require_trainable) {}
 
     void addTensor(const std::string& name,
                    Tensor& tensor,
@@ -324,69 +326,9 @@ public:
                    int layer = -1,
                    float wd_mult = 1.0f,
                    float lr_mult = 1.0f) {
-        if (name.empty()) {
-            throw std::runtime_error(
-                "[buildParameterGroups] parameter group name must not be empty");
-        }
-        if (!registered_names_.insert(name).second) {
-            throw std::runtime_error(
-                "[buildParameterGroups] duplicate parameter group name: " + name);
-        }
-        if (!tensor.data || !tensor.has_grad() || tensor.numel() == 0) {
-            throwUntrainableTensor(name, tensor, layer);
-        }
-        if (stats_bucket == ParamStatsBucket::COUNT) {
-            throw std::runtime_error("[buildParameterGroups] " + name +
-                                     " has invalid ParamStatsBucket::COUNT");
-        }
-        const void* data_ptr = static_cast<const void*>(tensor.data);
-        for (const void* registered_ptr : registered_data_) {
-            if (registered_ptr == data_ptr) {
-                throw std::runtime_error("[buildParameterGroups] duplicate tensor.data registration for " + name +
-                                         " would double-step the same memory: " +
-                                         tensorDebugSummary(tensor) + " layer=" + std::to_string(layer));
-            }
-        }
-        registered_data_.push_back(data_ptr);
-
         const ParameterGroupPrecision precision = precisionForType(type);
-        validateRegisteredPrecisionSupport(name, type, precision);
-
-        const TensorContract::PrecisionType tensor_precision =
-            TensorContract::precision_from_parameter_group_precision(precision);
-        if (tensor.precision() != TensorContract::PrecisionType::FP32 &&
-            tensor.precision() != tensor_precision) {
-            throw std::runtime_error("[buildParameterGroups] " + name +
-                                     " tensor precision metadata already equals " +
-                                     TensorContract::precision_name(tensor.precision()) +
-                                     " but registration requires " +
-                                     TensorContract::precision_name(tensor_precision));
-        }
-        tensor.set_compute_precision(tensor_precision, "ParameterGroupRegistration::Registrar::addTensor");
-
-        ParameterGroup group{};
-        group.name = name;
-        group.tensor = &tensor;
-        group.m_tensor = nullptr;
-        group.v_tensor = nullptr;
-        group.type = type;
-        group.parameter_precision = precision;
-        group.stats_bucket = stats_bucket;
-        group.layer_index = layer;
-        group.weight_decay_multiplier = wd_mult;
-        group.lr_multiplier = lr_mult;
-        // Registration is the durable ownership boundary for verifier history.
-        // Seed the observation point from the shared gradient tensor so a
-        // rebuilt registry never mistakes pre-registration writes for delivery
-        // by the first active backward it verifies.
-        group.gradient_verification.last_observed_delivery_count =
-            tensor.gradient_delivery_count();
-        if (optimizer_hp_.use_depth_aware_upsilon && layer >= 0) {
-            group.upsilon = GRIM::HyperParameters::UPSILON_BASE *
-                std::sqrt(static_cast<float>(GRIM::HyperParameters::UPSILON_REFERENCE_LAYERS) /
-                          static_cast<float>(layer + 1));
-        }
-        groups_.push_back(group);
+        addTensorWithPrecision(name, tensor, type, stats_bucket, layer,
+                               wd_mult, lr_mult, precision);
     }
 
     void addConfigGatedTensor(const std::string& name,
@@ -435,7 +377,8 @@ private:
             throw std::runtime_error(
                 "[buildParameterGroups] duplicate parameter group name: " + name);
         }
-        if (!tensor.data || !tensor.has_grad() || tensor.numel() == 0) {
+        if (!tensor.data || tensor.numel() == 0 ||
+            (require_trainable_ && !tensor.has_grad())) {
             throwUntrainableTensor(name, tensor, layer);
         }
         if (stats_bucket == ParamStatsBucket::COUNT) {
@@ -502,6 +445,7 @@ private:
     std::vector<ParameterGroup>& groups_;
     const GRIM::Config::AiConfigSnapshot& config_;
     const OptimizerUpdateHP optimizer_hp_;
+    bool require_trainable_ = true;
     std::unordered_set<std::string> registered_names_;
     std::vector<const void*> registered_data_;
 };
@@ -1014,7 +958,8 @@ void initializeFeedForwardParameterTensors(
     std::vector<GRIM::FeedForwardParameterTensors>& feed_forward_parameter_tensors,
     const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
+    cudaStream_t init_stream,
+    bool requires_grad) {
     if (!init_stream) {
         throw std::runtime_error("initializeFeedForwardParameterTensors: init_stream is NULL");
     }
@@ -1051,24 +996,32 @@ void initializeFeedForwardParameterTensors(
         const std::uint64_t ffn_seed = weight_init_seed + 4 + static_cast<std::uint64_t>(layer) * 10ULL;
 
         tensors.W_gate = GRIM::Tensor::zeros({ffn_hp.d_model, ffn_hp.d_ff}, init_stream, "ffn_w_gate");
-        tensors.W_gate.requires_grad_();
-        tensors.W_gate.alloc_grad();
+        if (requires_grad) {
+            tensors.W_gate.requires_grad_();
+            tensors.W_gate.alloc_grad();
+        }
         GRIM::Tensor::xavier_uniform_(tensors.W_gate, ffn_seed, init_stream);
 
         tensors.W1 = GRIM::Tensor::zeros({ffn_hp.d_model, ffn_hp.d_ff}, init_stream, "ffn_w1");
-        tensors.W1.requires_grad_();
-        tensors.W1.alloc_grad();
+        if (requires_grad) {
+            tensors.W1.requires_grad_();
+            tensors.W1.alloc_grad();
+        }
         GRIM::Tensor::xavier_uniform_(tensors.W1, ffn_seed + 1, init_stream);
 
         tensors.W2 = GRIM::Tensor::zeros({ffn_hp.d_ff, ffn_hp.d_model}, init_stream, "ffn_w2");
-        tensors.W2.requires_grad_();
-        tensors.W2.alloc_grad();
+        if (requires_grad) {
+            tensors.W2.requires_grad_();
+            tensors.W2.alloc_grad();
+        }
         GRIM::Tensor::xavier_uniform_with_gain_(tensors.W2, ffn_seed + 2, residual_projection_init_gain, init_stream);
 
         if (ffn_hp.output_bias_enabled) {
             tensors.b2 = GRIM::Tensor::zeros({1, ffn_hp.d_model}, init_stream, "ffn_b2");
-            tensors.b2.requires_grad_();
-            tensors.b2.alloc_grad();
+            if (requires_grad) {
+                tensors.b2.requires_grad_();
+                tensors.b2.alloc_grad();
+            }
         }
     }
 
@@ -1086,7 +1039,8 @@ void initializeEncodingLayerParameterTensors(
     std::vector<GRIM::EncodingLayerParameterTensors>& encoding_layer_parameter_tensors,
     const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
+    cudaStream_t init_stream,
+    bool requires_grad) {
     if (!init_stream) {
         throw std::runtime_error("initializeEncodingLayerParameterTensors: init_stream is NULL");
     }
@@ -1124,7 +1078,7 @@ void initializeEncodingLayerParameterTensors(
         const std::uint64_t layer_seed = weight_init_seed + 2 + static_cast<std::uint64_t>(layer) * 10ULL;
 
         tensors.rms1_gamma = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_rms1_gamma");
-        if (!encoder_hp.freeze_learned_rms_gammas) {
+        if (requires_grad && !encoder_hp.freeze_learned_rms_gammas) {
             tensors.rms1_gamma.requires_grad_();
             tensors.rms1_gamma.alloc_grad();
         }
@@ -1140,7 +1094,7 @@ void initializeEncodingLayerParameterTensors(
         }
 
         tensors.rms2_gamma = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_rms2_gamma");
-        if (!encoder_hp.freeze_learned_rms_gammas) {
+        if (requires_grad && !encoder_hp.freeze_learned_rms_gammas) {
             tensors.rms2_gamma.requires_grad_();
             tensors.rms2_gamma.alloc_grad();
         }
@@ -1156,25 +1110,33 @@ void initializeEncodingLayerParameterTensors(
         }
 
         tensors.W_qkv = GRIM::Tensor::zeros({encoder_hp.qkv_dim, encoder_hp.d_model}, init_stream, "enc_W_qkv");
-        tensors.W_qkv.requires_grad_();
-        tensors.W_qkv.alloc_grad();
+        if (requires_grad) {
+            tensors.W_qkv.requires_grad_();
+            tensors.W_qkv.alloc_grad();
+        }
         GRIM::Tensor::xavier_uniform_(tensors.W_qkv, layer_seed + 0, init_stream);
 
         tensors.W_o = GRIM::Tensor::zeros({encoder_hp.d_model, encoder_hp.d_model}, init_stream, "enc_W_o");
-        tensors.W_o.requires_grad_();
-        tensors.W_o.alloc_grad();
+        if (requires_grad) {
+            tensors.W_o.requires_grad_();
+            tensors.W_o.alloc_grad();
+        }
         GRIM::Tensor::xavier_uniform_with_gain_(tensors.W_o, layer_seed + 1, residual_projection_init_gain, init_stream);
 
         if (encoder_hp.attention_qkv_bias_enabled) {
             tensors.b_qkv = GRIM::Tensor::zeros({encoder_hp.qkv_dim}, init_stream, "enc_b_qkv");
-            tensors.b_qkv.requires_grad_();
-            tensors.b_qkv.alloc_grad();
+            if (requires_grad) {
+                tensors.b_qkv.requires_grad_();
+                tensors.b_qkv.alloc_grad();
+            }
         }
 
         if (encoder_hp.attention_output_bias_enabled) {
             tensors.b_o = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_b_o");
-            tensors.b_o.requires_grad_();
-            tensors.b_o.alloc_grad();
+            if (requires_grad) {
+                tensors.b_o.requires_grad_();
+                tensors.b_o.alloc_grad();
+            }
         }
 
         if (encoder_hp.attention_residual_gate_enabled) {
@@ -1182,19 +1144,25 @@ void initializeEncodingLayerParameterTensors(
             // initialize the residual multiplier to exactly 1.0.
             tensors.attention_residual_gate.W_gate = GRIM::Tensor::zeros(
                 {encoder_hp.d_model, 1}, init_stream, "enc_attention_residual_gate_W");
-            tensors.attention_residual_gate.W_gate.requires_grad_();
-            tensors.attention_residual_gate.W_gate.alloc_grad();
+            if (requires_grad) {
+                tensors.attention_residual_gate.W_gate.requires_grad_();
+                tensors.attention_residual_gate.W_gate.alloc_grad();
+            }
 
             tensors.attention_residual_gate.b_gate = GRIM::Tensor::zeros(
                 {1}, init_stream, "enc_attention_residual_gate_b");
-            tensors.attention_residual_gate.b_gate.requires_grad_();
-            tensors.attention_residual_gate.b_gate.alloc_grad();
+            if (requires_grad) {
+                tensors.attention_residual_gate.b_gate.requires_grad_();
+                tensors.attention_residual_gate.b_gate.alloc_grad();
+            }
         }
 
         if (encoder_hp.use_layer_scale) {
             tensors.layer_scale1 = GRIM::Tensor::zeros({1, encoder_hp.d_model}, init_stream, "enc_layer_scale1");
-            tensors.layer_scale1.requires_grad_();
-            tensors.layer_scale1.alloc_grad();
+            if (requires_grad) {
+                tensors.layer_scale1.requires_grad_();
+                tensors.layer_scale1.alloc_grad();
+            }
             copy_err = cudaMemcpyAsync(
                 tensors.layer_scale1.data,
                 layer_scale_init.data(),
@@ -1207,8 +1175,10 @@ void initializeEncodingLayerParameterTensors(
             }
 
             tensors.layer_scale2 = GRIM::Tensor::zeros({1, encoder_hp.d_model}, init_stream, "enc_layer_scale2");
-            tensors.layer_scale2.requires_grad_();
-            tensors.layer_scale2.alloc_grad();
+            if (requires_grad) {
+                tensors.layer_scale2.requires_grad_();
+                tensors.layer_scale2.alloc_grad();
+            }
             copy_err = cudaMemcpyAsync(
                 tensors.layer_scale2.data,
                 layer_scale_init.data(),
@@ -1276,7 +1246,8 @@ void initializeLmHeadParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream,
     GRIM::Tensor* tied_embedding_weights,
-    const OutputUnigramPriorView* output_unigram_prior) {
+    const OutputUnigramPriorView* output_unigram_prior,
+    bool requires_grad) {
     if (!init_stream) {
         throw std::runtime_error("initializeLmHeadParameterTensors: init_stream is NULL");
     }
@@ -1338,23 +1309,29 @@ void initializeLmHeadParameterTensors(
             false,
             true,
             "lm_head.weights_tied");
-        parameter_tensors.weights.share_grad(*tied_embedding_weights);
         parameter_tensors.weights.owns_data = false;
-        parameter_tensors.weights.requires_grad = true;
+        if (requires_grad) {
+            parameter_tensors.weights.share_grad(*tied_embedding_weights);
+            parameter_tensors.weights.requires_grad_();
+        }
     } else {
         parameter_tensors.weights = Tensor::zeros(
             {lm_head_hp.vocab_size, lm_head_hp.d_model},
             init_stream,
             "lm_head.weights");
-        parameter_tensors.weights.requires_grad_();
-        parameter_tensors.weights.alloc_grad();
+        if (requires_grad) {
+            parameter_tensors.weights.requires_grad_();
+            parameter_tensors.weights.alloc_grad();
+        }
         Tensor::xavier_uniform_(parameter_tensors.weights, weight_init_seed, init_stream);
     }
 
     if (lm_head_hp.bias_enabled) {
         parameter_tensors.bias = Tensor::zeros({lm_head_hp.vocab_size}, init_stream, "lm_head.bias");
-        parameter_tensors.bias.requires_grad_();
-        parameter_tensors.bias.alloc_grad();
+        if (requires_grad) {
+            parameter_tensors.bias.requires_grad_();
+            parameter_tensors.bias.alloc_grad();
+        }
         if (output_unigram_prior) {
             if (!lm_head_hp.unigram_bias) {
                 throw std::runtime_error(
@@ -1379,7 +1356,7 @@ void initializeLmHeadParameterTensors(
     }
 
     parameter_tensors.final_rms_gamma = Tensor::zeros({lm_head_hp.d_model}, init_stream, "final_rms_gamma");
-    if (!lm_head_hp.freeze_learned_rms_gammas) {
+    if (requires_grad && !lm_head_hp.freeze_learned_rms_gammas) {
         parameter_tensors.final_rms_gamma.requires_grad_();
         parameter_tensors.final_rms_gamma.alloc_grad();
     }
@@ -1402,20 +1379,26 @@ void initializeLmHeadParameterTensors(
 
         parameter_tensors.mlp_W_gate = Tensor::zeros(
             {lm_head_hp.d_model, lm_head_hp.mlp_d_ff}, init_stream, "lm_head.mlp_W_gate");
-        parameter_tensors.mlp_W_gate.requires_grad_();
-        parameter_tensors.mlp_W_gate.alloc_grad();
+        if (requires_grad) {
+            parameter_tensors.mlp_W_gate.requires_grad_();
+            parameter_tensors.mlp_W_gate.alloc_grad();
+        }
         Tensor::xavier_uniform_(parameter_tensors.mlp_W_gate, mlp_seed, init_stream);
 
         parameter_tensors.mlp_W_up = Tensor::zeros(
             {lm_head_hp.d_model, lm_head_hp.mlp_d_ff}, init_stream, "lm_head.mlp_W_up");
-        parameter_tensors.mlp_W_up.requires_grad_();
-        parameter_tensors.mlp_W_up.alloc_grad();
+        if (requires_grad) {
+            parameter_tensors.mlp_W_up.requires_grad_();
+            parameter_tensors.mlp_W_up.alloc_grad();
+        }
         Tensor::xavier_uniform_(parameter_tensors.mlp_W_up, mlp_seed + 1, init_stream);
 
         parameter_tensors.mlp_W_down = Tensor::zeros(
             {lm_head_hp.mlp_d_ff, lm_head_hp.d_model}, init_stream, "lm_head.mlp_W_down");
-        parameter_tensors.mlp_W_down.requires_grad_();
-        parameter_tensors.mlp_W_down.alloc_grad();
+        if (requires_grad) {
+            parameter_tensors.mlp_W_down.requires_grad_();
+            parameter_tensors.mlp_W_down.alloc_grad();
+        }
     }
 
     emitInfo("[initializeLmHeadParameterTensors] Initialized registry-owned LM-head tensors" +
@@ -1430,7 +1413,8 @@ void initializeAtomInsertionBoundaryParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::HyperParameters::AtomInsertionBoundaryProjectionHP& atom_hp,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
+    cudaStream_t init_stream,
+    bool requires_grad) {
     if (!atom_hp.enabled) {
         if (parameter_registry.getAtomInsertionBoundaryParameters()) {
             throw std::runtime_error(
@@ -1458,8 +1442,10 @@ void initializeAtomInsertionBoundaryParameterTensors(
     auto make_xavier = [&](const char* name, std::uint64_t seed) -> GRIM::Tensor {
         GRIM::Tensor tensor = GRIM::Tensor::zeros(
             {atom_hp.d_model, atom_hp.d_model}, init_stream, name);
-        tensor.requires_grad_();
-        tensor.alloc_grad();
+        if (requires_grad) {
+            tensor.requires_grad_();
+            tensor.alloc_grad();
+        }
         GRIM::Tensor::xavier_uniform_(tensor, seed, init_stream);
         return tensor;
     };
@@ -1472,8 +1458,10 @@ void initializeAtomInsertionBoundaryParameterTensors(
         {1, atom_hp.d_model},
         init_stream,
         "atom_insertion.projection_bias");
-    parameters->projection_bias.requires_grad_();
-    parameters->projection_bias.alloc_grad();
+    if (requires_grad) {
+        parameters->projection_bias.requires_grad_();
+        parameters->projection_bias.alloc_grad();
+    }
 
     validateAtomInsertionBoundaryParameterTensors(
         *parameters,
@@ -1500,7 +1488,8 @@ void initializeSelectorParameterTensors(
     bool selector_enabled,
     int d_model,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
+    cudaStream_t init_stream,
+    bool requires_grad) {
     if (!selector_enabled) {
         if (parameter_registry.getSelectorParameters()) {
             throw std::runtime_error("initializeSelectorParameterTensors: selector disabled but registry owner already exists");
@@ -1520,8 +1509,10 @@ void initializeSelectorParameterTensors(
 
     auto params = std::make_unique<GRIM::SelectorParameterTensors>();
     GRIM::Tensor w_q = GRIM::Tensor::zeros({d_model, d_model}, init_stream, "selector.W_q");
-    w_q.requires_grad_();
-    w_q.alloc_grad();
+    if (requires_grad) {
+        w_q.requires_grad_();
+        w_q.alloc_grad();
+    }
     GRIM::Tensor::xavier_uniform_(w_q, weight_init_seed, init_stream);
     params->W_q = std::move(w_q);
 
@@ -1540,7 +1531,8 @@ void initializeLocalAtomRetrievalParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int d_model,
     std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
+    cudaStream_t init_stream,
+    bool requires_grad) {
     if (!init_stream) {
         throw std::runtime_error(
             "initializeLocalAtomRetrievalParameterTensors: init_stream is NULL");
@@ -1560,8 +1552,10 @@ void initializeLocalAtomRetrievalParameterTensors(
         {GRIM::Tokenizer::kAtomTypeCount, d_model},
         init_stream,
         "local_atom_retrieval.type_no_reference_key");
-    params->type_no_reference_key.requires_grad_();
-    params->type_no_reference_key.alloc_grad();
+    if (requires_grad) {
+        params->type_no_reference_key.requires_grad_();
+        params->type_no_reference_key.alloc_grad();
+    }
     GRIM::Tensor::xavier_uniform_(
         params->type_no_reference_key,
         weight_init_seed,
@@ -1703,6 +1697,16 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     if (lora_model) {
         validateBaseParametersFrozen(parameter_registry);
         registerLoRAParameters(parameter_registry, registrar, config);
+
+        std::vector<ParameterGroup> checkpoint_groups;
+        Registrar checkpoint_registrar(checkpoint_groups, config, false);
+        registerTopLevelParameters(gpu_model_state, parameter_registry, checkpoint_registrar, config);
+        registerAtomInsertionBoundaryParameters(parameter_registry, checkpoint_registrar, config);
+        registerEncoderParameters(gpu_model_state, parameter_registry, checkpoint_registrar, config);
+        registerLocalAtomRetrievalParameters(parameter_registry, checkpoint_registrar, config);
+        validateRegisteredTensorPrecisionMetadata(checkpoint_groups);
+        clearOptimizerBindings(checkpoint_groups);
+        parameter_registry.checkpointParameterGroups().swap(checkpoint_groups);
     } else {
         if (!parameter_registry.loraLayerParameterPairs().empty()) {
             throw std::runtime_error(
@@ -1721,6 +1725,10 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     // registration check must never leave StartupParameterRegistry with a half-built group
     // vector that downstream optimizer/checkpoint code could observe.
     registry_groups.swap(rebuilt_groups);
+    if (!lora_model) {
+        parameter_registry.checkpointParameterGroups() = registry_groups;
+        clearOptimizerBindings(parameter_registry.checkpointParameterGroups());
+    }
 
     emitInfo("[buildParameterGroups] Built " + std::to_string(registry_groups.size()) + " parameter groups");
     emitGroupSummary(registry_groups);

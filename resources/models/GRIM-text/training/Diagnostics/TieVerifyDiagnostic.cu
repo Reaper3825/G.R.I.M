@@ -29,8 +29,10 @@ void runTieVerifyDiagnostic(
     const float* lm_w  = lm_head_parameters.weights.data;
     const float* lm_g  = lm_head_parameters.weights.grad_data();
     const bool cfg_tied = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
+    const bool lora_model = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "lora_model");
     const bool w_same = (emb_w == lm_w);
     const bool g_same = (emb_g == lm_g);
+    const bool frozen_grads_absent = emb_g == nullptr && lm_g == nullptr;
 
     // Count parameter groups referencing each buffer
     int emb_w_groups = 0, lm_w_groups = 0;
@@ -40,12 +42,16 @@ void runTieVerifyDiagnostic(
     }
 
     // Log every 10 batches to avoid spam, but ALWAYS log if inconsistent
-    const bool inconsistent = (cfg_tied != w_same) || (cfg_tied != g_same);
+    const bool gradients_consistent = lora_model
+        ? frozen_grads_absent
+        : (cfg_tied == g_same);
+    const bool inconsistent = (cfg_tied != w_same) || !gradients_consistent;
     if (inconsistent || (batch_idx % 10 == 0)) {
         std::ostringstream oss;
         oss << "[TIE_VERIFY] B=" << (batch_idx + 1)
             << " step=" << ctx.optimizer.optimizer_step.step
             << " cfg_tied=" << (cfg_tied ? "yes" : "no")
+            << " lora_model=" << (lora_model ? "yes" : "no")
             << " w_ptrs=" << (w_same ? "SAME" : "DIFF")
             << " g_ptrs=" << (g_same ? "SAME" : "DIFF")
             << " emb_w=" << (const void*)emb_w
@@ -58,7 +64,8 @@ void runTieVerifyDiagnostic(
             oss << " [ANOMALY] POINTER ALIASING MISMATCH — cfg says "
                 << (cfg_tied ? "tied" : "untied")
                 << " but weights " << (w_same ? "match" : "DIFFER")
-                << " and grads " << (g_same ? "match" : "DIFFER");
+                << " and grads are "
+                << (gradients_consistent ? "consistent" : "INCONSISTENT");
         }
         ctx.logging.logger->log(oss.str());
     }
@@ -69,7 +76,12 @@ void runTieVerifyDiagnostic(
             + std::to_string(batch_idx + 1) + " emb=" + std::to_string(reinterpret_cast<uintptr_t>(emb_w))
             + " lm=" + std::to_string(reinterpret_cast<uintptr_t>(lm_w)));
     }
-    if (cfg_tied && !g_same) {
+    if (lora_model && !frozen_grads_absent) {
+        throw std::runtime_error("[TIE_VERIFY] FATAL: LoRA frozen embedding/LM head owns a grad buffer at batch "
+            + std::to_string(batch_idx + 1) + " emb_g=" + std::to_string(reinterpret_cast<uintptr_t>(emb_g))
+            + " lm_g=" + std::to_string(reinterpret_cast<uintptr_t>(lm_g)));
+    }
+    if (!lora_model && cfg_tied && !g_same) {
         throw std::runtime_error("[TIE_VERIFY] FATAL: tie_embeddings=true but grad pointers differ at batch "
             + std::to_string(batch_idx + 1) + " emb_g=" + std::to_string(reinterpret_cast<uintptr_t>(emb_g))
             + " lm_g=" + std::to_string(reinterpret_cast<uintptr_t>(lm_g)));

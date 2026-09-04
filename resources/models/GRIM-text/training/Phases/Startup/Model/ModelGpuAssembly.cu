@@ -150,7 +150,8 @@ void initializeLocalAtomRetrievalSubsystem(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
     uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
+    cudaStream_t init_stream,
+    bool requires_grad) {
     const auto model_hp = GRIM::HyperParameters::modelHP(model_cfg);
     if (!model_hp.local_atom_retrieval_enabled) {
         if (parameter_registry.getLocalAtomRetrievalParameters()) {
@@ -169,7 +170,8 @@ void initializeLocalAtomRetrievalSubsystem(
             parameter_registry,
             d_model,
             weight_init_seed + 70,
-            init_stream);
+            init_stream,
+            requires_grad);
     (void)parameter_registry.requireLocalAtomRetrievalParameters(
         "Startup::assembleGpuModel.LocalAtomRetrieval");
     std::cout << "LocalAtomRetrieval parameters created\n";
@@ -179,7 +181,8 @@ void initializeAtomInsertionSubsystem(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
     uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
+    cudaStream_t init_stream,
+    bool requires_grad) {
     const auto atom_hp =
         GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(model_cfg);
     GRIMText::Training::Startup::ModelRegistration::
@@ -187,7 +190,8 @@ void initializeAtomInsertionSubsystem(
             parameter_registry,
             atom_hp,
             weight_init_seed + 60,
-            init_stream);
+            init_stream,
+            requires_grad);
     if (atom_hp.enabled) {
         (void)parameter_registry.requireAtomInsertionBoundaryParameters(
             "Startup::assembleGpuModel.AtomInsertion");
@@ -435,6 +439,10 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                       const ModelRegistration::OutputUnigramPriorView* output_unigram_prior) {
     GRIM::HyperParameters::validateRootBiasConfig(model_cfg, "Startup::assembleGpuModel");
     const auto init_hp = GRIM::HyperParameters::gpuModelInitializationHP(model_cfg);
+    const bool lora_model = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
+        model_cfg,
+        "lora_model");
+    const bool base_requires_grad = !lora_model;
 
     std::cout << "[assembleGpuModel] Verifying grouped GPU initialization config..." << std::endl;
     if (!init_hp.use_gpu) {
@@ -473,13 +481,24 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             parameter_registry.encodingLayerParameterTensors(),
             encoder_hp,
             weight_init_seed,
-            init_stream);
+            init_stream,
+            base_requires_grad);
 
         ModelRegistration::initializeFeedForwardParameterTensors(
             parameter_registry.feedForwardParameterTensors(),
             encoder_hp,
             weight_init_seed,
-            init_stream);
+            init_stream,
+            base_requires_grad);
+
+        if (lora_model) {
+            ModelRegistration::initializeLoRAParameterTensors(
+                parameter_registry,
+                encoder_hp,
+                GRIM::HyperParameters::loraTrainingHP(model_cfg),
+                weight_init_seed,
+                init_stream);
+        }
 
         gpu_model_state.gpu_encoder = std::make_unique<GRIM::GPUGrimEncoder>(encoder_hp);
         verifyEncoderLayersConstructed(*gpu_model_state.gpu_encoder, init_hp.num_layers, kAssembleGpuModelCaller);
@@ -500,7 +519,7 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 emb_hp,
                 weight_init_seed,
                 init_stream,
-                true);
+                base_requires_grad);
             (void)requireEmbeddingParametersReady(parameter_registry, "Startup::assembleGpuModel");
             std::cout << "✓ Embedding parameters created\n";
         }
@@ -526,7 +545,8 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 weight_init_seed + 1,
                 init_stream,
                 tied_emb,
-                output_unigram_prior);
+                output_unigram_prior,
+                base_requires_grad);
             (void)requireLmHeadParametersReady(parameter_registry, "Startup::assembleGpuModel");
             std::cout << "✓ LM head parameters created\n";
         }
@@ -535,13 +555,15 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             parameter_registry,
             model_cfg,
             weight_init_seed,
-            init_stream);
+            init_stream,
+            base_requires_grad);
 
         initializeLocalAtomRetrievalSubsystem(
             parameter_registry,
             model_cfg,
             weight_init_seed,
-            init_stream);
+            init_stream,
+            base_requires_grad);
 
         std::cout << "✓ GPU model layer assembly complete\n";
         std::cout << "  - Attention: GPU-accelerated\n";

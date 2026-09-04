@@ -27,6 +27,13 @@ void SoftRestartController::markRestart(int64_t global_step) {
     state_.last_restart_step = global_step;
 }
 
+void SoftRestartController::restoreState(const SoftRestartState& state) {
+    if (state.last_restart_step < -1) {
+        throw std::runtime_error("SoftRestartController::restoreState: last_restart_step is invalid");
+    }
+    state_ = state;
+}
+
 void zeroOptimizerMoments(std::vector<ParameterGroup>& parameter_groups,
                           TrainingState& training_state,
                           GRIM::OptimizerStep* optimizer) {

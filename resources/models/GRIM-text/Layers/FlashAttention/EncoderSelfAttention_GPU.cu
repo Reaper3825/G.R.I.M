@@ -9,6 +9,7 @@
 #include "Flash_Attention_Kernal.hpp"
 #include "../../Shared/TensorContract/AutogradQKVDiagnostics.hpp"
 #include "../../Shared/TensorContract/AttentionEpilogue.hpp"
+#include "../../Shared/TensorContract/LoRALinear.hpp"
 #include "../../Shared/TensorConversion/TensorConversion.hpp"
 
 #include <algorithm>
@@ -178,7 +179,13 @@ void encoderSelfAttentionForward(
     if constexpr (kEnableAttentionStepLogs) {
         std::fprintf(stderr, "[EncoderSelfAttention] QKV projection...\n");
     }
-    qkv_out = autograd::matmul(norm_input, W_qkv, request.stream, true);
+    qkv_out = autograd::lora_linear(
+        norm_input,
+        W_qkv,
+        forward_outputs.loraProjectionOrNull(
+            layer_slot, LoRAMatrixClass::QKV),
+        MatmulOrientation::TRANSPOSED_WEIGHT,
+        request.stream);
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradQKV:qkv_out_prebias", qkv_out, request.stream);
     }
@@ -319,7 +326,13 @@ void encoderSelfAttentionForward(
     if (!attn_out.data) {
         throw std::runtime_error("encoderSelfAttentionForward: attn_out.data is NULL before output projection matmul");
     }
-    proj_out = autograd::matmul(attn_out, W_o, request.stream, true);
+    proj_out = autograd::lora_linear(
+        attn_out,
+        W_o,
+        forward_outputs.loraProjectionOrNull(
+            layer_slot, LoRAMatrixClass::ATTENTION_OUTPUT),
+        MatmulOrientation::TRANSPOSED_WEIGHT,
+        request.stream);
     if (request.hp.output_bias_enabled) {
         proj_out = autograd::broadcast_add(proj_out, b_o, request.stream);
     }
@@ -411,7 +424,13 @@ void encoderSelfAttentionForwardCached(
     }
 
     // 1. QKV projection (identical to the training-time facade).
-    qkv_out = autograd::matmul(norm_input, W_qkv, request.stream, true);
+    qkv_out = autograd::lora_linear(
+        norm_input,
+        W_qkv,
+        forward_outputs.loraProjectionOrNull(
+            layer_slot, LoRAMatrixClass::QKV),
+        MatmulOrientation::TRANSPOSED_WEIGHT,
+        request.stream);
     if (request.hp.qkv_bias_enabled) {
         qkv_out = autograd::broadcast_add(qkv_out, b_qkv, request.stream);
     }
@@ -485,7 +504,13 @@ void encoderSelfAttentionForwardCached(
     if (!attn_out.data) {
         throw std::runtime_error("encoderSelfAttentionForwardCached: attn_out.data is NULL before output projection");
     }
-    proj_out = autograd::matmul(attn_out, W_o, request.stream, true);
+    proj_out = autograd::lora_linear(
+        attn_out,
+        W_o,
+        forward_outputs.loraProjectionOrNull(
+            layer_slot, LoRAMatrixClass::ATTENTION_OUTPUT),
+        MatmulOrientation::TRANSPOSED_WEIGHT,
+        request.stream);
     if (request.hp.output_bias_enabled) {
         proj_out = autograd::broadcast_add(proj_out, b_o, request.stream);
     }

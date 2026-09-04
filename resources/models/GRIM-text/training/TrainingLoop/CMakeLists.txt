@@ -567,9 +567,7 @@ target_compile_options(grim_parameter_checkpoint PRIVATE
 )
 target_compile_definitions(grim_parameter_checkpoint PRIVATE USE_CUDA)
 
-# Resumable LoRA training-checkpoint schema and host-only load I/O. This target
-# is linked into train_gpu so startup can call it beside base-weight loading,
-# but the call is intentionally not wired until LoRA durable owners exist.
+# Resumable LoRA training-checkpoint schema and host-only format I/O.
 set(GRIM_LORA_TRAINING_CHECKPOINT_SCHEMA
     ${CMAKE_CURRENT_SOURCE_DIR}/../schemas/grim_lora_training_checkpoint.fbs
 )
@@ -621,6 +619,8 @@ target_link_libraries(grim_lora_training_checkpoint PRIVATE
 # Main GPU training executable (three-phase architecture)
 add_executable(train_gpu 
     ../train_gpu.cu
+    ../LoRACheckpointLifecycle.cu
+    ../LoRACheckpointLifecycle.hpp
     ../Phases/Phase1_Startup.cu
     ../Phases/Phase1_Startup.hpp
     ../Phases/Startup/Rng.cu

@@ -39,6 +39,8 @@
 #include <chrono>
 #include <stdexcept>
 
+#include "../LoRACheckpointLifecycle.hpp"
+
 // Core includes
 // NOTE: ai_config_paths.hpp must NOT be included directly. It is pulled in
 // transitively (and in the correct order) by HyperParameters_GPU.hpp below.
@@ -277,6 +279,8 @@ struct TrainingContext {
     
     // State tracking
     int global_step = 0;
+    int resume_batch_cursor = 0;
+    LoRACheckpointLifecycleState lora_checkpoint;
     
     /** Deterministic LR schedule — exposed curve queryable at any step.
      *  Constructed in Phase1 after PlannedBatchesReady authors the train payload count. */

@@ -22,6 +22,7 @@
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../VerboseLogging.hpp"
 
+#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -183,6 +184,69 @@ detachAtomInsertionBoundaryParameters(
     return detached;
 }
 
+void bindLoRAParametersForLayer(
+    ModelForwardOutputs& forward_outputs,
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const HyperParameters::LoRATrainingHP& lora_hp,
+    int layer_idx,
+    bool connect_parameter_graph,
+    cudaStream_t stream) {
+    struct ProjectionSpec {
+        LoRAMatrixClass matrix_class;
+        const HyperParameters::LoRAClassSettingsHP* settings;
+        const char* name;
+    };
+    const std::array<ProjectionSpec, 5> specs{{
+        {LoRAMatrixClass::QKV, &lora_hp.qkv, "qkv"},
+        {LoRAMatrixClass::ATTENTION_OUTPUT, &lora_hp.o, "attention_output"},
+        {LoRAMatrixClass::FFN_GATE, &lora_hp.gate, "ffn_gate"},
+        {LoRAMatrixClass::FFN_UP, &lora_hp.w1, "ffn_up"},
+        {LoRAMatrixClass::FFN_DOWN, &lora_hp.w2, "ffn_down"},
+    }};
+
+    for (const auto& spec : specs) {
+        auto* pair = parameter_registry.getLoRAParameterPair(
+            layer_idx, spec.matrix_class);
+        if (!spec.settings->enabled) {
+            if (pair) {
+                throw std::runtime_error(
+                    "executeModelForward: disabled LoRA projection owns parameters at layer " +
+                    std::to_string(layer_idx) + " projection=" + spec.name);
+            }
+            continue;
+        }
+        if (!pair) {
+            throw std::runtime_error(
+                "executeModelForward: enabled LoRA projection is missing parameters at layer " +
+                std::to_string(layer_idx) + " projection=" + spec.name);
+        }
+        if (pair->matrix_class != spec.matrix_class ||
+            pair->rank != spec.settings->rank ||
+            pair->alpha != spec.settings->alpha ||
+            pair->precision != spec.settings->precision) {
+            throw std::runtime_error(
+                "executeModelForward: LoRA parameter facts disagree with configuration at layer " +
+                std::to_string(layer_idx) + " projection=" + spec.name);
+        }
+        const float expected_scale =
+            pair->alpha / static_cast<float>(pair->rank);
+        if (pair->scale != expected_scale) {
+            throw std::runtime_error(
+                "executeModelForward: LoRA scale disagrees with alpha/rank at layer " +
+                std::to_string(layer_idx) + " projection=" + spec.name);
+        }
+        forward_outputs.bindLoRAProjection(
+            static_cast<size_t>(layer_idx),
+            spec.matrix_class,
+            pair->A,
+            pair->B,
+            pair->rank,
+            pair->scale,
+            connect_parameter_graph,
+            stream);
+    }
+}
+
 }  // namespace
 
 GoalSpanView ModelForwardRequest::goalSpansForRow(std::size_t row) const {
@@ -330,6 +394,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
+    const auto lora_hp = HyperParameters::loraTrainingHP(*cfg);
     const auto atom_boundary_hp =
         HyperParameters::atomInsertionBoundaryProjectionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
@@ -442,6 +507,13 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             }
 
             forward_outputs.pushLayerOutputs();
+            bindLoRAParametersForLayer(
+                forward_outputs,
+                *request.parameter_registry,
+                lora_hp,
+                layer_idx,
+                false,
+                request.stream);
 
             Tensor* layer_input = (layer_idx == 0) ? &forward_outputs.embedding_tensor : &running;
 
@@ -554,6 +626,13 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             }
 
             forward_outputs.pushLayerOutputs();
+            bindLoRAParametersForLayer(
+                forward_outputs,
+                *request.parameter_registry,
+                lora_hp,
+                layer_idx,
+                true,
+                request.stream);
 
             const Tensor* layer_input = (layer_idx == 0)
                 ? &forward_outputs.embedding_tensor

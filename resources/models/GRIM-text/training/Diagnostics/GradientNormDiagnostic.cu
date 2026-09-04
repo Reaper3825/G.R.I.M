@@ -194,9 +194,15 @@ void runGradientNormClipDiagnostic(
 
     validateMeasuredMetricsOrThrow(gm, clip.measured_group_count, batch_idx);
 
+    const bool lora_model =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
+            ctx.config, "lora_model");
     const bool tied = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
     const float preclip_grad_rms = clip.global_rms_pre;
-    const float emb_rms_pre = computeEmbeddingDiagnosticRmsOrThrow(gm, tied, batch_idx);
+    float emb_rms_pre = std::numeric_limits<float>::quiet_NaN();
+    if (!lora_model) {
+        emb_rms_pre = computeEmbeddingDiagnosticRmsOrThrow(gm, tied, batch_idx);
+    }
     const float enc_rms_pre = computeEncoderTelemetryRms(gm, batch_idx);
     const auto& groups = ctx.parameter_registry.requireParameterGroups("runGradientNormClipDiagnostic");
 
@@ -208,15 +214,17 @@ void runGradientNormClipDiagnostic(
                             " enc_rms_pre=" + formatScalar(enc_rms_pre, 6));
     ctx.logging.logger->log(formatTopGradientGroups(clip, groups));
 
-    runPostClipParamGradEmbLmEquation(
-        ctx,
-        state,
-        ctx.parameter_registry,
-        payload,
-        emb_rms_pre,
-        batch_idx,
-        sync_diag,
-        clip_stream);
+    if (!lora_model) {
+        runPostClipParamGradEmbLmEquation(
+            ctx,
+            state,
+            ctx.parameter_registry,
+            payload,
+            emb_rms_pre,
+            batch_idx,
+            sync_diag,
+            clip_stream);
+    }
 
 }
 

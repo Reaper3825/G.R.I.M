@@ -718,7 +718,7 @@ bool saveParameterCheckpoint(
             throw std::runtime_error("saveParameterCheckpoint: stream is NULL");
         }
         const auto& groups =
-            parameter_registry.requireParameterGroups("saveParameterCheckpoint");
+            parameter_registry.requireCheckpointParameterGroups("saveParameterCheckpoint");
         std::vector<HostParameterEntry> entries = buildHostManifest(groups);
         const auto facts = buildCompatibilityFacts(config);
 
@@ -905,7 +905,7 @@ bool loadParameterCheckpoint(
             throw std::runtime_error("checkpoint compatibility checksum mismatch");
         }
 
-        auto& groups = parameter_registry.requireParameterGroups("loadParameterCheckpoint");
+        const auto& groups = parameter_registry.requireCheckpointParameterGroups("loadParameterCheckpoint");
         const auto expected_entries = buildHostManifest(groups);
         const auto* stored_entries = checkpoint->parameters();
         const auto* payload = checkpoint->payload();

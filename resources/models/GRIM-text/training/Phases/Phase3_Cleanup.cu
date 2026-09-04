@@ -19,6 +19,7 @@
 #include "Phase3_Cleanup.hpp"
 #include "Phase2_TrainingLoop.hpp"
 #include "../OptimizerCheckpoint.hpp"
+#include "../LoRACheckpointLifecycle.hpp"
 
 #include "../../Common/ParameterCheckpoint.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
@@ -221,6 +222,8 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
                 EmitModuleWarning(ModuleId::Checkpoint,
                     std::string("Optimizer state save failed: ") + e.what(), ctx.global_step);
             }
+            saveLoRATrainingCheckpointAtBoundary(
+                ctx, "final", ctx.epochs_completed);
             return final_path;
         } else {
             EmitModuleError(ModuleId::Checkpoint, "Save returned false", ctx.global_step);
@@ -228,6 +231,9 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
     } catch (const std::exception& e) {
         EmitModuleError(ModuleId::Checkpoint, 
             std::string("Exception during save: ") + e.what(), ctx.global_step);
+        if (ctx.lora_checkpoint.active) {
+            throw;
+        }
     }
     
     return "";
@@ -326,11 +332,16 @@ bool saveBestCheckpoint(
             } catch (const std::exception& e) {
                 ctx.logging.logger->log(std::string("  ⚠ Optimizer state save failed: ") + e.what());
             }
+            saveLoRATrainingCheckpointAtBoundary(
+                ctx, "best_epoch_" + std::to_string(epoch + 1), epoch + 1);
             return true;
         }
         ctx.logging.logger->log("  ✗ Save returned false");
     } catch (const std::exception& e) {
         ctx.logging.logger->log(std::string("  ✗ Exception: ") + e.what());
+        if (ctx.lora_checkpoint.active) {
+            throw;
+        }
     }
 
     return false;

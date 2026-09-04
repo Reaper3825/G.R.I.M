@@ -16,6 +16,7 @@
 #include "Feed_Forward_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
+#include "../../Shared/TensorContract/LoRALinear.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"  // Issue #97: autograd::broadcast_add
 
 #include <cuda_runtime.h>
@@ -138,14 +139,26 @@ void FeedForwardLayer::forward(const Tensor& input,
     //--------------------------------------------------
     // SwiGLU Gate Path: gate = SiLU(input @ W_gate)
     //--------------------------------------------------
-    ffn_gate_out = autograd::matmul(input, W_gate, stream);
+    ffn_gate_out = autograd::lora_linear(
+        input,
+        W_gate,
+        forward_outputs.loraProjectionOrNull(
+            layer_slot, LoRAMatrixClass::FFN_GATE),
+        MatmulOrientation::DIRECT_WEIGHT,
+        stream);
     ffn_silu_out = autograd::silu(ffn_gate_out, stream,
                                   ffn_gate_out.data);
 
     //--------------------------------------------------
     // SwiGLU Up Path: up = input @ W1
     //--------------------------------------------------
-    ffn_linear1_out = autograd::matmul(input, W1, stream);
+    ffn_linear1_out = autograd::lora_linear(
+        input,
+        W1,
+        forward_outputs.loraProjectionOrNull(
+            layer_slot, LoRAMatrixClass::FFN_UP),
+        MatmulOrientation::DIRECT_WEIGHT,
+        stream);
 
     //--------------------------------------------------
     // SwiGLU Combine: hidden = gate ⊙ up
@@ -159,7 +172,13 @@ void FeedForwardLayer::forward(const Tensor& input,
     if (!ffn_swiglu_out.data) {
         throw std::runtime_error("FeedForwardLayer::forward: ffn_swiglu_out.data is NULL before W2 matmul");
     }
-    ffn_out = autograd::matmul(ffn_swiglu_out, W2, stream);
+    ffn_out = autograd::lora_linear(
+        ffn_swiglu_out,
+        W2,
+        forward_outputs.loraProjectionOrNull(
+            layer_slot, LoRAMatrixClass::FFN_DOWN),
+        MatmulOrientation::DIRECT_WEIGHT,
+        stream);
     
     if (hp_.output_bias_enabled) {
         ffn_out = autograd::broadcast_add(ffn_out, *b2, stream);
