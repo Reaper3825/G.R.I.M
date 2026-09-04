@@ -22,6 +22,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <chrono>
 
 #include <nlohmann/json.hpp>
 #include "../../../../../DataCollection/concept_block_generated.h"
@@ -1065,6 +1066,7 @@ LoadedTrainingCorpus readGrmtCorpusWithProgressOrThrow(
 			? std::max<std::uint32_t>(1u, header.num_sequences / 10u)
 			: header.num_sequences;
 	std::uint32_t next_progress = progress_stride;
+	const auto load_started_at = std::chrono::steady_clock::now();
 
 	GrmtSequence sequence;
 	while (reader.readNext(sequence)) {
@@ -1076,13 +1078,23 @@ LoadedTrainingCorpus readGrmtCorpusWithProgressOrThrow(
 			(loaded == header.num_sequences ||
 			 (progress_stride > 0 && loaded >= next_progress))) {
 			std::ostringstream progress_msg;
+			const double elapsed_seconds = std::chrono::duration<double>(
+				std::chrono::steady_clock::now() - load_started_at).count();
+			if (!(elapsed_seconds > 0.0)) {
+				throw std::runtime_error("[DataLoader] GRMT load timer did not advance");
+			}
+			const double sequences_per_second =
+				static_cast<double>(loaded) / elapsed_seconds;
+			const double remaining_seconds =
+				static_cast<double>(header.num_sequences - loaded) / sequences_per_second;
 			progress_msg << "[Data] GRMT load progress: "
 			             << loaded << "/" << header.num_sequences
 			             << " sequences ("
 			             << std::fixed << std::setprecision(1)
 			             << (100.0 * static_cast<double>(loaded) /
 			                 static_cast<double>(header.num_sequences))
-			             << "%)";
+			             << "%) | " << sequences_per_second << " seq/s"
+			             << " | ETA " << remaining_seconds << "s";
 			emitProgress(progress, progress_msg.str());
 			if (loaded < header.num_sequences && progress_stride > 0) {
 				next_progress = std::min(header.num_sequences, loaded + progress_stride);

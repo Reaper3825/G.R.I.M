@@ -67,7 +67,10 @@ public:
     GrmtCorpus readAll();
 
 private:
+    static constexpr std::size_t kReadBufferBytes = 8u * 1024u * 1024u;
+
     std::filesystem::path path_;
+    std::vector<char> file_buffer_;
     std::ifstream file_;
     GRIM::GRMT::Header header_{};
     std::uint32_t sequences_read_ = 0;

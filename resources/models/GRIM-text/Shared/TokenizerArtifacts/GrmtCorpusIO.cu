@@ -1286,9 +1286,15 @@ GrmtSaveReport GrmtCorpusWriter::commit(std::size_t dropped_empty_sequences,
 }
 
 GrmtCorpusReader::GrmtCorpusReader(const fs::path& path)
-    : path_(path)
+    : path_(path),
+      file_buffer_(kReadBufferBytes)
 {
     pathString(path_);
+    if (file_.rdbuf()->pubsetbuf(
+            file_buffer_.data(),
+            static_cast<std::streamsize>(file_buffer_.size())) == nullptr) {
+        throw std::runtime_error("[GRMT] failed to configure read buffer for: " + path_.string());
+    }
     file_.open(path_, std::ios::binary);
     if (!file_.is_open()) {
         throw std::runtime_error("[GRMT] cannot open file for read: " + path_.string());
