@@ -25,6 +25,7 @@ struct ExecutionBlockConstructionHP;
 struct LMHeadLayerConstructionHP;
 struct AtomInsertionBoundaryProjectionHP;
 struct NumberEncoderConstructionHP;
+struct LoRATrainingHP;
 }
 }
 
@@ -100,6 +101,13 @@ void initializeSelectorParameterTensors(
 void initializeLocalAtomRetrievalParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int d_model,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream);
+
+void initializeLoRAParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
+    const GRIM::HyperParameters::LoRATrainingHP& lora_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 

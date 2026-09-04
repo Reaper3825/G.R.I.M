@@ -20,8 +20,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 6;
-constexpr std::uint32_t kSupportedSemanticVersion = 5;
+constexpr std::uint32_t kSupportedSchemaVersion = 7;
+constexpr std::uint32_t kSupportedSemanticVersion = 6;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -402,6 +402,7 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     add(f.atom_insertion_enabled, CompiledModelCapability::AtomInsertion);
     add(f.local_atom_retrieval_enabled,
         CompiledModelCapability::LocalAtomRetrieval);
+    add(f.lora_model, CompiledModelCapability::LoRA);
     if (expected != c.required_capabilities) {
         throw std::runtime_error("compiled required-capability vector does not match model features");
     }
@@ -515,7 +516,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     capability_bytes.reserve(capabilities->size() * 2u);
     for (const auto raw : *capabilities) {
         if (raw == 0 || raw > static_cast<std::uint16_t>(
-                                  CompiledModelCapability::LocalAtomRetrieval)) {
+                                  CompiledModelCapability::LoRA)) {
             throw std::runtime_error("model config contains an unknown required capability");
         }
         result.required_capabilities.push_back(static_cast<CompiledModelCapability>(raw));
@@ -548,6 +549,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     result.features.atom_insertion_enabled = f->atom_insertion_enabled();
     result.features.local_atom_retrieval_enabled =
         f->local_atom_retrieval_enabled();
+    result.features.lora_model = f->lora_model();
     result.features.use_atom_data = f->use_atom_data();
     result.features.atom_embedding_dim = f->atom_embedding_dim();
     result.features.bias = {f->bias()->use_bias(), f->bias()->attention_qkv(),

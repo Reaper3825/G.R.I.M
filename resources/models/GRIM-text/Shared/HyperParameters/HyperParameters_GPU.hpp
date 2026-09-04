@@ -363,6 +363,29 @@ struct LanguageModelConfig {
     ParameterGroupPrecision parameter_precision_attention = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_ffn = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_lora_qkv = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_lora_o = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_lora_gate = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_lora_w1 = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_lora_w2 = ParameterGroupPrecision::UNSPECIFIED;
+
+    bool lora_model = false;
+    bool lora_qkv_enabled = false;
+    int lora_qkv_rank = 0;
+    float lora_qkv_alpha = 0.0f;
+    bool lora_o_enabled = false;
+    int lora_o_rank = 0;
+    float lora_o_alpha = 0.0f;
+    bool lora_gate_enabled = false;
+    int lora_gate_rank = 0;
+    float lora_gate_alpha = 0.0f;
+    bool lora_w1_enabled = false;
+    int lora_w1_rank = 0;
+    float lora_w1_alpha = 0.0f;
+    bool lora_w2_enabled = false;
+    int lora_w2_rank = 0;
+    float lora_w2_alpha = 0.0f;
+    float learning_rate_lora = 0.0f;
 
     // Separate full-context byte-gap atom-insertion model. This compiled model
     // semantic is distinct from use_atom_data, which feeds ExecutionBlock.
@@ -1442,6 +1465,56 @@ inline void validateRootConfigDocument(
     validateParameterGroupPrecision(params.parameter_precision_attention, "parameter_precision_attention", caller);
     validateParameterGroupPrecision(params.parameter_precision_ffn, "parameter_precision_ffn", caller);
     validateParameterGroupPrecision(params.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", caller);
+    validateParameterGroupPrecision(params.parameter_precision_lora_qkv, "parameter_precision_lora_qkv", caller);
+    validateParameterGroupPrecision(params.parameter_precision_lora_o, "parameter_precision_lora_o", caller);
+    validateParameterGroupPrecision(params.parameter_precision_lora_gate, "parameter_precision_lora_gate", caller);
+    validateParameterGroupPrecision(params.parameter_precision_lora_w1, "parameter_precision_lora_w1", caller);
+    validateParameterGroupPrecision(params.parameter_precision_lora_w2, "parameter_precision_lora_w2", caller);
+    if (params.parameter_precision_lora_qkv != ParameterGroupPrecision::FP32 ||
+        params.parameter_precision_lora_o != ParameterGroupPrecision::FP32 ||
+        params.parameter_precision_lora_gate != ParameterGroupPrecision::FP32 ||
+        params.parameter_precision_lora_w1 != ParameterGroupPrecision::FP32 ||
+        params.parameter_precision_lora_w2 != ParameterGroupPrecision::FP32) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": all LoRA parameter precision fields must be fp32");
+    }
+    validatePositiveFiniteFields(params, {
+        validationField("learning_rate_lora", &LanguageModelConfig::learning_rate_lora)
+    }, caller);
+    const bool any_lora_class_enabled = params.lora_qkv_enabled || params.lora_o_enabled ||
+        params.lora_gate_enabled || params.lora_w1_enabled || params.lora_w2_enabled;
+    if (params.lora_model != any_lora_class_enabled) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": lora_model must match whether any LoRA matrix class is enabled");
+    }
+    const auto validate_lora_class = [&](bool enabled,
+                                         int rank,
+                                         float alpha,
+                                         int input_dim,
+                                         int output_dim,
+                                         const char* name) {
+        if (!enabled) {
+            return;
+        }
+        if (rank <= 0 || rank > std::min(input_dim, output_dim)) {
+            throw std::runtime_error(std::string(caller) + ": " + name +
+                                     " rank must be positive and fit its projection dimensions");
+        }
+        if (!std::isfinite(alpha) || alpha <= 0.0f) {
+            throw std::runtime_error(std::string(caller) + ": " + name +
+                                     " alpha must be positive and finite");
+        }
+    };
+    validate_lora_class(params.lora_qkv_enabled, params.lora_qkv_rank, params.lora_qkv_alpha,
+                        params.d_model, params.qkv_dim, "lora_qkv");
+    validate_lora_class(params.lora_o_enabled, params.lora_o_rank, params.lora_o_alpha,
+                        params.d_model, params.d_model, "lora_o");
+    validate_lora_class(params.lora_gate_enabled, params.lora_gate_rank, params.lora_gate_alpha,
+                        params.d_model, params.d_ff, "lora_gate");
+    validate_lora_class(params.lora_w1_enabled, params.lora_w1_rank, params.lora_w1_alpha,
+                        params.d_model, params.d_ff, "lora_w1");
+    validate_lora_class(params.lora_w2_enabled, params.lora_w2_rank, params.lora_w2_alpha,
+                        params.d_ff, params.d_model, "lora_w2");
 
     validateNonNegativeFiniteFields(params, {
         validationField("loss_focal_gamma", &LanguageModelConfig::loss_focal_gamma),
@@ -1853,6 +1926,7 @@ inline void applyCompiledModelConfig(
 
     params.atom_insertion_enabled = f.atom_insertion_enabled;
     params.local_atom_retrieval_enabled = f.local_atom_retrieval_enabled;
+    params.lora_model = f.lora_model;
     params.use_atom_data = f.use_atom_data;
     params.atom_embedding_dim = compiledU32ToInt(f.atom_embedding_dim, "features.atom_embedding_dim");
     params.execution_block_enabled = f.execution_block.has_value();
@@ -1940,6 +2014,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(gradient_accumulation_steps);
     GRIM_LOAD_CONFIG_FIELD(batch_strategy);
     GRIM_LOAD_CONFIG_FIELD(learning_rate);
+    GRIM_LOAD_CONFIG_FIELD(learning_rate_lora);
     GRIM_LOAD_CONFIG_FIELD(weight_decay);
     GRIM_LOAD_CONFIG_FIELD(use_depth_aware_upsilon);
     GRIM_LOAD_CONFIG_LEAF("gradient_clip", grad_clip_norm);
@@ -1965,6 +2040,26 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_attention);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_ffn);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_rmsnorm);
+    GRIM_LOAD_CONFIG_FIELD(parameter_precision_lora_qkv);
+    GRIM_LOAD_CONFIG_FIELD(parameter_precision_lora_o);
+    GRIM_LOAD_CONFIG_FIELD(parameter_precision_lora_gate);
+    GRIM_LOAD_CONFIG_FIELD(parameter_precision_lora_w1);
+    GRIM_LOAD_CONFIG_FIELD(parameter_precision_lora_w2);
+    GRIM_LOAD_CONFIG_FIELD(lora_qkv_enabled);
+    GRIM_LOAD_CONFIG_FIELD(lora_qkv_rank);
+    GRIM_LOAD_CONFIG_FIELD(lora_qkv_alpha);
+    GRIM_LOAD_CONFIG_FIELD(lora_o_enabled);
+    GRIM_LOAD_CONFIG_FIELD(lora_o_rank);
+    GRIM_LOAD_CONFIG_FIELD(lora_o_alpha);
+    GRIM_LOAD_CONFIG_FIELD(lora_gate_enabled);
+    GRIM_LOAD_CONFIG_FIELD(lora_gate_rank);
+    GRIM_LOAD_CONFIG_FIELD(lora_gate_alpha);
+    GRIM_LOAD_CONFIG_FIELD(lora_w1_enabled);
+    GRIM_LOAD_CONFIG_FIELD(lora_w1_rank);
+    GRIM_LOAD_CONFIG_FIELD(lora_w1_alpha);
+    GRIM_LOAD_CONFIG_FIELD(lora_w2_enabled);
+    GRIM_LOAD_CONFIG_FIELD(lora_w2_rank);
+    GRIM_LOAD_CONFIG_FIELD(lora_w2_alpha);
 
     GRIM_LOAD_CONFIG_FIELD(soft_restart_enabled);
     GRIM_LOAD_CONFIG_FIELD(soft_restart_loss_increase_threshold);
@@ -2540,6 +2635,27 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_attention);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_ffn);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_lora_qkv);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_lora_o);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_lora_gate);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_lora_w1);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_lora_w2);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_model);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_qkv_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_qkv_rank);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_qkv_alpha);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_o_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_o_rank);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_o_alpha);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_gate_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_gate_rank);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_gate_alpha);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_w1_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_w1_rank);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_w1_alpha);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_w2_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_w2_rank);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lora_w2_alpha);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_insertion_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(local_atom_retrieval_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
@@ -2653,6 +2769,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(single_batch_overfit_max_steps);
     GRIM_WRITE_FINAL_CONFIG_FIELD(batch_strategy);
     GRIM_WRITE_FINAL_CONFIG_FIELD(learning_rate);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(learning_rate_lora);
     GRIM_WRITE_FINAL_CONFIG_FIELD(weight_decay);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_depth_aware_upsilon);
     GRIM_WRITE_FINAL_CONFIG_FIELD(grad_clip_norm);

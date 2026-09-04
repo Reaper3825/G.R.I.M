@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -38,6 +39,82 @@ using GRIM::ParamGroupType;
 using GRIM::Tensor;
 using GRIM::HyperParameters::ParameterGroupPrecision;
 using GRIM::HyperParameters::OptimizerUpdateHP;
+
+struct LoRAMatrixSpec {
+    GRIM::LoRAMatrixClass matrix_class;
+    const GRIM::HyperParameters::LoRAClassSettingsHP* settings;
+    int a_rows;
+    int a_cols;
+    int b_rows;
+    int b_cols;
+    ParamGroupType group_type;
+    const char* projection_name;
+    const char* tensor_a_name;
+    const char* tensor_b_name;
+};
+
+std::array<LoRAMatrixSpec, 5> makeLoRAMatrixSpecs(
+    const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
+    const GRIM::HyperParameters::LoRATrainingHP& lora_hp) {
+    return {{
+        {GRIM::LoRAMatrixClass::QKV, &lora_hp.qkv,
+         static_cast<int>(lora_hp.qkv.rank), encoder_hp.d_model,
+         encoder_hp.qkv_dim, static_cast<int>(lora_hp.qkv.rank),
+         ParamGroupType::ATTENTION, "qkv", "lora_qkv_A", "lora_qkv_B"},
+        {GRIM::LoRAMatrixClass::ATTENTION_OUTPUT, &lora_hp.o,
+         static_cast<int>(lora_hp.o.rank), encoder_hp.d_model,
+         encoder_hp.d_model, static_cast<int>(lora_hp.o.rank),
+         ParamGroupType::ATTENTION, "wo", "lora_o_A", "lora_o_B"},
+        {GRIM::LoRAMatrixClass::FFN_GATE, &lora_hp.gate,
+         static_cast<int>(lora_hp.gate.rank), encoder_hp.d_ff,
+         encoder_hp.d_model, static_cast<int>(lora_hp.gate.rank),
+         ParamGroupType::FFN, "ffn_w_gate", "lora_gate_A", "lora_gate_B"},
+        {GRIM::LoRAMatrixClass::FFN_UP, &lora_hp.w1,
+         static_cast<int>(lora_hp.w1.rank), encoder_hp.d_ff,
+         encoder_hp.d_model, static_cast<int>(lora_hp.w1.rank),
+         ParamGroupType::FFN, "ffn_w1", "lora_w1_A", "lora_w1_B"},
+        {GRIM::LoRAMatrixClass::FFN_DOWN, &lora_hp.w2,
+         static_cast<int>(lora_hp.w2.rank), encoder_hp.d_model,
+         encoder_hp.d_ff, static_cast<int>(lora_hp.w2.rank),
+         ParamGroupType::FFN, "ffn_w2", "lora_w2_A", "lora_w2_B"},
+    }};
+}
+
+std::uint64_t deriveLoRATargetSeed(std::uint64_t base_seed,
+                                   int layer,
+                                   GRIM::LoRAMatrixClass matrix_class) {
+    if (layer < 0) {
+        throw std::runtime_error("deriveLoRATargetSeed: layer must be non-negative");
+    }
+    std::uint64_t value = base_seed ^
+        (static_cast<std::uint64_t>(layer) + 1ULL) * 0x9E3779B97F4A7C15ULL ^
+        (static_cast<std::uint64_t>(ParameterRegistry::loraMatrixClassIndex(matrix_class)) + 1ULL) *
+            0xD1B54A32D192ED03ULL;
+    value ^= value >> 30;
+    value *= 0xBF58476D1CE4E5B9ULL;
+    value ^= value >> 27;
+    value *= 0x94D049BB133111EBULL;
+    value ^= value >> 31;
+    return value;
+}
+
+void requireTensorShape(const Tensor& tensor,
+                        int rows,
+                        int cols,
+                        const std::string& name,
+                        const char* caller) {
+    tensor.require(caller);
+    if (!tensor.shape.is_2d_layout()) {
+        throw std::runtime_error(std::string(caller) + ": " + name + " must be 2D");
+    }
+    const auto shape = tensor.shape.as_2d();
+    if (shape.rows != rows || shape.cols != cols) {
+        throw std::runtime_error(
+            std::string(caller) + ": " + name + " shape mismatch; expected [" +
+            std::to_string(rows) + "," + std::to_string(cols) + "] got [" +
+            std::to_string(shape.rows) + "," + std::to_string(shape.cols) + "]");
+    }
+}
 
 std::string tensorDebugSummary(const Tensor& tensor) {
     std::ostringstream oss;
@@ -331,7 +408,84 @@ public:
         }
     }
 
+    void addLoRATensor(const std::string& name,
+                       Tensor& tensor,
+                       ParamGroupType type,
+                       ParamStatsBucket stats_bucket,
+                       int layer,
+                       ParameterGroupPrecision precision) {
+        addTensorWithPrecision(name, tensor, type, stats_bucket, layer,
+                               0.0f, 1.0f, precision);
+    }
+
 private:
+    void addTensorWithPrecision(const std::string& name,
+                                Tensor& tensor,
+                                ParamGroupType type,
+                                ParamStatsBucket stats_bucket,
+                                int layer,
+                                float wd_mult,
+                                float lr_mult,
+                                ParameterGroupPrecision precision) {
+        if (name.empty()) {
+            throw std::runtime_error(
+                "[buildParameterGroups] parameter group name must not be empty");
+        }
+        if (!registered_names_.insert(name).second) {
+            throw std::runtime_error(
+                "[buildParameterGroups] duplicate parameter group name: " + name);
+        }
+        if (!tensor.data || !tensor.has_grad() || tensor.numel() == 0) {
+            throwUntrainableTensor(name, tensor, layer);
+        }
+        if (stats_bucket == ParamStatsBucket::COUNT) {
+            throw std::runtime_error("[buildParameterGroups] " + name +
+                                     " has invalid ParamStatsBucket::COUNT");
+        }
+        const void* data_ptr = static_cast<const void*>(tensor.data);
+        for (const void* registered_ptr : registered_data_) {
+            if (registered_ptr == data_ptr) {
+                throw std::runtime_error("[buildParameterGroups] duplicate tensor.data registration for " + name +
+                                         " would double-step the same memory: " +
+                                         tensorDebugSummary(tensor) + " layer=" + std::to_string(layer));
+            }
+        }
+        registered_data_.push_back(data_ptr);
+        validateRegisteredPrecisionSupport(name, type, precision);
+
+        const TensorContract::PrecisionType tensor_precision =
+            TensorContract::precision_from_parameter_group_precision(precision);
+        if (tensor.precision() != TensorContract::PrecisionType::FP32 &&
+            tensor.precision() != tensor_precision) {
+            throw std::runtime_error("[buildParameterGroups] " + name +
+                                     " tensor precision metadata already equals " +
+                                     TensorContract::precision_name(tensor.precision()) +
+                                     " but registration requires " +
+                                     TensorContract::precision_name(tensor_precision));
+        }
+        tensor.set_compute_precision(tensor_precision, "ParameterGroupRegistration::Registrar::addTensorWithPrecision");
+
+        ParameterGroup group{};
+        group.name = name;
+        group.tensor = &tensor;
+        group.m_tensor = nullptr;
+        group.v_tensor = nullptr;
+        group.type = type;
+        group.parameter_precision = precision;
+        group.stats_bucket = stats_bucket;
+        group.layer_index = layer;
+        group.weight_decay_multiplier = wd_mult;
+        group.lr_multiplier = lr_mult;
+        group.gradient_verification.last_observed_delivery_count =
+            tensor.gradient_delivery_count();
+        if (optimizer_hp_.use_depth_aware_upsilon && layer >= 0) {
+            group.upsilon = GRIM::HyperParameters::UPSILON_BASE *
+                std::sqrt(static_cast<float>(GRIM::HyperParameters::UPSILON_REFERENCE_LAYERS) /
+                          static_cast<float>(layer + 1));
+        }
+        groups_.push_back(group);
+    }
+
     ParameterGroupPrecision precisionForType(ParamGroupType type) const {
         switch (type) {
             case ParamGroupType::EMBEDDING:       return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_embedding");
@@ -578,6 +732,123 @@ void registerLocalAtomRetrievalParameters(
     auto& owner = parameter_registry.requireLocalAtomRetrievalParameters(
         "registerLocalAtomRetrievalParameters");
     ParameterRegistry::registerLocalAtomRetrievalParameters(owner, registrar);
+}
+
+void validateBaseParametersFrozen(
+    const ParameterRegistry::StartupParameterRegistry& parameter_registry) {
+    const auto require_frozen = [](const Tensor& tensor, const std::string& name) {
+        if (tensor.requires_grad || tensor.has_grad()) {
+            throw std::runtime_error(
+                "[buildParameterGroups] LoRA model base tensor is not frozen: " +
+                name + " " + tensorDebugSummary(tensor));
+        }
+    };
+
+    if (const auto* embedding = parameter_registry.getEmbeddingParameters()) {
+        require_frozen(embedding->token_weights, "embedding");
+    }
+    if (const auto* lm_head = parameter_registry.getLmHeadParameters()) {
+        require_frozen(lm_head->weights, "lm_head_weight");
+        require_frozen(lm_head->bias, "lm_head_bias");
+        require_frozen(lm_head->final_rms_gamma, "final_rms_gamma");
+        require_frozen(lm_head->mlp_W_gate, "lm_head_mlp_w_gate");
+        require_frozen(lm_head->mlp_W_up, "lm_head_mlp_w_up");
+        require_frozen(lm_head->mlp_W_down, "lm_head_mlp_w_down");
+    }
+    if (const auto* atom = parameter_registry.getAtomInsertionBoundaryParameters()) {
+        require_frozen(atom->left_projection_weight, "atom_insertion_left_projection_weight");
+        require_frozen(atom->right_projection_weight, "atom_insertion_right_projection_weight");
+        require_frozen(atom->projection_bias, "atom_insertion_projection_bias");
+    }
+    for (std::size_t layer = 0;
+         layer < parameter_registry.encodingLayerParameterTensors().size();
+         ++layer) {
+        const auto& tensors = parameter_registry.encodingLayerParameterTensors()[layer];
+        const std::string prefix = "layer" + std::to_string(layer) + "_";
+        for (const auto& spec : ParameterRegistry::kEncodingLayerTensorParameters) {
+            require_frozen(tensors.*(spec.tensor_member), prefix + spec.name);
+        }
+        for (const auto& spec : ParameterRegistry::kAttentionResidualGateTensorParameters) {
+            require_frozen(tensors.attention_residual_gate.*(spec.tensor_member),
+                           prefix + spec.name);
+        }
+    }
+    for (std::size_t layer = 0;
+         layer < parameter_registry.feedForwardParameterTensors().size();
+         ++layer) {
+        const auto& tensors = parameter_registry.feedForwardParameterTensors()[layer];
+        const std::string prefix = "layer" + std::to_string(layer) + "_";
+        for (const auto& spec : ParameterRegistry::kFeedForwardTensorParameters) {
+            require_frozen(tensors.*(spec.tensor_member), prefix + spec.name);
+        }
+    }
+    if (const auto* selector = parameter_registry.getSelectorParameters()) {
+        require_frozen(selector->W_q, "selector_W_q");
+    }
+    if (const auto* retrieval = parameter_registry.getLocalAtomRetrievalParameters()) {
+        require_frozen(retrieval->type_no_reference_key,
+                       "local_atom_retrieval_type_no_reference_key");
+    }
+}
+
+void registerLoRAParameters(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    Registrar& registrar,
+    const GRIM::Config::AiConfigSnapshot& config) {
+    const auto encoder_hp = GRIM::HyperParameters::encoderLayerConstructionHP(config);
+    const auto lora_hp = GRIM::HyperParameters::loraTrainingHP(config);
+    const auto specs = makeLoRAMatrixSpecs(encoder_hp, lora_hp);
+    if (static_cast<int>(parameter_registry.loraLayerParameterPairs().size()) !=
+        encoder_hp.num_layers) {
+        throw std::runtime_error(
+            "[buildParameterGroups] lora_layer_parameter_pairs size must equal num_layers");
+    }
+
+    for (int layer = 0; layer < encoder_hp.num_layers; ++layer) {
+        for (const auto& spec : specs) {
+            auto* pair = parameter_registry.getLoRAParameterPair(layer, spec.matrix_class);
+            if (!spec.settings->enabled) {
+                if (pair) {
+                    throw std::runtime_error(
+                        "[buildParameterGroups] disabled LoRA class owns tensors at layer " +
+                        std::to_string(layer) + " projection=" + spec.projection_name);
+                }
+                continue;
+            }
+            if (!pair) {
+                throw std::runtime_error(
+                    "[buildParameterGroups] enabled LoRA class is missing tensors at layer " +
+                    std::to_string(layer) + " projection=" + spec.projection_name);
+            }
+            if (pair->matrix_class != spec.matrix_class ||
+                pair->rank != spec.settings->rank ||
+                pair->alpha != spec.settings->alpha ||
+                pair->precision != spec.settings->precision) {
+                throw std::runtime_error(
+                    "[buildParameterGroups] LoRA pair facts do not match authored class settings at layer " +
+                    std::to_string(layer) + " projection=" + spec.projection_name);
+            }
+            const float expected_scale = pair->alpha / static_cast<float>(pair->rank);
+            if (!std::isfinite(pair->scale) || pair->scale <= 0.0f ||
+                pair->scale != expected_scale) {
+                throw std::runtime_error(
+                    "[buildParameterGroups] LoRA pair scale is invalid at layer " +
+                    std::to_string(layer) + " projection=" + spec.projection_name);
+            }
+            requireTensorShape(pair->A, spec.a_rows, spec.a_cols,
+                               std::string(spec.projection_name) + ".lora_A",
+                               "registerLoRAParameters");
+            requireTensorShape(pair->B, spec.b_rows, spec.b_cols,
+                               std::string(spec.projection_name) + ".lora_B",
+                               "registerLoRAParameters");
+            const std::string prefix = "layer" + std::to_string(layer) + "_" +
+                spec.projection_name;
+            registrar.addLoRATensor(prefix + ".lora_A", pair->A, spec.group_type,
+                                    ParamStatsBucket::ENCODER, layer, pair->precision);
+            registrar.addLoRATensor(prefix + ".lora_B", pair->B, spec.group_type,
+                                    ParamStatsBucket::ENCODER, layer, pair->precision);
+        }
+    }
 }
 
 void clearOptimizerBindings(std::vector<ParameterGroup>& groups) {
@@ -1313,6 +1584,110 @@ void initializeLocalAtomRetrievalParameterTensors(
         ", d_model=" + std::to_string(d_model) + ")");
 }
 
+void initializeLoRAParameterTensors(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
+    const GRIM::HyperParameters::LoRATrainingHP& lora_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!init_stream) {
+        throw std::runtime_error("initializeLoRAParameterTensors: init_stream is NULL");
+    }
+    if (encoder_hp.num_layers <= 0 || encoder_hp.d_model <= 0 ||
+        encoder_hp.qkv_dim <= 0 || encoder_hp.d_ff <= 0) {
+        throw std::runtime_error(
+            "initializeLoRAParameterTensors: encoder dimensions must be positive");
+    }
+    if (!parameter_registry.loraLayerParameterPairs().empty()) {
+        throw std::runtime_error(
+            "initializeLoRAParameterTensors: registry LoRA owner is already initialized");
+    }
+    if (!std::isfinite(lora_hp.learning_rate_lora) ||
+        lora_hp.learning_rate_lora <= 0.0f) {
+        throw std::runtime_error(
+            "initializeLoRAParameterTensors: learning_rate_lora must be positive and finite");
+    }
+
+    const auto specs = makeLoRAMatrixSpecs(encoder_hp, lora_hp);
+    bool any_enabled = false;
+    for (const auto& spec : specs) {
+        if (spec.settings->precision != ParameterGroupPrecision::FP32) {
+            throw std::runtime_error(
+                std::string("initializeLoRAParameterTensors: ") + spec.projection_name +
+                " precision must be FP32 in v1");
+        }
+        if (!spec.settings->enabled) {
+            continue;
+        }
+        any_enabled = true;
+        if (spec.settings->rank == 0 ||
+            spec.settings->rank > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            static_cast<int>(spec.settings->rank) > std::min(spec.a_cols, spec.b_rows)) {
+            throw std::runtime_error(
+                std::string("initializeLoRAParameterTensors: invalid rank for ") +
+                spec.projection_name);
+        }
+        if (!std::isfinite(spec.settings->alpha) || spec.settings->alpha <= 0.0f) {
+            throw std::runtime_error(
+                std::string("initializeLoRAParameterTensors: invalid alpha for ") +
+                spec.projection_name);
+        }
+    }
+    if (!any_enabled) {
+        throw std::runtime_error(
+            "initializeLoRAParameterTensors: no LoRA matrix class is enabled");
+    }
+
+    parameter_registry.loraLayerParameterPairs().resize(
+        static_cast<std::size_t>(encoder_hp.num_layers));
+    for (int layer = 0; layer < encoder_hp.num_layers; ++layer) {
+        auto& layer_pairs = parameter_registry.loraLayerParameterPairs()[
+            static_cast<std::size_t>(layer)];
+        for (const auto& spec : specs) {
+            if (!spec.settings->enabled) {
+                continue;
+            }
+            auto pair = std::make_unique<GRIM::LoRAParameterPair>();
+            pair->rank = spec.settings->rank;
+            pair->alpha = spec.settings->alpha;
+            pair->scale = pair->alpha / static_cast<float>(pair->rank);
+            pair->matrix_class = spec.matrix_class;
+            pair->precision = spec.settings->precision;
+            if (!std::isfinite(pair->scale) || pair->scale <= 0.0f) {
+                throw std::runtime_error(
+                    std::string("initializeLoRAParameterTensors: invalid scale for ") +
+                    spec.projection_name);
+            }
+
+            pair->A = Tensor::zeros(
+                {spec.a_rows, spec.a_cols}, init_stream, spec.tensor_a_name);
+            pair->A.requires_grad_();
+            pair->A.alloc_grad();
+            Tensor::xavier_uniform_(
+                pair->A,
+                deriveLoRATargetSeed(weight_init_seed, layer, spec.matrix_class),
+                init_stream);
+
+            pair->B = Tensor::zeros(
+                {spec.b_rows, spec.b_cols}, init_stream, spec.tensor_b_name);
+            pair->B.requires_grad_();
+            pair->B.alloc_grad();
+
+            layer_pairs.pairs[ParameterRegistry::loraMatrixClassIndex(spec.matrix_class)] =
+                std::move(pair);
+        }
+    }
+
+    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("initializeLoRAParameterTensors: cudaStreamSynchronize failed: ") +
+            cudaGetErrorString(sync_err));
+    }
+    emitInfo("[initializeLoRAParameterTensors] Initialized registry-owned LoRA tensors for " +
+             std::to_string(encoder_hp.num_layers) + " layers");
+}
+
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
@@ -1323,11 +1698,21 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     rebuilt_groups.reserve(registry_groups.size());
 
     Registrar registrar(rebuilt_groups, config);
-    registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
-    registerAtomInsertionBoundaryParameters(parameter_registry, registrar, config);
-    registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
-
-    registerLocalAtomRetrievalParameters(parameter_registry, registrar, config);
+    const bool lora_model =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "lora_model");
+    if (lora_model) {
+        validateBaseParametersFrozen(parameter_registry);
+        registerLoRAParameters(parameter_registry, registrar, config);
+    } else {
+        if (!parameter_registry.loraLayerParameterPairs().empty()) {
+            throw std::runtime_error(
+                "[buildParameterGroups] LoRA tensor owner exists while lora_model=false");
+        }
+        registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
+        registerAtomInsertionBoundaryParameters(parameter_registry, registrar, config);
+        registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
+        registerLocalAtomRetrievalParameters(parameter_registry, registrar, config);
+    }
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);
 

@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "../../../../Common/LoRAMatrixClass.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/TensorContract/TensorContract_GPU.hpp"
 
@@ -103,9 +104,35 @@ struct FeedForwardParameterTensors {
     Tensor b2;      // [1, d_model] when config.use_bias=true
 };
 
+struct LoRAParameterPair {
+    Tensor A;
+    Tensor B;
+    std::uint32_t rank = 0;
+    float alpha = 0.0f;
+    float scale = 0.0f;
+    LoRAMatrixClass matrix_class = LoRAMatrixClass::QKV;
+    HyperParameters::ParameterGroupPrecision precision =
+        HyperParameters::ParameterGroupPrecision::UNSPECIFIED;
+};
+
+struct LoRALayerParameterPairs {
+    std::array<std::unique_ptr<LoRAParameterPair>, 5> pairs;
+};
+
 } // namespace GRIM
 
 namespace ParameterRegistry {
+
+inline std::size_t loraMatrixClassIndex(GRIM::LoRAMatrixClass matrix_class) {
+    switch (matrix_class) {
+        case GRIM::LoRAMatrixClass::QKV: return 0;
+        case GRIM::LoRAMatrixClass::ATTENTION_OUTPUT: return 1;
+        case GRIM::LoRAMatrixClass::FFN_GATE: return 2;
+        case GRIM::LoRAMatrixClass::FFN_UP: return 3;
+        case GRIM::LoRAMatrixClass::FFN_DOWN: return 4;
+    }
+    throw std::runtime_error("loraMatrixClassIndex: unknown LoRAMatrixClass");
+}
 
 struct StartupParameterRegistry {
     std::unique_ptr<GRIM::EmbeddingParameterTensors> embedding_parameters;
@@ -117,6 +144,7 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::LocalAtomRetrievalParameterTensors>
         local_atom_retrieval_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
+    std::vector<GRIM::LoRALayerParameterPairs> lora_layer_parameter_pairs;
     // Single durable optimizer/autograd parameter inventory owner.
     // ParameterGroup entries are non-owning views into the tensor owners in
     // this registry and startup-owned layer topology. Do not mirror this
@@ -322,6 +350,60 @@ struct StartupParameterRegistry {
                                      std::to_string(feed_forward_parameter_tensors.size()));
         }
         return feed_forward_parameter_tensors[static_cast<std::size_t>(layer)];
+    }
+
+    std::vector<GRIM::LoRALayerParameterPairs>& loraLayerParameterPairs() {
+        return lora_layer_parameter_pairs;
+    }
+
+    const std::vector<GRIM::LoRALayerParameterPairs>& loraLayerParameterPairs() const {
+        return lora_layer_parameter_pairs;
+    }
+
+    GRIM::LoRAParameterPair* getLoRAParameterPair(
+        int layer,
+        GRIM::LoRAMatrixClass matrix_class) {
+        if (layer < 0 || layer >= static_cast<int>(lora_layer_parameter_pairs.size())) {
+            return nullptr;
+        }
+        return lora_layer_parameter_pairs[static_cast<std::size_t>(layer)]
+            .pairs[loraMatrixClassIndex(matrix_class)].get();
+    }
+
+    const GRIM::LoRAParameterPair* getLoRAParameterPair(
+        int layer,
+        GRIM::LoRAMatrixClass matrix_class) const {
+        if (layer < 0 || layer >= static_cast<int>(lora_layer_parameter_pairs.size())) {
+            return nullptr;
+        }
+        return lora_layer_parameter_pairs[static_cast<std::size_t>(layer)]
+            .pairs[loraMatrixClassIndex(matrix_class)].get();
+    }
+
+    GRIM::LoRAParameterPair& requireLoRAParameterPair(
+        int layer,
+        GRIM::LoRAMatrixClass matrix_class,
+        const char* caller) {
+        auto* pair = getLoRAParameterPair(layer, matrix_class);
+        if (!pair) {
+            throw std::runtime_error(
+                std::string(caller) + ": missing LoRAParameterPair for layer " +
+                std::to_string(layer));
+        }
+        return *pair;
+    }
+
+    const GRIM::LoRAParameterPair& requireLoRAParameterPair(
+        int layer,
+        GRIM::LoRAMatrixClass matrix_class,
+        const char* caller) const {
+        const auto* pair = getLoRAParameterPair(layer, matrix_class);
+        if (!pair) {
+            throw std::runtime_error(
+                std::string(caller) + ": missing LoRAParameterPair for layer " +
+                std::to_string(layer));
+        }
+        return *pair;
     }
 
     std::vector<GRIM::ParameterGroup>& parameterGroups() {

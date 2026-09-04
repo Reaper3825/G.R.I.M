@@ -26,8 +26,8 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 6;
-constexpr std::uint32_t kSemanticVersion = 5;
+constexpr std::uint32_t kSchemaVersion = 7;
+constexpr std::uint32_t kSemanticVersion = 6;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -95,6 +95,7 @@ struct EffectiveConfig {
 
     bool atom_insertion_enabled = false;
     bool local_atom_retrieval_enabled = false;
+    bool lora_model = false;
     bool use_atom_data = false;
     std::uint32_t atom_embedding_dim = 0;
     bool execution_block_enabled = false;
@@ -540,6 +541,7 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
                 "local_atom_retrieval_enabled=true requires causal_mask=true");
         }
     }
+    c.lora_model = required<bool>(j, "lora_model");
     c.use_atom_data = required<bool>(j, "use_atom_data");
     c.atom_embedding_dim = requiredU32(j, "atom_embedding_dim", !c.use_atom_data);
     c.execution_block_enabled = required<bool>(j, "execution_block_enabled");
@@ -668,6 +670,7 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     addCapability(c.atom_insertion_enabled, GRIMConfig::ModelCapability_AtomInsertion);
     addCapability(c.local_atom_retrieval_enabled,
                   GRIMConfig::ModelCapability_LocalAtomRetrieval);
+    addCapability(c.lora_model, GRIMConfig::ModelCapability_LoRA);
     std::sort(c.capabilities.begin(), c.capabilities.end(), [](auto a, auto b) {
         return static_cast<std::uint16_t>(a) < static_cast<std::uint16_t>(b);
     });
@@ -758,7 +761,7 @@ std::vector<std::uint8_t> buildArtifact(
         builder, c.use_atom_data, c.atom_embedding_dim, bias, attention, positional,
         encoder, lm_head, execution, number_encoder, c.arg_selector_enabled,
         slot_seed, c.atom_insertion_enabled,
-        c.local_atom_retrieval_enabled);
+        c.local_atom_retrieval_enabled, c.lora_model);
 
     const auto model_type = builder.CreateString(c.tokenizer_model_type);
     std::vector<flatbuffers::Offset<flatbuffers::String>> special_strings;

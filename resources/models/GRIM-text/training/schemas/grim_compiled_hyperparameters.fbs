@@ -51,7 +51,8 @@ enum ModelCapability : ushort {
   LmHeadMlp = 12,
   AtomData = 13,
   AtomInsertion = 14,
-  LocalAtomRetrieval = 15
+  LocalAtomRetrieval = 15,
+  LoRA = 16
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +225,8 @@ table ModelFeatures {
   // Enables the causal sequence-local typed-atom retrieval path in training
   // and inference. Appended to preserve existing ModelFeatures field IDs.
   local_atom_retrieval_enabled:bool;
+
+  lora_model:bool;
 }
 
 // ---------------------------------------------------------------------------

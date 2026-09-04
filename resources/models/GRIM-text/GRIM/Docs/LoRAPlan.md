@@ -216,6 +216,10 @@ hide an incorrect transpose contract.
 
 ## Authored per-class configuration
 
+`model_config.json.lora_model` is the immutable model-level LoRA semantic. It
+is compiled into `model.grimcfg`, included in the required-capability digest,
+and must match whether the training policy enables any LoRA matrix class.
+
 All v1 LoRA settings are required flat leaves on `TrainingHyperparameters`.
 Each matrix class has an explicit enable flag, rank, alpha, and precision:
 
@@ -862,6 +866,8 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
 - [x] Add `lora_qkv_enabled`, `lora_o_enabled`, `lora_gate_enabled`,
       `lora_w1_enabled`, and `lora_w2_enabled`, with explicit rank, alpha, and
       precision fields for each class on `TrainingHyperparameters`.
+- [x] Compile the required `model_config.json.lora_model` semantic into the
+      model artifact and require it to match the active per-class policy.
 - [x] Expose the five class settings through one typed grouped read view; do not
       pass raw config or parallel setting arguments to consumers.
 - [x] Apply each enabled matrix class to every transformer layer; do not support

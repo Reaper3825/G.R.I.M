@@ -99,6 +99,22 @@ struct TrainingSeedHP {
     int64_t seed = 0;
 };
 
+struct LoRAClassSettingsHP {
+    bool enabled = false;
+    uint32_t rank = 0;
+    float alpha = 0.0f;
+    ParameterGroupPrecision precision = ParameterGroupPrecision::UNSPECIFIED;
+};
+
+struct LoRATrainingHP {
+    LoRAClassSettingsHP qkv;
+    LoRAClassSettingsHP o;
+    LoRAClassSettingsHP gate;
+    LoRAClassSettingsHP w1;
+    LoRAClassSettingsHP w2;
+    float learning_rate_lora = 0.0f;
+};
+
 struct GenerationHP {
     SamplingStrategy strategy = SamplingStrategy::UNSPECIFIED;
     int max_new_tokens = 0;
@@ -651,6 +667,23 @@ inline TrainingSeedHP trainingSeedHP(const LanguageModelConfig& config)
     return view;
 }
 
+inline LoRATrainingHP loraTrainingHP(const LanguageModelConfig& config)
+{
+    LoRATrainingHP view;
+    view.qkv = {config.lora_qkv_enabled, static_cast<uint32_t>(config.lora_qkv_rank),
+                config.lora_qkv_alpha, config.parameter_precision_lora_qkv};
+    view.o = {config.lora_o_enabled, static_cast<uint32_t>(config.lora_o_rank),
+              config.lora_o_alpha, config.parameter_precision_lora_o};
+    view.gate = {config.lora_gate_enabled, static_cast<uint32_t>(config.lora_gate_rank),
+                 config.lora_gate_alpha, config.parameter_precision_lora_gate};
+    view.w1 = {config.lora_w1_enabled, static_cast<uint32_t>(config.lora_w1_rank),
+               config.lora_w1_alpha, config.parameter_precision_lora_w1};
+    view.w2 = {config.lora_w2_enabled, static_cast<uint32_t>(config.lora_w2_rank),
+               config.lora_w2_alpha, config.parameter_precision_lora_w2};
+    view.learning_rate_lora = config.learning_rate_lora;
+    return view;
+}
+
 inline TapeLogHP tapeLogHP(
     const LanguageModelConfig& hp)
 {
@@ -1015,6 +1048,39 @@ inline TrainingSeedHP trainingSeedHP(const GRIM::Config::AiConfigSnapshot& snaps
 {
     TrainingSeedHP view;
     view.seed = snapshotTrainingConfigField<int64_t>(snapshot, "seed");
+    return view;
+}
+
+inline LoRATrainingHP loraTrainingHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    LoRATrainingHP view;
+    view.qkv = {
+        snapshotTrainingConfigField<bool>(snapshot, "lora_qkv_enabled"),
+        snapshotTrainingConfigField<uint32_t>(snapshot, "lora_qkv_rank"),
+        snapshotTrainingConfigField<float>(snapshot, "lora_qkv_alpha"),
+        snapshotTrainingConfigField<ParameterGroupPrecision>(snapshot, "parameter_precision_lora_qkv")};
+    view.o = {
+        snapshotTrainingConfigField<bool>(snapshot, "lora_o_enabled"),
+        snapshotTrainingConfigField<uint32_t>(snapshot, "lora_o_rank"),
+        snapshotTrainingConfigField<float>(snapshot, "lora_o_alpha"),
+        snapshotTrainingConfigField<ParameterGroupPrecision>(snapshot, "parameter_precision_lora_o")};
+    view.gate = {
+        snapshotTrainingConfigField<bool>(snapshot, "lora_gate_enabled"),
+        snapshotTrainingConfigField<uint32_t>(snapshot, "lora_gate_rank"),
+        snapshotTrainingConfigField<float>(snapshot, "lora_gate_alpha"),
+        snapshotTrainingConfigField<ParameterGroupPrecision>(snapshot, "parameter_precision_lora_gate")};
+    view.w1 = {
+        snapshotTrainingConfigField<bool>(snapshot, "lora_w1_enabled"),
+        snapshotTrainingConfigField<uint32_t>(snapshot, "lora_w1_rank"),
+        snapshotTrainingConfigField<float>(snapshot, "lora_w1_alpha"),
+        snapshotTrainingConfigField<ParameterGroupPrecision>(snapshot, "parameter_precision_lora_w1")};
+    view.w2 = {
+        snapshotTrainingConfigField<bool>(snapshot, "lora_w2_enabled"),
+        snapshotTrainingConfigField<uint32_t>(snapshot, "lora_w2_rank"),
+        snapshotTrainingConfigField<float>(snapshot, "lora_w2_alpha"),
+        snapshotTrainingConfigField<ParameterGroupPrecision>(snapshot, "parameter_precision_lora_w2")};
+    view.learning_rate_lora = snapshotTrainingConfigField<float>(snapshot, "learning_rate_lora");
     return view;
 }
 

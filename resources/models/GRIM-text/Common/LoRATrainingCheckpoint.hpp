@@ -1,5 +1,7 @@
 #pragma once
 
+#include "LoRAMatrixClass.hpp"
+
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -13,13 +15,7 @@ struct AiConfigSnapshot;
 
 namespace GRIM::Checkpoint {
 
-enum class LoRAMatrixClass : std::uint8_t {
-    QKV,
-    ATTENTION_OUTPUT,
-    FFN_GATE,
-    FFN_UP,
-    FFN_DOWN
-};
+using LoRAMatrixClass = GRIM::LoRAMatrixClass;
 
 enum class LoRAMatrixOrientation : std::uint8_t {
     TRANSPOSED_WEIGHT,
