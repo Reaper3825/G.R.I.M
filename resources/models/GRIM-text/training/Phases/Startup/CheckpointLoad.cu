@@ -3,6 +3,7 @@
 #include "CheckpointLoad.hpp"
 #include "InitFacts.hpp"
 
+#include "../../../Common/CheckpointNaming.hpp"
 #include "../../../Common/ParameterCheckpoint.hpp"
 #include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../Shared/LogRecorder/LogRecorder.hpp"
@@ -47,6 +48,30 @@ std::string checkpointSelectField(
     return trimmed(checkpoint_hp.checkpoint_select);
 }
 
+void validateSelectedCheckpointStage(
+    const GRIM::HyperParameters::CheckpointLoadHP& checkpoint_hp,
+    const std::string& selection,
+    const std::string& resolved_path)
+{
+    const auto selected_stage = GRIM::Checkpoint::checkpointStageFromFilename(
+        fs::path(resolved_path).filename().string());
+    if (!selected_stage) {
+        throw std::runtime_error(
+            "Checkpoint select=\"" + selection +
+            "\" is not a stage-qualified checkpoint filename: " + resolved_path);
+    }
+    if (checkpoint_hp.checkpoint_resume_mode ==
+            GRIM::HyperParameters::CheckpointResumeMode::RESUME &&
+        *selected_stage != checkpoint_hp.training_stage) {
+        throw std::runtime_error(
+            "Checkpoint select=\"" + selection + "\" has training stage " +
+            GRIM::HyperParameters::trainingStageToString(*selected_stage) +
+            ", but resume mode requires " +
+            GRIM::HyperParameters::trainingStageToString(
+                checkpoint_hp.training_stage));
+    }
+}
+
 // Parse a trailing integer from a filename stem (e.g. "checkpoint_epoch_3" -> 3).
 // Returns -1 when the stem has no trailing digits.
 long long trailingEpochNumber(const std::string& stem) {
@@ -69,7 +94,14 @@ long long trailingEpochNumber(const std::string& stem) {
 // Ranking: most recent modification time, then highest parsed epoch number.
 // Partial atomic-write artifacts and optimizer sidecars are skipped by
 // requiring the registry-checkpoint extension.
-std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
+std::vector<std::string> rankedCheckpoints(
+    const std::string& checkpoint_dir,
+    GRIM::HyperParameters::TrainingStage training_stage)
+{
+    if (training_stage == GRIM::HyperParameters::TrainingStage::UNSPECIFIED) {
+        throw std::runtime_error(
+            "rankedCheckpoints: training stage is UNSPECIFIED");
+    }
     std::vector<std::string> result;
     if (checkpoint_dir.empty()) {
         return result;
@@ -95,6 +127,12 @@ std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
         }
         const auto& path = entry.path();
         if (path.extension() != ".grimckpt") {
+            continue;
+        }
+        const auto checkpoint_stage =
+            GRIM::Checkpoint::checkpointStageFromFilename(
+                path.filename().string());
+        if (!checkpoint_stage || *checkpoint_stage != training_stage) {
             continue;
         }
         const auto size = fs::file_size(path, ec);
@@ -131,7 +169,7 @@ std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
 // Resolve the ordered set of checkpoint candidates to attempt, honoring
 // training.config.grim_text_checkpoint_select:
 //   - ""/"default"    → the configured grim_text_model path
-//   - "latest"        → every *.grimckpt in the checkpoint dir, newest first
+//   - "latest"        → stage-matching *.grimckpt files, newest first
 //   - "<name>.grimckpt" → that file inside the checkpoint dir
 //   - "<path>/<name>" → an explicit (possibly relative) path
 std::vector<std::string> resolveCheckpointCandidates(
@@ -144,14 +182,20 @@ std::vector<std::string> resolveCheckpointCandidates(
         if (checkpoint_hp.checkpoint_path.empty()) {
             return {};
         }
+        validateSelectedCheckpointStage(
+            checkpoint_hp, "default", checkpoint_hp.checkpoint_path);
         return {checkpoint_hp.checkpoint_path};
     }
 
     if (select == "latest") {
-        auto candidates = rankedCheckpoints(checkpoint_hp.checkpoint_dir);
+        auto candidates = rankedCheckpoints(
+            checkpoint_hp.checkpoint_dir, checkpoint_hp.training_stage);
         if (candidates.empty()) {
-            logger.log("Checkpoint select=\"latest\": no usable checkpoint found in " +
-                       checkpoint_hp.checkpoint_dir);
+            logger.log(
+                "Checkpoint select=\"latest\": no usable " +
+                std::string(GRIM::HyperParameters::trainingStageToString(
+                    checkpoint_hp.training_stage)) +
+                " checkpoint found in " + checkpoint_hp.checkpoint_dir);
         } else {
             logger.log("Checkpoint select=\"latest\": newest candidate is " + candidates.front());
         }
@@ -167,6 +211,7 @@ std::vector<std::string> resolveCheckpointCandidates(
     } else {
         resolved = (fs::path(checkpoint_hp.checkpoint_dir) / select_path).string();
     }
+    validateSelectedCheckpointStage(checkpoint_hp, select, resolved);
     logger.log("Checkpoint select=\"" + select + "\": resolved to " + resolved);
     return {resolved};
 }

@@ -11,8 +11,8 @@
 //
 //  SIDECAR CONVENTION
 //  ==================
-//  For a model checkpoint at:  checkpoint_epoch_7.grimckpt
-//  The optimizer sidecar is:   checkpoint_epoch_7.opt
+//  For a model checkpoint at:  checkpoint_PT_epoch_7.grimckpt
+//  The optimizer sidecar is:   checkpoint_PT_epoch_7.opt
 //
 //  BINARY FORMAT (v1)
 //  ==================

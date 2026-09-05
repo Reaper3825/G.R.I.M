@@ -21,6 +21,7 @@
 #include "../OptimizerCheckpoint.hpp"
 #include "../LoRACheckpointLifecycle.hpp"
 
+#include "../../Common/CheckpointNaming.hpp"
 #include "../../Common/ParameterCheckpoint.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
@@ -185,8 +186,12 @@ latestCurriculumCompletionForSave(
 std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
     EmitModuleInfo(ModuleId::Checkpoint, "Saving final model...", ctx.global_step);
     const auto paths_hp = ::GRIM::HyperParameters::pathsHP(ctx.config);
-    
-    std::string final_path = paths_hp.checkpoint_dir + "/checkpoint" + suffix + ".grimckpt";
+    const auto training_stage =
+        ::GRIM::HyperParameters::snapshotTrainingConfigField<
+            ::GRIM::HyperParameters::TrainingStage>(ctx.config, "training_stage");
+    const std::string final_path =
+        (fs::path(paths_hp.checkpoint_dir) /
+         GRIM::Checkpoint::stageQualifiedCheckpointFilename(training_stage, suffix)).string();
     
 #ifdef USE_CUDA
     cudaError_t sync_err = cudaDeviceSynchronize();
@@ -308,8 +313,13 @@ bool saveBestCheckpoint(
     ctx.logging.logger->log("✓ New best! Saving checkpoint...");
 
     const auto paths_hp = ::GRIM::HyperParameters::pathsHP(ctx.config);
-    std::string checkpoint_path = paths_hp.checkpoint_dir +
-                                  "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".grimckpt";
+    const auto training_stage =
+        ::GRIM::HyperParameters::snapshotTrainingConfigField<
+            ::GRIM::HyperParameters::TrainingStage>(ctx.config, "training_stage");
+    const std::string checkpoint_path =
+        (fs::path(paths_hp.checkpoint_dir) /
+         GRIM::Checkpoint::stageQualifiedCheckpointFilename(
+             training_stage, "_epoch_" + std::to_string(epoch + 1))).string();
     try {
         const auto latest_curriculum_completion =
             latestCurriculumCompletionForSave(ctx, epoch + 1);
