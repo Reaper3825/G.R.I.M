@@ -150,6 +150,7 @@ inline CurriculumTabLayout computeCurriculumTabLayout(const PanelRect& content) 
     float y = content.origin.y + 10.0f;
     constexpr float kToolbarRowH = 36.0f;
     y += kToolbarRowH + 6.0f;
+    y += kToolbarRowH + 6.0f;
     y += kToolbarRowH + 12.0f;
 
     const float fullW = content.size.x - 30.0f;

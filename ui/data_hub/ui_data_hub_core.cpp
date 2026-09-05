@@ -495,6 +495,64 @@ UIDataHubPanel::UIDataHubPanel()
             selectActiveCurriculum(idx);
         });
 
+    cbCourseDropdown_ = std::make_shared<UIDropdown>(
+        "Course", std::vector<std::string>{"(none)"}, 0,
+        [this](int idx, const std::string&) {
+            if (!datasetTarget_) return;
+            const auto& courses = datasetTarget_->getCourses();
+            activeCourseId_ = idx > 0 && idx <= static_cast<int>(courses.size()) ? courses[idx - 1].id : "";
+            cbCourseNameInput_->setText(datasetTarget_->getCourseById(activeCourseId_).name);
+            cbFilterDirty_ = true;
+        });
+    cbCourseNameInput_ = std::make_shared<UIInputBox>();
+    cbCourseNameInput_->setPlaceholder("Course name (New / Rename in Courses menu)");
+    courseActionMenu_ = std::make_shared<UIActionMenu>("Courses");
+    courseActionMenu_->addItem("New Course", [this]() {
+        if (!datasetTarget_) return;
+        GRIM::Course course;
+        course.name = cbCourseNameInput_->getText();
+        if (course.name.find_first_not_of(" \t\r\n") == std::string::npos) {
+            addLog("Enter a course name first", 1);
+            return;
+        }
+        const auto stamp = std::chrono::system_clock::now().time_since_epoch().count();
+        course.id = "course_" + std::to_string(stamp);
+        while (!datasetTarget_->getCourseById(course.id).id.empty()) course.id += "_";
+        if (!datasetTarget_->saveCourse(course)) { addLog("Failed to save course", 2); return; }
+        activeCourseId_ = course.id;
+        refreshCurriculumTabState();
+        addLog("Created course; use Assign Course to Curriculum to attach it", 0);
+    });
+    courseActionMenu_->addItem("Rename Course", [this]() {
+        if (!datasetTarget_ || activeCourseId_.empty()) return;
+        auto course = datasetTarget_->getCourseById(activeCourseId_);
+        course.name = cbCourseNameInput_->getText();
+        if (!datasetTarget_->saveCourse(course)) { addLog("Failed to rename course", 2); return; }
+        populateCBCourseDropdown();
+    });
+    courseActionMenu_->addItem("Assign Course to Curriculum", [this]() {
+        if (!datasetTarget_ || activeCourseId_.empty() || activeCurriculumId_.empty()) {
+            addLog("Select a course and curriculum first", 1); return;
+        }
+        if (!datasetTarget_->assignCourse(activeCourseId_, activeCurriculumId_, true)) {
+            addLog("Failed to assign course", 2); return;
+        }
+        refreshCurriculumTabState();
+    });
+    courseActionMenu_->addItem("Remove Course from Curriculum", [this]() {
+        if (!datasetTarget_ || activeCourseId_.empty() || activeCurriculumId_.empty()) return;
+        if (!datasetTarget_->assignCourse(activeCourseId_, activeCurriculumId_, false)) {
+            addLog("Failed to remove course assignment", 2); return;
+        }
+        refreshCurriculumTabState();
+    });
+    courseActionMenu_->addItem("Delete Course (keep blocks)", [this]() {
+        if (!datasetTarget_ || activeCourseId_.empty()) return;
+        if (!datasetTarget_->removeCourse(activeCourseId_)) { addLog("Failed to delete course", 2); return; }
+        activeCourseId_.clear();
+        refreshCurriculumTabState();
+    }, UITheme::Colors::Danger);
+
     cbTrainingStageDropdown_ = std::make_shared<UIDropdown>(
         "Stage", std::vector<std::string>{"(select curriculum)", "PT", "SFT", "DPO", "RLHF"}, 0,
         [this](int idx, const std::string&) {
@@ -571,7 +629,7 @@ UIDataHubPanel::UIDataHubPanel()
     }
 
     cbCurriculumFilterToggle_ = std::make_shared<UIToggle>(
-        "In Curriculum", false,
+        "In Course", false,
         [this](bool state) {
             cbCurriculumFilterActive_ = state;
             cbFilterDirty_ = true;
@@ -764,14 +822,14 @@ UIDataHubPanel::UIDataHubPanel()
 
     // ── Curriculum action menus ────────────────────────
 
-    blockCurriculumMenu_ = std::make_shared<UIActionMenu>("Curriculum");
-    blockCurriculumMenu_->addItem("Add to Curriculum", [this]() {
-        if (activeCurriculumId_.empty()) {
-            addLog("Select a curriculum first", 1);
+    blockCurriculumMenu_ = std::make_shared<UIActionMenu>("Course");
+    blockCurriculumMenu_->addItem("Add to Course", [this]() {
+        if (activeCourseId_.empty()) {
+            addLog("Select a course first", 1);
             return;
         }
         if (cbCurriculumRowIsDraft(selectedCBRow_)) {
-            addLog("Save the block before adding to curriculum", 1);
+            addLog("Save the block before adding to course", 1);
             return;
         }
         if (!datasetTarget_ || selectedCBRow_ < 0) return;
@@ -779,21 +837,21 @@ UIDataHubPanel::UIDataHubPanel()
         if (!cbCurriculumRowToBlockIndex(selectedCBRow_, idx))
             return;
         auto cb = datasetTarget_->getConceptBlock(idx);
-        if (datasetTarget_->addConceptBlockToCurriculum(cb.id, activeCurriculumId_)) {
-            addLog("Added to curriculum: " + cb.name, 0);
+        if (datasetTarget_->setCourseBlock(activeCourseId_, cb.id, true)) {
+            addLog("Added to course: " + cb.name, 0);
             refreshCurriculumTabState();
         }
     });
-    blockCurriculumMenu_->addItem("Remove from Curriculum", [this]() {
-        if (activeCurriculumId_.empty()) return;
+    blockCurriculumMenu_->addItem("Remove from Course", [this]() {
+        if (activeCourseId_.empty()) return;
         if (cbCurriculumRowIsDraft(selectedCBRow_)) return;
         if (!datasetTarget_ || selectedCBRow_ < 0) return;
         size_t idx = 0;
         if (!cbCurriculumRowToBlockIndex(selectedCBRow_, idx))
             return;
         auto cb = datasetTarget_->getConceptBlock(idx);
-        if (datasetTarget_->removeConceptBlockFromCurriculum(cb.id, activeCurriculumId_)) {
-            addLog("Removed from curriculum: " + cb.name, 0);
+        if (datasetTarget_->setCourseBlock(activeCourseId_, cb.id, false)) {
+            addLog("Removed from course: " + cb.name, 0);
             refreshCurriculumTabState();
         }
     }, UITheme::Colors::Danger);
@@ -900,6 +958,7 @@ UIDataHubPanel::UIDataHubPanel()
     });
 
     curriculumWidgets_ = {
+        cbCourseDropdown_, cbCourseNameInput_, courseActionMenu_,
         cbModelDropdown_, cbCurriculumDropdown_, cbTrainingStageDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbAnswerArea_, cbCustomPromptArea_,
@@ -1392,7 +1451,9 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                 const float cbListW = layout.listW;
                 const float cbListH = layout.listH;
                 const bool cbListTypeDropdownWasExpanded =
-                    cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded();
+                    (cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded()) ||
+                    (cbCourseDropdown_ && cbCourseDropdown_->isExpanded()) ||
+                    (courseActionMenu_ && courseActionMenu_->isExpanded());
 
             layoutCBListTypeDropdownInList(cbListX, cbListY, cbListW);
 
@@ -1580,6 +1641,10 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         cbCurriculumDropdown_->drawExpandedList(renderer, position);
     if (cbTrainingStageDropdown_ && cbTrainingStageDropdown_->isExpanded())
         cbTrainingStageDropdown_->drawExpandedList(renderer, position);
+    if (cbCourseDropdown_ && cbCourseDropdown_->isExpanded())
+        cbCourseDropdown_->drawExpandedList(renderer, position);
+    if (courseActionMenu_ && courseActionMenu_->isExpanded())
+        courseActionMenu_->drawExpandedList(renderer, position);
     if (curriculumActionMenu_ && curriculumActionMenu_->isExpanded())
         curriculumActionMenu_->drawExpandedList(renderer, position);
     if (blockCurriculumMenu_ && blockCurriculumMenu_->isExpanded())

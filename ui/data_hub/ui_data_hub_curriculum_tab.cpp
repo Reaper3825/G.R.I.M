@@ -69,6 +69,17 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
     y += rowH + 6.0f;
 
+    cbCourseDropdown_->setPosition(x, y);
+    cbCourseDropdown_->setSize(fullW * 0.45f, rowH);
+    cbCourseDropdown_->drawOverlay(renderer, position);
+    cbCourseNameInput_->setPosition(x + fullW * 0.45f + gap, y + 4.0f);
+    cbCourseNameInput_->setSize(fullW * 0.55f - menuW - 3.0f * gap, rowH - 8.0f);
+    cbCourseNameInput_->drawOverlay(renderer, position);
+    courseActionMenu_->setPosition(x + fullW - menuW, y + 4.0f);
+    courseActionMenu_->setSize(menuW, rowH - 8.0f);
+    courseActionMenu_->drawOverlay(renderer, position);
+    y += rowH + 6.0f;
+
     // ── Toolbar row 2: Curriculum filter + Format filter + Generate + Search ──
     float toggleW = 130.0f;
     cx = x;
@@ -133,6 +144,11 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     float bodyH = availH - kPoolHeaderH;
     renderer.pushClipRect({x, bodyY}, {listW, bodyH});
 
+    const GRIM::Course* selectedCourse = nullptr;
+    if (datasetTarget_) {
+        for (const auto& course : datasetTarget_->getCourses())
+            if (course.id == activeCourseId_) { selectedCourse = &course; break; }
+    }
     const int cbRows = cbCurriculumListRowCount();
     int startRow = static_cast<int>(cbListScrollOffset_ / kCBListRowH);
     float offsetY = bodyY - (cbListScrollOffset_ - startRow * kCBListRowH);
@@ -200,8 +216,9 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         }
 
         if (!isDraft && datasetTarget_ && !blockId.empty()
-            && !activeCurriculumId_.empty()
-            && datasetTarget_->isConceptBlockInCurriculum(blockId, activeCurriculumId_))
+            && selectedCourse
+            && std::find(selectedCourse->concept_block_ids.begin(), selectedCourse->concept_block_ids.end(), blockId)
+                != selectedCourse->concept_block_ids.end())
             renderer.drawRoundedRect({x + listW - 14.0f, offsetY + 10.0f}, {8.0f, 8.0f},
                                      UITheme::Colors::Success, 4.0f);
 
@@ -655,6 +672,7 @@ void UIDataHubPanel::refreshCurriculumTabState() {
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
     populateCBCurriculumDropdown();
     syncCurriculumTrainingStageDropdown();
+    populateCBCourseDropdown();
     // Count blocks in active curriculum
     if (!activeCurriculumId_.empty()) {
         auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
@@ -668,6 +686,8 @@ void UIDataHubPanel::refreshCurriculumTabState() {
 }
 
 void UIDataHubPanel::rebuildFilteredCBList() {
+    size_t previousBlockIndex = SIZE_MAX;
+    const bool hadSelection = cbCurriculumRowToBlockIndex(selectedCBRow_, previousBlockIndex);
     cbFilterDirty_ = false;
     filteredCBIndices_.clear();
     if (!datasetTarget_) return;
@@ -679,9 +699,9 @@ void UIDataHubPanel::rebuildFilteredCBList() {
     }
     filteredCBIndices_ = datasetTarget_->filterConceptBlocks(formatFilter, cbFilterSearch_);
 
-    // Optional: restrict to blocks in the active curriculum
-    if (cbCurriculumFilterActive_ && !activeCurriculumId_.empty()) {
-        auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+    // Optional: restrict to blocks owned by the selected course
+    if (cbCurriculumFilterActive_) {
+        auto curr = datasetTarget_->getCourseById(activeCourseId_);
         if (!curr.id.empty()) {
             std::unordered_set<std::string> inCurr(
                 curr.concept_block_ids.begin(), curr.concept_block_ids.end());
@@ -693,9 +713,17 @@ void UIDataHubPanel::rebuildFilteredCBList() {
                     filtered.push_back(idx);
             }
             filteredCBIndices_ = std::move(filtered);
+        } else {
+            filteredCBIndices_.clear();
         }
     }
 
+    if (hadSelection) {
+        auto found = std::find(filteredCBIndices_.begin(), filteredCBIndices_.end(), previousBlockIndex);
+        selectedCBRow_ = found == filteredCBIndices_.end() ? -1 :
+            static_cast<int>(found - filteredCBIndices_.begin()) + (cbDraftPreviewActive_ ? 1 : 0);
+    }
+    cbListScrollOffset_ = 0.0f;
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
 }
 
@@ -1208,6 +1236,26 @@ void UIDataHubPanel::selectActiveCurriculum(int dropdownIndex) {
         activeCurriculumId_ = curr.id;
         cbInCurrCount_ = static_cast<int>(curr.concept_block_ids.size());
     }
+    const auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+    activeCourseId_ = curr.course_ids.empty() ? "" : curr.course_ids.front();
+    populateCBCourseDropdown();
     syncCurriculumTrainingStageDropdown();
     cbFilterDirty_ = true;
+}
+
+void UIDataHubPanel::populateCBCourseDropdown() {
+    if (!datasetTarget_ || !cbCourseDropdown_) return;
+    const auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+    std::vector<std::string> names{"(none)"};
+    int selected = 0;
+    const auto& courses = datasetTarget_->getCourses();
+    for (size_t i = 0; i < courses.size(); ++i) {
+        const bool assigned = std::find(curr.course_ids.begin(), curr.course_ids.end(), courses[i].id) != curr.course_ids.end();
+        names.push_back((assigned ? "[Assigned] " : "") + courses[i].name);
+        if (courses[i].id == activeCourseId_) selected = static_cast<int>(i) + 1;
+    }
+    if (selected == 0) activeCourseId_.clear();
+    cbCourseDropdown_->setItems(names);
+    cbCourseDropdown_->setSelectedIndex(selected);
+    cbCourseNameInput_->setText(datasetTarget_->getCourseById(activeCourseId_).name);
 }

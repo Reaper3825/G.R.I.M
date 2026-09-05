@@ -182,10 +182,13 @@ public:
 
     // ── Concept block ↔ curriculum assignment ────────────
 
-    bool addConceptBlockToCurriculum(const std::string& cb_id,
-                                     const std::string& curr_id);
-    bool removeConceptBlockFromCurriculum(const std::string& cb_id,
-                                          const std::string& curr_id);
+    const std::vector<GRIM::Course>& getCourses() const { return courses_; }
+    GRIM::Course getCourseById(const std::string& id) const;
+    bool saveCourse(const GRIM::Course& course);
+    bool removeCourse(const std::string& id);
+    bool assignCourse(const std::string& course_id, const std::string& curr_id, bool assigned);
+    bool setCourseBlock(const std::string& course_id, const std::string& block_id, bool assigned);
+
     bool isConceptBlockInCurriculum(const std::string& cb_id,
                                     const std::string& curr_id) const;
     size_t conceptBlockCountInCurriculum(const std::string& curr_id) const;
@@ -232,4 +235,6 @@ private:
     void rebuildSequenceCache(const std::vector<GRIM::Pipeline::TaggedEntry>& entries);
     void rebuildCBIndex();
     void rebuildCurrIndex();
+    void rebuildCurriculumBlocks();
+    std::vector<GRIM::Course> courses_;
 };

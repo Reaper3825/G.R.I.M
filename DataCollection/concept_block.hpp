@@ -156,9 +156,17 @@ inline std::vector<std::string> presetLabels() {
     return v;
 }
 
-// ── Curriculum — Named group of ConceptBlock IDs ────────
+// Curriculum -> Course -> ConceptBlock
+
+// Courses own membership; curriculum block IDs are a derived compatibility view.
+struct Course {
+    std::string id;
+    std::string name;
+    std::vector<std::string> concept_block_ids;
+};
 
 struct Curriculum {
+    std::vector<std::string> course_ids;
     std::string              id;
     std::string              name;
     std::vector<std::string> concept_block_ids;
@@ -175,18 +183,7 @@ struct Curriculum {
         return false;
     }
 
-    bool addBlock(const std::string& cb_id) {
-        if (containsBlock(cb_id)) return false;
-        concept_block_ids.push_back(cb_id);
-        return true;
-    }
 
-    bool removeBlock(const std::string& cb_id) {
-        auto it = std::find(concept_block_ids.begin(), concept_block_ids.end(), cb_id);
-        if (it == concept_block_ids.end()) return false;
-        concept_block_ids.erase(it);
-        return true;
-    }
 };
 
 } // namespace GRIM

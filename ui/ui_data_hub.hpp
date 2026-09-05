@@ -488,6 +488,11 @@ private:
     size_t cbInCurrCount_        = 0;
     /// ID of the currently selected curriculum in the dropdown.
     std::string activeCurriculumId_;
+    std::string activeCourseId_;
+    std::shared_ptr<UIDropdown> cbCourseDropdown_;
+    std::shared_ptr<UIInputBox> cbCourseNameInput_;
+    std::shared_ptr<UIActionMenu> courseActionMenu_;
+    void populateCBCourseDropdown();
     /// Unsaved row pinned at list index 0; shows live name / question preview.
     bool   cbDraftPreviewActive_ = false;
 

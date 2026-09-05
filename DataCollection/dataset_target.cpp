@@ -760,10 +760,13 @@ bool DatasetTarget::removeConceptBlock(const std::string& cb_id) {
 
     // Remove from any curriculum that contains this block.
     bool currChanged = false;
-    for (auto& curr : curriculums_) {
-        if (curr.removeBlock(cb_id))
-            currChanged = true;
+    for (auto& course : courses_) {
+        auto& ids = course.concept_block_ids;
+        auto end = std::remove(ids.begin(), ids.end(), cb_id);
+        currChanged = currChanged || end != ids.end();
+        ids.erase(end, ids.end());
     }
+    rebuildCurriculumBlocks();
     if (currChanged) saveCurriculumRegistry();
 
     return saveConceptBlocks();
@@ -854,15 +857,27 @@ void DatasetTarget::rebuildCurrIndex() {
 }
 
 bool DatasetTarget::loadCurriculumRegistry() {
+    const auto previousCurriculums = curriculums_;
+    const auto previousCourses = courses_;
     curriculums_.clear();
+    courses_.clear();
     currIdIndex_.clear();
     fs::path path = curriculumRegistryPath();
     if (!fs::exists(path)) return true;
 
     try {
         std::ifstream file(path);
-        if (!file.is_open()) return false;
+        if (!file.is_open()) throw std::runtime_error("Cannot open curriculum registry");
         json j = json::parse(file);
+        for (const auto& entry : j.value("courses", json::array())) {
+            GRIM::Course course;
+            course.id = entry.at("id").get<std::string>();
+            course.name = entry.at("name").get<std::string>();
+            course.concept_block_ids = entry.at("concept_block_ids").get<std::vector<std::string>>();
+            if (course.id.empty() || !getCourseById(course.id).id.empty())
+                throw std::runtime_error("Invalid or duplicate course ID");
+            courses_.push_back(std::move(course));
+        }
         if (j.contains("curriculums") && j["curriculums"].is_array()) {
             for (const auto& cj : j["curriculums"]) {
                 GRIM::Curriculum curr;
@@ -888,13 +903,29 @@ bool DatasetTarget::loadCurriculumRegistry() {
                             curr.plaintext_block_ids.push_back(bid.get<std::string>());
                     }
                 }
+                if (cj.contains("course_ids")) {
+                    curr.course_ids = cj.at("course_ids").get<std::vector<std::string>>();
+                    for (const auto& id : curr.course_ids)
+                        if (getCourseById(id).id.empty())
+                            throw std::runtime_error("Unknown course: " + id);
+                } else {
+                    GRIM::Course course{"course_generic_" + curr.id, "General - " + curr.name, curr.concept_block_ids};
+                    if (!getCourseById(course.id).id.empty())
+                        throw std::runtime_error("Generic course ID collision: " + course.id);
+                    curr.course_ids.push_back(course.id);
+                    courses_.push_back(std::move(course));
+                }
                 if (!curr.id.empty())
                     curriculums_.push_back(std::move(curr));
             }
         }
         rebuildCurrIndex();
+        rebuildCurriculumBlocks();
         return true;
     } catch (const std::exception& e) {
+        curriculums_ = previousCurriculums;
+        courses_ = previousCourses;
+        rebuildCurrIndex();
         std::cerr << "[DatasetTarget] Error loading curriculum registry: " << e.what() << "\n";
         return false;
     }
@@ -906,9 +937,15 @@ bool DatasetTarget::saveCurriculumRegistry() const {
     fs::create_directories(path.parent_path(), ec);
 
     json j;
+    j["schema_version"] = 2;
+    j["courses"] = json::array();
+    for (const auto& course : courses_)
+        j["courses"].push_back({{"id", course.id}, {"name", course.name},
+                                 {"concept_block_ids", course.concept_block_ids}});
     j["curriculums"] = json::array();
     for (const auto& curr : curriculums_) {
         json cj;
+        cj["course_ids"]        = curr.course_ids;
         cj["id"]                = curr.id;
         cj["name"]              = curr.name;
         cj["training_stage"]    = curr.training_stage;
@@ -961,7 +998,10 @@ bool DatasetTarget::addCurriculum(const GRIM::Curriculum& curr) {
     if (curr.id.empty()) return false;
     if (!isValidCurriculumTrainingStage(curr.training_stage)) return false;
     if (currIdIndex_.count(curr.id)) return false;
+    for (const auto& id : curr.course_ids)
+        if (getCourseById(id).id.empty()) return false;
     curriculums_.push_back(curr);
+    rebuildCurriculumBlocks();
     currIdIndex_[curr.id] = curriculums_.size() - 1;
     return saveCurriculumRegistry();
 }
@@ -971,8 +1011,11 @@ bool DatasetTarget::updateCurriculum(const std::string& curr_id,
     auto it = currIdIndex_.find(curr_id);
     if (it == currIdIndex_.end()) return false;
     if (!isValidCurriculumTrainingStage(curr.training_stage)) return false;
+    for (const auto& id : curr.course_ids)
+        if (getCourseById(id).id.empty()) return false;
     curriculums_[it->second] = curr;
     curriculums_[it->second].id = curr_id;
+    rebuildCurriculumBlocks();
     return saveCurriculumRegistry();
 }
 
@@ -995,22 +1038,6 @@ bool DatasetTarget::removeCurriculum(const std::string& curr_id) {
 }
 
 // ─── Concept block ↔ curriculum assignment ───────────────
-
-bool DatasetTarget::addConceptBlockToCurriculum(const std::string& cb_id,
-                                                const std::string& curr_id) {
-    auto it = currIdIndex_.find(curr_id);
-    if (it == currIdIndex_.end()) return false;
-    if (!curriculums_[it->second].addBlock(cb_id)) return false;
-    return saveCurriculumRegistry();
-}
-
-bool DatasetTarget::removeConceptBlockFromCurriculum(const std::string& cb_id,
-                                                     const std::string& curr_id) {
-    auto it = currIdIndex_.find(curr_id);
-    if (it == currIdIndex_.end()) return false;
-    if (!curriculums_[it->second].removeBlock(cb_id)) return false;
-    return saveCurriculumRegistry();
-}
 
 bool DatasetTarget::isConceptBlockInCurriculum(const std::string& cb_id,
                                                const std::string& curr_id) const {
@@ -1116,4 +1143,77 @@ bool DatasetTarget::exportCurriculumManifest() const {
     std::error_code ec;
     fs::rename(tmpPath, manifest_path, ec);
     return !ec;
+}
+
+void DatasetTarget::rebuildCurriculumBlocks() {
+    for (auto& curr : curriculums_) {
+        curr.concept_block_ids.clear();
+        std::set<std::string> seen;
+        for (const auto& id : curr.course_ids) {
+            for (const auto& course : courses_) {
+                if (course.id != id) continue;
+                for (const auto& block : course.concept_block_ids)
+                    if (seen.insert(block).second) curr.concept_block_ids.push_back(block);
+                break;
+            }
+        }
+    }
+}
+
+GRIM::Course DatasetTarget::getCourseById(const std::string& id) const {
+    for (const auto& course : courses_) if (course.id == id) return course;
+    return {};
+}
+
+bool DatasetTarget::saveCourse(const GRIM::Course& course) {
+    if (course.id.empty() || course.name.find_first_not_of(" \t\r\n") == std::string::npos) return false;
+    const auto previous = courses_;
+    auto it = std::find_if(courses_.begin(), courses_.end(), [&](const auto& c) { return c.id == course.id; });
+    if (it == courses_.end()) courses_.push_back(course);
+    else *it = course;
+    rebuildCurriculumBlocks();
+    if (saveCurriculumRegistry()) return true;
+    courses_ = previous;
+    rebuildCurriculumBlocks();
+    return false;
+}
+
+bool DatasetTarget::removeCourse(const std::string& id) {
+    if (getCourseById(id).id.empty()) return false;
+    const auto previousCourses = courses_;
+    const auto previousCurriculums = curriculums_;
+    courses_.erase(std::remove_if(courses_.begin(), courses_.end(), [&](const auto& c) { return c.id == id; }), courses_.end());
+    for (auto& curr : curriculums_)
+        curr.course_ids.erase(std::remove(curr.course_ids.begin(), curr.course_ids.end(), id), curr.course_ids.end());
+    rebuildCurriculumBlocks();
+    if (saveCurriculumRegistry()) return true;
+    courses_ = previousCourses;
+    curriculums_ = previousCurriculums;
+    return false;
+}
+
+bool DatasetTarget::assignCourse(const std::string& course_id, const std::string& curr_id, bool assigned) {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end() || getCourseById(course_id).id.empty()) return false;
+    auto& curr = curriculums_[it->second];
+    const auto previous = curr;
+    auto found = std::find(curr.course_ids.begin(), curr.course_ids.end(), course_id);
+    if (assigned && found == curr.course_ids.end()) curr.course_ids.push_back(course_id);
+    else if (!assigned && found != curr.course_ids.end()) curr.course_ids.erase(found);
+    else return true;
+    rebuildCurriculumBlocks();
+    if (saveCurriculumRegistry()) return true;
+    curr = previous;
+    return false;
+}
+
+bool DatasetTarget::setCourseBlock(const std::string& course_id, const std::string& block_id, bool assigned) {
+    auto course = getCourseById(course_id);
+    if (course.id.empty() || (assigned && !cbIdIndex_.count(block_id))) return false;
+    auto& ids = course.concept_block_ids;
+    auto it = std::find(ids.begin(), ids.end(), block_id);
+    if (assigned && it == ids.end()) ids.push_back(block_id);
+    else if (!assigned && it != ids.end()) ids.erase(it);
+    else return false;
+    return saveCourse(course);
 }
