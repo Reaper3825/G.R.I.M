@@ -56,7 +56,7 @@ namespace aliases {
 }
 
 namespace Voice {
-    GRIM_EXPORT_SYMBOL std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory);
+    GRIM_EXPORT_SYMBOL std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig);
     GRIM_EXPORT_SYMBOL void playAudio(const std::string& file);
     GRIM_EXPORT_SYMBOL bool isSpeaking();
     GRIM_EXPORT_SYMBOL std::string coquiSpeak(const std::string& text, const std::string& model, double speed, double pitch = 1.0);

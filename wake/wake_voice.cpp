@@ -191,9 +191,7 @@ static void stopPortAudio(PaStream* stream) {
     Pa_Terminate();
 }
 
-void start(ConsoleHistory* history,
-           std::vector<Timer>& timers,
-           nlohmann::json& longTermMemory)
+void start()
 {
     if (g_running.load()) {
         LOG_DEBUG("WakeVoice", "Already running.");
@@ -213,7 +211,7 @@ void start(ConsoleHistory* history,
     }
 
     g_running = true;
-    g_thread = std::thread([history, &timers, &longTermMemory]() {
+    g_thread = std::thread([]() {
         const int frameLen = pv_porcupine_frame_length();
         const int sampleRate = pv_porcupine_sample_rate();
         std::vector<int16_t> frame(frameLen);
@@ -244,10 +242,10 @@ void start(ConsoleHistory* history,
                 Voice::speak("Yes?", "wake");
 
                 // Primary command capture
-                std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+                std::string transcript = Voice::captureAndTranscribeSpeech(aiConfig);
                 LOG_DEBUG("WakeVoice", "Captured voice transcript: " + transcript);
 
-                LOG_DEBUG("WakeVoice", "runVoiceDemo() finished — about to call handleCommand()");
+                LOG_DEBUG("WakeVoice", "captureAndTranscribeSpeech() finished — about to call handleCommand()");
 
                 if (!transcript.empty()) {
                     handleCommand(transcript);
@@ -276,7 +274,7 @@ void start(ConsoleHistory* history,
                         
                         // ✅ Just listen for speech with Whisper (don't use wake word stream)
                         LOG_DEBUG("WakeVoice", "Listening for feedback response...");
-                        std::string follow = Voice::runVoiceDemo(aiConfig, longTermMemory);
+                        std::string follow = Voice::captureAndTranscribeSpeech(aiConfig);
                         
                         if (!follow.empty()) {
                             std::string norm = GRIMInput::normalizeCommand(follow);

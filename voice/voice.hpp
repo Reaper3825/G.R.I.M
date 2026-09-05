@@ -19,7 +19,7 @@ namespace Voice {
     // ============================================================
     // Voice core
     // ============================================================
-    std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory);
+    std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig);
     void shutdown();
 
     // ============================================================

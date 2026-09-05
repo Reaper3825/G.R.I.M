@@ -1,11 +1,5 @@
 #pragma once
-#include <vector>
 #include <string>
-#include <atomic>
-#include <nlohmann/json.hpp>  // ✅ real header, no forward declare
-
-struct ConsoleHistory;
-struct Timer;
 
 namespace Voice {
     bool initWakeWord(const std::string& accessKey,
@@ -16,9 +10,7 @@ namespace Voice {
 }
 
 namespace WakeVoice {
-    void start(ConsoleHistory* history,
-               std::vector<Timer>& timers,
-               nlohmann::json& longTermMemory);
+    void start();
     void stop();
     bool isRunning();
 }

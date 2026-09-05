@@ -1,15 +1,9 @@
 #pragma once
-#include <vector>
 #include <string>
-#include <nlohmann/json.hpp>
-#include "console_history.hpp"
-#include "timer.hpp"
 
 namespace WakeKey {
 
-void start(ConsoleHistory* history,
-           std::vector<Timer>& timers,
-           nlohmann::json& longTermMemory);
+void start();
 
 void stop();
 bool isRunning();

@@ -29,9 +29,75 @@
 #include "platform_clipboard.hpp"
 #include "platform_input.hpp"
 #include "window_manager.hpp"
+#include "grim_platform.h"
 #include "../helpers/mouse.hpp"
 
+#include <atomic>
+#include <csignal>
+#include <stdexcept>
+
+namespace {
+
+std::atomic<bool> s_shutdownRequested{false};
+std::atomic<bool> s_shutdownComplete{false};
+
+#ifdef _WIN32
+BOOL WINAPI consoleHandler(DWORD signal)
+{
+    if (signal != CTRL_C_EVENT &&
+        signal != CTRL_CLOSE_EVENT &&
+        signal != CTRL_BREAK_EVENT) {
+        return FALSE;
+    }
+
+    s_shutdownRequested.store(true, std::memory_order_release);
+    WindowManager::requestMainLoopStop();
+
+    if (signal == CTRL_CLOSE_EVENT) {
+        constexpr DWORD kCloseDrainTimeoutMs = 4500;
+        constexpr DWORD kPollIntervalMs = 10;
+        for (DWORD waitedMs = 0;
+             waitedMs < kCloseDrainTimeoutMs &&
+                 !s_shutdownComplete.load(std::memory_order_acquire);
+             waitedMs += kPollIntervalMs) {
+            ::Sleep(kPollIntervalMs);
+        }
+    }
+
+    return TRUE;
+}
+#else
+void signalHandler(int signal)
+{
+    if (signal == SIGINT || signal == SIGTERM) {
+        s_shutdownRequested.store(true, std::memory_order_release);
+    }
+}
+#endif
+
+} // namespace
+
 namespace GRIM {
+
+void installApplicationShutdownHandlers()
+{
+#ifdef _WIN32
+    if (!SetConsoleCtrlHandler(consoleHandler, TRUE)) {
+        throw std::runtime_error(
+            "installApplicationShutdownHandlers: SetConsoleCtrlHandler failed");
+    }
+    LOG_DEBUG("Teardown", "Signal handler installed (Ctrl+C will request shutdown)");
+#else
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+    LOG_DEBUG("Teardown", "Signal handlers installed");
+#endif
+}
+
+bool isApplicationShutdownRequested()
+{
+    return s_shutdownRequested.load(std::memory_order_acquire);
+}
 
 void shutdownApplication(
     UnifiedMemoryStorage& memoryStorage,
@@ -118,6 +184,7 @@ void shutdownApplication(
     LOG_PHASE("All subsystems shut down", true);
     LOG_PHASE("G.R.I.M terminated successfully", true);
     shutdownLogger();
+    s_shutdownComplete.store(true, std::memory_order_release);
 }
 
 } // namespace GRIM

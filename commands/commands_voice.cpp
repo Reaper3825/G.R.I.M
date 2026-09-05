@@ -49,7 +49,7 @@
 // [Voice] One-shot voice command
 // ====================================================
 CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
-    std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+    std::string transcript = Voice::captureAndTranscribeSpeech(aiConfig);
 
     if (transcript.empty()) {
         return {

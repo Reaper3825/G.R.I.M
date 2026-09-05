@@ -121,9 +121,8 @@ static bool ensureWhisperLoaded(const nlohmann::json& aiConfig) {
 // ============================================================
 // Voice Input (Speech → Text)
 // ============================================================
-std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory) {
-    (void) longTermMemory;
-    LOG_DEBUG("Voice", "Entering runVoiceDemo()");
+std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
+    LOG_DEBUG("Voice", "Entering captureAndTranscribeSpeech()");
 
     // Load thresholds from config
     g_silenceThreshold   = aiConfig["voice"].value("silence_threshold", 0.02f);

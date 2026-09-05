@@ -18,6 +18,7 @@ struct GRIMWindow;
 
 namespace GRIM {
 class DeviceCommServer;
+class UnifiedMemoryStorage;
 class WebSocketServer;
 namespace GeoSpatial {
 class GeoSpatialRuntime;
@@ -29,6 +30,11 @@ void runBootstrapChecks(int argc, char** argv);
 
 std::unique_ptr<GRIM::DeviceCommServer> bootstrapNetworkServices(
 	GRIM::WebSocketServer& webSocketServer);
+
+void bootstrapVoiceSubsystem();
+
+void bootstrapMemorySubsystem(GRIM::UnifiedMemoryStorage& memoryStorage);
+void bootstrapPerceptionSubsystem();
 
 struct UIBootstrapResult {
 	GRIMWindow& overlayWindow;

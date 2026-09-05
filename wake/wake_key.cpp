@@ -5,7 +5,6 @@
 #include "ui/ui_helpers.hpp"
 #include "ui/ui_root.hpp"
 #include "ai/ai.hpp"
-#include "console_history.hpp"
 #include "resources.hpp"
 #include "helpers/key.hpp"
 #include "core/input/InputBindings.hpp"
@@ -19,34 +18,25 @@ namespace WakeKey {
 
 static bool g_running = false;
 static bool g_listening = false;
-static ConsoleHistory* g_history = nullptr;
-static std::vector<Timer>* g_timers = nullptr;
-static nlohmann::json* g_longTermMemory = nullptr;
 
 // -----------------------------------------------------------
-// Voice command handler
+// Wake-triggered voice capture
 // -----------------------------------------------------------
-static void handleVoiceCommand(ConsoleHistory* history,
-                               std::vector<Timer>& timers,
-                               nlohmann::json& longTermMemory)
+static void captureAndProcessVoiceInput()
 {
     if (g_listening) return;
     g_listening = true;
 
-    LOG_DEBUG("WakeKey", "Wake key pressed — capturing voice command.");
+    LOG_DEBUG("WakeKey", "Capturing voice input.");
     notifyPopupActivity();
 
     // Capture speech → text
-    std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+    std::string transcript = Voice::captureAndTranscribeSpeech(aiConfig);
     LOG_DEBUG("WakeKey", "Captured voice transcript: " + transcript);
 
     // Send transcript through the same raw conversation path as typed input.
     if (!transcript.empty()) {
-        CommandResult result = ai_process(transcript);
-        if (history) {
-            history->push("[AI] " + result.message,
-                          result.success ? 0xFF00FF00 : 0xFF0000FF);
-        }
+        ai_process(transcript);
     }
 
     g_listening = false;
@@ -57,9 +47,7 @@ static void handleVoiceCommand(ConsoleHistory* history,
 // -----------------------------------------------------------
 // Start / Stop
 // -----------------------------------------------------------
-void start(ConsoleHistory* history,
-           std::vector<Timer>& timers,
-           nlohmann::json& longTermMemory)
+void start()
 {
     if (g_running) {
         LOG_DEBUG("WakeKey", "WakeKey system already running.");
@@ -69,28 +57,24 @@ void start(ConsoleHistory* history,
     LOG_DEBUG("WakeKey", "Initializing Key system hook...");
     Key::initialize();
 
-    g_history = history;
-    g_timers = &timers;
-    g_longTermMemory = &longTermMemory;
-
     g_running = true;
     LOG_PHASE("WakeKey system active (configurable global binding)", true);
 }
 
 void update()
 {
-    if (!g_running || g_listening || !g_timers || !g_longTermMemory)
+    if (!g_running || g_listening)
         return;
 
     if (GRIM::InputBindings::wasPressed("wake_voice")) {
         LOG_DEBUG("WakeKey", "Configurable wake binding detected.");
-        handleVoiceCommand(g_history, *g_timers, *g_longTermMemory);
+        captureAndProcessVoiceInput();
     }
 }
 
 bool requestWake(const std::string& source)
 {
-    if (!g_running || g_listening || !g_timers || !g_longTermMemory) {
+    if (!g_running || g_listening) {
         LOG_DEBUG("WakeKey", "External wake request rejected: " + source);
         return false;
     }
@@ -104,7 +88,7 @@ bool requestWake(const std::string& source)
     event.payload = "voice_capture";
     Wake::triggerWake(event);
     LOG_DEBUG("WakeKey", "External wake request accepted: " + source);
-    handleVoiceCommand(g_history, *g_timers, *g_longTermMemory);
+    captureAndProcessVoiceInput();
     return true;
 }
 
@@ -114,9 +98,6 @@ void stop()
 
     LOG_DEBUG("WakeKey", "Stopping WakeKey system...");
     Key::shutdown();
-    g_history = nullptr;
-    g_timers = nullptr;
-    g_longTermMemory = nullptr;
     g_running = false;
 
     LOG_PHASE("WakeKey system stopped", true);
