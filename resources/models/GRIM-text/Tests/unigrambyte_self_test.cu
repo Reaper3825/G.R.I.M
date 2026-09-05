@@ -2697,6 +2697,7 @@ bool testByteFallbackRejectsMalformedGeneratedUtf8(std::string& message) {
 
 static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     TokenizerArtifacts::GrmtSequence sequence;
+    sequence.concept_block_id = "cb_test_source";
     const int int_open_id = atomTypeToOpenTokenId(AtomType::ATOM_INT);
     const int int_close_id = atomTypeToCloseTokenId(AtomType::ATOM_INT);
     sequence.token_ids = {
@@ -2770,6 +2771,8 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
               "Typed atom span fixture should use the current GRMT format");
     ASSERT_EQ(round_trip.sequences.size(), static_cast<std::size_t>(1),
               "Typed atom span fixture should load as one GRMT row");
+    ASSERT_TRUE(round_trip.sequences[0].concept_block_id == valid.concept_block_id,
+                "Source concept block ID must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].token_ids == valid.token_ids,
                 "Typed atom span token IDs must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].token_atom_mask == valid.token_atom_mask,
@@ -2852,6 +2855,7 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
 
 bool testGrmtFixedNumericTokenRoundTripAndRangeValidation(std::string& message) {
     TokenizerArtifacts::GrmtSequence sequence;
+    sequence.concept_block_id = "cb_test_source";
     appendNumericLiteralTokenIds("-11111.0000e+22", sequence.token_ids);
     sequence.targets.assign(sequence.token_ids.size(), -1);
     for (size_t index = 0; index + 1 < sequence.token_ids.size(); ++index) {
@@ -2922,6 +2926,7 @@ static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     std::size_t prefix_tokens,
     std::size_t suffix_tokens) {
     TokenizerArtifacts::GrmtSequence sequence;
+    sequence.concept_block_id = "cb_test_source";
     for (std::size_t i = 0; i < prefix_tokens; ++i) {
         sequence.token_ids.push_back(
             BYTE_TOKEN_OFFSET + static_cast<int>('a' + (i % 20)));

@@ -208,6 +208,7 @@ struct AutoStopHP {
 };
 
 struct TrainingScheduleHP {
+    std::string batch_strategy;
     int epochs = 0;
     int gradient_accumulation_steps = 0;
     float accumulation_normalization_scale = 1.0f;
@@ -786,6 +787,7 @@ inline TrainingScheduleHP trainingScheduleHP(
         : 1.0f;
     view.single_batch_overfit_enabled = hp.single_batch_overfit_enabled;
     view.single_batch_overfit_max_steps = hp.single_batch_overfit_max_steps;
+    view.batch_strategy = hp.batch_strategy;
     view.shuffle_train_enabled = hp.shuffle_train_enabled;
     view.shuffle_train_epochs = hp.shuffle_train_epochs;
     return view;
@@ -1192,6 +1194,7 @@ inline TrainingScheduleHP trainingScheduleHP(
         : 1.0f;
     view.single_batch_overfit_enabled = snapshotTrainingConfigField<bool>(snapshot, "single_batch_overfit_enabled");
     view.single_batch_overfit_max_steps = snapshotTrainingConfigField<int>(snapshot, "single_batch_overfit_max_steps");
+    view.batch_strategy = snapshotTrainingConfigField<std::string>(snapshot, "batch_strategy");
     view.shuffle_train_enabled = snapshotTrainingConfigField<bool>(snapshot, "shuffle_train_enabled");
     view.shuffle_train_epochs = snapshotTrainingConfigField<int>(snapshot, "shuffle_train_epochs");
     return view;

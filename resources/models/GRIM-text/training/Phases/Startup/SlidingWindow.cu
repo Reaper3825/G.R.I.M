@@ -525,6 +525,7 @@ SftWindowConstruction constructSftWindows(
             if (!fragmented) {
                 window = sequence;
             } else {
+                window.concept_block_id = sequence.concept_block_id;
                 window.atom_table = sequence.atom_table;
                 window.goal = sequence.goal;
                 window.concept_block_spans = sliceConceptBlockSpansForSftWindow(
@@ -832,6 +833,7 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             }
 
             GRIM::TokenizerArtifacts::GrmtSequence window;
+            window.concept_block_id = seq.concept_block_id;
             // PT windows do not pin goal metadata. Retain it only on the
             // leading window when every authored logical span is present.
             if (is_first_window && goalFitsPrefix(seq.goal, end)) {

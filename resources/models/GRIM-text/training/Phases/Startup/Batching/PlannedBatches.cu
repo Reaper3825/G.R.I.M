@@ -392,15 +392,20 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     //======================================================//
     // Train: build ONE fixed BatchSchedule.
     //
-    // We delegate to GRIM::Batching::buildEpochBatches with epoch=0 so the
-    // packing policy (greedy, RANDOM ordering, bucket settings) matches the
-    // historical per-epoch behaviour exactly. Per the plan's "fixed batch
-    // membership" rule, this schedule is authored once and never rebuilt.
-    // Normal-mode per-epoch diversity comes from `epoch_batch_order`.
-    //======================================================//
-    log("[PlannedBatches] Building fixed train schedule (epochs=" +
-        std::to_string(num_epochs) + ")");
-
+    // Resolve curriculum policy before packing. Generic epoch batch shuffles
+    // must not subsequently destroy the authored concept-block order.
+    if (!ctx.current_curriculum_metadata)
+        throw std::runtime_error("PlannedBatches: missing current curriculum metadata");
+    const auto ordering = GRIM::Batching::parseCurriculumOrdering(schedule_hp.batch_strategy);
+    std::vector<std::string> train_block_ids;
+    train_block_ids.reserve(ctx.data.train_views.size());
+    for (const auto* row : ctx.data.train_views) {
+        if (!row) throw std::runtime_error("PlannedBatches: null training row");
+        train_block_ids.push_back(row->concept_block_id);
+    }
+    log("[PlannedBatches] Building fixed train schedule: batch_strategy=" + schedule_hp.batch_strategy +
+        " randomize_course_order=" + std::to_string(ctx.current_curriculum_metadata->randomize_course_order) +
+        " randomize_concept_block_order=" + std::to_string(ctx.current_curriculum_metadata->randomize_concept_block_order));
     ctx.fixed_train_schedule = GRIM::Batching::buildEpochBatches(
         atom_insertion_enabled ? train_atom_lengths : ctx.data.train_seq_lengths,
         static_cast<uint32_t>(fixed_max_seq_len),
@@ -408,6 +413,9 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         /*global_step=*/0,
         /*epoch=*/0,
         /*data_seed=*/ctx.rng.data_seed,
+        *ctx.current_curriculum_metadata,
+        train_block_ids,
+        ordering,
         log);
 
     const int num_train_batches =
@@ -502,11 +510,14 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     //======================================================//
     // Per-epoch executable order.
     //
-    // Normal training: deterministic permutations of [0, num_train_batches).
+    // Normal training: replay the initial concept-block plan without batch shuffling.
     // Single-batch overfit: diagnostic mode authored here as repeated index 0.
     // Phase2 treats this vector as the complete executable step plan and does
     // not branch on the diagnostic hyperparameter.
     //======================================================//
+    if (schedule_hp.shuffle_train_enabled)
+        log("[PlannedBatches] shuffle_train is superseded by batch_strategy and curriculum flags; "
+            "fixed block plan is replayed each epoch");
     ctx.epoch_batch_order.assign(num_epochs, std::vector<int>{});
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         auto& order = ctx.epoch_batch_order[epoch];
@@ -516,16 +527,10 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             order.resize(num_train_batches);
             std::iota(order.begin(), order.end(), 0);
 
-            const bool shuffle_this_epoch =
-                schedule_hp.shuffle_train_enabled &&
-                (schedule_hp.shuffle_train_epochs == 0 ||
-                 epoch < schedule_hp.shuffle_train_epochs);
+            // Fixed payload membership can only replay the initial block plan.
+            // Shuffling packed batches would violate course order and split
+            // multi-row blocks. Fresh per-epoch block plans need rematerialization.
 
-            if (shuffle_this_epoch) {
-                std::mt19937_64 epoch_rng(
-                    ctx.rng.data_seed + static_cast<uint64_t>(epoch));
-                std::shuffle(order.begin(), order.end(), epoch_rng);
-            }
         }
     }
     if (schedule_hp.single_batch_overfit_enabled) {

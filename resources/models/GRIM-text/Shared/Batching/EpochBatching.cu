@@ -39,19 +39,20 @@ BatchSchedule buildEpochBatches(
     int global_step,
     int epoch,
     uint64_t data_seed,
+    const CurriculumMetadata& curriculum,
+    const std::vector<std::string>& concept_block_ids,
+    CurriculumOrdering ordering,
     const EpochBatchingLogFn& log_fn)
 {
     (void)global_step;
 
     PackerPolicy policy;
 
-    // Per-epoch deterministic shuffle.
-    policy.rng_seed = data_seed + static_cast<uint64_t>(epoch) + 1ULL;
-
-    // RANDOM ordering avoids loss spikes at epoch end. Length curricula are
-    // forbidden here: rows are fixed-window padded, so length-sorted exposure
-    // reintroduces boundary bias.
-    policy.batch_ordering      = BatchOrdering::RANDOM;
+    policy.sequence_order = orderedCourseSequences(
+        sequence_lengths, concept_block_ids, curriculum, ordering,
+        data_seed + static_cast<uint64_t>(epoch) + 1ULL);
+    // The explicit block plan is authoritative; no later row/batch shuffle.
+    policy.batch_ordering = BatchOrdering::PRESERVE;
 
     auto schedule = buildBatches(sequence_lengths, fixed_sequence_cap, fixed_batch_size, policy);
 

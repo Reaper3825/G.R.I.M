@@ -122,9 +122,21 @@ BatchSchedule buildBatches(
     schedule.p90_seq_len = percentile(sorted_lengths, 0.90f);
     schedule.p99_seq_len = percentile(sorted_lengths, 0.99f);
     
+    if (policy.sequence_order) {
+        if (policy.sequence_order->size() != view_indices.size())
+            throw std::runtime_error("buildBatches: explicit sequence order must cover every valid row");
+        std::vector<bool> seen(sequence_lengths.size(), false);
+        for (const auto index : *policy.sequence_order) {
+            if (index >= sequence_lengths.size() || sequence_lengths[index] == 0 || seen[index])
+                throw std::runtime_error("buildBatches: invalid or duplicate row in explicit sequence order");
+            seen[index] = true;
+        }
+        view_indices = *policy.sequence_order;
+    }
+
     // Deterministic shuffle to mix sequence lengths when training requests it.
     // Zero seed means preserve input order, which validation relies on.
-    if (policy.rng_seed != 0) {
+    if (!policy.sequence_order && policy.rng_seed != 0) {
         std::mt19937_64 shuffle_rng(policy.rng_seed);
         std::shuffle(view_indices.begin(), view_indices.end(), shuffle_rng);
     }
@@ -205,7 +217,7 @@ BatchSchedule buildBatches(
     // Post-packing batch ordering
     // =======================================================================
     
-    if (policy.batch_ordering != BatchOrdering::PRESERVE && schedule.batches.size() > 1) {
+    if (!policy.sequence_order && policy.batch_ordering != BatchOrdering::PRESERVE && schedule.batches.size() > 1) {
         std::vector<BatchAssignment> normal_batches = std::move(schedule.batches);
         
         switch (policy.batch_ordering) {

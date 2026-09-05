@@ -15,6 +15,9 @@ namespace GRIM { struct ConceptBlockSpans; }
 namespace GRIM::TokenizerArtifacts {
 
 struct GrmtSequence {
+    // Opaque source identity, persisted in GRMT and inherited by every window.
+    // Scheduling metadata only; never tokenized or used as a model target.
+    std::string concept_block_id;
     std::vector<int> token_ids;
     std::vector<int> targets;
     // Numeric atom metadata is aligned to token_ids but populated only at a

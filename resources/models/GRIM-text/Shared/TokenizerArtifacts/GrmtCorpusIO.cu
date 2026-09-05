@@ -1,4 +1,5 @@
 #include "GrmtCorpusIO.hpp"
+#include "../GRMT/GrmtSourceIdentity.hpp"
 
 #include "../ConceptBlock/ConceptBlockSpans.hpp"
 #include "../Goal/Goal.hpp"
@@ -823,6 +824,7 @@ bool GrmtSequence::hasAnyValidTarget() const {
 }
 
 void GrmtSequence::validateForWrite(const std::string& source) const {
+    GRIM::GRMT::validateConceptBlockId(concept_block_id, source);
     const std::size_t n = token_ids.size();
     if (!token_atom_aux_target_mask.empty()) {
         throw std::runtime_error(
@@ -1186,6 +1188,7 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     validateConceptBlockSpanTokenRange(
         sequence.concept_block_spans, vocab_size_, sink);
 
+    GRIM::GRMT::writeConceptBlockId(file_, sequence.concept_block_id, sink);
     const std::uint32_t len = static_cast<std::uint32_t>(sequence.token_ids.size());
     writeScalar(file_, len, sink);
     writeExact(file_, sequence.token_ids.data(), static_cast<std::size_t>(len) * sizeof(int), sink);
@@ -1314,12 +1317,14 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     }
 
     const std::string source = path_.string() + "#seq" + std::to_string(sequences_read_);
+    auto concept_block_id = GRIM::GRMT::readConceptBlockId(file_, source);
     const std::uint32_t seq_len = readScalar<std::uint32_t>(file_, source);
     if (seq_len == 0) {
         throw std::runtime_error("[GRMT] sequence length is zero in " + source);
     }
 
     GrmtSequence seq;
+    seq.concept_block_id = std::move(concept_block_id);
     seq.token_ids.resize(seq_len);
     seq.targets.resize(seq_len);
     seq.token_numeric_values.resize(seq_len);

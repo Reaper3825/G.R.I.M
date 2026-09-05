@@ -91,11 +91,15 @@ void addCourseMembership(const json& registry, const json& source, CurriculumMet
         const auto& course = *found->second;
         if (!course.contains("concept_block_ids") || !course["concept_block_ids"].is_array())
             throw std::runtime_error("[DataLoader] FATAL: course '" + course_id + "' is missing the concept_block_ids array");
+        CourseMetadata course_metadata;
+        course_metadata.id = course_id;
         for (const auto& block_id : course["concept_block_ids"]) {
             if (!block_id.is_string() || block_id.get_ref<const std::string&>().empty())
                 throw std::runtime_error("[DataLoader] FATAL: course '" + course_id + "' contains an invalid concept_block_id");
             metadata.concept_block_ids.insert(block_id.get<std::string>());
+            course_metadata.concept_block_ids.push_back(block_id.get<std::string>());
         }
+        metadata.courses.push_back(std::move(course_metadata));
     }
 }
 
@@ -115,6 +119,8 @@ void readCurriculumMetadata(const json& registry, const json& source,
 			"[DataLoader] FATAL: curriculum '" + metadata.name +
 			"' has invalid training_stage '" + metadata.training_stage + "'");
 	}
+	metadata.randomize_course_order = source.value("randomize_course_order", false);
+	metadata.randomize_concept_block_order = source.value("randomize_concept_block_order", false);
 	addCourseMembership(registry, source, metadata);
 }
 
@@ -891,7 +897,8 @@ bool PrepareTrainingDataFromCache(
 				} else {
 					assign_prompt_span(*seq, rendered, boundaries, token_counts);
 				}
-				all_tokens.push_back(std::move(*seq));
+				seq->concept_block_id = cj.at("id").get<std::string>();
+			all_tokens.push_back(std::move(*seq));
 				++raw_text_count;
 				continue;
 			}
@@ -938,6 +945,7 @@ bool PrepareTrainingDataFromCache(
 					<< std::endl;
 				warned_execution_bridge_stub = true;
 			}
+			seq->concept_block_id = cj.at("id").get<std::string>();
 			all_tokens.push_back(std::move(*seq));
 		} catch (const std::exception& e) {
 			++concept_build_failures;

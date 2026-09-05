@@ -11,7 +11,7 @@
 //  co-located with the rest of the batch construction
 //  logic. To avoid pulling training-layer types
 //  (TrainingContext / TrainingLogger) into Shared, the API
-//  accepts only the primitives it actually needs.
+//  accepts shared curriculum metadata and explicit row provenance.
 //======================================================//
 
 #pragma once
@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "CurriculumOrdering.hpp"
 #include "Batching_GPU.hpp"   // BatchSchedule
 
 namespace GRIM { namespace Batching {
@@ -36,6 +37,9 @@ using EpochBatchingLogFn = std::function<void(const std::string&)>;
 //  global_step  — current optimizer step; accepted to keep the call boundary explicit.
 //  epoch        — 0-based epoch index used for deterministic per-epoch RNG.
 //  data_seed    — base data RNG seed; per-epoch seed = data_seed + epoch + 1.
+//  curriculum   — flags and ordered course/block membership from the registry.
+//  concept_block_ids — source block identity for each sequence_lengths row.
+//  ordering     — CURRICULUM uses flags; PRESERVE/RANDOM override both flags.
 //  log_fn       — optional callback for the [Batching] summary lines.
 //                 Pass {} to suppress logging.
 //======================================================//
@@ -46,6 +50,9 @@ BatchSchedule buildEpochBatches(
     int global_step,
     int epoch,
     uint64_t data_seed,
+    const CurriculumMetadata& curriculum,
+    const std::vector<std::string>& concept_block_ids,
+    CurriculumOrdering ordering,
     const EpochBatchingLogFn& log_fn);
 
 //======================================================//
