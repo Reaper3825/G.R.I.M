@@ -885,6 +885,8 @@ bool DatasetTarget::loadCurriculumRegistry() {
                 curr.name      = cj.value("name", std::string());
                 curr.timestamp = cj.value("timestamp", int64_t(0));
                 curr.format_as_concept = cj.value("format_as_concept", true);
+                curr.randomize_course_order = cj.value("randomize_course_order", false);
+                curr.randomize_concept_block_order = cj.value("randomize_concept_block_order", false);
                 curr.training_stage = cj.value("training_stage", std::string("sft"));
                 if (!isValidCurriculumTrainingStage(curr.training_stage)) {
                     throw std::runtime_error(
@@ -951,6 +953,8 @@ bool DatasetTarget::saveCurriculumRegistry() const {
         cj["training_stage"]    = curr.training_stage;
         cj["timestamp"]         = curr.timestamp;
         cj["format_as_concept"] = curr.format_as_concept;
+        cj["randomize_course_order"] = curr.randomize_course_order;
+        cj["randomize_concept_block_order"] = curr.randomize_concept_block_order;
         cj["concept_block_ids"] = curr.concept_block_ids;
         if (!curr.plaintext_block_ids.empty()) {
             cj["plaintext_block_ids"] = curr.plaintext_block_ids;
@@ -1013,10 +1017,13 @@ bool DatasetTarget::updateCurriculum(const std::string& curr_id,
     if (!isValidCurriculumTrainingStage(curr.training_stage)) return false;
     for (const auto& id : curr.course_ids)
         if (getCourseById(id).id.empty()) return false;
+    const auto previous = curriculums_[it->second];
     curriculums_[it->second] = curr;
     curriculums_[it->second].id = curr_id;
     rebuildCurriculumBlocks();
-    return saveCurriculumRegistry();
+    if (saveCurriculumRegistry()) return true;
+    curriculums_[it->second] = previous;
+    return false;
 }
 
 bool DatasetTarget::removeCurriculum(const std::string& curr_id) {

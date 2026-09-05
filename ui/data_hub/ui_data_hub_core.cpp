@@ -628,6 +628,27 @@ UIDataHubPanel::UIDataHubPanel()
         cbTypeFilterDropdown_->setMaxVisibleItems(8);
     }
 
+    cbRandomizeCourseOrderToggle_ = std::make_shared<UIToggle>(
+        "Randomize course order", false, [this](bool state) {
+            if (datasetTarget_ && !activeCurriculumId_.empty()) {
+                auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+                curr.randomize_course_order = state;
+                if (!datasetTarget_->updateCurriculum(curr.id, curr))
+                    addLog("Failed to save Randomize course order", 2);
+            }
+            syncCurriculumTrainingStageDropdown();
+        });
+    cbRandomizeConceptBlockOrderToggle_ = std::make_shared<UIToggle>(
+        "Randomize concept block order", false, [this](bool state) {
+            if (datasetTarget_ && !activeCurriculumId_.empty()) {
+                auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+                curr.randomize_concept_block_order = state;
+                if (!datasetTarget_->updateCurriculum(curr.id, curr))
+                    addLog("Failed to save Randomize concept block order", 2);
+            }
+            syncCurriculumTrainingStageDropdown();
+        });
+
     cbCurriculumFilterToggle_ = std::make_shared<UIToggle>(
         "In Course", false,
         [this](bool state) {
@@ -959,6 +980,7 @@ UIDataHubPanel::UIDataHubPanel()
 
     curriculumWidgets_ = {
         cbCourseDropdown_, cbCourseNameInput_, courseActionMenu_,
+        cbRandomizeCourseOrderToggle_, cbRandomizeConceptBlockOrderToggle_,
         cbModelDropdown_, cbCurriculumDropdown_, cbTrainingStageDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbAnswerArea_, cbCustomPromptArea_,

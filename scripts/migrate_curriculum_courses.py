@@ -18,6 +18,8 @@ def migrate_registry(source):
             raise ValueError("Empty or duplicate course ID")
         by_id[course["id"]] = course
     for curriculum in result.get("curriculums", []):
+        curriculum.setdefault("randomize_course_order", False)
+        curriculum.setdefault("randomize_concept_block_order", False)
         if "course_ids" not in curriculum:
             course_id = "course_generic_" + curriculum["id"]
             if course_id in by_id:

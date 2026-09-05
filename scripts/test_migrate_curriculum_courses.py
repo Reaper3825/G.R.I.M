@@ -17,8 +17,20 @@ class CourseMigrationTests(unittest.TestCase):
         self.assertEqual(len(result["courses"]), 3)
         for original, migrated, course in zip(before["curriculums"], result["curriculums"], result["courses"]):
             self.assertEqual(migrated.pop("course_ids"), [course["id"]])
+            self.assertFalse(migrated.pop("randomize_course_order"))
+            self.assertFalse(migrated.pop("randomize_concept_block_order"))
             self.assertEqual(original, migrated)
             self.assertEqual(course["concept_block_ids"], original["concept_block_ids"])
+
+    def test_preserves_explicit_order_flags(self):
+        self.source["curriculums"][0]["randomize_course_order"] = True
+        self.source["curriculums"][1]["randomize_concept_block_order"] = True
+        result = migrate_registry(self.source)
+        self.assertTrue(result["curriculums"][0]["randomize_course_order"])
+        self.assertFalse(result["curriculums"][0]["randomize_concept_block_order"])
+        self.assertFalse(result["curriculums"][1]["randomize_course_order"])
+        self.assertTrue(result["curriculums"][1]["randomize_concept_block_order"])
+        self.assertEqual(migrate_registry(result), result)
 
     def test_idempotent(self):
         result = migrate_registry(self.source)

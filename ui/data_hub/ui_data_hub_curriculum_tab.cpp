@@ -69,6 +69,15 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
     y += rowH + 6.0f;
 
+    const float orderToggleW = (fullW - gap) * 0.5f;
+    cbRandomizeCourseOrderToggle_->setPosition(x, y);
+    cbRandomizeCourseOrderToggle_->setSize(orderToggleW, rowH);
+    cbRandomizeCourseOrderToggle_->drawOverlay(renderer, position);
+    cbRandomizeConceptBlockOrderToggle_->setPosition(x + orderToggleW + gap, y);
+    cbRandomizeConceptBlockOrderToggle_->setSize(orderToggleW, rowH);
+    cbRandomizeConceptBlockOrderToggle_->drawOverlay(renderer, position);
+    y += rowH + 6.0f;
+
     cbCourseDropdown_->setPosition(x, y);
     cbCourseDropdown_->setSize(fullW * 0.45f, rowH);
     cbCourseDropdown_->drawOverlay(renderer, position);
@@ -1212,6 +1221,11 @@ void UIDataHubPanel::populateCBCurriculumDropdown() {
 }
 
 void UIDataHubPanel::syncCurriculumTrainingStageDropdown() {
+    const auto curr = datasetTarget_ ? datasetTarget_->getCurriculumById(activeCurriculumId_) : GRIM::Curriculum{};
+    if (cbRandomizeCourseOrderToggle_)
+        cbRandomizeCourseOrderToggle_->setState(curr.randomize_course_order);
+    if (cbRandomizeConceptBlockOrderToggle_)
+        cbRandomizeConceptBlockOrderToggle_->setState(curr.randomize_concept_block_order);
     if (!cbTrainingStageDropdown_) return;
 
     int selectedIdx = 0;

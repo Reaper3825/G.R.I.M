@@ -27,7 +27,7 @@ CurriculumMetadata LoadCurriculumMetadataFromRegistry(
 //   UniByte's tokenization entry point once per sequence.
 // - Structured execution compilation is intentionally stubbed until state
 //   atoms bind directly from AtomTable entries to execution slots.
-// - Optionally filtered by `curriculum_manifest.json` (concept_block_ids).
+// - Resolves curriculum_registry.json: curriculum course_ids -> courses -> concept_block_ids.
 //
 // Returns true on success. Throws on fatal errors (missing concept blocks).
 bool PrepareTrainingDataFromCache(const HyperParameters::TokenizerHP& tokenizer_hp);

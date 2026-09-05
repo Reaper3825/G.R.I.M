@@ -432,6 +432,8 @@ private:
     /// Toolbar filter-by-type dropdown ("All", "Q/A", "Chain of Thought", etc.).
     std::shared_ptr<UIDropdown>  cbTypeFilterDropdown_;
     std::shared_ptr<UIToggle>    cbCurriculumFilterToggle_;
+    std::shared_ptr<UIToggle>    cbRandomizeCourseOrderToggle_;
+    std::shared_ptr<UIToggle>    cbRandomizeConceptBlockOrderToggle_;
     std::shared_ptr<UIInputBox>  cbSearchInput_;
     std::shared_ptr<UIInputBox>  cbNameInput_;
     std::shared_ptr<UITextArea>  cbPromptArea_;

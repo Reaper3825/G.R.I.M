@@ -122,6 +122,36 @@ def default_output_path(start_line: int, end_line: int | None, mode: str) -> Pat
     return Path(__file__).resolve().parent / "logs" / f"tokenizer_sequence_length_rankings_{suffix_mode}_{start_line}_{suffix_end}.txt"
 
 
+def course_concept_ids(registry: dict[str, Any], curriculum: dict[str, Any]) -> set[str]:
+    course_ids = curriculum.get("course_ids")
+    courses = registry.get("courses")
+    if not isinstance(course_ids, list):
+        raise RuntimeError("curriculum is missing the course_ids array; migrate the registry first")
+    if not isinstance(courses, list):
+        raise RuntimeError("curriculum registry is missing the courses array")
+    by_id = {}
+    for course in courses:
+        course_id = course.get("id") if isinstance(course, dict) else None
+        if not isinstance(course_id, str) or not course_id or course_id in by_id:
+            raise RuntimeError("invalid or duplicate course ID")
+        by_id[course_id] = course
+    assigned = set()
+    blocks = set()
+    for course_id in course_ids:
+        if not isinstance(course_id, str) or not course_id or course_id in assigned:
+            raise RuntimeError("invalid or duplicate course assignment")
+        assigned.add(course_id)
+        if course_id not in by_id:
+            raise RuntimeError(f"missing course: {course_id}")
+        ids = by_id[course_id].get("concept_block_ids")
+        if not isinstance(ids, list) or any(not isinstance(x, str) or not x for x in ids):
+            raise RuntimeError(f"invalid concept_block_ids for course: {course_id}")
+        blocks.update(ids)
+    if not blocks:
+        raise RuntimeError("curriculum has no concept blocks in its assigned courses")
+    return blocks
+
+
 def load_curriculum_selection(registry_path: Path, curriculum_name: str | None) -> CurriculumSelection:
     if curriculum_name is None:
         return CurriculumSelection(
@@ -140,7 +170,7 @@ def load_curriculum_selection(registry_path: Path, curriculum_name: str | None) 
             continue
 
         format_as_concept = bool(cur.get("format_as_concept", True))
-        concept_ids = {x for x in cur.get("concept_block_ids", []) if isinstance(x, str)}
+        concept_ids = course_concept_ids(reg, cur)
         plaintext_ids = {x for x in cur.get("plaintext_block_ids", []) if isinstance(x, str)}
         if not format_as_concept:
             plaintext_ids |= concept_ids

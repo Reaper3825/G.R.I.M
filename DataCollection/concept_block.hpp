@@ -175,6 +175,8 @@ struct Curriculum {
     // Valid persisted values are: pt, sft, dpo, rlhf.
     std::string              training_stage = "sft";
     int64_t                  timestamp = 0;
+    bool                     randomize_course_order = false;
+    bool                     randomize_concept_block_order = false;
     bool                     format_as_concept = true;  // false = render curriculum rows as plain text
 
     bool containsBlock(const std::string& cb_id) const {
