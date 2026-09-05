@@ -90,6 +90,26 @@ long long trailingEpochNumber(const std::string& stem) {
     }
 }
 
+std::optional<GRIM::HyperParameters::TrainingStage> predecessorTrainingStage(
+    GRIM::HyperParameters::TrainingStage training_stage)
+{
+    using GRIM::HyperParameters::TrainingStage;
+    switch (training_stage) {
+        case TrainingStage::PT:
+            return std::nullopt;
+        case TrainingStage::SFT:
+            return TrainingStage::PT;
+        case TrainingStage::DPO:
+            return TrainingStage::SFT;
+        case TrainingStage::RLHF:
+            return TrainingStage::DPO;
+        case TrainingStage::UNSPECIFIED:
+            break;
+    }
+    throw std::runtime_error(
+        "predecessorTrainingStage: training stage is UNSPECIFIED");
+}
+
 // Ordered list of usable checkpoints in checkpoint_dir, "latest" first.
 // Ranking: most recent modification time, then highest parsed epoch number.
 // Partial atomic-write artifacts and optimizer sidecars are skipped by
@@ -191,13 +211,30 @@ std::vector<std::string> resolveCheckpointCandidates(
         auto candidates = rankedCheckpoints(
             checkpoint_hp.checkpoint_dir, checkpoint_hp.training_stage);
         if (candidates.empty()) {
+            const auto predecessor =
+                predecessorTrainingStage(checkpoint_hp.training_stage);
+            if (predecessor) {
+                candidates = rankedCheckpoints(
+                    checkpoint_hp.checkpoint_dir, *predecessor);
+                if (!candidates.empty()) {
+                    logger.log(
+                        "Checkpoint select=\"latest\": no " +
+                        std::string(GRIM::HyperParameters::trainingStageToString(
+                            checkpoint_hp.training_stage)) +
+                        " checkpoint exists; starting stage from latest " +
+                        GRIM::HyperParameters::trainingStageToString(*predecessor) +
+                        " checkpoint " + candidates.front());
+                }
+            }
+        }
+        if (candidates.empty()) {
             logger.log(
-                "Checkpoint select=\"latest\": no usable " +
-                std::string(GRIM::HyperParameters::trainingStageToString(
-                    checkpoint_hp.training_stage)) +
-                " checkpoint found in " + checkpoint_hp.checkpoint_dir);
+                "Checkpoint select=\"latest\": no current-stage or predecessor-stage "
+                "checkpoint found in " + checkpoint_hp.checkpoint_dir);
         } else {
-            logger.log("Checkpoint select=\"latest\": newest candidate is " + candidates.front());
+            logger.log(
+                "Checkpoint select=\"latest\": newest candidate is " +
+                candidates.front());
         }
         return candidates;
     }
