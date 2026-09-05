@@ -2759,18 +2759,24 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
 
     std::filesystem::create_directories("output");
     const std::string round_trip_path = "output/test_grmt_typed_atom_span.grmt";
+    auto second_source = valid;
+    second_source.concept_block_id = "cb_different_source_same_tokens";
     const auto save_report = TokenizerArtifacts::saveGrmtCorpus(
         round_trip_path,
-        std::vector<TokenizerArtifacts::GrmtSequence>{valid},
+        std::vector<TokenizerArtifacts::GrmtSequence>{valid, second_source},
         static_cast<std::uint32_t>(UNIGRAM_VOCAB_OFFSET));
-    ASSERT_EQ(save_report.written_sequences, 1u,
-              "Typed atom span fixture should persist as one GRMT row");
+    ASSERT_EQ(save_report.written_sequences, 2u,
+              "Source identity fixtures should persist as two GRMT rows");
     const auto round_trip = TokenizerArtifacts::loadGrmtCorpus(round_trip_path);
     std::filesystem::remove(round_trip_path);
     ASSERT_EQ(round_trip.header.version, GRIM::GRMT_FORMAT_VERSION,
               "Typed atom span fixture should use the current GRMT format");
-    ASSERT_EQ(round_trip.sequences.size(), static_cast<std::size_t>(1),
-              "Typed atom span fixture should load as one GRMT row");
+    ASSERT_EQ(round_trip.sequences.size(), static_cast<std::size_t>(2),
+              "Source identity fixtures should load as two GRMT rows");
+    ASSERT_TRUE(round_trip.sequences[1].concept_block_id == second_source.concept_block_id,
+                "Identical token rows must retain distinct source IDs");
+    ASSERT_TRUE(round_trip.sequences[1].token_ids == valid.token_ids,
+                "Source IDs must not alter token arrays");
     ASSERT_TRUE(round_trip.sequences[0].concept_block_id == valid.concept_block_id,
                 "Source concept block ID must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].token_ids == valid.token_ids,
@@ -2979,6 +2985,10 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                                const char* stage) {
         bool found_complete_span = false;
         for (const auto& window : windows) {
+            if (window.concept_block_id != "cb_test_source") {
+                message = std::string(stage) + " lost source concept block identity";
+                return false;
+            }
             if (window.token_ids.size() > max_seq_len) {
                 message = std::string(stage) + " emitted an overlong window";
                 return false;

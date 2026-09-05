@@ -898,7 +898,7 @@ bool PrepareTrainingDataFromCache(
 					assign_prompt_span(*seq, rendered, boundaries, token_counts);
 				}
 				seq->concept_block_id = cj.at("id").get<std::string>();
-			all_tokens.push_back(std::move(*seq));
+				all_tokens.push_back(std::move(*seq));
 				++raw_text_count;
 				continue;
 			}
