@@ -12,7 +12,8 @@
 
 namespace GRIM {
 
-// Current GRMT training tensor stream version.
+// Current GRMT training tensor stream version. Version 24 invalidates SFT
+// artifacts authored before answer-only target masking.
 //
 // v23 adds top-level ConceptBlock known/unknown token IDs and one invisible
 // logical token span per ordered entry. These collections remain independent
@@ -42,7 +43,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 23;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 24;
 
 } // namespace GRIM
 

@@ -175,10 +175,11 @@ struct CompiledStructuredExecutionPayload {
     bool execution_active = false;
     ExecutionGateTarget execution_gate_target = ExecutionGateTarget::UNSUPERVISED;
 
-    // Logical <prompt>...</prompt> span. Delimiters are metadata only and are
-    // never inserted into token_ids. Positions are row-relative and the start
-    // is derived as prompt_end_pos - prompt_length + 1. The gate reads the
-    // final token of the complete prompt.
+    // Functional prompt span. In SFT this includes every model-visible token
+    // before the answer, including goal/context fields. Positions are
+    // row-relative and the start is derived as
+    // prompt_end_pos - prompt_length + 1. The gate reads the final token of
+    // the complete functional prompt.
     int32_t prompt_end_pos = -1;
     int32_t prompt_length = 0;
 

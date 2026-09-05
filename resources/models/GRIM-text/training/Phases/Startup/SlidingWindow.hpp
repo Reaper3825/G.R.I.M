@@ -40,6 +40,7 @@ namespace GRIMText::Training {
 //   added_bos_out  - out: number of sequences that received a BOS
 //   added_eos_out  - out: number of sequences that received an EOS
 void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
+                          GRIM::HyperParameters::TrainingStage training_stage,
                           bool add_bos_token,
                           bool add_eos_token,
                           size_t& added_bos_out,
@@ -58,7 +59,8 @@ void filterOverlongSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>
 // targets. "Valid" means the target value is already authored as a real
 // token ID (>= 0) after windowing/boundary logic has run; callers must not
 // assume position 0 is always masked because BOS insertion is config-driven
-// and BOS→first-token supervision is valid when BOS is present.
+// and BOS-to-first-token supervision remains valid for PT. SFT masks BOS
+// because the first token belongs to the functional prompt.
 // applySlidingWindows calls this internally after windowing so callers
 // never see a sequence that would trigger "valid_tokens=0" downstream.
 // Disabled (no-op) when min_seq_valid_tokens <= 0.

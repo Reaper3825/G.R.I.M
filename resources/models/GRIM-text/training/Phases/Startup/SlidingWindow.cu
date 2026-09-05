@@ -408,8 +408,9 @@ SftWindowConstruction constructSftWindows(
                 "Sliding window (" + split_name + "): invalid prompt span");
         }
 
-        // Pin the entire prefix through prompt_end_pos. A configured BOS may
-        // precede the logical prompt span and remains part of this prefix.
+        // Pin the entire functional prompt through prompt_end_pos. For SFT,
+        // this is every model-visible token before the answer. A configured
+        // BOS may precede the authored span and remains part of this prefix.
         const size_t prefix_length =
             static_cast<size_t>(sequence.prompt_end_pos) + 1;
         if (prefix_length >= sequence_length) {
@@ -423,6 +424,18 @@ SftWindowConstruction constructSftWindows(
                 std::to_string(prefix_length) +
                 " leaves no response capacity within max_seq_len=" +
                 std::to_string(max_seq_len));
+        }
+        for (size_t target_position = 1;
+             target_position < prefix_length;
+             ++target_position) {
+            const size_t causal_row = target_position - 1;
+            if (sequence.targets[causal_row] != -1) {
+                throw std::runtime_error(
+                    "Sliding window (" + split_name +
+                    ", SFT): functional prompt token at position=" +
+                    std::to_string(target_position) +
+                    " has an LM target; only answer tokens may be supervised");
+            }
         }
 
         const size_t response_length = sequence_length - prefix_length;
@@ -577,6 +590,7 @@ SftWindowConstruction constructSftWindows(
 } // namespace
 
 void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
+                          GRIM::HyperParameters::TrainingStage training_stage,
                           bool add_bos_token,
                           bool add_eos_token,
                           size_t& added_bos_out,
@@ -598,9 +612,11 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
                 seq.token_local_atom_indices.begin(),
                 GRIM::Tokenizer::kLocalAtomIndexNone);
             seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
-            // BOS predicts the first real token. This is valid LM supervision;
-            // do not mask it away just because the input token is BOS.
-            seq.targets.insert(seq.targets.begin(), old_first_token);
+            const int bos_target =
+                training_stage == GRIM::HyperParameters::TrainingStage::SFT
+                    ? -1
+                    : old_first_token;
+            seq.targets.insert(seq.targets.begin(), bos_target);
             if (!seq.token_exec_slot_indices.empty())
                 seq.token_exec_slot_indices.insert(seq.token_exec_slot_indices.begin(), static_cast<int32_t>(-1));
             // BOS insertion shifted all existing token positions right by 1.
@@ -651,7 +667,13 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
     // train/val pass reports its own boundary-injection count.
     size_t added_bos = 0;
     size_t added_eos = 0;
-    injectBoundaryTokens(sequences, add_bos_token, add_eos_token, added_bos, added_eos);
+    injectBoundaryTokens(
+        sequences,
+        training_stage,
+        add_bos_token,
+        add_eos_token,
+        added_bos,
+        added_eos);
     if (added_bos > 0 || added_eos > 0) {
         logger.log("[Data] Boundary tokens (" + split_name + "): added_bos=" +
                    std::to_string(added_bos) + " added_eos=" + std::to_string(added_eos));

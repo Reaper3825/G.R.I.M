@@ -45,6 +45,8 @@ struct RenderResult {
     // neither collection has an outer span.
     std::vector<LogicalByteSpan> knowns;
     std::vector<LogicalByteSpan> unknowns;
+    // The only model-visible response field supervised during SFT.
+    LogicalByteSpan answer;
     // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
     // and are never emitted into model-visible text.
     size_t prompt_byte_begin = 0;
@@ -213,7 +215,8 @@ inline RenderResult render(const nlohmann::json& j) {
     // result exists. This is required for NOOP-supervised Q/A blocks.
     if (j.contains("answer") && j["answer"].is_string()
         && !j["answer"].get<std::string>().empty()) {
-        out << j["answer"].get<std::string>() << "\n";
+        appendLogicalSpan(
+            out, j["answer"].get<std::string>(), result.answer);
     }
 
     result.text = out.str();
@@ -248,7 +251,8 @@ inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
     }
     if (j.contains("answer") && j["answer"].is_string()
         && !j["answer"].get<std::string>().empty()) {
-        out << j["answer"].get<std::string>() << "\n";
+        appendLogicalSpan(
+            out, j["answer"].get<std::string>(), result.answer);
     }
     result.text = out.str();
     return result;

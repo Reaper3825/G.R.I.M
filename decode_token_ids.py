@@ -14,7 +14,7 @@ serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + numeric + atoms + learned pieces.
 
-Current training_data.grmt format is GRMT v23. Rows persist atom side channels,
+Current training_data.grmt format is GRMT v24. Rows persist atom side channels,
 per-sequence AtomTable and sequence-local atom data, row-level Goal metadata,
 top-level ConceptBlock known/unknown spans, opaque slot/transition lowering
 tables, and variable-arity transition invocations. This script reads the full
@@ -75,7 +75,7 @@ UNIGRAM_TOKEN_START = ATOM_TOKEN_END
 KTMG_VOCAB_VERSION = 6
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 23
+GRMT_FORMAT_VERSION = 24
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
@@ -521,7 +521,7 @@ def read_goal_metadata(
 def iter_grmt_sequences(path: Path):
     """Yield decoded GRMT rows using the current persisted row layout.
 
-    GRMT v23 per-sequence layout (must read ALL fields to stay in sync):
+    GRMT v24 per-sequence layout (must read ALL fields to stay in sync):
       uint32         seq_len
       int32[seq_len] token_ids
       int32[seq_len] targets

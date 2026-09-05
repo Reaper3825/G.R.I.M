@@ -168,6 +168,7 @@ AtomTable safety contracts:
 
 ## Training data
 - HTML must be stripped before tokenization. `DataLoader.cu` handles `stripHtmlTags()` / `decodeHtmlEntities()` / `normalizeWhitespace()` automatically.
+- SFT supervision is answer-only. The canonical renderer authors an explicit answer span, and `DataLoader.cu` masks every causal target outside that span before GRMT serialization. Every model-visible token before the answer is functionally part of the pinned prompt, including knowns, unknowns, target state, success criteria/evidence, constraints, explanations/intermediates, and separators; the renderer does not emit literal prompt tags. The final answer token may predict EOS after boundary insertion.
 - `DataLoader.cu` tokenizes raw content only. It must not add `BOS`/`EOS`; Phase 1 startup routes sequences through `SlidingWindow.cu` for that layout work.
 - `UniByte` intentionally exposes per-text encode paths only. Do not reintroduce `encodeBatch()` / vector-of-vector tokenization; corpus batching, `BOS`/`EOS`, and sequence windows belong to the `DataLoader.cu` → `SlidingWindow.cu` startup path.
 - Minimum text-length gating is config-owned: `training.config.tokenizer_min_cleaned_text_length` is loaded into `TrainingHyperparameters`, sliced directly through `TokenizerHP`, and consumed by `DataLoader.cu` before GRMT encoding. Do not hard-code this threshold in the loader.

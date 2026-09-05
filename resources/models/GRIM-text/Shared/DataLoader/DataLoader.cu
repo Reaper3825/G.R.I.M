@@ -540,6 +540,7 @@ bool PrepareTrainingDataFromCache(
 		for (const auto& unknown : rendered.unknowns) {
 			add_span(unknown);
 		}
+		add_span(rendered.answer);
 		if (rendered.prompt_byte_end > rendered.prompt_byte_begin) {
 			boundaries.push_back(rendered.prompt_byte_begin);
 			boundaries.push_back(rendered.prompt_byte_end);
@@ -627,6 +628,36 @@ bool PrepareTrainingDataFromCache(
 		return std::vector<std::int32_t>(
 			sequence.token_ids.begin() + span.begin,
 			sequence.token_ids.begin() + span.end);
+	};
+
+	auto apply_sft_answer_contract = [&token_span](
+		TokenizedSequence& sequence,
+		const GRIM::ConceptCanonical::RenderResult& rendered,
+		const std::vector<size_t>& boundaries,
+		const std::vector<size_t>& token_counts) {
+		const GRIM::GoalTokenSpan answer_span = token_span(
+			rendered.answer, boundaries, token_counts, "answer");
+		if (rendered.prompt_byte_end <= rendered.prompt_byte_begin) {
+			throw std::runtime_error(
+				"[DataLoader] SFT row requires a non-empty authored prompt");
+		}
+		if (answer_span.begin <= 0) {
+			throw std::runtime_error(
+				"[DataLoader] SFT answer must follow a non-empty functional prompt");
+		}
+
+		// SFT prompt geometry is functional, not a literal <prompt> span: every
+		// model-visible token before the answer is pinned context. This includes
+		// knowns, unknowns, goal decomposition, and explanation/intermediates.
+		sequence.prompt_length = answer_span.begin;
+		sequence.prompt_end_pos = answer_span.begin - 1;
+		for (size_t row = 0; row + 1 < sequence.targets.size(); ++row) {
+			const size_t target_position = row + 1;
+			if (target_position < static_cast<size_t>(answer_span.begin) ||
+			    target_position >= static_cast<size_t>(answer_span.end)) {
+				sequence.targets[row] = -1;
+			}
+		}
 	};
 
 	auto materialize_goal = [&token_span, &span_token_ids](
@@ -830,7 +861,12 @@ bool PrepareTrainingDataFromCache(
 				if (!seq) { ++selected_entries_skipped; continue; }
 				seq->execution_active = false;
 				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-				assign_prompt_span(*seq, rendered, boundaries, token_counts);
+				if (curriculum_metadata.training_stage == "sft") {
+					apply_sft_answer_contract(
+						*seq, rendered, boundaries, token_counts);
+				} else {
+					assign_prompt_span(*seq, rendered, boundaries, token_counts);
+				}
 				all_tokens.push_back(std::move(*seq));
 				++raw_text_count;
 				continue;
@@ -854,7 +890,12 @@ bool PrepareTrainingDataFromCache(
 			seq->execution_active = false;
 			seq->execution_gate_target =
 				GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-			assign_prompt_span(*seq, rendered, boundaries, token_counts);
+			if (curriculum_metadata.training_stage == "sft") {
+				apply_sft_answer_contract(
+					*seq, rendered, boundaries, token_counts);
+			} else {
+				assign_prompt_span(*seq, rendered, boundaries, token_counts);
+			}
 			seq->concept_block_spans = materialize_concept_block_spans(
 				cj, rendered, boundaries, token_counts, *seq);
 			seq->goal = materialize_goal(

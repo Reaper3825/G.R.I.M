@@ -44,6 +44,9 @@ struct GrmtSequence {
     bool execution_active = false;
     GRIM::Execution::ExecutionGateTarget execution_gate_target =
         GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
+    // Functional prompt geometry. In SFT this spans every token before the
+    // answer, including model-visible goal/context fields; it is not limited
+    // to the canonical renderer's literal <prompt> byte span.
     std::int32_t prompt_end_pos = -1;
     std::int32_t prompt_length = 0;
     std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
