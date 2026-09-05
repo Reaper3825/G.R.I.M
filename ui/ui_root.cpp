@@ -152,6 +152,13 @@ void UIRoot::update(const InputState& input, float dt)
     }
 }
 
+void UIRoot::updateOverlayInteraction(const InputState& input)
+{
+    const bool overUI = shouldReceiveInputAtCached(input.mousePos.x, input.mousePos.y) ||
+                        isAnyPanelDraggingCached();
+    PlatformWindow::setOverlayClickThrough(m_hwnd, !overUI);
+}
+
 void UIRoot::draw()
 {
     if (m_drawGuard.test_and_set(std::memory_order_acquire)) {

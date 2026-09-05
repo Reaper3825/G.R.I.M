@@ -29,6 +29,7 @@ public:
     void shutdown();
 
     void update(const InputState& input, float dt);
+    void updateOverlayInteraction(const InputState& input);
     void draw();
 
     void addPanel(const std::shared_ptr<UIPanel>& panel);

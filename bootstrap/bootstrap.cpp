@@ -249,7 +249,7 @@ static void EnsurePhysicalVisionModelsAvailable(GRIM::MMO::ModelRegistry& regist
 // ================================================================
 // Phase 1: Config and static data bootstrap
 // ================================================================
-static void bootstrapConfigAndStatics(int argc, char** argv) {
+static void bootstrapConfigAndStatics() {
     beginPhaseGroup();
     bootstrap_config::initAll();
     endPhaseGroup();
@@ -260,14 +260,6 @@ static void bootstrapConfigAndStatics(int argc, char** argv) {
     endPhaseGroup();
     LOG_PHASE("Aliases bootstrap finished", true);
 
-    std::string fontPath = findAnyFontInResources(argc, argv);
-    if (!fontPath.empty()) {
-        LOG_PHASE("Font search", true);
-        LOG_DEBUG("Config", "Font found: " + fontPath);
-    } else {
-        LOG_ERROR("Config", "No system font found, UI may render incorrectly");
-        LOG_PHASE("Font search", false);
-    }
 }
 
 // ================================================================
@@ -952,7 +944,9 @@ static void bootstrapWarmup() {
 // Public entry point — orchestrates all phases
 // ================================================================
 void runBootstrapChecks(int argc, char** argv) {
-    bootstrapConfigAndStatics(argc, argv);     // Phase 1: config, aliases, fonts
+    (void)argc;
+    (void)argv;
+    bootstrapConfigAndStatics();               // Phase 1: config and aliases
     bootstrapHardwareAndResources();            // Phase 2: inventory, signal, coordinator
     bootstrapSubsystems();                      // Phase 3: voice, RL, server
     bootstrapMMOLayer();                        // Phase 4: registry, loader, orchestrator, tools, policy

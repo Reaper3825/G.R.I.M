@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <string>
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/ResourceSignal.hpp"
@@ -13,8 +14,31 @@
 #include "../MMO/Core/ActionPolicyRegistry.hpp"
 #include "../MMO/UI/UISurfaceRegistry.hpp"
 
+struct GRIMWindow;
+
+namespace GRIM {
+class DeviceCommServer;
+class WebSocketServer;
+namespace GeoSpatial {
+class GeoSpatialRuntime;
+}
+}
+
 // Run startup checks and initialize GRIM environment
 void runBootstrapChecks(int argc, char** argv);
+
+std::unique_ptr<GRIM::DeviceCommServer> bootstrapNetworkServices(
+	GRIM::WebSocketServer& webSocketServer);
+
+struct UIBootstrapResult {
+	GRIMWindow& overlayWindow;
+	std::shared_ptr<GRIM::GeoSpatial::GeoSpatialRuntime> geoSpatialRuntime;
+};
+
+UIBootstrapResult bootstrapUI(
+	GRIM::DeviceCommServer& deviceCommServer,
+	int argc,
+	char** argv);
 
 // Stop MMO idle-tick background thread (call during shutdown)
 void stopMMOIdleTick();
