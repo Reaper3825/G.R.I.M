@@ -29,7 +29,19 @@ int main() {
     assert(value(rendered.constraints[0]) == "Use liters");
     assert(value(rendered.constraints[1]) == "Do not invent values");
     assert(value(rendered.answer) == "used = 36");
-    for (const std::string tag : {"knowns", "unknowns", "target_state", "criteria", "criterion", "evidence", "constraints"}) {
+    // Both collections expose one outer span containing their ordered entries.
+    // Containment, not coincidence: the outer span brackets the entry labels.
+    assert(rendered.criteria.present && rendered.constraints_span.present);
+    assert(rendered.criteria.begin <= rendered.success_criteria[0].criterion.begin);
+    assert(rendered.criteria.end >= rendered.success_criteria[1].criterion.end);
+    assert(rendered.constraints_span.begin <= rendered.constraints[0].begin);
+    assert(rendered.constraints_span.end >= rendered.constraints[1].end);
+    // One <constraints> wrapper, one <constraint> per entry.
+    assert(rendered.text.find("<constraints>") ==
+           rendered.text.rfind("<constraints>"));
+    assert(rendered.text.find("<constraint>") !=
+           rendered.text.rfind("<constraint>"));
+    for (const std::string tag : {"knowns", "unknowns", "target_state", "criteria", "criterion", "evidence", "constraints", "constraint"}) {
         const auto open = rendered.text.find("<" + tag + ">");
         const auto close = rendered.text.find("</" + tag + ">");
         assert(open != std::string::npos && close > open && close < rendered.answer.begin);

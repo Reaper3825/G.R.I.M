@@ -3,34 +3,20 @@
 // Every orchestrator call receives a RequestContext.  It binds:
 //   request_id, session_id, turn_id   — envelope correlation
 //   deadline                          — absolute timeout
-//   session-scoped history handle     — for memory/context queries
 //
 // This is a lightweight value type, NOT a managed session.
-// Session lifecycle is owned by the caller (context_manager /
-// body main loop); the orchestrator only borrows this context
-// for the duration of a single generate() call.
+// Session lifecycle and conversation/turn history are owned by
+// GRIM::MMO::SessionContextManager; the orchestrator only borrows
+// this context for the duration of a single generate() call and
+// queries SessionContextManager directly for history.
 //======================================================//
 #pragma once
 
 #include <chrono>
 #include <cstdint>
 #include <string>
-#include <vector>
 
 namespace GRIM::MMO {
-
-// =========================================================
-// TurnSummary — minimal record of a single conversation turn
-// used when building router metadata.  The full TurnRecord
-// lives in the session context authority; this is a read-only
-// projection for cross-boundary transfer.
-// =========================================================
-struct TurnSummary {
-    std::string turn_id;
-    std::string role;       // "user" | "assistant" | "system"
-    std::string text;       // truncated if needed
-    int         token_count = 0;
-};
 
 // =========================================================
 // RequestContext — immutable per-request snapshot
@@ -56,11 +42,6 @@ struct RequestContext {
     // If empty (default), the orchestrator uses per-step
     // timeouts from OrchestratorConfig.
     std::chrono::steady_clock::time_point deadline{};
-
-    // ── Session-scoped history ──
-    // Recent turns for context window.  Populated by the caller
-    // from ContextManager / session authority.
-    std::vector<TurnSummary> recent_turns;
 
     // ── Tool-surface fingerprint ──
     // Registry version at the time the request was constructed.

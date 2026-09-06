@@ -2,15 +2,15 @@
   "memories": [
     {
       "comm_type": "unknown",
-      "confidence": 0.9033151865005493,
+      "confidence": 0.869837760925293,
       "context": "conversation",
       "domain": "base",
-      "id": 7839645297171050720,
-      "importance": 0.9033151865005493,
+      "id": 11104590477689104166,
+      "importance": 0.869837760925293,
       "modality": "vision",
-      "normalized": "person#1 labelled [\"a\", \"1\"]",
-      "parent_id": 4782712853066859193,
-      "raw": "person#1 labelled [\"a\", \"1\"]",
+      "normalized": "person#47 labelled [\"mazine\"]",
+      "parent_id": 9862574768647179767,
+      "raw": "person#47 labelled [\"mazine\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -18,9 +18,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:1"
+        "object:47"
       ],
-      "timestamp": 1777828246,
+      "timestamp": 1786391993,
       "type": "string"
     },
     {
@@ -45,15 +45,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.869837760925293,
+      "confidence": 0.9033151865005493,
       "context": "conversation",
       "domain": "base",
-      "id": 11104590477689104166,
-      "importance": 0.869837760925293,
+      "id": 7839645297171050720,
+      "importance": 0.9033151865005493,
       "modality": "vision",
-      "normalized": "person#47 labelled [\"mazine\"]",
-      "parent_id": 9862574768647179767,
-      "raw": "person#47 labelled [\"mazine\"]",
+      "normalized": "person#1 labelled [\"a\", \"1\"]",
+      "parent_id": 4782712853066859193,
+      "raw": "person#1 labelled [\"a\", \"1\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -61,32 +61,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:47"
+        "object:1"
       ],
-      "timestamp": 1786391993,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.8688662648200989,
-      "context": "conversation",
-      "domain": "base",
-      "id": 6117601512482540215,
-      "importance": 0.8688662648200989,
-      "modality": "vision",
-      "normalized": "person#57 labelled [\"te\"]",
-      "parent_id": 10189786817762091635,
-      "raw": "person#57 labelled [\"te\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:57"
-      ],
-      "timestamp": 1777064848,
+      "timestamp": 1777828246,
       "type": "string"
     },
     {
@@ -110,6 +87,29 @@
         "object:1"
       ],
       "timestamp": 1784319702,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8688662648200989,
+      "context": "conversation",
+      "domain": "base",
+      "id": 6117601512482540215,
+      "importance": 0.8688662648200989,
+      "modality": "vision",
+      "normalized": "person#57 labelled [\"te\"]",
+      "parent_id": 10189786817762091635,
+      "raw": "person#57 labelled [\"te\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:57"
+      ],
+      "timestamp": 1777064848,
       "type": "string"
     },
     {
@@ -180,52 +180,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8658778667449951,
-      "context": "conversation",
-      "domain": "base",
-      "id": 2506398725631676341,
-      "importance": 0.8658778667449951,
-      "modality": "vision",
-      "normalized": "person#2 labelled [\"c\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"c\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:2"
-      ],
-      "timestamp": 1786391151,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.7455009818077087,
-      "context": "conversation",
-      "domain": "base",
-      "id": 11436666827500279432,
-      "importance": 0.7455009818077087,
-      "modality": "vision",
-      "normalized": "person#8 labelled [\"a\"]",
-      "parent_id": 5732563858019944405,
-      "raw": "person#8 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:8"
-      ],
-      "timestamp": 1777064726,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8599094152450562,
       "context": "conversation",
       "domain": "base",
@@ -272,25 +226,48 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.800000011920929,
+      "confidence": 0.8658778667449951,
       "context": "conversation",
       "domain": "base",
-      "id": 16345830255049333101,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
+      "id": 2506398725631676341,
+      "importance": 0.8658778667449951,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"c\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"c\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "visual-context",
-        "screen-capture",
-        "IDE/Code Editor",
-        "Code.exe",
-        "monitor-3"
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
       ],
-      "timestamp": 1772909252,
+      "timestamp": 1786391151,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.7455009818077087,
+      "context": "conversation",
+      "domain": "base",
+      "id": 11436666827500279432,
+      "importance": 0.7455009818077087,
+      "modality": "vision",
+      "normalized": "person#8 labelled [\"a\"]",
+      "parent_id": 5732563858019944405,
+      "raw": "person#8 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:8"
+      ],
+      "timestamp": 1777064726,
       "type": "string"
     },
     {
@@ -321,22 +298,22 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 2645216943489785093,
+      "id": 16345830255049333101,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3330 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3330 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
         "visual-context",
         "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
+        "IDE/Code Editor",
+        "Code.exe",
+        "monitor-3"
       ],
-      "timestamp": 1773423146,
+      "timestamp": 1772909252,
       "type": "string"
     },
     {
@@ -387,25 +364,25 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.9129199385643005,
+      "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 12890574890385732766,
-      "importance": 0.9129199385643005,
-      "modality": "vision",
-      "normalized": "bottle#35 labelled [\"peps\"]",
-      "parent_id": 15014588640686583279,
-      "raw": "bottle#35 labelled [\"peps\"]",
+      "id": 2645216943489785093,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3330 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3330 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:bottle",
-        "object:35"
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
       ],
-      "timestamp": 1777064695,
+      "timestamp": 1773423146,
       "type": "string"
     },
     {
@@ -429,6 +406,29 @@
         "object:8"
       ],
       "timestamp": 1777064724,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.9129199385643005,
+      "context": "conversation",
+      "domain": "base",
+      "id": 12890574890385732766,
+      "importance": 0.9129199385643005,
+      "modality": "vision",
+      "normalized": "bottle#35 labelled [\"peps\"]",
+      "parent_id": 15014588640686583279,
+      "raw": "bottle#35 labelled [\"peps\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:bottle",
+        "object:35"
+      ],
+      "timestamp": 1777064695,
       "type": "string"
     },
     {
@@ -594,6 +594,29 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.9034433364868164,
+      "context": "conversation",
+      "domain": "base",
+      "id": 5556815651642646343,
+      "importance": 0.9034433364868164,
+      "modality": "vision",
+      "normalized": "bottle#35 labelled [\"pepi\"]",
+      "parent_id": 15014588640686583279,
+      "raw": "bottle#35 labelled [\"pepi\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:bottle",
+        "object:35"
+      ],
+      "timestamp": 1777064693,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
@@ -617,15 +640,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.9034433364868164,
+      "confidence": 0.9237396717071533,
       "context": "conversation",
       "domain": "base",
-      "id": 5556815651642646343,
-      "importance": 0.9034433364868164,
+      "id": 10094518973207840937,
+      "importance": 0.9237396717071533,
       "modality": "vision",
-      "normalized": "bottle#35 labelled [\"pepi\"]",
+      "normalized": "bottle#35 labelled [\"peps\"]",
       "parent_id": 15014588640686583279,
-      "raw": "bottle#35 labelled [\"pepi\"]",
+      "raw": "bottle#35 labelled [\"peps\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -635,7 +658,7 @@
         "class:bottle",
         "object:35"
       ],
-      "timestamp": 1777064693,
+      "timestamp": 1777064674,
       "type": "string"
     },
     {
@@ -686,29 +709,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.9237396717071533,
-      "context": "conversation",
-      "domain": "base",
-      "id": 10094518973207840937,
-      "importance": 0.9237396717071533,
-      "modality": "vision",
-      "normalized": "bottle#35 labelled [\"peps\"]",
-      "parent_id": 15014588640686583279,
-      "raw": "bottle#35 labelled [\"peps\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:bottle",
-        "object:35"
-      ],
-      "timestamp": 1777064674,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8404718637466431,
       "context": "conversation",
       "domain": "base",
@@ -752,29 +752,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.901189386844635,
-      "context": "conversation",
-      "domain": "base",
-      "id": 6069853679479786516,
-      "importance": 0.901189386844635,
-      "modality": "vision",
-      "normalized": "person#8 labelled [\"taay\", \"i\"]",
-      "parent_id": 5732563858019944405,
-      "raw": "person#8 labelled [\"taay\", \"i\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:8"
-      ],
-      "timestamp": 1777064607,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.9033726453781128,
       "context": "conversation",
       "domain": "base",
@@ -794,6 +771,29 @@
         "object:8"
       ],
       "timestamp": 1777064643,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.901189386844635,
+      "context": "conversation",
+      "domain": "base",
+      "id": 6069853679479786516,
+      "importance": 0.901189386844635,
+      "modality": "vision",
+      "normalized": "person#8 labelled [\"taay\", \"i\"]",
+      "parent_id": 5732563858019944405,
+      "raw": "person#8 labelled [\"taay\", \"i\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:8"
+      ],
+      "timestamp": 1777064607,
       "type": "string"
     },
     {
@@ -909,15 +909,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8947693705558777,
+      "confidence": 0.8964318633079529,
       "context": "conversation",
       "domain": "base",
-      "id": 8432205278902197902,
-      "importance": 0.8947693705558777,
+      "id": 2318702773104843998,
+      "importance": 0.8964318633079529,
       "modality": "vision",
-      "normalized": "person#8 labelled [\"aaay\", \"i\"]",
+      "normalized": "person#8 labelled [\"nuy\", \"a\"]",
       "parent_id": 5732563858019944405,
-      "raw": "person#8 labelled [\"aaay\", \"i\"]",
+      "raw": "person#8 labelled [\"nuy\", \"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -927,7 +927,7 @@
         "class:person",
         "object:8"
       ],
-      "timestamp": 1777064605,
+      "timestamp": 1777064608,
       "type": "string"
     },
     {
@@ -955,15 +955,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8964318633079529,
+      "confidence": 0.8947693705558777,
       "context": "conversation",
       "domain": "base",
-      "id": 2318702773104843998,
-      "importance": 0.8964318633079529,
+      "id": 8432205278902197902,
+      "importance": 0.8947693705558777,
       "modality": "vision",
-      "normalized": "person#8 labelled [\"nuy\", \"a\"]",
+      "normalized": "person#8 labelled [\"aaay\", \"i\"]",
       "parent_id": 5732563858019944405,
-      "raw": "person#8 labelled [\"nuy\", \"a\"]",
+      "raw": "person#8 labelled [\"aaay\", \"i\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -973,7 +973,7 @@
         "class:person",
         "object:8"
       ],
-      "timestamp": 1777064608,
+      "timestamp": 1777064605,
       "type": "string"
     },
     {
@@ -1040,6 +1040,29 @@
         "session"
       ],
       "timestamp": 1773348525,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8723759651184082,
+      "context": "conversation",
+      "domain": "base",
+      "id": 7825535909427755644,
+      "importance": 0.8723759651184082,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 7225202196510746112,
+      "raw": "person#1 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777064507,
       "type": "string"
     },
     {
@@ -1113,29 +1136,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8723759651184082,
-      "context": "conversation",
-      "domain": "base",
-      "id": 7825535909427755644,
-      "importance": 0.8723759651184082,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\"]",
-      "parent_id": 7225202196510746112,
-      "raw": "person#1 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1777064507,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8987362384796143,
       "context": "conversation",
       "domain": "base",
@@ -1162,12 +1162,12 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 6445319161544451530,
+      "id": 16071170330847233607,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3336 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3336 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1177,7 +1177,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773779870,
+      "timestamp": 1773425979,
       "type": "string"
     },
     {
@@ -1208,12 +1208,12 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 16071170330847233607,
+      "id": 6445319161544451530,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3336 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3336 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1223,20 +1223,43 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773425979,
+      "timestamp": 1773779870,
       "type": "string"
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8510878086090088,
+      "confidence": 0.6700126528739929,
       "context": "conversation",
       "domain": "base",
-      "id": 16579616619757918936,
-      "importance": 0.8510878086090088,
+      "id": 8062961671728838957,
+      "importance": 0.6700126528739929,
       "modality": "vision",
-      "normalized": "person#1 labelled [\"to\", \"to\", \"a\"]",
-      "parent_id": 57277452335961420,
-      "raw": "person#1 labelled [\"to\", \"to\", \"a\"]",
+      "normalized": "suitcase#72 labelled [\"sa\"]",
+      "parent_id": 300134260988907218,
+      "raw": "suitcase#72 labelled [\"sa\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:suitcase",
+        "object:72"
+      ],
+      "timestamp": 1786392097,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.9095937013626099,
+      "context": "conversation",
+      "domain": "base",
+      "id": 10058401456237581882,
+      "importance": 0.9095937013626099,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"f\"]",
+      "parent_id": 7225202196510746112,
+      "raw": "person#1 labelled [\"f\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1246,30 +1269,7 @@
         "class:person",
         "object:1"
       ],
-      "timestamp": 1784319727,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 1008915329494292195,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n[2026-93-16 19:47:32]\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n20... (3991 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n[2026-93-16 19:47:32]\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n20... (3991 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1773704907,
+      "timestamp": 1777064479,
       "type": "string"
     },
     {
@@ -1320,38 +1320,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.6700126528739929,
+      "confidence": 0.8510878086090088,
       "context": "conversation",
       "domain": "base",
-      "id": 8062961671728838957,
-      "importance": 0.6700126528739929,
+      "id": 16579616619757918936,
+      "importance": 0.8510878086090088,
       "modality": "vision",
-      "normalized": "suitcase#72 labelled [\"sa\"]",
-      "parent_id": 300134260988907218,
-      "raw": "suitcase#72 labelled [\"sa\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:suitcase",
-        "object:72"
-      ],
-      "timestamp": 1786392097,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.9095937013626099,
-      "context": "conversation",
-      "domain": "base",
-      "id": 10058401456237581882,
-      "importance": 0.9095937013626099,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"f\"]",
-      "parent_id": 7225202196510746112,
-      "raw": "person#1 labelled [\"f\"]",
+      "normalized": "person#1 labelled [\"to\", \"to\", \"a\"]",
+      "parent_id": 57277452335961420,
+      "raw": "person#1 labelled [\"to\", \"to\", \"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1361,7 +1338,30 @@
         "class:person",
         "object:1"
       ],
-      "timestamp": 1777064479,
+      "timestamp": 1784319727,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
+      "id": 1008915329494292195,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n[2026-93-16 19:47:32]\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n20... (3991 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n[2026-93-16 19:47:32]\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n2026-03-16 19:47:32\n20... (3991 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773704907,
       "type": "string"
     },
     {
@@ -1458,29 +1458,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8636202216148376,
-      "context": "conversation",
-      "domain": "base",
-      "id": 10035739742622839629,
-      "importance": 0.8636202216148376,
-      "modality": "vision",
-      "normalized": "person#8 labelled [\"a\"]",
-      "parent_id": 5732563858019944405,
-      "raw": "person#8 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:8"
-      ],
-      "timestamp": 1777064614,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.9060659408569336,
       "context": "conversation",
       "domain": "base",
@@ -1500,6 +1477,29 @@
         "object:1"
       ],
       "timestamp": 1777064470,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8636202216148376,
+      "context": "conversation",
+      "domain": "base",
+      "id": 10035739742622839629,
+      "importance": 0.8636202216148376,
+      "modality": "vision",
+      "normalized": "person#8 labelled [\"a\"]",
+      "parent_id": 5732563858019944405,
+      "raw": "person#8 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:8"
+      ],
+      "timestamp": 1777064614,
       "type": "string"
     },
     {
@@ -1547,29 +1547,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.9104011058807373,
-      "context": "conversation",
-      "domain": "base",
-      "id": 3700461272100725561,
-      "importance": 0.9104011058807373,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\", \"o\"]",
-      "parent_id": 9570062928167028331,
-      "raw": "person#1 labelled [\"a\", \"o\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1777831122,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
@@ -1589,6 +1566,29 @@
         "monitor-1"
       ],
       "timestamp": 1773781071,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.9104011058807373,
+      "context": "conversation",
+      "domain": "base",
+      "id": 3700461272100725561,
+      "importance": 0.9104011058807373,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\", \"o\"]",
+      "parent_id": 9570062928167028331,
+      "raw": "person#1 labelled [\"a\", \"o\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777831122,
       "type": "string"
     },
     {
@@ -1728,29 +1728,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 14255766333883090755,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3338 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3338 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1773427783,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8650244474411011,
       "context": "conversation",
       "domain": "base",
@@ -1770,6 +1747,29 @@
         "object:1"
       ],
       "timestamp": 1784319329,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
+      "id": 14255766333883090755,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3338 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator Windows Pom X= = + Y\n\ntraining_data: D:/G.R.I.M\\resources/models/GRIM-text/training/data/training_data.grmt\n\ncheckpoints: D:/G.R.I.M\\resources/models/GRIM-text/checkpoints\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.I.M\\resources/models/GRIM-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/Logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training/training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\re... (3338 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773427783,
       "type": "string"
     },
     {
@@ -1797,15 +1797,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8685688972473145,
+      "confidence": 0.900757372379303,
       "context": "conversation",
       "domain": "base",
-      "id": 10906009248683639066,
-      "importance": 0.8685688972473145,
+      "id": 11508730769602349783,
+      "importance": 0.900757372379303,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"a\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"a\"]",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 7225202196510746112,
+      "raw": "person#1 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1813,9 +1813,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:2"
+        "object:1"
       ],
-      "timestamp": 1786391223,
+      "timestamp": 1777064469,
       "type": "string"
     },
     {
@@ -1840,15 +1840,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.900757372379303,
+      "confidence": 0.8685688972473145,
       "context": "conversation",
       "domain": "base",
-      "id": 11508730769602349783,
-      "importance": 0.900757372379303,
+      "id": 10906009248683639066,
+      "importance": 0.8685688972473145,
       "modality": "vision",
-      "normalized": "person#1 labelled [\"a\"]",
-      "parent_id": 7225202196510746112,
-      "raw": "person#1 labelled [\"a\"]",
+      "normalized": "person#2 labelled [\"a\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1856,9 +1856,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:1"
+        "object:2"
       ],
-      "timestamp": 1777064469,
+      "timestamp": 1786391223,
       "type": "string"
     },
     {
@@ -1866,12 +1866,12 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 18377090759358606338,
+      "id": 7470247515122062315,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\nes)\n\nDivi:\n\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n\n7... (3065 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3211 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\nes)\n\nDivi:\n\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n\n7... (3065 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3211 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1881,7 +1881,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773094988,
+      "timestamp": 1773781923,
       "type": "string"
     },
     {
@@ -1912,12 +1912,12 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 7470247515122062315,
+      "id": 18377090759358606338,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3211 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\nes)\n\nDivi:\n\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n\n7... (3065 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3211 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pom X\n\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\n[2026-03-09\nes)\n\nDivi:\n\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n18\n\n7... (3065 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -1927,7 +1927,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773781923,
+      "timestamp": 1773094988,
       "type": "string"
     },
     {
@@ -1998,25 +1998,25 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8823373317718506,
+      "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 12359618094466573884,
-      "importance": 0.8823373317718506,
-      "modality": "vision",
-      "normalized": "person#2 labelled [\"a\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"a\"]",
+      "id": 3455066776217882529,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } ri) Ga gs rs min nn xr in | rscim mie wi | sew mie ie | ROA,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nGrimblend1 cache fluid,\n\nistrator: Windows Pow X = + - a x\n\n[2026-03-07 14:\n[2026-03-07 14\n\n[2026-03-07 14\n| Pt [2026-e3-07 14\n< am [2026-03-07 14\n\n26:\n26\n26\n26\n26\n\n52) [DEBUG] [UITrainingPanel] Loaded paths from ai_config. json\n\n52) [DEBUG] [UIGraph] Created graph: System Resources of type 4\n\n52) [DEBUG] [Resourcettonitor] Initializing resource monitor...\n\n52) [DEBUG] [Resou... (3562 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } ri) Ga gs rs min nn xr in | rscim mie wi | sew mie ie | ROA,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nGrimblend1 cache fluid,\n\nistrator: Windows Pow X = + - a x\n\n[2026-03-07 14:\n[2026-03-07 14\n\n[2026-03-07 14\n| Pt [2026-e3-07 14\n< am [2026-03-07 14\n\n26:\n26\n26\n26\n26\n\n52) [DEBUG] [UITrainingPanel] Loaded paths from ai_config. json\n\n52) [DEBUG] [UIGraph] Created graph: System Resources of type 4\n\n52) [DEBUG] [Resourcettonitor] Initializing resource monitor...\n\n52) [DEBUG] [Resou... (3562 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:2"
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
       ],
-      "timestamp": 1786391165,
+      "timestamp": 1772911622,
       "type": "string"
     },
     {
@@ -2044,45 +2044,25 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.800000011920929,
+      "confidence": 0.8823373317718506,
       "context": "conversation",
       "domain": "base",
-      "id": 3455066776217882529,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } ri) Ga gs rs min nn xr in | rscim mie wi | sew mie ie | ROA,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nGrimblend1 cache fluid,\n\nistrator: Windows Pow X = + - a x\n\n[2026-03-07 14:\n[2026-03-07 14\n\n[2026-03-07 14\n| Pt [2026-e3-07 14\n< am [2026-03-07 14\n\n26:\n26\n26\n26\n26\n\n52) [DEBUG] [UITrainingPanel] Loaded paths from ai_config. json\n\n52) [DEBUG] [UIGraph] Created graph: System Resources of type 4\n\n52) [DEBUG] [Resourcettonitor] Initializing resource monitor...\n\n52) [DEBUG] [Resou... (3562 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } ri) Ga gs rs min nn xr in | rscim mie wi | sew mie ie | ROA,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nGrimblend1 cache fluid,\n\nistrator: Windows Pow X = + - a x\n\n[2026-03-07 14:\n[2026-03-07 14\n\n[2026-03-07 14\n| Pt [2026-e3-07 14\n< am [2026-03-07 14\n\n26:\n26\n26\n26\n26\n\n52) [DEBUG] [UITrainingPanel] Loaded paths from ai_config. json\n\n52) [DEBUG] [UIGraph] Created graph: System Resources of type 4\n\n52) [DEBUG] [Resourcettonitor] Initializing resource monitor...\n\n52) [DEBUG] [Resou... (3562 total chars)\n",
+      "id": 12359618094466573884,
+      "importance": 0.8823373317718506,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"a\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
       ],
-      "timestamp": 1772911622,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 1.0,
-      "context": "conversation",
-      "domain": "base",
-      "id": 964632914567486341,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "you",
-      "parent_id": 0,
-      "raw": "you",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "context_command",
-        "session"
-      ],
-      "timestamp": 1773348757,
+      "timestamp": 1786391165,
       "type": "string"
     },
     {
@@ -2106,6 +2086,26 @@
         "object:47"
       ],
       "timestamp": 1786392015,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 1.0,
+      "context": "conversation",
+      "domain": "base",
+      "id": 964632914567486341,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "you",
+      "parent_id": 0,
+      "raw": "you",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "context_command",
+        "session"
+      ],
+      "timestamp": 1773348757,
       "type": "string"
     },
     {
@@ -2156,6 +2156,26 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 1.0,
+      "context": "conversation",
+      "domain": "base",
+      "id": 16022737974409462405,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "start",
+      "parent_id": 0,
+      "raw": "start",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "context_command",
+        "session"
+      ],
+      "timestamp": 1773348526,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.8859870433807373,
       "context": "conversation",
       "domain": "base",
@@ -2179,35 +2199,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 1.0,
+      "confidence": 0.7177507877349854,
       "context": "conversation",
       "domain": "base",
-      "id": 16022737974409462405,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "start",
-      "parent_id": 0,
-      "raw": "start",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "context_command",
-        "session"
-      ],
-      "timestamp": 1773348526,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.8971527218818665,
-      "context": "conversation",
-      "domain": "base",
-      "id": 5573841280765728586,
-      "importance": 0.8971527218818665,
+      "id": 10500581759299225210,
+      "importance": 0.7177507877349854,
       "modality": "vision",
-      "normalized": "person#1 labelled [\"o\", \"1\"]",
-      "parent_id": 4782712853066859193,
-      "raw": "person#1 labelled [\"o\", \"1\"]",
+      "normalized": "person#3 labelled [\"ls\"]",
+      "parent_id": 420683642492996820,
+      "raw": "person#3 labelled [\"ls\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -2215,9 +2215,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:1"
+        "object:3"
       ],
-      "timestamp": 1777828253,
+      "timestamp": 1784258898,
       "type": "string"
     },
     {
@@ -2245,15 +2245,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.7177507877349854,
+      "confidence": 0.8971527218818665,
       "context": "conversation",
       "domain": "base",
-      "id": 10500581759299225210,
-      "importance": 0.7177507877349854,
+      "id": 5573841280765728586,
+      "importance": 0.8971527218818665,
       "modality": "vision",
-      "normalized": "person#3 labelled [\"ls\"]",
-      "parent_id": 420683642492996820,
-      "raw": "person#3 labelled [\"ls\"]",
+      "normalized": "person#1 labelled [\"o\", \"1\"]",
+      "parent_id": 4782712853066859193,
+      "raw": "person#1 labelled [\"o\", \"1\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -2261,9 +2261,32 @@
         "perception",
         "ocr",
         "class:person",
-        "object:3"
+        "object:1"
       ],
-      "timestamp": 1784258898,
+      "timestamp": 1777828253,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
+      "id": 6071310128815657420,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ©) mF administrator: Windows Pow X = + v - @ x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/colle... (3220 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ©) mF administrator: Windows Pow X = + v - @ x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/colle... (3220 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773777231,
       "type": "string"
     },
     {
@@ -2294,49 +2317,6 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 6071310128815657420,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ©) mF administrator: Windows Pow X = + v - @ x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/colle... (3220 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ©) mF administrator: Windows Pow X = + v - @ x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/colle... (3220 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1773777231,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 1.0,
-      "context": "conversation",
-      "domain": "base",
-      "id": 5861254642448864385,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "and",
-      "parent_id": 0,
-      "raw": "And",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "context_command",
-        "session"
-      ],
-      "timestamp": 1773349169,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
       "id": 15865424043551785712,
       "importance": 1.0,
       "modality": "text",
@@ -2357,48 +2337,22 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8820211887359619,
+      "confidence": 1.0,
       "context": "conversation",
       "domain": "base",
-      "id": 4103470600707483103,
-      "importance": 0.8820211887359619,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\"]",
-      "parent_id": 7225202196510746112,
-      "raw": "person#1 labelled [\"a\"]",
+      "id": 5861254642448864385,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "and",
+      "parent_id": 0,
+      "raw": "And",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
+        "context_command",
+        "session"
       ],
-      "timestamp": 1777064483,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.8047812581062317,
-      "context": "conversation",
-      "domain": "base",
-      "id": 10527707582482112519,
-      "importance": 0.8047812581062317,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\"]",
-      "parent_id": 5534459781434752158,
-      "raw": "person#1 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784319220,
+      "timestamp": 1773349169,
       "type": "string"
     },
     {
@@ -2426,6 +2380,52 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.8047812581062317,
+      "context": "conversation",
+      "domain": "base",
+      "id": 10527707582482112519,
+      "importance": 0.8047812581062317,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 5534459781434752158,
+      "raw": "person#1 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1784319220,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8820211887359619,
+      "context": "conversation",
+      "domain": "base",
+      "id": 4103470600707483103,
+      "importance": 0.8820211887359619,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 7225202196510746112,
+      "raw": "person#1 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777064483,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 1.0,
       "context": "conversation",
       "domain": "base",
@@ -2442,52 +2442,6 @@
         "session"
       ],
       "timestamp": 1773348881,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 1164387843312393746,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: | } rf) ap Be rs mde aun [varie | scm nie i | stow mie a | RRO,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nBea\n\nME Administrator: Windows Pow X = + v - oOo xX\nGrimblend1 cache fluid... Blender 50 Grim\n\nD:/G.R.I.M/out/build/Release [GRIM] Copied ggnl-cpu.dUL 4 0:/G.R.I.M/out/build/Release [cRIN} Copied ggmt-cuda.dll + 0:/6.R.1\nsM/out/build/Release [GRIN] Copied whisper.dLl + 0:/G.R.I.M/out/build/Release [GRIN] Copied Libpv_porcupine.dLl + D:/G.R.I.M\n\n(or fout/build/Release [GRIN] Co... (4117 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: | } rf) ap Be rs mde aun [varie | scm nie i | stow mie a | RRO,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nBea\n\nME Administrator: Windows Pow X = + v - oOo xX\nGrimblend1 cache fluid... Blender 50 Grim\n\nD:/G.R.I.M/out/build/Release [GRIM] Copied ggnl-cpu.dUL 4 0:/G.R.I.M/out/build/Release [cRIN} Copied ggmt-cuda.dll + 0:/6.R.1\nsM/out/build/Release [GRIN] Copied whisper.dLl + 0:/G.R.I.M/out/build/Release [GRIN] Copied Libpv_porcupine.dLl + D:/G.R.I.M\n\n(or fout/build/Release [GRIN] Co... (4117 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1772914849,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.8986736536026001,
-      "context": "conversation",
-      "domain": "base",
-      "id": 11543450514919919060,
-      "importance": 0.8986736536026001,
-      "modality": "vision",
-      "normalized": "person#47 labelled [\"surhur\"]",
-      "parent_id": 9862574768647179767,
-      "raw": "person#47 labelled [\"surhur\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:47"
-      ],
-      "timestamp": 1786391928,
       "type": "string"
     },
     {
@@ -2515,15 +2469,38 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.8986736536026001,
+      "context": "conversation",
+      "domain": "base",
+      "id": 11543450514919919060,
+      "importance": 0.8986736536026001,
+      "modality": "vision",
+      "normalized": "person#47 labelled [\"surhur\"]",
+      "parent_id": 9862574768647179767,
+      "raw": "person#47 labelled [\"surhur\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:47"
+      ],
+      "timestamp": 1786391928,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 15428231962710949578,
+      "id": 1164387843312393746,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: OxD14AF8E5C7678DEC\n[2026-03-10 14:26:03] [DEBUG] [UISlider] Constructed: Max HF Results\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: 0x224B9A2F5B07785D\n[2026-03-10 14:26:03] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: Ox98DDDA6FFHOO4A2D\n[2026-03-16 14:26:03] [D... (2917 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: | } rf) ap Be rs mde aun [varie | scm nie i | stow mie a | RRO,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nBea\n\nME Administrator: Windows Pow X = + v - oOo xX\nGrimblend1 cache fluid... Blender 50 Grim\n\nD:/G.R.I.M/out/build/Release [GRIM] Copied ggnl-cpu.dUL 4 0:/G.R.I.M/out/build/Release [cRIN} Copied ggmt-cuda.dll + 0:/6.R.1\nsM/out/build/Release [GRIN] Copied whisper.dLl + 0:/G.R.I.M/out/build/Release [GRIN] Copied Libpv_porcupine.dLl + D:/G.R.I.M\n\n(or fout/build/Release [GRIN] Co... (4117 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: OxD14AF8E5C7678DEC\n[2026-03-10 14:26:03] [DEBUG] [UISlider] Constructed: Max HF Results\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: 0x224B9A2F5B07785D\n[2026-03-10 14:26:03] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: Ox98DDDA6FFHOO4A2D\n[2026-03-16 14:26:03] [D... (2917 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: | } rf) ap Be rs mde aun [varie | scm nie i | stow mie a | RRO,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\nBea\n\nME Administrator: Windows Pow X = + v - oOo xX\nGrimblend1 cache fluid... Blender 50 Grim\n\nD:/G.R.I.M/out/build/Release [GRIM] Copied ggnl-cpu.dUL 4 0:/G.R.I.M/out/build/Release [cRIN} Copied ggmt-cuda.dll + 0:/6.R.1\nsM/out/build/Release [GRIN] Copied whisper.dLl + 0:/G.R.I.M/out/build/Release [GRIN] Copied Libpv_porcupine.dLl + D:/G.R.I.M\n\n(or fout/build/Release [GRIN] Co... (4117 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -2533,7 +2510,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773167174,
+      "timestamp": 1772914849,
       "type": "string"
     },
     {
@@ -2564,6 +2541,29 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
+      "id": 15428231962710949578,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: OxD14AF8E5C7678DEC\n[2026-03-10 14:26:03] [DEBUG] [UISlider] Constructed: Max HF Results\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: 0x224B9A2F5B07785D\n[2026-03-10 14:26:03] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: Ox98DDDA6FFHOO4A2D\n[2026-03-16 14:26:03] [D... (2917 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: OxD14AF8E5C7678DEC\n[2026-03-10 14:26:03] [DEBUG] [UISlider] Constructed: Max HF Results\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: 0x224B9A2F5B07785D\n[2026-03-10 14:26:03] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 14:26:03] [DEBUG] [UIFocusManager] Generated unique ID: Ox98DDDA6FFHOO4A2D\n[2026-03-16 14:26:03] [D... (2917 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773167174,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
       "id": 7674280795819617598,
       "importance": 1.0,
       "modality": "text",
@@ -2580,6 +2580,49 @@
         "monitor-1"
       ],
       "timestamp": 1773345898,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.6895188689231873,
+      "context": "conversation",
+      "domain": "base",
+      "id": 15272362387997999549,
+      "importance": 0.6895188689231873,
+      "modality": "vision",
+      "normalized": "person#8 labelled [\"ma\"]",
+      "parent_id": 5732563858019944405,
+      "raw": "person#8 labelled [\"ma\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:8"
+      ],
+      "timestamp": 1777064728,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 1.0,
+      "context": "conversation",
+      "domain": "base",
+      "id": 13537786611173444424,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "nevermind",
+      "parent_id": 0,
+      "raw": "nevermind",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "context_command",
+        "session"
+      ],
+      "timestamp": 1777690207,
       "type": "string"
     },
     {
@@ -2610,7 +2653,7 @@
       "confidence": 1.0,
       "context": "conversation",
       "domain": "base",
-      "id": 13537786611173444424,
+      "id": 2447439212556394441,
       "importance": 1.0,
       "modality": "text",
       "normalized": "nevermind",
@@ -2622,30 +2665,7 @@
         "context_command",
         "session"
       ],
-      "timestamp": 1777690207,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.6895188689231873,
-      "context": "conversation",
-      "domain": "base",
-      "id": 15272362387997999549,
-      "importance": 0.6895188689231873,
-      "modality": "vision",
-      "normalized": "person#8 labelled [\"ma\"]",
-      "parent_id": 5732563858019944405,
-      "raw": "person#8 labelled [\"ma\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:8"
-      ],
-      "timestamp": 1777064728,
+      "timestamp": 1777756455,
       "type": "string"
     },
     {
@@ -2669,26 +2689,6 @@
         "monitor-3"
       ],
       "timestamp": 1773179920,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 1.0,
-      "context": "conversation",
-      "domain": "base",
-      "id": 2447439212556394441,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "nevermind",
-      "parent_id": 0,
-      "raw": "nevermind",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "context_command",
-        "session"
-      ],
-      "timestamp": 1777756455,
       "type": "string"
     },
     {
@@ -2762,25 +2762,25 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.800000011920929,
+      "confidence": 0.925028920173645,
       "context": "conversation",
       "domain": "base",
-      "id": 4604987747581525783,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
+      "id": 11285585653311280824,
+      "importance": 0.925028920173645,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\", \"a\", \"fr\"]",
+      "parent_id": 15545617931016562047,
+      "raw": "person#1 labelled [\"a\", \"a\", \"fr\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
       ],
-      "timestamp": 1773766114,
+      "timestamp": 1784235495,
       "type": "string"
     },
     {
@@ -2808,25 +2808,25 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.925028920173645,
+      "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 11285585653311280824,
-      "importance": 0.925028920173645,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\", \"a\", \"fr\"]",
-      "parent_id": 15545617931016562047,
-      "raw": "person#1 labelled [\"a\", \"a\", \"fr\"]",
+      "id": 4604987747581525783,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
       ],
-      "timestamp": 1784235495,
+      "timestamp": 1773766114,
       "type": "string"
     },
     {
@@ -2847,6 +2847,26 @@
         "session"
       ],
       "timestamp": 1773758597,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 1.0,
+      "context": "conversation",
+      "domain": "base",
+      "id": 8124497847800563013,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "nevermind",
+      "parent_id": 0,
+      "raw": "nevermind",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "context_command",
+        "session"
+      ],
+      "timestamp": 1777689842,
       "type": "string"
     },
     {
@@ -2874,26 +2894,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 1.0,
-      "context": "conversation",
-      "domain": "base",
-      "id": 8124497847800563013,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "nevermind",
-      "parent_id": 0,
-      "raw": "nevermind",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "context_command",
-        "session"
-      ],
-      "timestamp": 1777689842,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.910103976726532,
       "context": "conversation",
       "domain": "base",
@@ -2913,52 +2913,6 @@
         "object:8"
       ],
       "timestamp": 1777064646,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 10788447108507572798,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxC26D74A8E6758F80\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: 0x53DBC7883C95796D\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxE599867C37CCE7EA\n[2026-03-16 12:24:10] [DEBUG] [UIDro... (2818 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxC26D74A8E6758F80\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: 0x53DBC7883C95796D\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxE599867C37CCE7EA\n[2026-03-16 12:24:10] [DEBUG] [UIDro... (2818 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1773159861,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.7613565921783447,
-      "context": "conversation",
-      "domain": "base",
-      "id": 11093354974075355054,
-      "importance": 0.7613565921783447,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"jin\"]",
-      "parent_id": 57277452335961420,
-      "raw": "person#1 labelled [\"jin\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784319615,
       "type": "string"
     },
     {
@@ -2986,15 +2940,38 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.7613565921783447,
+      "context": "conversation",
+      "domain": "base",
+      "id": 11093354974075355054,
+      "importance": 0.7613565921783447,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"jin\"]",
+      "parent_id": 57277452335961420,
+      "raw": "person#1 labelled [\"jin\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1784319615,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 2362138483178549987,
+      "id": 10788447108507572798,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } rf) a) Be es min nn [xr win | rac mie i | sew mie wa | RRO A,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\na = Po) a eo © RF Administrator Windows Pom X= = + Y - ao xX\n\nGrimblend! cache fluid... Blender 50 GrimDesk,. blender-50,\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n(pe [2626-83-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n> 3 re (Wa) [2026-93-12 17:31:33] [DEBUG] [UZFocusManager]... (3148 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxC26D74A8E6758F80\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: 0x53DBC7883C95796D\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxE599867C37CCE7EA\n[2026-03-16 12:24:10] [DEBUG] [UIDro... (2818 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } rf) a) Be es min nn [xr win | rac mie i | sew mie wa | RRO A,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\na = Po) a eo © RF Administrator Windows Pom X= = + Y - ao xX\n\nGrimblend! cache fluid... Blender 50 GrimDesk,. blender-50,\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n(pe [2626-83-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n> 3 re (Wa) [2026-93-12 17:31:33] [DEBUG] [UZFocusManager]... (3148 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF administrator: Windows Pow X = + os mga ae | var | cm wim, | sem wie, | [Home ADO\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxC26D74A8E6758F80\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-10 12:24:10] [DEBUG] [UIScroLLBox] Constructed\n\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: 0x53DBC7883C95796D\n[2026-03-16 12:24:10] [DEBUG] [UIFocusManager] Generated unique ID: OxE599867C37CCE7EA\n[2026-03-16 12:24:10] [DEBUG] [UIDro... (2818 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -3004,7 +2981,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773351102,
+      "timestamp": 1773159861,
       "type": "string"
     },
     {
@@ -3028,6 +3005,29 @@
         "object:1"
       ],
       "timestamp": 1784319623,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
+      "id": 2362138483178549987,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } rf) a) Be es min nn [xr win | rac mie i | sew mie wa | RRO A,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\na = Po) a eo © RF Administrator Windows Pom X= = + Y - ao xX\n\nGrimblend! cache fluid... Blender 50 GrimDesk,. blender-50,\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n(pe [2626-83-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n> 3 re (Wa) [2026-93-12 17:31:33] [DEBUG] [UZFocusManager]... (3148 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: a } rf) a) Be es min nn [xr win | rac mie i | sew mie wa | RRO A,\n\nassets waveletNoi... FontForge Jump Space LibreOffice.\n\na = Po) a eo © RF Administrator Windows Pom X= = + Y - ao xX\n\nGrimblend! cache fluid... Blender 50 GrimDesk,. blender-50,\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n[2626-63-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n(pe [2626-83-12 17:31:33] [DEBUG] [UIFocusManager] Generated unique\n> 3 re (Wa) [2026-93-12 17:31:33] [DEBUG] [UZFocusManager]... (3148 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773351102,
       "type": "string"
     },
     {
@@ -3170,29 +3170,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 9424174109067714104,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: commands_ui.cpp - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBower SeLOeER-\n\nEXPLORER\n\nv GRIM\nY commands\n\n© commands memory.hpp\n\n© commands nip test.cpp\n\n© commands nip test-hpp\n\n© commands_osintepp\n\n© commands_osinthpp\n\n© commands_perception.cpp\n\n© commands_perception.hpp\n\n© commands_question.cpp\n\n© commands_question.hpp\n\n© commands system.cpp\n\n© commands _system.hpp\n\n© commands tasks.cpp\n\n© commands tasks.hpp\n\n© commands timers.cpp\n\n© commands _timers.hpp\n\n© commands training.cpp\n\n© co... (3436 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: commands_ui.cpp - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBower SeLOeER-\n\nEXPLORER\n\nv GRIM\nY commands\n\n© commands memory.hpp\n\n© commands nip test.cpp\n\n© commands nip test-hpp\n\n© commands_osintepp\n\n© commands_osinthpp\n\n© commands_perception.cpp\n\n© commands_perception.hpp\n\n© commands_question.cpp\n\n© commands_question.hpp\n\n© commands system.cpp\n\n© commands _system.hpp\n\n© commands tasks.cpp\n\n© commands tasks.hpp\n\n© commands timers.cpp\n\n© commands _timers.hpp\n\n© commands training.cpp\n\n© co... (3436 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "IDE/Code Editor",
-        "Code.exe",
-        "monitor-3"
-      ],
-      "timestamp": 1772989468,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8363277912139893,
       "context": "conversation",
       "domain": "base",
@@ -3212,6 +3189,29 @@
         "object:47"
       ],
       "timestamp": 1786391990,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
+      "id": 9424174109067714104,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: commands_ui.cpp - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBower SeLOeER-\n\nEXPLORER\n\nv GRIM\nY commands\n\n© commands memory.hpp\n\n© commands nip test.cpp\n\n© commands nip test-hpp\n\n© commands_osintepp\n\n© commands_osinthpp\n\n© commands_perception.cpp\n\n© commands_perception.hpp\n\n© commands_question.cpp\n\n© commands_question.hpp\n\n© commands system.cpp\n\n© commands _system.hpp\n\n© commands tasks.cpp\n\n© commands tasks.hpp\n\n© commands timers.cpp\n\n© commands _timers.hpp\n\n© commands training.cpp\n\n© co... (3436 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: commands_ui.cpp - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBower SeLOeER-\n\nEXPLORER\n\nv GRIM\nY commands\n\n© commands memory.hpp\n\n© commands nip test.cpp\n\n© commands nip test-hpp\n\n© commands_osintepp\n\n© commands_osinthpp\n\n© commands_perception.cpp\n\n© commands_perception.hpp\n\n© commands_question.cpp\n\n© commands_question.hpp\n\n© commands system.cpp\n\n© commands _system.hpp\n\n© commands tasks.cpp\n\n© commands tasks.hpp\n\n© commands timers.cpp\n\n© commands _timers.hpp\n\n© commands training.cpp\n\n© co... (3436 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "IDE/Code Editor",
+        "Code.exe",
+        "monitor-3"
+      ],
+      "timestamp": 1772989468,
       "type": "string"
     },
     {
@@ -3262,29 +3262,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 11945212140266021268,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: |  ] rf) Gal BS res mga mia | car ania | recom mds, wie | smcrm mgs, mia | ROR iA, MR\nAF Administrator: Windows Pom\n\nGrimblend1 cache fluid... Blender50 Grima\n\n, (2026-03-07 2 3] [DEBUG] [UIFocusManager] Generated unique ID: @xB456F7B4F15EF63D\n\n“\" [2026-03-07 21 3] [DEBUG] [UISlider] Constructed: Max HF Results\n\n= [Config] ERROR: Exception loading ai_config. json:\n3] [DEBUG] [UIRoot] Added panel: GRIM-text Training Control\n[2026-03-07 2 3] [DEBUG] [WakeKey] Initializing Key system hook...\n\nass... (2604 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: |  ] rf) Gal BS res mga mia | car ania | recom mds, wie | smcrm mgs, mia | ROR iA, MR\nAF Administrator: Windows Pom\n\nGrimblend1 cache fluid... Blender50 Grima\n\n, (2026-03-07 2 3] [DEBUG] [UIFocusManager] Generated unique ID: @xB456F7B4F15EF63D\n\n“\" [2026-03-07 21 3] [DEBUG] [UISlider] Constructed: Max HF Results\n\n= [Config] ERROR: Exception loading ai_config. json:\n3] [DEBUG] [UIRoot] Added panel: GRIM-text Training Control\n[2026-03-07 2 3] [DEBUG] [WakeKey] Initializing Key system hook...\n\nass... (2604 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1772934791,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8535552620887756,
       "context": "conversation",
       "domain": "base",
@@ -3304,6 +3281,29 @@
         "object:1"
       ],
       "timestamp": 1784319431,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
+      "id": 11945212140266021268,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: |  ] rf) Gal BS res mga mia | car ania | recom mds, wie | smcrm mgs, mia | ROR iA, MR\nAF Administrator: Windows Pom\n\nGrimblend1 cache fluid... Blender50 Grima\n\n, (2026-03-07 2 3] [DEBUG] [UIFocusManager] Generated unique ID: @xB456F7B4F15EF63D\n\n“\" [2026-03-07 21 3] [DEBUG] [UISlider] Constructed: Max HF Results\n\n= [Config] ERROR: Exception loading ai_config. json:\n3] [DEBUG] [UIRoot] Added panel: GRIM-text Training Control\n[2026-03-07 2 3] [DEBUG] [WakeKey] Initializing Key system hook...\n\nass... (2604 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: |  ] rf) Gal BS res mga mia | car ania | recom mds, wie | smcrm mgs, mia | ROR iA, MR\nAF Administrator: Windows Pom\n\nGrimblend1 cache fluid... Blender50 Grima\n\n, (2026-03-07 2 3] [DEBUG] [UIFocusManager] Generated unique ID: @xB456F7B4F15EF63D\n\n“\" [2026-03-07 21 3] [DEBUG] [UISlider] Constructed: Max HF Results\n\n= [Config] ERROR: Exception loading ai_config. json:\n3] [DEBUG] [UIRoot] Added panel: GRIM-text Training Control\n[2026-03-07 2 3] [DEBUG] [WakeKey] Initializing Key system hook...\n\nass... (2604 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1772934791,
       "type": "string"
     },
     {
@@ -3334,29 +3334,6 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 3380946894110927083,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ie ee\n\nassets\n\nwaveletNoi.. FontForge\n\n= 2\n\nJump Space LibreOffice..\n\nME Administrator: Windows Pow X= = + v\n\n[2026-03-07 23:57:51] [DEBUG][Aliases] Loaded app_aliases.fb successfully\n\n| 2026-03-07 23:57:\n\n| 2026-03-07 23:57:\n\n51 | aliases.cpp | Aliases init | true |\n51 | websocket_server.cpp | WebSocket server stopped | true |\n51 | aliases.cpp | Aliases load | true |\n\nMea | 2026-03-07 23:57:51 | bootstrap.cpp | Aliases bootstrap finished | true |\n\n| 2026-03-07 23:57:51 | bootstrap.cpp |\n51] [DE... (2806 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ie ee\n\nassets\n\nwaveletNoi.. FontForge\n\n= 2\n\nJump Space LibreOffice..\n\nME Administrator: Windows Pow X= = + v\n\n[2026-03-07 23:57:51] [DEBUG][Aliases] Loaded app_aliases.fb successfully\n\n| 2026-03-07 23:57:\n\n| 2026-03-07 23:57:\n\n51 | aliases.cpp | Aliases init | true |\n51 | websocket_server.cpp | WebSocket server stopped | true |\n51 | aliases.cpp | Aliases load | true |\n\nMea | 2026-03-07 23:57:51 | bootstrap.cpp | Aliases bootstrap finished | true |\n\n| 2026-03-07 23:57:51 | bootstrap.cpp |\n51] [DE... (2806 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1772945920,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
       "id": 13278474426443772701,
       "importance": 1.0,
       "modality": "text",
@@ -3377,38 +3354,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.9061775803565979,
-      "context": "conversation",
-      "domain": "base",
-      "id": 414398737877725797,
-      "importance": 0.9061775803565979,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"bt\"]",
-      "parent_id": 3792774234509705681,
-      "raw": "person#1 labelled [\"bt\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784233487,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 8019441783581583139,
+      "id": 3380946894110927083,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © Administrator: Windows Pow X + oy - a x\n\n[2026-83-12 1! 93] [DEBUG] [ResourceMonitor] Resource monitor initialized (GPU available: Yes}\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xS9FEBB13CS9EW7CS\n[2026-93-12 15:33:03] [DEBUG] [UIScrollBox] Constructed\n\n[2026-83-12 1! 93] [DEBUG] [UIScrollBox] Constructed\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xB1B88AB1AFSAUA3D\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®x49671A2DCS6... (3828 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ie ee\n\nassets\n\nwaveletNoi.. FontForge\n\n= 2\n\nJump Space LibreOffice..\n\nME Administrator: Windows Pow X= = + v\n\n[2026-03-07 23:57:51] [DEBUG][Aliases] Loaded app_aliases.fb successfully\n\n| 2026-03-07 23:57:\n\n| 2026-03-07 23:57:\n\n51 | aliases.cpp | Aliases init | true |\n51 | websocket_server.cpp | WebSocket server stopped | true |\n51 | aliases.cpp | Aliases load | true |\n\nMea | 2026-03-07 23:57:51 | bootstrap.cpp | Aliases bootstrap finished | true |\n\n| 2026-03-07 23:57:51 | bootstrap.cpp |\n51] [DE... (2806 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © Administrator: Windows Pow X + oy - a x\n\n[2026-83-12 1! 93] [DEBUG] [ResourceMonitor] Resource monitor initialized (GPU available: Yes}\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xS9FEBB13CS9EW7CS\n[2026-93-12 15:33:03] [DEBUG] [UIScrollBox] Constructed\n\n[2026-83-12 1! 93] [DEBUG] [UIScrollBox] Constructed\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xB1B88AB1AFSAUA3D\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®x49671A2DCS6... (3828 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: ie ee\n\nassets\n\nwaveletNoi.. FontForge\n\n= 2\n\nJump Space LibreOffice..\n\nME Administrator: Windows Pow X= = + v\n\n[2026-03-07 23:57:51] [DEBUG][Aliases] Loaded app_aliases.fb successfully\n\n| 2026-03-07 23:57:\n\n| 2026-03-07 23:57:\n\n51 | aliases.cpp | Aliases init | true |\n51 | websocket_server.cpp | WebSocket server stopped | true |\n51 | aliases.cpp | Aliases load | true |\n\nMea | 2026-03-07 23:57:51 | bootstrap.cpp | Aliases bootstrap finished | true |\n\n| 2026-03-07 23:57:51 | bootstrap.cpp |\n51] [DE... (2806 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -3418,7 +3372,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773343994,
+      "timestamp": 1772945920,
       "type": "string"
     },
     {
@@ -3446,15 +3400,38 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.879688024520874,
+      "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 12671192952369099532,
-      "importance": 0.879688024520874,
+      "id": 8019441783581583139,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © Administrator: Windows Pow X + oy - a x\n\n[2026-83-12 1! 93] [DEBUG] [ResourceMonitor] Resource monitor initialized (GPU available: Yes}\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xS9FEBB13CS9EW7CS\n[2026-93-12 15:33:03] [DEBUG] [UIScrollBox] Constructed\n\n[2026-83-12 1! 93] [DEBUG] [UIScrollBox] Constructed\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xB1B88AB1AFSAUA3D\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®x49671A2DCS6... (3828 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © Administrator: Windows Pow X + oy - a x\n\n[2026-83-12 1! 93] [DEBUG] [ResourceMonitor] Resource monitor initialized (GPU available: Yes}\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xS9FEBB13CS9EW7CS\n[2026-93-12 15:33:03] [DEBUG] [UIScrollBox] Constructed\n\n[2026-83-12 1! 93] [DEBUG] [UIScrollBox] Constructed\n\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®xB1B88AB1AFSAUA3D\n[2926-93-12 1! 93] [DEBUG] [UIFocusManager] Generated unique ID: ®x49671A2DCS6... (3828 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773343994,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.9061775803565979,
+      "context": "conversation",
+      "domain": "base",
+      "id": 414398737877725797,
+      "importance": 0.9061775803565979,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"an\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"an\"]",
+      "normalized": "person#1 labelled [\"bt\"]",
+      "parent_id": 3792774234509705681,
+      "raw": "person#1 labelled [\"bt\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -3462,32 +3439,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:2"
+        "object:1"
       ],
-      "timestamp": 1786391298,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 12405001271115529072,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: multimodelorchestrationintegration.codoc.md - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBer SeLOFER-\n\nEXPLORER\nv GRIM\n\n= giio-geuexnze\n\n4 glib-mkenums-script py\n\nE grim gradients.tet\n\n0 grim_memoryjson\n\n® grim _text server.py\n\n= grimlog\n\n© intenthpp\nlibpng-config\nlibpngi6-config\nlist devicescpp\n location.cpp\n© location.hpp\n© logger.epp\n© loggerhpp\n& loss curvature diagnostics.png\n© main.cpp\n\n= matrix verification_report.txt\nQ memoryjson\n> mode.ps1\n¥ multimodelorchestrationintegration.codoc.... 9+, U\n¥ multimodelorchestrati... (3066 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: multimodelorchestrationintegration.codoc.md - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBer SeLOFER-\n\nEXPLORER\nv GRIM\n\n= giio-geuexnze\n\n4 glib-mkenums-script py\n\nE grim gradients.tet\n\n0 grim_memoryjson\n\n® grim _text server.py\n\n= grimlog\n\n© intenthpp\nlibpng-config\nlibpngi6-config\nlist devicescpp\n location.cpp\n© location.hpp\n© logger.epp\n© loggerhpp\n& loss curvature diagnostics.png\n© main.cpp\n\n= matrix verification_report.txt\nQ memoryjson\n> mode.ps1\n¥ multimodelorchestrationintegration.codoc.... 9+, U\n¥ multimodelorchestrati... (3066 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "IDE/Code Editor",
-        "Code.exe",
-        "monitor-3"
-      ],
-      "timestamp": 1772916013,
+      "timestamp": 1784233487,
       "type": "string"
     },
     {
@@ -3518,6 +3472,52 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
+      "id": 12405001271115529072,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: multimodelorchestrationintegration.codoc.md - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBer SeLOFER-\n\nEXPLORER\nv GRIM\n\n= giio-geuexnze\n\n4 glib-mkenums-script py\n\nE grim gradients.tet\n\n0 grim_memoryjson\n\n® grim _text server.py\n\n= grimlog\n\n© intenthpp\nlibpng-config\nlibpngi6-config\nlist devicescpp\n location.cpp\n© location.hpp\n© logger.epp\n© loggerhpp\n& loss curvature diagnostics.png\n© main.cpp\n\n= matrix verification_report.txt\nQ memoryjson\n> mode.ps1\n¥ multimodelorchestrationintegration.codoc.... 9+, U\n¥ multimodelorchestrati... (3066 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: multimodelorchestrationintegration.codoc.md - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\nBer SeLOFER-\n\nEXPLORER\nv GRIM\n\n= giio-geuexnze\n\n4 glib-mkenums-script py\n\nE grim gradients.tet\n\n0 grim_memoryjson\n\n® grim _text server.py\n\n= grimlog\n\n© intenthpp\nlibpng-config\nlibpngi6-config\nlist devicescpp\n location.cpp\n© location.hpp\n© logger.epp\n© loggerhpp\n& loss curvature diagnostics.png\n© main.cpp\n\n= matrix verification_report.txt\nQ memoryjson\n> mode.ps1\n¥ multimodelorchestrationintegration.codoc.... 9+, U\n¥ multimodelorchestrati... (3066 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "IDE/Code Editor",
+        "Code.exe",
+        "monitor-3"
+      ],
+      "timestamp": 1772916013,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.879688024520874,
+      "context": "conversation",
+      "domain": "base",
+      "id": 12671192952369099532,
+      "importance": 0.879688024520874,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"an\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"an\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391298,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
       "id": 16102650968938458150,
       "importance": 1.0,
       "modality": "text",
@@ -3534,6 +3534,29 @@
         "monitor-2"
       ],
       "timestamp": 1773802913,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "conversation",
+      "domain": "base",
+      "id": 17157655264144155592,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: assets waveletNoi\n\nGrimblend1 cache fluid,\n\nz\n\nCursor BUILD-RUN.\n\ncheckpoint... GrimDesk\n\nriftBW.reso.... RASPBERR,\n\n6 Wl ®\n\nFontForge lump Space LibreOffice..\n\nobese\n\nBlender50  GrimDesk..._blender-5..\n\nPt\n\nGRIMShard... Meta Horizon. GrimPiece.\nLink\n\nGe f\n\nim_sprit.. RustDesk Fallen Patriot\n\n:} &\n\nGrimBlend.... Stationers checkpoint,\n\ngr\n\nDs Pt\n\nriftBW.sbs  GRIMShard,\n\nL_\n»\n\nGrimblend —LibreOffice\n258\n\nLae\n\nriftBW_out... GrimDesk,\n\nsbsar ris Plotting\nCompass (\n\nsubstance grim_sprite\n\nGrimfo... (2357 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: assets waveletNoi\n\nGrimblend1 cache fluid,\n\nz\n\nCursor BUILD-RUN.\n\ncheckpoint... GrimDesk\n\nriftBW.reso.... RASPBERR,\n\n6 Wl ®\n\nFontForge lump Space LibreOffice..\n\nobese\n\nBlender50  GrimDesk..._blender-5..\n\nPt\n\nGRIMShard... Meta Horizon. GrimPiece.\nLink\n\nGe f\n\nim_sprit.. RustDesk Fallen Patriot\n\n:} &\n\nGrimBlend.... Stationers checkpoint,\n\ngr\n\nDs Pt\n\nriftBW.sbs  GRIMShard,\n\nL_\n»\n\nGrimblend —LibreOffice\n258\n\nLae\n\nriftBW_out... GrimDesk,\n\nsbsar ris Plotting\nCompass (\n\nsubstance grim_sprite\n\nGrimfo... (2357 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773407490,
       "type": "string"
     },
     {
@@ -3564,12 +3587,12 @@
       "confidence": 0.800000011920929,
       "context": "conversation",
       "domain": "base",
-      "id": 17157655264144155592,
+      "id": 7377740268057762831,
       "importance": 1.0,
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: assets waveletNoi\n\nGrimblend1 cache fluid,\n\nz\n\nCursor BUILD-RUN.\n\ncheckpoint... GrimDesk\n\nriftBW.reso.... RASPBERR,\n\n6 Wl ®\n\nFontForge lump Space LibreOffice..\n\nobese\n\nBlender50  GrimDesk..._blender-5..\n\nPt\n\nGRIMShard... Meta Horizon. GrimPiece.\nLink\n\nGe f\n\nim_sprit.. RustDesk Fallen Patriot\n\n:} &\n\nGrimBlend.... Stationers checkpoint,\n\ngr\n\nDs Pt\n\nriftBW.sbs  GRIMShard,\n\nL_\n»\n\nGrimblend —LibreOffice\n258\n\nLae\n\nriftBW_out... GrimDesk,\n\nsbsar ris Plotting\nCompass (\n\nsubstance grim_sprite\n\nGrimfo... (2357 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator: Windows Pom X\n\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2... (2917 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: assets waveletNoi\n\nGrimblend1 cache fluid,\n\nz\n\nCursor BUILD-RUN.\n\ncheckpoint... GrimDesk\n\nriftBW.reso.... RASPBERR,\n\n6 Wl ®\n\nFontForge lump Space LibreOffice..\n\nobese\n\nBlender50  GrimDesk..._blender-5..\n\nPt\n\nGRIMShard... Meta Horizon. GrimPiece.\nLink\n\nGe f\n\nim_sprit.. RustDesk Fallen Patriot\n\n:} &\n\nGrimBlend.... Stationers checkpoint,\n\ngr\n\nDs Pt\n\nriftBW.sbs  GRIMShard,\n\nL_\n»\n\nGrimblend —LibreOffice\n258\n\nLae\n\nriftBW_out... GrimDesk,\n\nsbsar ris Plotting\nCompass (\n\nsubstance grim_sprite\n\nGrimfo... (2357 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator: Windows Pom X\n\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2... (2917 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -3579,7 +3602,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773407490,
+      "timestamp": 1773166308,
       "type": "string"
     },
     {
@@ -3603,29 +3626,6 @@
         "object:2"
       ],
       "timestamp": 1786391286,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "conversation",
-      "domain": "base",
-      "id": 7377740268057762831,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator: Windows Pom X\n\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2... (2917 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: © RF Administrator: Windows Pom X\n\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2626-03-16 14:11:37]\n[2... (2917 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1773166308,
       "type": "string"
     },
     {
@@ -3788,22 +3788,25 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 1.0,
+      "confidence": 0.7585152387619019,
       "context": "conversation",
       "domain": "base",
-      "id": 4442877939157275493,
-      "importance": 1.0,
-      "modality": "text",
-      "normalized": "nevermind",
-      "parent_id": 0,
-      "raw": "nevermind",
+      "id": 8185466230692688913,
+      "importance": 0.7585152387619019,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"7\"]",
+      "parent_id": 57277452335961420,
+      "raw": "person#1 labelled [\"7\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "context_command",
-        "session"
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
       ],
-      "timestamp": 1777689229,
+      "timestamp": 1784319618,
       "type": "string"
     },
     {
@@ -3831,48 +3834,22 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.7585152387619019,
+      "confidence": 1.0,
       "context": "conversation",
       "domain": "base",
-      "id": 8185466230692688913,
-      "importance": 0.7585152387619019,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"7\"]",
-      "parent_id": 57277452335961420,
-      "raw": "person#1 labelled [\"7\"]",
+      "id": 4442877939157275493,
+      "importance": 1.0,
+      "modality": "text",
+      "normalized": "nevermind",
+      "parent_id": 0,
+      "raw": "nevermind",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
+        "context_command",
+        "session"
       ],
-      "timestamp": 1784319618,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.8876954317092896,
-      "context": "conversation",
-      "domain": "base",
-      "id": 7002646755022953886,
-      "importance": 0.8876954317092896,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\"]",
-      "parent_id": 10744991204378372359,
-      "raw": "person#1 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1786391323,
+      "timestamp": 1777689229,
       "type": "string"
     },
     {
@@ -3896,6 +3873,29 @@
         "object:1"
       ],
       "timestamp": 1777830392,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8876954317092896,
+      "context": "conversation",
+      "domain": "base",
+      "id": 7002646755022953886,
+      "importance": 0.8876954317092896,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 10744991204378372359,
+      "raw": "person#1 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1786391323,
       "type": "string"
     },
     {
@@ -4032,29 +4032,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.9236295223236084,
-      "context": "conversation",
-      "domain": "base",
-      "id": 11252823026776703184,
-      "importance": 0.9236295223236084,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"i\", \"a\"]",
-      "parent_id": 15545617931016562047,
-      "raw": "person#1 labelled [\"i\", \"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784235497,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8931204080581665,
       "context": "conversation",
       "domain": "base",
@@ -4074,6 +4051,29 @@
         "object:47"
       ],
       "timestamp": 1786391943,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.9236295223236084,
+      "context": "conversation",
+      "domain": "base",
+      "id": 11252823026776703184,
+      "importance": 0.9236295223236084,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"i\", \"a\"]",
+      "parent_id": 15545617931016562047,
+      "raw": "person#1 labelled [\"i\", \"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1784235497,
       "type": "string"
     },
     {
@@ -4147,29 +4147,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8965719938278198,
-      "context": "conversation",
-      "domain": "base",
-      "id": 12448109813503448062,
-      "importance": 0.8965719938278198,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"ar\"]",
-      "parent_id": 15545617931016562047,
-      "raw": "person#1 labelled [\"ar\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784235584,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8304953575134277,
       "context": "conversation",
       "domain": "base",
@@ -4193,38 +4170,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8595044612884521,
+      "confidence": 0.8965719938278198,
       "context": "conversation",
       "domain": "base",
-      "id": 9042930325672848000,
-      "importance": 0.8595044612884521,
+      "id": 12448109813503448062,
+      "importance": 0.8965719938278198,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"aa\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"aa\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:2"
-      ],
-      "timestamp": 1786391137,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.88634192943573,
-      "context": "conversation",
-      "domain": "base",
-      "id": 50728345966069844,
-      "importance": 0.88634192943573,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"l\"]",
+      "normalized": "person#1 labelled [\"ar\"]",
       "parent_id": 15545617931016562047,
-      "raw": "person#1 labelled [\"l\"]",
+      "raw": "person#1 labelled [\"ar\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -4234,7 +4188,7 @@
         "class:person",
         "object:1"
       ],
-      "timestamp": 1784235588,
+      "timestamp": 1784235584,
       "type": "string"
     },
     {
@@ -4262,15 +4216,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.630781888961792,
+      "confidence": 0.88634192943573,
       "context": "conversation",
       "domain": "base",
-      "id": 3272110336790300421,
-      "importance": 0.630781888961792,
+      "id": 50728345966069844,
+      "importance": 0.88634192943573,
       "modality": "vision",
-      "normalized": "person#1 labelled [\"c\", \"i\"]",
-      "parent_id": 17116476052167967919,
-      "raw": "person#1 labelled [\"c\", \"i\"]",
+      "normalized": "person#1 labelled [\"l\"]",
+      "parent_id": 15545617931016562047,
+      "raw": "person#1 labelled [\"l\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -4280,7 +4234,30 @@
         "class:person",
         "object:1"
       ],
-      "timestamp": 1784252679,
+      "timestamp": 1784235588,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8595044612884521,
+      "context": "conversation",
+      "domain": "base",
+      "id": 9042930325672848000,
+      "importance": 0.8595044612884521,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"aa\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"aa\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391137,
       "type": "string"
     },
     {
@@ -4304,6 +4281,29 @@
         "object:47"
       ],
       "timestamp": 1786392040,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.630781888961792,
+      "context": "conversation",
+      "domain": "base",
+      "id": 3272110336790300421,
+      "importance": 0.630781888961792,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"c\", \"i\"]",
+      "parent_id": 17116476052167967919,
+      "raw": "person#1 labelled [\"c\", \"i\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1784252679,
       "type": "string"
     },
     {
@@ -4377,29 +4377,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.7473989725112915,
-      "context": "conversation",
-      "domain": "base",
-      "id": 18089929518509450703,
-      "importance": 0.7473989725112915,
-      "modality": "vision",
-      "normalized": "person#4 labelled [\"a\"]",
-      "parent_id": 5938715883984048262,
-      "raw": "person#4 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:4"
-      ],
-      "timestamp": 1784258889,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.6778533458709717,
       "context": "conversation",
       "domain": "base",
@@ -4419,6 +4396,29 @@
         "object:77"
       ],
       "timestamp": 1786392859,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.7473989725112915,
+      "context": "conversation",
+      "domain": "base",
+      "id": 18089929518509450703,
+      "importance": 0.7473989725112915,
+      "modality": "vision",
+      "normalized": "person#4 labelled [\"a\"]",
+      "parent_id": 5938715883984048262,
+      "raw": "person#4 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:4"
+      ],
+      "timestamp": 1784258889,
       "type": "string"
     },
     {
@@ -4676,15 +4676,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.6155245304107666,
+      "confidence": 0.8986274003982544,
       "context": "conversation",
       "domain": "base",
-      "id": 944559633486906604,
-      "importance": 0.6155245304107666,
+      "id": 10254517268903006151,
+      "importance": 0.8986274003982544,
       "modality": "vision",
-      "normalized": "person#34 labelled [\"i\"]",
-      "parent_id": 9642431544260498138,
-      "raw": "person#34 labelled [\"i\"]",
+      "normalized": "person#47 labelled [\"nhennons\"]",
+      "parent_id": 9862574768647179767,
+      "raw": "person#47 labelled [\"nhennons\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -4692,9 +4692,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:34"
+        "object:47"
       ],
-      "timestamp": 1784259257,
+      "timestamp": 1786391967,
       "type": "string"
     },
     {
@@ -4722,38 +4722,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8986274003982544,
+      "confidence": 0.6155245304107666,
       "context": "conversation",
       "domain": "base",
-      "id": 10254517268903006151,
-      "importance": 0.8986274003982544,
+      "id": 944559633486906604,
+      "importance": 0.6155245304107666,
       "modality": "vision",
-      "normalized": "person#47 labelled [\"nhennons\"]",
-      "parent_id": 9862574768647179767,
-      "raw": "person#47 labelled [\"nhennons\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:47"
-      ],
-      "timestamp": 1786391967,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.7249573469161987,
-      "context": "conversation",
-      "domain": "base",
-      "id": 13685484348092889589,
-      "importance": 0.7249573469161987,
-      "modality": "vision",
-      "normalized": "person#34 labelled [\"a\"]",
-      "parent_id": 619316878740676416,
-      "raw": "person#34 labelled [\"a\"]",
+      "normalized": "person#34 labelled [\"i\"]",
+      "parent_id": 9642431544260498138,
+      "raw": "person#34 labelled [\"i\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -4763,7 +4740,7 @@
         "class:person",
         "object:34"
       ],
-      "timestamp": 1784259364,
+      "timestamp": 1784259257,
       "type": "string"
     },
     {
@@ -4787,6 +4764,29 @@
         "object:1"
       ],
       "timestamp": 1784319525,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.7249573469161987,
+      "context": "conversation",
+      "domain": "base",
+      "id": 13685484348092889589,
+      "importance": 0.7249573469161987,
+      "modality": "vision",
+      "normalized": "person#34 labelled [\"a\"]",
+      "parent_id": 619316878740676416,
+      "raw": "person#34 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:34"
+      ],
+      "timestamp": 1784259364,
       "type": "string"
     },
     {
@@ -4837,29 +4837,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.5639187693595886,
-      "context": "conversation",
-      "domain": "base",
-      "id": 3219844576476189496,
-      "importance": 0.5639187693595886,
-      "modality": "vision",
-      "normalized": "person#75 labelled [\"a\"]",
-      "parent_id": 9653850913111152026,
-      "raw": "person#75 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:75"
-      ],
-      "timestamp": 1784265143,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.6141589879989624,
       "context": "conversation",
       "domain": "base",
@@ -4879,6 +4856,29 @@
         "object:5"
       ],
       "timestamp": 1784264478,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.5639187693595886,
+      "context": "conversation",
+      "domain": "base",
+      "id": 3219844576476189496,
+      "importance": 0.5639187693595886,
+      "modality": "vision",
+      "normalized": "person#75 labelled [\"a\"]",
+      "parent_id": 9653850913111152026,
+      "raw": "person#75 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:75"
+      ],
+      "timestamp": 1784265143,
       "type": "string"
     },
     {
@@ -4929,29 +4929,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.5639187693595886,
-      "context": "conversation",
-      "domain": "base",
-      "id": 3377024478457314366,
-      "importance": 0.5639187693595886,
-      "modality": "vision",
-      "normalized": "person#75 labelled [\"4\"]",
-      "parent_id": 9653850913111152026,
-      "raw": "person#75 labelled [\"4\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:75"
-      ],
-      "timestamp": 1784265146,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.6379604339599609,
       "context": "conversation",
       "domain": "base",
@@ -4971,6 +4948,29 @@
         "object:76"
       ],
       "timestamp": 1786392485,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.5639187693595886,
+      "context": "conversation",
+      "domain": "base",
+      "id": 3377024478457314366,
+      "importance": 0.5639187693595886,
+      "modality": "vision",
+      "normalized": "person#75 labelled [\"4\"]",
+      "parent_id": 9653850913111152026,
+      "raw": "person#75 labelled [\"4\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:75"
+      ],
+      "timestamp": 1784265146,
       "type": "string"
     },
     {
@@ -4998,29 +4998,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.5639187693595886,
-      "context": "conversation",
-      "domain": "base",
-      "id": 17776550660411307886,
-      "importance": 0.5639187693595886,
-      "modality": "vision",
-      "normalized": "person#75 labelled [\"l\"]",
-      "parent_id": 9653850913111152026,
-      "raw": "person#75 labelled [\"l\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:75"
-      ],
-      "timestamp": 1784265154,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8724038600921631,
       "context": "conversation",
       "domain": "base",
@@ -5040,6 +5017,29 @@
         "object:1"
       ],
       "timestamp": 1784319281,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.5639187693595886,
+      "context": "conversation",
+      "domain": "base",
+      "id": 17776550660411307886,
+      "importance": 0.5639187693595886,
+      "modality": "vision",
+      "normalized": "person#75 labelled [\"l\"]",
+      "parent_id": 9653850913111152026,
+      "raw": "person#75 labelled [\"l\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:75"
+      ],
+      "timestamp": 1784265154,
       "type": "string"
     },
     {
@@ -5090,29 +5090,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8615539073944092,
-      "context": "conversation",
-      "domain": "base",
-      "id": 1597050697335405293,
-      "importance": 0.8615539073944092,
-      "modality": "vision",
-      "normalized": "person#13 labelled [\"c\"]",
-      "parent_id": 17863122507213986377,
-      "raw": "person#13 labelled [\"c\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:13"
-      ],
-      "timestamp": 1784305642,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8844479322433472,
       "context": "conversation",
       "domain": "base",
@@ -5132,6 +5109,29 @@
         "object:7"
       ],
       "timestamp": 1784305123,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8615539073944092,
+      "context": "conversation",
+      "domain": "base",
+      "id": 1597050697335405293,
+      "importance": 0.8615539073944092,
+      "modality": "vision",
+      "normalized": "person#13 labelled [\"c\"]",
+      "parent_id": 17863122507213986377,
+      "raw": "person#13 labelled [\"c\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:13"
+      ],
+      "timestamp": 1784305642,
       "type": "string"
     },
     {
@@ -5343,29 +5343,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.6348686218261719,
-      "context": "conversation",
-      "domain": "base",
-      "id": 18433548413186579328,
-      "importance": 0.6348686218261719,
-      "modality": "vision",
-      "normalized": "couch#8 labelled [\"t\"]",
-      "parent_id": 9447610450076954301,
-      "raw": "couch#8 labelled [\"t\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:couch",
-        "object:8"
-      ],
-      "timestamp": 1784319126,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.6160464286804199,
       "context": "conversation",
       "domain": "base",
@@ -5389,25 +5366,25 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8827365636825562,
+      "confidence": 0.6348686218261719,
       "context": "conversation",
       "domain": "base",
-      "id": 9644342634712606958,
-      "importance": 0.8827365636825562,
+      "id": 18433548413186579328,
+      "importance": 0.6348686218261719,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"ane\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"ane\"]",
+      "normalized": "couch#8 labelled [\"t\"]",
+      "parent_id": 9447610450076954301,
+      "raw": "couch#8 labelled [\"t\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
         "physical",
         "perception",
         "ocr",
-        "class:person",
-        "object:2"
+        "class:couch",
+        "object:8"
       ],
-      "timestamp": 1786391329,
+      "timestamp": 1784319126,
       "type": "string"
     },
     {
@@ -5431,6 +5408,29 @@
         "object:1"
       ],
       "timestamp": 1784319287,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8827365636825562,
+      "context": "conversation",
+      "domain": "base",
+      "id": 9644342634712606958,
+      "importance": 0.8827365636825562,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"ane\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"ane\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391329,
       "type": "string"
     },
     {
@@ -5757,29 +5757,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8184905648231506,
-      "context": "conversation",
-      "domain": "base",
-      "id": 16500673589526009846,
-      "importance": 0.8184905648231506,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"if\", \"3\"]",
-      "parent_id": 57277452335961420,
-      "raw": "person#1 labelled [\"if\", \"3\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784319638,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8713537454605103,
       "context": "conversation",
       "domain": "base",
@@ -5799,6 +5776,29 @@
         "object:47"
       ],
       "timestamp": 1786391932,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8184905648231506,
+      "context": "conversation",
+      "domain": "base",
+      "id": 16500673589526009846,
+      "importance": 0.8184905648231506,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"if\", \"3\"]",
+      "parent_id": 57277452335961420,
+      "raw": "person#1 labelled [\"if\", \"3\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1784319638,
       "type": "string"
     },
     {
@@ -5941,29 +5941,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.6253165006637573,
-      "context": "conversation",
-      "domain": "base",
-      "id": 4922647394996448862,
-      "importance": 0.6253165006637573,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\"]",
-      "parent_id": 57277452335961420,
-      "raw": "person#1 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784319691,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8628225326538086,
       "context": "conversation",
       "domain": "base",
@@ -5987,15 +5964,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8739491701126099,
+      "confidence": 0.6253165006637573,
       "context": "conversation",
       "domain": "base",
-      "id": 4911833236822427323,
-      "importance": 0.8739491701126099,
+      "id": 4922647394996448862,
+      "importance": 0.6253165006637573,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"fas\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"fas\"]",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 57277452335961420,
+      "raw": "person#1 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -6003,9 +5980,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:2"
+        "object:1"
       ],
-      "timestamp": 1786391291,
+      "timestamp": 1784319691,
       "type": "string"
     },
     {
@@ -6033,6 +6010,29 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.8739491701126099,
+      "context": "conversation",
+      "domain": "base",
+      "id": 4911833236822427323,
+      "importance": 0.8739491701126099,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"fas\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"fas\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391291,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.8678135871887207,
       "context": "conversation",
       "domain": "base",
@@ -6052,29 +6052,6 @@
         "object:1"
       ],
       "timestamp": 1784319731,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.8373234868049622,
-      "context": "conversation",
-      "domain": "base",
-      "id": 1251105132741721359,
-      "importance": 0.8373234868049622,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"a\"]",
-      "parent_id": 57277452335961420,
-      "raw": "person#1 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1784319734,
       "type": "string"
     },
     {
@@ -6102,15 +6079,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8771191835403442,
+      "confidence": 0.8373234868049622,
       "context": "conversation",
       "domain": "base",
-      "id": 2511103899280650946,
-      "importance": 0.8771191835403442,
+      "id": 1251105132741721359,
+      "importance": 0.8373234868049622,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"ta\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"ta\"]",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 57277452335961420,
+      "raw": "person#1 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -6118,9 +6095,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:2"
+        "object:1"
       ],
-      "timestamp": 1786391267,
+      "timestamp": 1784319734,
       "type": "string"
     },
     {
@@ -6144,6 +6121,29 @@
         "object:1"
       ],
       "timestamp": 1784319941,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8771191835403442,
+      "context": "conversation",
+      "domain": "base",
+      "id": 2511103899280650946,
+      "importance": 0.8771191835403442,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"ta\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"ta\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391267,
       "type": "string"
     },
     {
@@ -6286,29 +6286,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8776821494102478,
-      "context": "conversation",
-      "domain": "base",
-      "id": 14366029968058848379,
-      "importance": 0.8776821494102478,
-      "modality": "vision",
-      "normalized": "person#2 labelled [\"a\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:2"
-      ],
-      "timestamp": 1786391272,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8619680404663086,
       "context": "conversation",
       "domain": "base",
@@ -6332,15 +6309,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8654789924621582,
+      "confidence": 0.8776821494102478,
       "context": "conversation",
       "domain": "base",
-      "id": 13706472601687995332,
-      "importance": 0.8654789924621582,
+      "id": 14366029968058848379,
+      "importance": 0.8776821494102478,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"ct\"]",
+      "normalized": "person#2 labelled [\"a\"]",
       "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"ct\"]",
+      "raw": "person#2 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -6350,7 +6327,7 @@
         "class:person",
         "object:2"
       ],
-      "timestamp": 1786391323,
+      "timestamp": 1786391272,
       "type": "string"
     },
     {
@@ -6374,6 +6351,29 @@
         "object:2"
       ],
       "timestamp": 1786391252,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8654789924621582,
+      "context": "conversation",
+      "domain": "base",
+      "id": 13706472601687995332,
+      "importance": 0.8654789924621582,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"ct\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"ct\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391323,
       "type": "string"
     },
     {
@@ -6470,29 +6470,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8775200247764587,
-      "context": "conversation",
-      "domain": "base",
-      "id": 15913115089146766325,
-      "importance": 0.8775200247764587,
-      "modality": "vision",
-      "normalized": "person#2 labelled [\"aa\"]",
-      "parent_id": 1911709982921771606,
-      "raw": "person#2 labelled [\"aa\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:2"
-      ],
-      "timestamp": 1786391307,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8466682434082031,
       "context": "conversation",
       "domain": "base",
@@ -6512,6 +6489,29 @@
         "object:47"
       ],
       "timestamp": 1786391960,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8775200247764587,
+      "context": "conversation",
+      "domain": "base",
+      "id": 15913115089146766325,
+      "importance": 0.8775200247764587,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"aa\"]",
+      "parent_id": 1911709982921771606,
+      "raw": "person#2 labelled [\"aa\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391307,
       "type": "string"
     },
     {
@@ -6608,15 +6608,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8729598522186279,
+      "confidence": 0.5874870419502258,
       "context": "conversation",
       "domain": "base",
-      "id": 10936240245993511653,
-      "importance": 0.8729598522186279,
+      "id": 13002368557240243161,
+      "importance": 0.5874870419502258,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"a\"]",
-      "parent_id": 10453825346317334970,
-      "raw": "person#2 labelled [\"a\"]",
+      "normalized": "person#107 labelled [\"mazine\", \"1n\", \"dces\"]",
+      "parent_id": 7471711594066658352,
+      "raw": "person#107 labelled [\"mazine\", \"1n\", \"dces\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -6624,9 +6624,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:2"
+        "object:107"
       ],
-      "timestamp": 1786391463,
+      "timestamp": 1786393013,
       "type": "string"
     },
     {
@@ -6654,15 +6654,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.5874870419502258,
+      "confidence": 0.8729598522186279,
       "context": "conversation",
       "domain": "base",
-      "id": 13002368557240243161,
-      "importance": 0.5874870419502258,
+      "id": 10936240245993511653,
+      "importance": 0.8729598522186279,
       "modality": "vision",
-      "normalized": "person#107 labelled [\"mazine\", \"1n\", \"dces\"]",
-      "parent_id": 7471711594066658352,
-      "raw": "person#107 labelled [\"mazine\", \"1n\", \"dces\"]",
+      "normalized": "person#2 labelled [\"a\"]",
+      "parent_id": 10453825346317334970,
+      "raw": "person#2 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -6670,9 +6670,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:107"
+        "object:2"
       ],
-      "timestamp": 1786393013,
+      "timestamp": 1786391463,
       "type": "string"
     },
     {
@@ -6700,29 +6700,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8550257682800293,
-      "context": "conversation",
-      "domain": "base",
-      "id": 6233238943236223805,
-      "importance": 0.8550257682800293,
-      "modality": "vision",
-      "normalized": "person#2 labelled [\"a\"]",
-      "parent_id": 10453825346317334970,
-      "raw": "person#2 labelled [\"a\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:2"
-      ],
-      "timestamp": 1786391470,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8245095014572144,
       "context": "conversation",
       "domain": "base",
@@ -6746,15 +6723,15 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.7606250047683716,
+      "confidence": 0.8550257682800293,
       "context": "conversation",
       "domain": "base",
-      "id": 12295249621832613664,
-      "importance": 0.7606250047683716,
+      "id": 6233238943236223805,
+      "importance": 0.8550257682800293,
       "modality": "vision",
-      "normalized": "person#2 labelled [\"ak\"]",
+      "normalized": "person#2 labelled [\"a\"]",
       "parent_id": 10453825346317334970,
-      "raw": "person#2 labelled [\"ak\"]",
+      "raw": "person#2 labelled [\"a\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "tags": [
@@ -6764,7 +6741,7 @@
         "class:person",
         "object:2"
       ],
-      "timestamp": 1786391482,
+      "timestamp": 1786391470,
       "type": "string"
     },
     {
@@ -6788,6 +6765,29 @@
         "object:1"
       ],
       "timestamp": 1786391699,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.7606250047683716,
+      "context": "conversation",
+      "domain": "base",
+      "id": 12295249621832613664,
+      "importance": 0.7606250047683716,
+      "modality": "vision",
+      "normalized": "person#2 labelled [\"ak\"]",
+      "parent_id": 10453825346317334970,
+      "raw": "person#2 labelled [\"ak\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:2"
+      ],
+      "timestamp": 1786391482,
       "type": "string"
     },
     {
@@ -6930,29 +6930,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8134064674377441,
-      "context": "conversation",
-      "domain": "base",
-      "id": 8750516943920925175,
-      "importance": 0.8134064674377441,
-      "modality": "vision",
-      "normalized": "person#1 labelled [\"saes\"]",
-      "parent_id": 12790635516859004557,
-      "raw": "person#1 labelled [\"saes\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:1"
-      ],
-      "timestamp": 1786391867,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.8366897106170654,
       "context": "conversation",
       "domain": "base",
@@ -6972,6 +6949,29 @@
         "object:85"
       ],
       "timestamp": 1786393000,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8134064674377441,
+      "context": "conversation",
+      "domain": "base",
+      "id": 8750516943920925175,
+      "importance": 0.8134064674377441,
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"saes\"]",
+      "parent_id": 12790635516859004557,
+      "raw": "person#1 labelled [\"saes\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1786391867,
       "type": "string"
     },
     {
@@ -7091,29 +7091,6 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8740931749343872,
-      "context": "conversation",
-      "domain": "base",
-      "id": 8649944767860313749,
-      "importance": 0.8740931749343872,
-      "modality": "vision",
-      "normalized": "person#47 labelled [\"mazine\"]",
-      "parent_id": 9862574768647179767,
-      "raw": "person#47 labelled [\"mazine\"]",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "tags": [
-        "physical",
-        "perception",
-        "ocr",
-        "class:person",
-        "object:47"
-      ],
-      "timestamp": 1786391970,
-      "type": "string"
-    },
-    {
-      "comm_type": "unknown",
       "confidence": 0.7216445207595825,
       "context": "conversation",
       "domain": "base",
@@ -7133,6 +7110,29 @@
         "object:8"
       ],
       "timestamp": 1786977107,
+      "type": "string"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8740931749343872,
+      "context": "conversation",
+      "domain": "base",
+      "id": 8649944767860313749,
+      "importance": 0.8740931749343872,
+      "modality": "vision",
+      "normalized": "person#47 labelled [\"mazine\"]",
+      "parent_id": 9862574768647179767,
+      "raw": "person#47 labelled [\"mazine\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:47"
+      ],
+      "timestamp": 1786391970,
       "type": "string"
     },
     {

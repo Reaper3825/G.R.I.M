@@ -74,6 +74,14 @@ public:
             entries[index].evidence_span};
     }
 
+    const GoalTokenSpan& constraintsSpan() const {
+        if (!hasConstraints()) {
+            throw std::runtime_error(
+                "GoalSpanView::constraintsSpan: constraints are absent");
+        }
+        return constraints_->span;
+    }
+
     std::size_t constraintCount() const noexcept {
         return hasConstraints() ? constraints_->entries.size() : 0;
     }

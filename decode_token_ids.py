@@ -97,6 +97,7 @@ class GrmtSequenceRecord:
     success_criteria: list[
         tuple[list[int], tuple[int, int], list[int], tuple[int, int]]
     ]
+    constraints_span: tuple[int, int] | None
     constraints: list[tuple[list[int], tuple[int, int]]]
     knowns: list[tuple[list[int], tuple[int, int]]]
     unknowns: list[tuple[list[int], tuple[int, int]]]
@@ -502,7 +503,9 @@ def read_goal_metadata(
             f"invalid GRMT constraints flag in {source}: {has_constraints}"
         )
     constraints = []
+    constraints_span = None
     if has_constraints:
+        constraints_span = (read_i32(f, source), read_i32(f, source))
         entry_count = read_u32(f, source)
         for _ in range(entry_count):
             token_ids = read_i32_array(f, read_u32(f, source), source)
@@ -514,6 +517,7 @@ def read_goal_metadata(
         target_state_span,
         criteria_span,
         success_criteria,
+        constraints_span,
         constraints,
     )
 
@@ -535,7 +539,7 @@ def iter_grmt_sequences(path: Path):
       uint8 execution_active, int8 execution_gate_target
       int32 prompt_end_pos, int32 prompt_length
       uint8 has_goal + optional target-state, criterion/evidence, and
-          per-constraint token spans
+          outer-plus-per-entry constraint token spans
       uint32 known_count + known token IDs/spans
       uint32 unknown_count + unknown token IDs/spans
       int32[seq_len] token_exec_slots
@@ -638,6 +642,7 @@ def iter_grmt_sequences(path: Path):
                 target_state_span,
                 criteria_span,
                 success_criteria,
+                constraints_span,
                 constraints,
             ) = read_goal_metadata(f, row_source)
             knowns = read_concept_block_entry_spans(f, row_source)
@@ -675,6 +680,7 @@ def iter_grmt_sequences(path: Path):
                 target_state_span=target_state_span,
                 criteria_span=criteria_span,
                 success_criteria=success_criteria,
+                constraints_span=constraints_span,
                 constraints=constraints,
                 knowns=knowns,
                 unknowns=unknowns,

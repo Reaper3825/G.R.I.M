@@ -321,18 +321,14 @@ std::future<std::string> callAIAsync(
         ctx.metadata_json = meta.toJson().dump();
         ctx.tool_registry_version = toolReg.version();
 
-        // Carry the same prior conversation used by direct backends into MMO
-        // requests. The current prompt is intentionally not in this history.
+        // Pull the system prompt from the session's authoritative history
+        // (SessionContextManager); the current prompt is passed separately
+        // via ctx.prompt.
         for (const auto& message : scm.getMessages(session_id)) {
             if (message.role == "system") {
                 ctx.system_prompt = message.content;
-                continue;
+                break;
             }
-
-            GRIM::MMO::TurnSummary turn;
-            turn.role = message.role;
-            turn.text = message.content;
-            ctx.recent_turns.push_back(std::move(turn));
         }
 
         auto result = g_orchestrator->generate(ctx);

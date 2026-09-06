@@ -206,12 +206,19 @@ schema with required and optional fields:
   the criterion-to-evidence association.
 - A success criterion's `evidence` is optional. Omit it or store an empty
   string when the criterion is intentionally waiting for evidence generation.
+- `goal.constraints` is an ordered array with the same collection shape as
+  success criteria: one outer `<constraints>` wrapper enclosing an ordered
+  `<constraint>` entry per item. Constraints have no evidence pairing.
 - For concept-mode SFT, the prompt is pinned before the goal decomposition in
   this exact logical order: `<prompt>`, `<target_state>`, outer `<criteria>`,
   then each `<criterion>` immediately followed by its matching `<evidence>`
-  when present, followed by the response.
-- These delimiter strings appear in DataHub's logical training preview only.
-  They are stored as half-open token spans and never enter model `input_ids`.
+  when present, then outer `<constraints>` with its ordered `<constraint>`
+  entries, followed by the response.
+- As of GRMT v26 these state labels are model-visible: they are emitted into
+  the compiled text and do enter model `input_ids`. The recorded half-open
+  spans cover field *values* only, excluding the surrounding labels, and each
+  collection's outer span contains its entries rather than coinciding with
+  them.
 
 ---
 

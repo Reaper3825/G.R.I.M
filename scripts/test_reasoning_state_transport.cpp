@@ -32,7 +32,7 @@ int main() {
     assert(input.find("<target_state>\nFind consumed volume") != std::string::npos);
     assert(input.find("<criterion>\nOne assignment") != std::string::npos);
     assert(input.find("<evidence>\nSubtraction applies") != std::string::npos);
-    assert(input.find("<constraints>\nUse liters") != std::string::npos);
+    assert(input.find("<constraints>\n<constraint>\nUse liters") != std::string::npos);
     block.answer = "consumed = 36 liters";
     auto training = GRIM::ConceptCanonical::render(block);
     assert(input == training.text.substr(0, training.answer.begin));

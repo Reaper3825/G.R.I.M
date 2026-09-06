@@ -245,22 +245,31 @@ void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
                 }
             }
         }
+        // The outer span opens after the collection's opening label and closes
+        // after the final entry's closing label, so it contains the ordered
+        // pairs rather than coinciding with them. Entry labels are model-
+        // visible (v26), which is why this is containment, not equality.
         const auto& last_entry = entries.back();
         const std::int32_t last_end = last_entry.evidence_span.valid()
             ? last_entry.evidence_span.end
             : last_entry.criterion_span.end;
-        if (criteria.span.begin != entries.front().criterion_span.begin ||
-            criteria.span.end != last_end) {
+        if (criteria.span.begin > entries.front().criterion_span.begin ||
+            criteria.span.end < last_end) {
             throw std::runtime_error(
                 "[GRMT] " + source +
-                ": outer criteria span does not enclose the ordered pairs exactly");
+                ": outer criteria span does not enclose the ordered pairs");
         }
     }
     if (goal->constraints.has_value()) {
-        const auto& entries = goal->constraints->entries;
+        const auto& constraints = *goal->constraints;
+        const auto& entries = constraints.entries;
         if (entries.empty()) {
             throw std::runtime_error(
                 "[GRMT] " + source + ": goal.constraints has no entries");
+        }
+        if (!constraints.span.valid()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": goal.constraints span is invalid");
         }
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const std::string field =
@@ -276,6 +285,12 @@ void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
                     "[GRMT] " + source +
                     ": constraint spans overlap or are out of order");
             }
+        }
+        if (constraints.span.begin > entries.front().constraint_span.begin ||
+            constraints.span.end < entries.back().constraint_span.end) {
+            throw std::runtime_error(
+                "[GRMT] " + source +
+                ": outer constraints span does not enclose the ordered entries");
         }
     }
 }
@@ -597,6 +612,7 @@ void writeGoalForSequence(std::ostream& output,
         const auto& entries = sequence.goal->constraints->entries;
         const std::uint32_t entry_count =
             checkedCount(entries.size(), "goal.constraints", sink);
+        writeGoalSpan(output, sequence.goal->constraints->span, sink);
         writeScalar(output, entry_count, sink);
         for (const auto& entry : entries) {
             writeTokenIds(output, entry.token_ids,
@@ -663,6 +679,7 @@ std::shared_ptr<const GRIM::Goal> readGoalForSequence(
     }
     if (has_constraints != 0) {
         GRIM::Constraints constraints;
+        constraints.span = readGoalSpan(input, source);
         const std::uint32_t entry_count =
             readScalar<std::uint32_t>(input, source);
         constraints.entries.reserve(entry_count);

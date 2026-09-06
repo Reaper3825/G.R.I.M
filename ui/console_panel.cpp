@@ -424,7 +424,7 @@ void ConsolePanel::submitPrompt(const std::string& prompt)
     history.push(
         timestamp + "  " + prompt,
         UITheme::Colors::PrimaryLight,
-        ConsoleHistory::Alignment::Right);
+        "user");
 
     // Display-only note: use the same state snapshot as the queued request.
     // These placeholders never enter conversation history or model input.
@@ -452,14 +452,18 @@ void ConsolePanel::submitPrompt(const std::string& prompt)
     stateNote += " | Goal success criteria: " +
         (criteriaCount == 0 ? std::string("(empty)") : std::to_string(criteriaCount) + " populated");
     stateNote += " | Goal constraints: " + entrySummary(goal.constraints);
-    history.push(stateNote, UITheme::Colors::TextSecondary, ConsoleHistory::Alignment::Right);
+    history.push(stateNote, UITheme::Colors::TextSecondary, "user");
 
     const std::string turnId = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     sessionManager.beginTurn(session.id, turnId, prompt, prompt);
     session.committed = true;
 
-    pendingRequests.push_back({session.id, prompt, reasoningState});
+    // Role delimiter on the model-facing prompt only. The display bubble and
+    // the turn record above keep the raw text; the model sees the turn's role
+    // as a delimiter rather than inferring it from position.
+    pendingRequests.push_back(
+        {session.id, "<Human>\n" + prompt + "\n</Human>", reasoningState});
     startNextRequest();
 }
 

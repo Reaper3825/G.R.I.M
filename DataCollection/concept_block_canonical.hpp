@@ -39,8 +39,10 @@ struct RenderResult {
     LogicalByteSpan target_state;
     LogicalByteSpan criteria;
     std::vector<SuccessCriterionByteSpans> success_criteria;
-    // Each constraint owns an independent logical <constraints> span. There
-    // is intentionally no outer span covering the full collection.
+    // Mirrors the criteria collection: one outer <constraints> span plus an
+    // independent <constraint> span per entry. Constraints have no evidence
+    // pairing, so entries are bare spans rather than paired records.
+    LogicalByteSpan constraints_span;
     std::vector<LogicalByteSpan> constraints;
     // Top-level ConceptBlock collections. Each entry owns an independent span;
     // neither collection has an outer span.
@@ -189,21 +191,33 @@ inline RenderResult render(const nlohmann::json& j) {
         }
 
         if (goal.contains("constraints") &&
-            goal["constraints"].is_array()) {
+            goal["constraints"].is_array() &&
+            !goal["constraints"].empty()) {
+            out << "<constraints>\n";
+            result.constraints_span.begin = static_cast<size_t>(out.tellp());
+            size_t constraints_content_end = result.constraints_span.begin;
             result.constraints.reserve(goal["constraints"].size());
-            for (const auto& source_constraint : goal["constraints"]) {
+            for (size_t index = 0; index < goal["constraints"].size(); ++index) {
+                const auto& source_constraint = goal["constraints"][index];
                 LogicalByteSpan constraint;
                 if (source_constraint.is_string()) {
                     appendStateField(
-                        out, "constraints",
+                        out, "constraint",
                         source_constraint.get<std::string>(),
                         constraint);
                     if (constraint.present) {
-                        out << "\n\n";
+                        constraints_content_end = static_cast<size_t>(out.tellp());
                     }
                 }
                 result.constraints.push_back(constraint);
+                if (index + 1 < goal["constraints"].size()) {
+                    out << "\n\n";
+                }
             }
+            result.constraints_span.end = constraints_content_end;
+            result.constraints_span.present =
+                result.constraints_span.end > result.constraints_span.begin;
+            out << "\n</constraints>\n\n";
         }
     }
 
@@ -373,10 +387,19 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
             }
             out << "</criteria>\n\n";
         }
-        for (const auto& constraint : cb.goal->constraints) {
-            out << "<constraints>\n"
-                << constraint
-                << "\n</constraints>\n\n";
+        if (!cb.goal->constraints.empty()) {
+            out << "<constraints>\n";
+            for (size_t index = 0;
+                 index < cb.goal->constraints.size();
+                 ++index) {
+                out << "    <constraint>\n"
+                    << "    " << cb.goal->constraints[index] << "\n"
+                    << "    </constraint>\n";
+                if (index + 1 < cb.goal->constraints.size()) {
+                    out << "\n";
+                }
+            }
+            out << "</constraints>\n\n";
         }
     }
 

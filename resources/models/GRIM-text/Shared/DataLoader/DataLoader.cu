@@ -561,6 +561,7 @@ bool PrepareTrainingDataFromCache(
 			add_span(entry.criterion);
 			add_span(entry.evidence);
 		}
+		add_span(rendered.constraints_span);
 		for (const auto& constraint : rendered.constraints) {
 			add_span(constraint);
 		}
@@ -777,6 +778,11 @@ bool PrepareTrainingDataFromCache(
 			}
 
 			GRIM::Constraints constraints;
+			if (!source_entries.empty()) {
+				constraints.span = token_span(
+					rendered.constraints_span, boundaries, token_counts,
+					"goal.constraints");
+			}
 			for (std::size_t index = 0;
 			     index < source_entries.size();
 			     ++index) {

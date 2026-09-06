@@ -238,6 +238,8 @@ std::shared_ptr<const GRIM::Goal> offsetGoalSpans(
     }
     if (source->constraints.has_value()) {
         GRIM::Constraints constraints = *source->constraints;
+        constraints.span.begin += offset;
+        constraints.span.end += offset;
         for (auto& entry : constraints.entries) {
             entry.constraint_span.begin += offset;
             entry.constraint_span.end += offset;
@@ -338,12 +340,9 @@ bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
         static_cast<size_t>(goal->success_criteria->span.end) > source_end) {
         return false;
     }
-    if (goal->constraints.has_value()) {
-        for (const auto& entry : goal->constraints->entries) {
-            if (static_cast<size_t>(entry.constraint_span.end) > source_end) {
-                return false;
-            }
-        }
+    if (goal->constraints.has_value() &&
+        static_cast<size_t>(goal->constraints->span.end) > source_end) {
+        return false;
     }
     return true;
 }

@@ -51,6 +51,7 @@ table Constraint {
 }
 
 table Constraints {
+  span: GoalTokenSpan (required);
   entries: [Constraint] (required);
 }
 

@@ -12,6 +12,15 @@
 
 namespace GRIM {
 
+// Version 27 gives constraints the same collection shape as success criteria:
+// one outer <constraints> span containing the ordered <constraint> entries.
+// The rendered label layout changed with it (entries are now <constraint>
+// inside a single <constraints> wrapper instead of one <constraints> wrapper
+// per entry), so artifacts must be regenerated from source blocks.
+// v27 also corrects the outer-span check for both collections: since v26 made
+// entry labels model-visible, an outer span contains its entries rather than
+// coinciding with them, so equality was unsatisfiable for success criteria.
+//
 // Version 26 makes supplied state labels visible in reasoning-model context.
 // Rebuild artifacts so label tokens and all logical spans agree.
 //
@@ -49,7 +58,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 26;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 27;
 
 } // namespace GRIM
 
