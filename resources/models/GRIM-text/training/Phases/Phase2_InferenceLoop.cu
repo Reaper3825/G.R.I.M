@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "Phase2_InferenceLoop.hpp"
+#include "../../../../../DataCollection/concept_block_canonical.hpp"
 
 #include "../../Shared/AtomInsertion/AtomInsertionData.hpp"
 #include "../../Shared/AtomInsertion/AtomInsertionDecode.hpp"
@@ -1003,6 +1004,15 @@ Phase2TextInferenceResult executePhase2TextInference(
         end_decode - start_decode).count();
     result.sequence_token_count = sequence.token_ids.size();
     return result;
+}
+
+Phase2TextInferenceResult executePhase2TextInference(
+    TrainingContext& ctx,
+    GRIM::Tokenizer::UniByte& tokenizer,
+    const GRIM::ConceptBlock& supplied_state,
+    const GRIM::HyperParameters::GenerationHP& generation_hp) {
+    return executePhase2TextInference(ctx, tokenizer,
+        GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state), generation_hp);
 }
 
 } // namespace GRIMText::Training

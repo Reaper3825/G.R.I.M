@@ -2,8 +2,8 @@
 //  Shared ConceptBlock training-text renderer.
 //
 //  GRIM-text corpus compilation uses the model-visible renderer below.
-//  DataHub uses renderLogicalTrainingPreview() to expose the invisible span
-//  structure without inserting those tags into compiled model text.
+//  State tags are shared by training and structured inference. DataHub
+//  additionally displays inspection-only prompt/answer wrappers.
 //======================================================//
 
 #pragma once
@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,8 +34,8 @@ struct SuccessCriterionByteSpans {
 
 struct RenderResult {
     std::string text;
-    // Invisible logical goal delimiters. All ranges are half-open byte spans
-    // into text and none of the delimiter strings are emitted.
+    // State labels are model-visible. Field ranges are half-open byte spans
+    // over values, excluding their opening/closing labels.
     LogicalByteSpan target_state;
     LogicalByteSpan criteria;
     std::vector<SuccessCriterionByteSpans> success_criteria;
@@ -63,6 +64,14 @@ inline void appendLogicalSpan(std::ostringstream& out,
     out << text;
     span.end = static_cast<size_t>(out.tellp());
     span.present = true;
+}
+
+inline void appendStateField(std::ostringstream& out, const char* label,
+                             const std::string& value, LogicalByteSpan& span) {
+    if (value.empty()) return;
+    out << "<" << label << ">\n";
+    appendLogicalSpan(out, value, span);
+    out << "\n</" << label << ">";
 }
 
 inline RenderResult render(const nlohmann::json& j) {
@@ -102,13 +111,13 @@ inline RenderResult render(const nlohmann::json& j) {
 
     auto append_entry_collection = [&out](
         const nlohmann::json& source,
-        std::vector<LogicalByteSpan>& spans) {
+        std::vector<LogicalByteSpan>& spans, const char* label) {
         spans.reserve(source.size());
         for (const auto& source_entry : source) {
             LogicalByteSpan entry;
             if (source_entry.is_string()) {
-                appendLogicalSpan(
-                    out, source_entry.get<std::string>(), entry);
+                appendStateField(
+                    out, label, source_entry.get<std::string>(), entry);
                 if (entry.present) {
                     out << "\n\n";
                 }
@@ -117,17 +126,17 @@ inline RenderResult render(const nlohmann::json& j) {
         }
     };
     if (j.contains("knowns") && j["knowns"].is_array()) {
-        append_entry_collection(j["knowns"], result.knowns);
+        append_entry_collection(j["knowns"], result.knowns, "knowns");
     }
     if (j.contains("unknowns") && j["unknowns"].is_array()) {
-        append_entry_collection(j["unknowns"], result.unknowns);
+        append_entry_collection(j["unknowns"], result.unknowns, "unknowns");
     }
 
     if (j.contains("goal") && j["goal"].is_object()) {
         const auto& goal = j["goal"];
         if (goal.contains("target_state") && goal["target_state"].is_string()) {
-            appendLogicalSpan(
-                out, goal["target_state"].get<std::string>(), result.target_state);
+            appendStateField(
+                out, "target_state", goal["target_state"].get<std::string>(), result.target_state);
             if (result.target_state.present) {
                 out << "\n\n";
             }
@@ -136,6 +145,7 @@ inline RenderResult render(const nlohmann::json& j) {
         if (goal.contains("success_criteria") &&
             goal["success_criteria"].is_array() &&
             !goal["success_criteria"].empty()) {
+            out << "<criteria>\n";
             result.criteria.begin = static_cast<size_t>(out.tellp());
             size_t criteria_content_end = result.criteria.begin;
             result.success_criteria.reserve(goal["success_criteria"].size());
@@ -145,12 +155,12 @@ inline RenderResult render(const nlohmann::json& j) {
                 if (source_entry.is_object()) {
                     if (source_entry.contains("criterion") &&
                         source_entry["criterion"].is_string()) {
-                        appendLogicalSpan(
-                            out,
+                        appendStateField(
+                            out, "criterion",
                             source_entry["criterion"].get<std::string>(),
                             entry.criterion);
                         if (entry.criterion.present) {
-                            criteria_content_end = entry.criterion.end;
+                            criteria_content_end = static_cast<size_t>(out.tellp());
                         }
                     }
                     if (entry.criterion.present) {
@@ -158,12 +168,12 @@ inline RenderResult render(const nlohmann::json& j) {
                     }
                     if (source_entry.contains("evidence") &&
                         source_entry["evidence"].is_string()) {
-                        appendLogicalSpan(
-                            out,
+                        appendStateField(
+                            out, "evidence",
                             source_entry["evidence"].get<std::string>(),
                             entry.evidence);
                         if (entry.evidence.present) {
-                            criteria_content_end = entry.evidence.end;
+                            criteria_content_end = static_cast<size_t>(out.tellp());
                         }
                     }
                 }
@@ -175,9 +185,7 @@ inline RenderResult render(const nlohmann::json& j) {
             result.criteria.end = criteria_content_end;
             result.criteria.present =
                 result.criteria.end > result.criteria.begin;
-            if (result.criteria.present) {
-                out << "\n\n";
-            }
+            out << "\n</criteria>\n\n";
         }
 
         if (goal.contains("constraints") &&
@@ -186,8 +194,8 @@ inline RenderResult render(const nlohmann::json& j) {
             for (const auto& source_constraint : goal["constraints"]) {
                 LogicalByteSpan constraint;
                 if (source_constraint.is_string()) {
-                    appendLogicalSpan(
-                        out,
+                    appendStateField(
+                        out, "constraints",
                         source_constraint.get<std::string>(),
                         constraint);
                     if (constraint.present) {
@@ -221,6 +229,17 @@ inline RenderResult render(const nlohmann::json& j) {
 
     result.text = out.str();
     return result;
+}
+
+// Supplied state is context, never a target. Removing the answer through the
+// same renderer guarantees an exact match to the SFT prefix byte layout.
+inline std::string renderReasoningPrompt(const nlohmann::json& supplied_state) {
+    if (supplied_state.contains("raw") && supplied_state["raw"].is_string() &&
+        !supplied_state["raw"].get_ref<const std::string&>().empty())
+        throw std::invalid_argument("Structured reasoning requires state fields, not an opaque raw sequence");
+    auto context = supplied_state;
+    context.erase("answer");
+    return render(context).text;
 }
 
 inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
@@ -301,8 +320,12 @@ inline RenderResult render(const ConceptBlock& cb) {
     return render(toCanonicalJson(cb));
 }
 
-// Human-facing inspection form for the invisible logical spans used by corpus
-// compilation. These tags are never passed to UniByte or model input_ids.
+inline std::string renderReasoningPrompt(const ConceptBlock& supplied_state) {
+    return renderReasoningPrompt(toCanonicalJson(supplied_state));
+}
+
+// Human-facing inspection form. State tags also appear in model input;
+// prompt/answer wrappers remain inspection-only.
 inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
     if (cb.format_type == "raw" || !cb.raw.empty()) {
         return cb.raw;

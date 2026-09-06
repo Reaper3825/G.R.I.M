@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+namespace GRIM { struct ConceptBlock; }
+
 namespace GRIMText::Training {
 
 struct Phase2TextInferenceResult {
@@ -44,6 +46,14 @@ Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
      GRIM::Tokenizer::UniByte& tokenizer,
     const std::string& prompt,
+    const GRIM::HyperParameters::GenerationHP& generation_hp);
+
+// Structured state supplied by upstream models. Uses the training renderer;
+// an answer present on the input object is excluded from the inference prefix.
+Phase2TextInferenceResult executePhase2TextInference(
+    TrainingContext& ctx,
+    GRIM::Tokenizer::UniByte& tokenizer,
+    const GRIM::ConceptBlock& supplied_state,
     const GRIM::HyperParameters::GenerationHP& generation_hp);
 
 } // namespace GRIMText::Training
