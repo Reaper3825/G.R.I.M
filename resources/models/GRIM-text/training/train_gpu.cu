@@ -31,6 +31,7 @@
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
 #include "Phases/Phase2_InferenceLoop.hpp"
+#include "../../../../DataCollection/reasoning_state_json.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
@@ -172,7 +173,7 @@ json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& res
     };
 }
 
-std::string chatPromptFromRequest(const json& request) {
+std::string chatPromptFromRequest(const json& request, bool structured_state = false) {
     if (!request.contains("messages")) {
         throw std::runtime_error("inference worker chat request missing required field: messages");
     }
@@ -180,6 +181,10 @@ std::string chatPromptFromRequest(const json& request) {
     if (!messages.is_array()) {
         throw std::runtime_error("inference worker chat request field messages is not an array");
     }
+
+    if (structured_state && messages.size() == 1 &&
+        requireJsonString(messages.front(), "role") == "user")
+        return requireJsonString(messages.front(), "content");
 
     std::string prompt;
     for (const auto& msg : messages) {
@@ -195,7 +200,7 @@ std::string chatPromptFromRequest(const json& request) {
             throw std::runtime_error("inference worker chat request contains unsupported role: " + role);
         }
     }
-    prompt += "Assistant: ";
+    if (!structured_state) prompt += "Assistant: ";
     return prompt;
 }
 
@@ -224,11 +229,10 @@ int runInferenceWorker(
             const json request = json::parse(req.body);
             const std::string prompt = requireJsonString(request, "prompt");
             const auto gen_config = generationHPFromRequest(ctx.config, request);
-            const auto generated = GRIMText::Training::executePhase2TextInference(
-                ctx,
-                tokenizer,
-                prompt,
-                gen_config);
+            const auto generated = request.contains("reasoning_state")
+                ? GRIMText::Training::executePhase2TextInference(
+                    ctx, tokenizer, GRIM::reasoningStateFromJson(request.at("reasoning_state")).withPrompt(prompt), gen_config)
+                : GRIMText::Training::executePhase2TextInference(ctx, tokenizer, prompt, gen_config);
 
             json response = {
                 {"model", "grim-text"},
@@ -249,13 +253,12 @@ int runInferenceWorker(
     svr.Post("/internal/chat", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json request = json::parse(req.body);
-            const std::string prompt = chatPromptFromRequest(request);
+            const std::string prompt = chatPromptFromRequest(request, request.contains("reasoning_state"));
             const auto gen_config = generationHPFromRequest(ctx.config, request);
-            const auto generated = GRIMText::Training::executePhase2TextInference(
-                ctx,
-                tokenizer,
-                prompt,
-                gen_config);
+            const auto generated = request.contains("reasoning_state")
+                ? GRIMText::Training::executePhase2TextInference(
+                    ctx, tokenizer, GRIM::reasoningStateFromJson(request.at("reasoning_state")).withPrompt(prompt), gen_config)
+                : GRIMText::Training::executePhase2TextInference(ctx, tokenizer, prompt, gen_config);
 
             json response = {
                 {"model", "grim-text"},

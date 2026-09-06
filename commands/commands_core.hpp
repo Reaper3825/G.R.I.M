@@ -1,4 +1,6 @@
 #pragma once
+#include "DataCollection/reasoning_state.hpp"
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <functional>
@@ -43,7 +45,8 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
 
 // Process raw model input and return the response to the owning surface.
 CommandResult handleCommand(const std::string& line);
-CommandResult handleCommand(const std::string& line, const std::string& session_id);
+CommandResult handleCommand(const std::string& line, const std::string& session_id,
+                            std::optional<GRIM::ReasoningState> reasoning_state = std::nullopt);
 
 // Ensure that built-in / core plugins are registered
 void ensureCorePluginsRegistered();

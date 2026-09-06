@@ -2,6 +2,7 @@
 // See GrimNativeBackend.hpp for interface documentation.
 //======================================================//
 #include "GrimNativeBackend.hpp"
+#include "../../DataCollection/reasoning_state_json.hpp"
 
 #include "../../logger.hpp"
 
@@ -90,6 +91,7 @@ GenerationResult GrimNativeBackend::generateWithHistory(
     body["model"]    = "grim-text";
     body["messages"] = messages;
     body["stream"]   = false;
+    if (options.reasoning_state) body["reasoning_state"] = GRIM::reasoningStateToJson(*options.reasoning_state);
 
     if (options.max_tokens > 0)    body["max_tokens"]   = options.max_tokens;
     if (options.temperature > 0.0f) body["temperature"]  = options.temperature;

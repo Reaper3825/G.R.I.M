@@ -82,10 +82,11 @@ CommandResult handleCommand(const std::string& line) {
 
 CommandResult handleCommand(
     const std::string& line,
-    const std::string& session_id) {
+    const std::string& session_id,
+    std::optional<GRIM::ReasoningState> reasoning_state) {
     LOG_TRACE("HandleCommand", "START raw model input");
 
-    CommandResult result = ai_process(line, session_id);
+    CommandResult result = ai_process(line, session_id, std::move(reasoning_state));
 
     if (result.message.empty()) {
         result.message = "[AI] Failed to process request";

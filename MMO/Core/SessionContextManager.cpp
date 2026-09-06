@@ -430,4 +430,16 @@ ConsoleHistory& SessionContextManager::displayHistory(
     return *s.display_history;
 }
 
+void SessionContextManager::setReasoningState(const std::string& session_id,
+    std::optional<GRIM::ReasoningState> state) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    getOrCreate(session_id).reasoning_state = std::move(state);
+}
+
+std::optional<GRIM::ReasoningState> SessionContextManager::getReasoningState(const std::string& session_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto* session = get(session_id);
+    return session ? session->reasoning_state : std::nullopt;
+}
+
 } // namespace GRIM::MMO

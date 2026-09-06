@@ -44,7 +44,8 @@ void setLastCommand(const std::string& command);
 std::future<std::string> callAIAsync(const std::string& prompt);
 std::future<std::string> callAIAsync(
 	const std::string& prompt,
-	const std::string& session_id);
+	const std::string& session_id,
+    std::optional<GRIM::ReasoningState> reasoning_state = std::nullopt);
 
 // ====================================================
 // Conversation management (for KV cache optimization)
@@ -60,4 +61,5 @@ void warmupAI();
 CommandResult ai_process(const std::string& input);
 CommandResult ai_process(
 	const std::string& input,
-	const std::string& session_id);
+	const std::string& session_id,
+    std::optional<GRIM::ReasoningState> reasoning_state = std::nullopt);

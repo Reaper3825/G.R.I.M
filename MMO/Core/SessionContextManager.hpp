@@ -22,6 +22,7 @@
 
 #include "memory/unified_memory.hpp"
 #include "console_history.hpp"
+#include "DataCollection/reasoning_state.hpp"
 
 namespace GRIM::MMO {
 
@@ -181,6 +182,9 @@ struct ContextSnapshotV2 {
 class SessionContextManager {
 public:
     static SessionContextManager& instance();
+    // State persists until replaced/cleared; console submission copies a per-request snapshot.
+    void setReasoningState(const std::string& session_id, std::optional<GRIM::ReasoningState> state);
+    std::optional<GRIM::ReasoningState> getReasoningState(const std::string& session_id) const;
 
     // ─── Turn lifecycle ───────────────────────────────────
 
@@ -296,6 +300,7 @@ private:
 
     // Per-session state bucket
     struct SessionState {
+        std::optional<GRIM::ReasoningState> reasoning_state;
         std::string session_id;
         std::vector<TurnRecord> turns;
         std::vector<ReferentBinding> referents;

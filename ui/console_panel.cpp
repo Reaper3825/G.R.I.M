@@ -408,6 +408,11 @@ void ConsolePanel::executeCommand(const std::string& cmd)
     submitPrompt(cmd);
 }
 
+void ConsolePanel::setReasoningState(std::optional<GRIM::ReasoningState> state)
+{
+    GRIM::MMO::SessionContextManager::instance().setReasoningState(activeSession().id, std::move(state));
+}
+
 void ConsolePanel::submitPrompt(const std::string& prompt)
 {
     auto& session = activeSession();
@@ -421,12 +426,40 @@ void ConsolePanel::submitPrompt(const std::string& prompt)
         UITheme::Colors::PrimaryLight,
         ConsoleHistory::Alignment::Right);
 
+    // Display-only note: use the same state snapshot as the queued request.
+    // These placeholders never enter conversation history or model input.
+    const auto reasoningState = sessionManager.getReasoningState(session.id);
+    const auto hasText = [](const std::string& text) {
+        return text.find_first_not_of(" \t\r\n") != std::string::npos;
+    };
+    const auto entrySummary = [&hasText](const std::vector<std::string>& entries) {
+        const auto count = std::count_if(entries.begin(), entries.end(), hasText);
+        return count == 0 ? std::string("(empty)")
+                          : std::to_string(count) + " populated";
+    };
+    const GRIM::ReasoningState emptyState;
+    const auto& state = reasoningState ? *reasoningState : emptyState;
+    const GRIM::ConceptBlockGoal emptyGoal;
+    const auto& goal = state.goal ? *state.goal : emptyGoal;
+    const auto criteriaCount = std::count_if(
+        goal.success_criteria.begin(), goal.success_criteria.end(),
+        [&hasText](const auto& entry) { return hasText(entry.criterion); });
+    std::string stateNote = reasoningState ? "[State]" : "[State: not supplied]";
+    stateNote += " | Knowns: " + entrySummary(state.knowns);
+    stateNote += " | Unknowns: " + entrySummary(state.unknowns);
+    stateNote += std::string(" | Goal target state: ") +
+        (hasText(goal.target_state) ? "populated" : "(empty)");
+    stateNote += " | Goal success criteria: " +
+        (criteriaCount == 0 ? std::string("(empty)") : std::to_string(criteriaCount) + " populated");
+    stateNote += " | Goal constraints: " + entrySummary(goal.constraints);
+    history.push(stateNote, UITheme::Colors::TextSecondary, ConsoleHistory::Alignment::Right);
+
     const std::string turnId = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     sessionManager.beginTurn(session.id, turnId, prompt, prompt);
     session.committed = true;
 
-    pendingRequests.push_back({session.id, prompt});
+    pendingRequests.push_back({session.id, prompt, reasoningState});
     startNextRequest();
 }
 
@@ -438,11 +471,12 @@ void ConsolePanel::startNextRequest()
     pendingRequests.pop_front();
     const std::string sessionId = request.sessionId;
     const std::string prompt = request.prompt;
+    const auto reasoningState = request.reasoningState;
 
     activeRequest.emplace(ActiveRequest{
         sessionId,
-        std::async(std::launch::async, [sessionId, prompt]() {
-            return handleCommand(prompt, sessionId);
+        std::async(std::launch::async, [sessionId, prompt, reasoningState]() {
+            return handleCommand(prompt, sessionId, reasoningState);
         }),
         false
     });

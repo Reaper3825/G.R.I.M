@@ -20,6 +20,7 @@
 #include "../Phases/Phase2_InferenceLoop.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
+#include "../../../../../DataCollection/reasoning_state.hpp"
 
 #include <iostream>
 #include <sstream>
@@ -108,6 +109,32 @@ void logDiagnosticSample(TrainingContext& ctx,
 
     const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT",
         "A tank holds 120 liters. After using some, 84 liters remain. How many liters were used?");
+
+    // Mirror the reasoning-model contract used at runtime: upstream models
+    // supply structured state, while this model determines the next output.
+    // These strings are rendered as labeled, masked input context; they are
+    // never treated as answer targets.
+    GRIM::ReasoningState reasoning_state;
+    reasoning_state.knowns = {
+        "tank capacity = 120 liters",
+        "remaining volume = 84 liters"
+    };
+    reasoning_state.unknowns = {
+        "used volume"
+    };
+    reasoning_state.goal = GRIM::ConceptBlockGoal{
+        "Determine how many liters were used.",
+        {
+            {
+                "The response contains one consumed-volume assignment.",
+                "Tank capacity and remaining volume form a complete subtraction relationship."
+            }
+        },
+        {
+            "Use liters as the unit.",
+            "Derive the used volume from capacity minus remaining volume."
+        }
+    };
     const int max_new_tokens = readEnvInt("GRIM_SAMPLE_TOKENS", 100);
     const int max_chars = readEnvInt("GRIM_SAMPLE_MAX_CHARS", 300);
     if (max_new_tokens <= 0 || max_chars <= 0) {
@@ -125,7 +152,8 @@ void logDiagnosticSample(TrainingContext& ctx,
     try {
         auto tokenizer = LoadInferenceTokenizer(ctx.config, *ctx.logging.logger);
         const auto start = std::chrono::steady_clock::now();
-        auto sample = executePhase2TextInference(ctx, *tokenizer, prompt, cfg);
+        auto sample = executePhase2TextInference(
+            ctx, *tokenizer, reasoning_state.withPrompt(prompt), cfg);
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 

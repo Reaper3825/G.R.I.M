@@ -16,6 +16,8 @@
 //   - LoRA loading is a ModelLoader concern, not a backend concern.
 //======================================================//
 #pragma once
+#include "DataCollection/reasoning_state.hpp"
+#include <optional>
 
 #include "../../MMO/Shared/MMD.hpp"
 
@@ -57,6 +59,9 @@ struct GenerationOptions {
     // Populated by Orchestrator::callBackend.
     std::string envelope_json;       // Full RequestEnvelope as JSON
     std::string mmo_endpoint;        // e.g. "/api/mmo/route"
+
+    // Native chat/generate state envelope, separate from text/history.
+    std::optional<GRIM::ReasoningState> reasoning_state;
 };
 
 // =========================================================

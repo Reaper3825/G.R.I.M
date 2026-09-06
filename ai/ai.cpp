@@ -214,7 +214,8 @@ static std::string callOllamaDirect(
 
 static std::string callGrimTextDirect(
     const std::string& prompt,
-    const std::string& session_id) {
+    const std::string& session_id,
+    const std::optional<GRIM::ReasoningState>& reasoning_state = std::nullopt) {
     std::string url = aiConfig.value("grim_text_url", "http://127.0.0.1:11435");
     ensureGrimTextServerReady(url);
 
@@ -223,6 +224,7 @@ static std::string callGrimTextDirect(
 
     GRIM::MMO::GenerationOptions opts;
     opts.timeout_ms = resolveGrimTextRequestTimeoutMs();
+    opts.reasoning_state = reasoning_state;
 
     GRIM::MMO::GenerationResult gen = backend.generateWithHistory(prompt, history, opts);
     if (gen.success) {
@@ -250,8 +252,9 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
 std::future<std::string> callAIAsync(
     const std::string& prompt,
-    const std::string& session_id) {
-    return std::async(std::launch::async, [prompt, session_id]() -> std::string {
+    const std::string& session_id,
+    std::optional<GRIM::ReasoningState> reasoning_state) {
+    return std::async(std::launch::async, [prompt, session_id, reasoning_state]() -> std::string {
         // Check aiConfig["backend"] to decide routing
         std::string backend = aiConfig.value("backend", "auto");
 
@@ -259,10 +262,14 @@ std::future<std::string> callAIAsync(
 
         if (backend == "grim_native") {
         LOG_DEBUG("AI", "backend=grim_native direct dispatch selected; " + formatMMORouteState());
-        return callGrimTextDirect(prompt, session_id);
+        return callGrimTextDirect(prompt, session_id, reasoning_state);
         }
 
 
+
+        if (reasoning_state) {
+            throw std::runtime_error("Structured reasoning state currently requires backend=grim_native");
+        }
 
         // Direct Ollama path -- no orchestrator needed
         if (backend == "ollama") {
@@ -347,7 +354,8 @@ CommandResult ai_process(const std::string& input) {
 
 CommandResult ai_process(
     const std::string& input,
-    const std::string& session_id) {
+    const std::string& session_id,
+    std::optional<GRIM::ReasoningState> reasoning_state) {
     CommandResult result;
     result.category  = "routine";
     result.color     = Colors::Cyan;
@@ -398,7 +406,7 @@ CommandResult ai_process(
             
             auto future = callAIAsync(
                 prefix + locationContext + " " + input,
-                session_id);
+                session_id, reasoning_state);
             reply = future.get();
 
 

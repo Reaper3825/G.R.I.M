@@ -24,6 +24,7 @@ public:
     
     // Execute a command programmatically
     void executeCommand(const std::string& cmd);
+    void setReasoningState(std::optional<GRIM::ReasoningState> state);
     
     // Get the active session's console history.
     ConsoleHistory& getHistory();
@@ -61,6 +62,7 @@ private:
     struct PendingRequest {
         std::string sessionId;
         std::string prompt;
+        std::optional<GRIM::ReasoningState> reasoningState;
     };
 
     struct ActiveRequest {
