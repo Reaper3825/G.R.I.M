@@ -1,4 +1,5 @@
 {
+    "concept_supervision_target": "answer",
     "d_model": 384,
     "num_layers": 8,
     "num_heads": 6,

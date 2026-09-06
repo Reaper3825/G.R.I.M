@@ -101,9 +101,9 @@ struct BatchPayload {
     int vocab_size = 0;                      // vocabulary size (for loss kernels + target validation)
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
     std::vector<int> valid_target_counts;    // [batch_size] — unmasked targets per sequence
-    // Functional prompt boundaries. SFT rows include all pre-answer context,
-    // not only the canonical renderer's literal <prompt> byte span. For a
-    // non-empty span, start = end - length + 1.
+    // Pinned-prefix boundaries. SFT rows include every token before the
+    // configured supervision span, not only the canonical renderer's literal
+    // <prompt> byte span. For a non-empty span, start = end - length + 1.
     std::vector<int32_t> prompt_lengths;       // [batch_size], 0 = no complete prompt in this row
     std::vector<int32_t> prompt_end_positions; // [batch_size], inclusive; -1 when length is 0
     // Immutable authored Goal metadata aligned one-to-one with training rows.

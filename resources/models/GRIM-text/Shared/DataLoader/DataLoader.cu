@@ -661,36 +661,6 @@ bool PrepareTrainingDataFromCache(
 			sequence.token_ids.begin() + span.end);
 	};
 
-	auto apply_sft_answer_contract = [&token_span](
-		TokenizedSequence& sequence,
-		const GRIM::ConceptCanonical::RenderResult& rendered,
-		const std::vector<size_t>& boundaries,
-		const std::vector<size_t>& token_counts) {
-		const GRIM::GoalTokenSpan answer_span = token_span(
-			rendered.answer, boundaries, token_counts, "answer");
-		if (rendered.prompt_byte_end <= rendered.prompt_byte_begin) {
-			throw std::runtime_error(
-				"[DataLoader] SFT row requires a non-empty authored prompt");
-		}
-		if (answer_span.begin <= 0) {
-			throw std::runtime_error(
-				"[DataLoader] SFT answer must follow a non-empty functional prompt");
-		}
-
-		// SFT prompt geometry is functional, not a literal <prompt> span: every
-		// model-visible token before the answer is pinned context. This includes
-		// knowns, unknowns, goal decomposition, and explanation/intermediates.
-		sequence.prompt_length = answer_span.begin;
-		sequence.prompt_end_pos = answer_span.begin - 1;
-		for (size_t row = 0; row + 1 < sequence.targets.size(); ++row) {
-			const size_t target_position = row + 1;
-			if (target_position < static_cast<size_t>(answer_span.begin) ||
-			    target_position >= static_cast<size_t>(answer_span.end)) {
-				sequence.targets[row] = -1;
-			}
-		}
-	};
-
 	auto materialize_goal = [&token_span, &span_token_ids](
 		const json& concept,
 		const GRIM::ConceptCanonical::RenderResult& rendered,
@@ -897,11 +867,10 @@ bool PrepareTrainingDataFromCache(
 				if (!seq) { ++selected_entries_skipped; continue; }
 				seq->execution_active = false;
 				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-				if (curriculum_metadata.training_stage == "sft") {
-					apply_sft_answer_contract(
-						*seq, rendered, boundaries, token_counts);
-				} else {
-					assign_prompt_span(*seq, rendered, boundaries, token_counts);
+				assign_prompt_span(*seq, rendered, boundaries, token_counts);
+				if (rendered.answer.present) {
+					seq->answer_span = token_span(
+						rendered.answer, boundaries, token_counts, "answer");
 				}
 				seq->concept_block_id = cj.at("id").get<std::string>();
 				all_tokens.push_back(std::move(*seq));
@@ -927,11 +896,10 @@ bool PrepareTrainingDataFromCache(
 			seq->execution_active = false;
 			seq->execution_gate_target =
 				GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-			if (curriculum_metadata.training_stage == "sft") {
-				apply_sft_answer_contract(
-					*seq, rendered, boundaries, token_counts);
-			} else {
-				assign_prompt_span(*seq, rendered, boundaries, token_counts);
+			assign_prompt_span(*seq, rendered, boundaries, token_counts);
+			if (rendered.answer.present) {
+				seq->answer_span = token_span(
+					rendered.answer, boundaries, token_counts, "answer");
 			}
 			seq->concept_block_spans = materialize_concept_block_spans(
 				cj, rendered, boundaries, token_counts, *seq);
@@ -1336,6 +1304,7 @@ SequenceData buildPhase1SequenceData(
 	logger.log("[Data] Applying sliding windows to train split...");
 	applySlidingWindows(data.train_seqs, "train",
 						data_hp.training_stage,
+						data_hp.concept_supervision_target,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Train split post-window sequence count=" +
@@ -1354,6 +1323,7 @@ SequenceData buildPhase1SequenceData(
 	logger.log("[Data] Applying sliding windows to validation split...");
 	applySlidingWindows(data.val_seqs, "val",
 						data_hp.training_stage,
+						data_hp.concept_supervision_target,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Validation split post-window sequence count=" +

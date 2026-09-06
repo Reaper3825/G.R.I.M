@@ -3,9 +3,11 @@
 #include "../UnigramByte/AtomTable.hpp"
 #include "../UnigramByte/SequenceLocalAtomTable.hpp"
 #include "../Execution/ExecutionMetadata.hpp"
+#include "../Goal/GoalTokenSpan.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -47,11 +49,14 @@ struct GrmtSequence {
     bool execution_active = false;
     GRIM::Execution::ExecutionGateTarget execution_gate_target =
         GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-    // Functional prompt geometry. In SFT this spans every token before the
-    // answer, including model-visible goal/context fields; it is not limited
-    // to the canonical renderer's literal <prompt> byte span.
+    // Prefix geometry. GRMT stores the literal authored prompt; Phase 1
+    // rewrites it to every token before the selected SFT supervision span.
     std::int32_t prompt_end_pos = -1;
     std::int32_t prompt_length = 0;
+    // Neutral authored answer location. Phase 1 selects this span only for an
+    // ANSWER-specialized model; other model roles project from structured
+    // Goal/ConceptBlock spans instead.
+    std::optional<GRIM::GoalTokenSpan> answer_span;
     std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
     std::vector<GRIM::Execution::CompiledTransitionBinding> compiled_transition_bindings;
     std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;

@@ -12,6 +12,11 @@
 
 namespace GRIM {
 
+// Version 28 reorders model-visible ConceptBlock state to target state ->
+// success criteria/evidence -> constraints -> knowns/unknowns -> reasoning ->
+// answer, stores the neutral authored answer span, and defers SFT target
+// selection to Phase-1 supervision projection.
+//
 // Version 27 gives constraints the same collection shape as success criteria:
 // one outer <constraints> span containing the ordered <constraint> entries.
 // The rendered label layout changed with it (entries are now <constraint>
@@ -58,7 +63,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 27;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 28;
 
 } // namespace GRIM
 

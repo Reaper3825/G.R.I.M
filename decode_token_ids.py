@@ -14,7 +14,7 @@ serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + numeric + atoms + learned pieces.
 
-Current training_data.grmt format is GRMT v24. Rows persist atom side channels,
+Current training_data.grmt format is GRMT v28. Rows persist atom side channels,
 per-sequence AtomTable and sequence-local atom data, row-level Goal metadata,
 top-level ConceptBlock known/unknown spans, opaque slot/transition lowering
 tables, and variable-arity transition invocations. This script reads the full
@@ -75,7 +75,7 @@ UNIGRAM_TOKEN_START = ATOM_TOKEN_END
 KTMG_VOCAB_VERSION = 6
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 24
+GRMT_FORMAT_VERSION = 28
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
@@ -91,6 +91,7 @@ class GrmtSequenceRecord:
     execution_active: bool
     prompt_end_pos: int
     prompt_length: int
+    answer_span: tuple[int, int] | None
     target_state_token_ids: list[int] | None
     target_state_span: tuple[int, int] | None
     criteria_span: tuple[int, int] | None
@@ -525,7 +526,7 @@ def read_goal_metadata(
 def iter_grmt_sequences(path: Path):
     """Yield decoded GRMT rows using the current persisted row layout.
 
-    GRMT v24 per-sequence layout (must read ALL fields to stay in sync):
+    GRMT v28 per-sequence layout (must read ALL fields to stay in sync):
       uint32         seq_len
       int32[seq_len] token_ids
       int32[seq_len] targets
@@ -538,6 +539,7 @@ def iter_grmt_sequences(path: Path):
       uint8 has_local_atom_table + optional SequenceLocalAtomTable payload
       uint8 execution_active, int8 execution_gate_target
       int32 prompt_end_pos, int32 prompt_length
+      uint8 has_answer_span + optional int32 answer_begin, int32 answer_end
       uint8 has_goal + optional target-state, criterion/evidence, and
           outer-plus-per-entry constraint token spans
       uint32 known_count + known token IDs/spans
@@ -637,6 +639,12 @@ def iter_grmt_sequences(path: Path):
             skip_exact(f, 1, row_source)                          # execution_gate_target (int8)
             prompt_end_pos = read_i32(f, row_source)
             prompt_length = read_i32(f, row_source)
+            has_answer_span = read_u8(f, row_source)
+            if has_answer_span not in (0, 1):
+                raise ValueError(f"invalid GRMT answer span flag in {row_source}")
+            answer_span = None
+            if has_answer_span:
+                answer_span = (read_i32(f, row_source), read_i32(f, row_source))
             (
                 target_state_token_ids,
                 target_state_span,
@@ -676,6 +684,7 @@ def iter_grmt_sequences(path: Path):
                 execution_active=execution_active,
                 prompt_end_pos=prompt_end_pos,
                 prompt_length=prompt_length,
+                answer_span=answer_span,
                 target_state_token_ids=target_state_token_ids,
                 target_state_span=target_state_span,
                 criteria_span=criteria_span,

@@ -16,6 +16,7 @@
 
 #include "../../../Shared/TokenizerArtifacts/GrmtSequence.hpp"  // GRIM::TokenizerArtifacts::GrmtSequence
 #include "../../../Shared/HyperParameters/HyperparameterEnums.hpp"
+#include "../../../Shared/ModelConfig/CompiledModelConfig.hpp"
 #include "../../training_logger.hpp"        // TrainingLogger
 
 #include <cstddef>
@@ -60,7 +61,7 @@ void filterOverlongSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>
 // token ID (>= 0) after windowing/boundary logic has run; callers must not
 // assume position 0 is always masked because BOS insertion is config-driven
 // and BOS-to-first-token supervision remains valid for PT. SFT masks BOS
-// because the first token belongs to the functional prompt.
+// because the first token belongs to the pinned prefix.
 // applySlidingWindows calls this internally after windowing so callers
 // never see a sequence that would trigger "valid_tokens=0" downstream.
 // Disabled (no-op) when min_seq_valid_tokens <= 0.
@@ -90,6 +91,8 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 //   sequences            - in/out: sequences to window (mutated in place)
 //   split_name           - "train" / "val", used only for log lines
 //   training_stage       - selects PT document windows or SFT prompt-pinned windows
+//   supervision_target   - SFT concept span to expose as causal targets;
+//                          ignored for PT
 //   max_seq_len          - maximum window length
 //   sliding_window_stride - hop size between windows; usually < max_seq_len
 //   min_seq_valid_tokens - minimum unmasked targets per output sequence
@@ -100,6 +103,7 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
                          GRIM::HyperParameters::TrainingStage training_stage,
+                         GRIM::Config::ConceptSupervisionTarget supervision_target,
                          int max_seq_len,
                          int sliding_window_stride,
                          int min_seq_valid_tokens,

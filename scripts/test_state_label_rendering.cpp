@@ -29,6 +29,11 @@ int main() {
     assert(value(rendered.constraints[0]) == "Use liters");
     assert(value(rendered.constraints[1]) == "Do not invent values");
     assert(value(rendered.answer) == "used = 36");
+    assert(rendered.target_state.begin < rendered.criteria.begin);
+    assert(rendered.criteria.end < rendered.constraints_span.begin);
+    assert(rendered.constraints_span.end < rendered.knowns[0].begin);
+    assert(rendered.knowns.back().end < rendered.unknowns[0].begin);
+    assert(rendered.unknowns.back().end < rendered.answer.begin);
     // Both collections expose one outer span containing their ordered entries.
     // Containment, not coincidence: the outer span brackets the entry labels.
     assert(rendered.criteria.present && rendered.constraints_span.present);

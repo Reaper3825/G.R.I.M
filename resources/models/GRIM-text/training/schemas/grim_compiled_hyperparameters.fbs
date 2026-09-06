@@ -35,6 +35,18 @@ enum PositionalEncodingType : ubyte {
   AlibiRope = 4
 }
 
+// Selects the one ConceptBlock field group authored as the causal LM
+// completion for this model. Earlier state fields are context; later fields
+// are excluded from the Phase-1 sequence projection.
+enum ConceptSupervisionTarget : ubyte {
+  Unspecified = 0,
+  TargetState = 1,
+  SuccessCriteriaAndEvidence = 2,
+  Constraints = 3,
+  KnownsAndUnknowns = 4,
+  Answer = 5
+}
+
 enum ModelCapability : ushort {
   Unknown = 0,
   Alibi = 1,
@@ -260,7 +272,7 @@ table TokenizerConfig {
 
 table CompiledModelHyperparameters {
   // FlatBuffer wire shape version implemented by the loader.
-  schema_version:uint32 = 6;
+  schema_version:uint32 = 8;
 
   // Identifies the formula/validation rules used to produce this artifact.
   // It is separate from schema_version because computations can change without
@@ -275,6 +287,9 @@ table CompiledModelHyperparameters {
   derived_architecture:DerivedArchitecture (required);
   features:ModelFeatures (required);
   tokenizer:TokenizerConfig (required);
+
+  // Learned response-role contract. Appended to preserve existing field IDs.
+  concept_supervision_target:ConceptSupervisionTarget = Unspecified;
 }
 
 root_type CompiledModelHyperparameters;

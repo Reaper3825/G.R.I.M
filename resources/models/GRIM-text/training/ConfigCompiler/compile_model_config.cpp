@@ -26,8 +26,8 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 7;
-constexpr std::uint32_t kSemanticVersion = 6;
+constexpr std::uint32_t kSchemaVersion = 8;
+constexpr std::uint32_t kSemanticVersion = 7;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -36,6 +36,8 @@ struct Cli {
 };
 
 struct EffectiveConfig {
+    GRIMConfig::ConceptSupervisionTarget concept_supervision_target =
+        GRIMConfig::ConceptSupervisionTarget_Unspecified;
     std::uint32_t d_model = 0;
     std::uint32_t num_layers = 0;
     std::uint32_t num_heads = 0;
@@ -147,6 +149,32 @@ struct EffectiveConfig {
 
     std::vector<GRIMConfig::ModelCapability> capabilities;
 };
+
+GRIMConfig::ConceptSupervisionTarget parseConceptSupervisionTarget(
+    const std::string& value) {
+    std::string normalized = value;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (normalized == "target_state") {
+        return GRIMConfig::ConceptSupervisionTarget_TargetState;
+    }
+    if (normalized == "success_criteria_and_evidence") {
+        return GRIMConfig::ConceptSupervisionTarget_SuccessCriteriaAndEvidence;
+    }
+    if (normalized == "constraints") {
+        return GRIMConfig::ConceptSupervisionTarget_Constraints;
+    }
+    if (normalized == "knowns_and_unknowns") {
+        return GRIMConfig::ConceptSupervisionTarget_KnownsAndUnknowns;
+    }
+    if (normalized == "answer") {
+        return GRIMConfig::ConceptSupervisionTarget_Answer;
+    }
+    throw std::runtime_error(
+        "concept_supervision_target has unknown value '" + value +
+        "' (valid: target_state, success_criteria_and_evidence, constraints, "
+        "knowns_and_unknowns, answer)");
+}
 
 // Small, dependency-free SHA-256 implementation. The compiler must remain a
 // host-only tool and cannot acquire a CUDA/runtime dependency through hashing.
@@ -428,6 +456,8 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     }
     const json& j = model_config;
     EffectiveConfig c;
+    c.concept_supervision_target = parseConceptSupervisionTarget(
+        required<std::string>(model_config, "concept_supervision_target"));
     c.d_model = requiredU32(j, "d_model");
     c.num_layers = requiredU32(j, "num_layers");
     c.num_heads = requiredU32(j, "num_heads");
@@ -778,7 +808,8 @@ std::vector<std::uint8_t> buildArtifact(
 
     const auto root = GRIMConfig::CreateCompiledModelHyperparameters(
         builder, kSchemaVersion, kSemanticVersion, integrity, capabilities,
-        architecture, derived, features, tokenizer);
+        architecture, derived, features, tokenizer,
+        c.concept_supervision_target);
     GRIMConfig::FinishCompiledModelHyperparametersBuffer(builder, root);
     return std::vector<std::uint8_t>(builder.GetBufferPointer(),
                                      builder.GetBufferPointer() + builder.GetSize());

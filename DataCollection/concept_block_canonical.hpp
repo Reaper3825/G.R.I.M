@@ -44,11 +44,14 @@ struct RenderResult {
     // pairing, so entries are bare spans rather than paired records.
     LogicalByteSpan constraints_span;
     std::vector<LogicalByteSpan> constraints;
-    // Top-level ConceptBlock collections. Each entry owns an independent span;
-    // neither collection has an outer span.
+    // Top-level ConceptBlock collections. They follow the completed Goal so a
+    // state-identification model can derive execution inputs from the complete
+    // objective contract. Each entry owns an independent span; neither
+    // collection has an outer span.
     std::vector<LogicalByteSpan> knowns;
     std::vector<LogicalByteSpan> unknowns;
-    // The only model-visible response field supervised during SFT.
+    // Authored final answer span. Phase 1 supervises it only when the selected
+    // model role is Answer; earlier state roles use the structured spans above.
     LogicalByteSpan answer;
     // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
     // and are never emitted into model-visible text.
@@ -127,13 +130,6 @@ inline RenderResult render(const nlohmann::json& j) {
             spans.push_back(entry);
         }
     };
-    if (j.contains("knowns") && j["knowns"].is_array()) {
-        append_entry_collection(j["knowns"], result.knowns, "knowns");
-    }
-    if (j.contains("unknowns") && j["unknowns"].is_array()) {
-        append_entry_collection(j["unknowns"], result.unknowns, "unknowns");
-    }
-
     if (j.contains("goal") && j["goal"].is_object()) {
         const auto& goal = j["goal"];
         if (goal.contains("target_state") && goal["target_state"].is_string()) {
@@ -219,6 +215,13 @@ inline RenderResult render(const nlohmann::json& j) {
                 result.constraints_span.end > result.constraints_span.begin;
             out << "\n</constraints>\n\n";
         }
+    }
+
+    if (j.contains("knowns") && j["knowns"].is_array()) {
+        append_entry_collection(j["knowns"], result.knowns, "knowns");
+    }
+    if (j.contains("unknowns") && j["unknowns"].is_array()) {
+        append_entry_collection(j["unknowns"], result.unknowns, "unknowns");
     }
 
     const nlohmann::json* explanation = nullptr;
@@ -350,17 +353,6 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
         out << "<prompt>\n" << cb.prompt << "\n</prompt>\n\n";
     }
 
-    for (const auto& known : cb.knowns) {
-        out << "<knowns>\n"
-            << known
-            << "\n</knowns>\n\n";
-    }
-    for (const auto& unknown : cb.unknowns) {
-        out << "<unknowns>\n"
-            << unknown
-            << "\n</unknowns>\n\n";
-    }
-
     if (cb.goal.has_value()) {
         if (!cb.goal->target_state.empty()) {
             out << "<target_state>\n"
@@ -401,6 +393,17 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
             }
             out << "</constraints>\n\n";
         }
+    }
+
+    for (const auto& known : cb.knowns) {
+        out << "<knowns>\n"
+            << known
+            << "\n</knowns>\n\n";
+    }
+    for (const auto& unknown : cb.unknowns) {
+        out << "<unknowns>\n"
+            << unknown
+            << "\n</unknowns>\n\n";
     }
 
     const auto& explanation = cb.explanation.empty()

@@ -42,6 +42,15 @@ wrappers are not accepted.
 requires `causal_mask=false` and `max_seq_len > 1`; ordinary causal LM presets
 must author it as `false`.
 
+`concept_supervision_target` selects the single concept-block span supervised
+during SFT. Valid values are `target_state`,
+`success_criteria_and_evidence`, `constraints`, `knowns_and_unknowns`, and
+`answer`. Phase 1 keeps all earlier contract fields as context, truncates the
+row at the selected span, and masks every target outside that span. The
+canonical dependency order is target state, success criteria/evidence,
+constraints, knowns/unknowns, then any reasoning and the answer. Use `answer`
+for ordinary answer-generation models.
+
 `local_atom_retrieval_enabled` selects the causal sequence-local typed-atom
 retrieval path across batching, parameter ownership, training, validation, and
 inference. It requires `causal_mask=true`,

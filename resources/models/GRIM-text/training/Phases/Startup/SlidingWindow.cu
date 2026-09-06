@@ -347,6 +347,165 @@ bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
     return true;
 }
 
+GRIM::GoalTokenSpan supervisionSpanOrThrow(
+    const GrmtSequence& sequence,
+    GRIM::Config::ConceptSupervisionTarget target,
+    const std::string& source) {
+    const auto require_goal = [&]() -> const GRIM::Goal& {
+        if (!sequence.goal) {
+            throw std::runtime_error(source + ": selected supervision target requires a goal");
+        }
+        return *sequence.goal;
+    };
+    const auto require_criteria_with_evidence = [&](const GRIM::Goal& goal) {
+        if (!goal.success_criteria.has_value() ||
+            goal.success_criteria->entries.empty()) {
+            throw std::runtime_error(
+                source + ": selected supervision target requires prior success criteria");
+        }
+        for (const auto& entry : goal.success_criteria->entries) {
+            if (!entry.evidence_span.valid()) {
+                throw std::runtime_error(
+                    source + ": selected supervision target requires evidence for every prior criterion");
+            }
+        }
+    };
+    switch (target) {
+        case GRIM::Config::ConceptSupervisionTarget::TargetState: {
+            const auto& goal = require_goal();
+            if (!goal.target_state.has_value()) {
+                throw std::runtime_error(source + ": target_state supervision requires goal.target_state");
+            }
+            return goal.target_state->span;
+        }
+        case GRIM::Config::ConceptSupervisionTarget::SuccessCriteriaAndEvidence: {
+            const auto& goal = require_goal();
+            if (!goal.target_state.has_value()) {
+                throw std::runtime_error(
+                    source + ": success-criteria supervision requires prior target_state");
+            }
+            require_criteria_with_evidence(goal);
+            return goal.success_criteria->span;
+        }
+        case GRIM::Config::ConceptSupervisionTarget::Constraints: {
+            const auto& goal = require_goal();
+            if (!goal.target_state.has_value() || !goal.constraints.has_value() ||
+                goal.constraints->entries.empty()) {
+                throw std::runtime_error(
+                    source + ": constraints supervision requires prior target_state, criteria, and constraints");
+            }
+            require_criteria_with_evidence(goal);
+            return goal.constraints->span;
+        }
+        case GRIM::Config::ConceptSupervisionTarget::KnownsAndUnknowns: {
+            const auto& goal = require_goal();
+            if (!goal.target_state.has_value() || !goal.constraints.has_value() ||
+                goal.constraints->entries.empty()) {
+                throw std::runtime_error(
+                    source + ": knowns/unknowns supervision requires the complete prior goal contract");
+            }
+            require_criteria_with_evidence(goal);
+            if (!sequence.concept_block_spans ||
+                sequence.concept_block_spans->knowns.empty() ||
+                sequence.concept_block_spans->unknowns.empty()) {
+                throw std::runtime_error(
+                    source + ": knowns/unknowns supervision requires both collections");
+            }
+            return GRIM::GoalTokenSpan{
+                sequence.concept_block_spans->knowns.front().span.begin,
+                sequence.concept_block_spans->unknowns.back().span.end};
+        }
+        case GRIM::Config::ConceptSupervisionTarget::Answer:
+            if (!sequence.answer_span.has_value()) {
+                throw std::runtime_error(source + ": answer supervision requires a non-empty answer");
+            }
+            return *sequence.answer_span;
+        case GRIM::Config::ConceptSupervisionTarget::Unspecified:
+            break;
+    }
+    throw std::runtime_error(source + ": concept supervision target is unspecified");
+}
+
+void retainMetadataThrough(GrmtSequence& sequence, std::int32_t cut) {
+    if (sequence.goal) {
+        auto retained = std::make_shared<GRIM::Goal>();
+        if (sequence.goal->target_state.has_value() &&
+            sequence.goal->target_state->span.end <= cut) {
+            retained->target_state = sequence.goal->target_state;
+        }
+        if (sequence.goal->success_criteria.has_value() &&
+            sequence.goal->success_criteria->span.end <= cut) {
+            retained->success_criteria = sequence.goal->success_criteria;
+        }
+        if (sequence.goal->constraints.has_value() &&
+            sequence.goal->constraints->span.end <= cut) {
+            retained->constraints = sequence.goal->constraints;
+        }
+        if (!retained->target_state && !retained->success_criteria &&
+            !retained->constraints) {
+            sequence.goal.reset();
+        } else {
+            sequence.goal = std::move(retained);
+        }
+    }
+    if (sequence.concept_block_spans) {
+        auto retained = std::make_shared<GRIM::ConceptBlockSpans>();
+        const auto copy_fitting = [cut](
+            const std::vector<GRIM::ConceptBlockSpanEntry>& source,
+            std::vector<GRIM::ConceptBlockSpanEntry>& destination) {
+            for (const auto& entry : source) {
+                if (entry.span.end <= cut) destination.push_back(entry);
+            }
+        };
+        copy_fitting(sequence.concept_block_spans->knowns, retained->knowns);
+        copy_fitting(sequence.concept_block_spans->unknowns, retained->unknowns);
+        if (retained->empty()) sequence.concept_block_spans.reset();
+        else sequence.concept_block_spans = std::move(retained);
+    }
+}
+
+void projectConceptSupervision(
+    GrmtSequence& sequence,
+    GRIM::Config::ConceptSupervisionTarget target,
+    const std::string& source) {
+    const GRIM::GoalTokenSpan span = supervisionSpanOrThrow(sequence, target, source);
+    if (!span.valid() || span.begin <= 0 ||
+        static_cast<std::size_t>(span.end) > sequence.token_ids.size()) {
+        throw std::runtime_error(source + ": selected supervision span is invalid");
+    }
+    const std::size_t cut = static_cast<std::size_t>(span.end);
+    sequence.token_ids.resize(cut);
+    sequence.targets.assign(cut, -1);
+    sequence.token_numeric_values.resize(cut);
+    sequence.token_atom_mask.resize(cut);
+    sequence.token_atom_flags.resize(cut);
+    sequence.atom_entry_ids.resize(cut);
+    sequence.token_local_atom_indices.resize(cut);
+    if (!sequence.token_atom_aux_target_mask.empty()) {
+        sequence.token_atom_aux_target_mask.resize(cut);
+    }
+    sequence.token_exec_slot_indices.resize(cut);
+    for (std::int32_t position = span.begin; position < span.end; ++position) {
+        sequence.targets[static_cast<std::size_t>(position - 1)] =
+            sequence.token_ids[static_cast<std::size_t>(position)];
+    }
+    sequence.prompt_length = span.begin;
+    sequence.prompt_end_pos = span.begin - 1;
+    retainMetadataThrough(sequence, span.end);
+    sequence.answer_span.reset();
+    if (target != GRIM::Config::ConceptSupervisionTarget::Answer) {
+        sequence.execution_active = false;
+        sequence.execution_gate_target =
+            GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
+        std::fill(sequence.token_exec_slot_indices.begin(),
+                  sequence.token_exec_slot_indices.end(), -1);
+        sequence.compiled_slot_bindings.clear();
+        sequence.compiled_transition_bindings.clear();
+        sequence.compiled_bootstrap_bindings.clear();
+        sequence.transition_targets.clear();
+    }
+}
+
 void appendSftTokenRange(GrmtSequence& destination,
                          const GrmtSequence& source,
                          size_t begin,
@@ -407,9 +566,9 @@ SftWindowConstruction constructSftWindows(
                 "Sliding window (" + split_name + "): invalid prompt span");
         }
 
-        // Pin the entire functional prompt through prompt_end_pos. For SFT,
-        // this is every model-visible token before the answer. A configured
-        // BOS may precede the authored span and remains part of this prefix.
+        // Pin every token before the selected supervision span through
+        // prompt_end_pos. A configured BOS may precede the authored span and
+        // remains part of this prefix.
         const size_t prefix_length =
             static_cast<size_t>(sequence.prompt_end_pos) + 1;
         if (prefix_length >= sequence_length) {
@@ -431,9 +590,9 @@ SftWindowConstruction constructSftWindows(
             if (sequence.targets[causal_row] != -1) {
                 throw std::runtime_error(
                     "Sliding window (" + split_name +
-                    ", SFT): functional prompt token at position=" +
+                    ", SFT): pinned-prefix token at position=" +
                     std::to_string(target_position) +
-                    " has an LM target; only answer tokens may be supervised");
+                    " has an LM target; only the configured concept span may be supervised");
             }
         }
 
@@ -629,6 +788,10 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             seq.goal = offsetGoalSpans(seq.goal, 1);
             seq.concept_block_spans =
                 offsetConceptBlockSpans(seq.concept_block_spans, 1);
+            if (seq.answer_span.has_value()) {
+                ++seq.answer_span->begin;
+                ++seq.answer_span->end;
+            }
             added_bos_out++;
         }
 
@@ -656,12 +819,25 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
                          GRIM::HyperParameters::TrainingStage training_stage,
+                         GRIM::Config::ConceptSupervisionTarget supervision_target,
                          int max_seq_len,
                          int sliding_window_stride,
                          int min_seq_valid_tokens,
                          bool add_bos_token,
                          bool add_eos_token,
                          TrainingLogger& logger) {
+    if (training_stage == GRIM::HyperParameters::TrainingStage::SFT) {
+        for (auto& sequence : sequences) {
+            projectConceptSupervision(
+                sequence, supervision_target,
+                "Sliding window (" + split_name + ", SFT, concept_block_id=" +
+                    sequence.concept_block_id + ")");
+        }
+        logger.log("[Data] SFT concept supervision target (" + split_name + ")=" +
+                   std::string(GRIM::Config::conceptSupervisionTargetToString(
+                       supervision_target)));
+    }
+
     // Bracket sequences with BOS/EOS before windowing so window math sees
     // fully-bracketed input. Per-split summary is emitted here so each
     // train/val pass reports its own boundary-injection count.

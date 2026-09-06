@@ -20,8 +20,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 7;
-constexpr std::uint32_t kSupportedSemanticVersion = 6;
+constexpr std::uint32_t kSupportedSchemaVersion = 8;
+constexpr std::uint32_t kSupportedSemanticVersion = 7;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -281,6 +281,10 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     const auto& a = c.architecture;
     const auto& d = c.derived_architecture;
     const auto& f = c.features;
+    if (c.concept_supervision_target <= ConceptSupervisionTarget::Unspecified ||
+        c.concept_supervision_target > ConceptSupervisionTarget::Answer) {
+        throw std::runtime_error("compiled concept supervision target is invalid");
+    }
     if (a.d_model == 0 || a.num_layers == 0 || a.num_heads == 0 ||
         a.num_kv_heads == 0 || a.max_seq_len == 0) {
         throw std::runtime_error("compiled architecture contains a zero required dimension");
@@ -410,6 +414,21 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
 
 } // namespace
 
+const char* conceptSupervisionTargetToString(ConceptSupervisionTarget target) {
+    switch (target) {
+        case ConceptSupervisionTarget::TargetState: return "target_state";
+        case ConceptSupervisionTarget::SuccessCriteriaAndEvidence:
+            return "success_criteria_and_evidence";
+        case ConceptSupervisionTarget::Constraints: return "constraints";
+        case ConceptSupervisionTarget::KnownsAndUnknowns:
+            return "knowns_and_unknowns";
+        case ConceptSupervisionTarget::Answer: return "answer";
+        case ConceptSupervisionTarget::Unspecified: break;
+    }
+    throw std::runtime_error(
+        "conceptSupervisionTargetToString: invalid target");
+}
+
 std::optional<fs::path> resolveCompiledModelConfigPath(
     const nlohmann::json& document,
     const fs::path& ai_config_path)
@@ -506,6 +525,9 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     result.source_path = fs::absolute(artifact_path).lexically_normal();
     result.schema_version = root->schema_version();
     result.semantic_version = root->semantic_version();
+    result.concept_supervision_target =
+        static_cast<ConceptSupervisionTarget>(
+            root->concept_supervision_target());
     result.integrity.semantic_sha256 = stored_sha;
     result.integrity.model_compatibility_xxhash64 = stored_model_hash;
     result.integrity.capability_xxhash64 = stored_capability_hash;

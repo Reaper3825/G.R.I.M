@@ -910,6 +910,12 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                      ": prompt_length extends before the sequence start");
         }
     }
+    if (answer_span.has_value() &&
+        (!answer_span->valid() ||
+         static_cast<std::size_t>(answer_span->end) > n)) {
+        throw std::runtime_error("[GRMT] " + source +
+                                 ": answer span is outside the sequence");
+    }
     if (execution_active &&
         execution_gate_target != GRIM::Execution::ExecutionGateTarget::EXECUTE) {
         throw std::runtime_error("[GRMT] " + source +
@@ -1225,6 +1231,12 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     writeScalar(file_, gate_target, sink);
     writeScalar(file_, sequence.prompt_end_pos, sink);
     writeScalar(file_, sequence.prompt_length, sink);
+    const std::uint8_t has_answer_span = sequence.answer_span.has_value() ? 1 : 0;
+    writeScalar(file_, has_answer_span, sink);
+    if (sequence.answer_span.has_value()) {
+        writeScalar(file_, sequence.answer_span->begin, sink);
+        writeScalar(file_, sequence.answer_span->end, sink);
+    }
     writeGoalForSequence(file_, sequence, sink);
     writeConceptBlockSpansForSequence(file_, sequence, sink);
     writeExact(file_, sequence.token_exec_slot_indices.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
@@ -1367,6 +1379,15 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     seq.execution_gate_target = static_cast<GRIM::Execution::ExecutionGateTarget>(gate_target);
     seq.prompt_end_pos = readScalar<std::int32_t>(file_, source);
     seq.prompt_length = readScalar<std::int32_t>(file_, source);
+    const std::uint8_t has_answer_span = readScalar<std::uint8_t>(file_, source);
+    if (has_answer_span > 1) {
+        throw std::runtime_error("[GRMT] invalid answer-span presence flag in " + source);
+    }
+    if (has_answer_span != 0) {
+        seq.answer_span = GRIM::GoalTokenSpan{
+            readScalar<std::int32_t>(file_, source),
+            readScalar<std::int32_t>(file_, source)};
+    }
     seq.goal = readGoalForSequence(file_, source);
     seq.concept_block_spans =
         readConceptBlockSpansForSequence(file_, source);

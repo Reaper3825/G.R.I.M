@@ -19,6 +19,17 @@ enum class CompiledPositionalEncoding : std::uint8_t {
     AlibiRope = 4,
 };
 
+enum class ConceptSupervisionTarget : std::uint8_t {
+    Unspecified = 0,
+    TargetState = 1,
+    SuccessCriteriaAndEvidence = 2,
+    Constraints = 3,
+    KnownsAndUnknowns = 4,
+    Answer = 5,
+};
+
+const char* conceptSupervisionTargetToString(ConceptSupervisionTarget target);
+
 enum class CompiledModelCapability : std::uint16_t {
     Unknown = 0,
     Alibi = 1,
@@ -199,6 +210,8 @@ struct CompiledModelConfigSnapshot {
     CompiledDerivedArchitecture derived_architecture;
     CompiledModelFeatures features;
     CompiledTokenizerConfig tokenizer;
+    ConceptSupervisionTarget concept_supervision_target =
+        ConceptSupervisionTarget::Unspecified;
 };
 
 // Resolve model.grimcfg from the configured model store. An explicit model
