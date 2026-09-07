@@ -50,6 +50,10 @@ struct RenderResult {
     // collection has an outer span.
     std::vector<LogicalByteSpan> knowns;
     std::vector<LogicalByteSpan> unknowns;
+    // Authored Determine/Execute/Update phases immediately preceding Answer.
+    LogicalByteSpan determine;
+    LogicalByteSpan execute;
+    LogicalByteSpan update;
     // Authored final answer span. Phase 1 supervises it only when the selected
     // model role is Answer; earlier state roles use the structured spans above.
     LogicalByteSpan answer;
@@ -236,6 +240,15 @@ inline RenderResult render(const nlohmann::json& j) {
         }
     }
 
+    auto append_phase = [&j, &out](const char* name, LogicalByteSpan& span) {
+        if (!j.contains(name) || !j[name].is_string()) return;
+        appendStateField(out, name, j[name].get<std::string>(), span);
+        if (span.present) out << "\n\n";
+    };
+    append_phase("determine", result.determine);
+    append_phase("execute", result.execute);
+    append_phase("update", result.update);
+
     // Answers are training content independently of whether an arithmetic
     // result exists. This is required for NOOP-supervised Q/A blocks.
     if (j.contains("answer") && j["answer"].is_string()
@@ -285,6 +298,12 @@ inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
             if (step.is_string()) out << step.get<std::string>() << "\n";
         }
     }
+    for (const char* phase : {"determine", "execute", "update"}) {
+        if (j.contains(phase) && j[phase].is_string()
+            && !j[phase].get<std::string>().empty()) {
+            out << j[phase].get<std::string>() << "\n";
+        }
+    }
     if (j.contains("answer") && j["answer"].is_string()
         && !j["answer"].get<std::string>().empty()) {
         appendLogicalSpan(
@@ -304,6 +323,9 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
         {"knowns", cb.knowns},
         {"unknowns", cb.unknowns},
         {"explanation", cb.explanation.empty() ? cb.intermediates : cb.explanation},
+        {"determine", cb.determine},
+        {"execute", cb.execute},
+        {"update", cb.update},
         {"answer", cb.answer},
         {"raw", cb.raw}
     };
@@ -409,6 +431,16 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
     const auto& explanation = cb.explanation.empty()
         ? cb.intermediates
         : cb.explanation;
+    auto append_phase = [&out](const char* label, const std::string& value) {
+        if (value.empty()) return;
+        out << "<" << label << ">\n"
+            << value << "\n"
+            << "</" << label << ">\n\n";
+    };
+    append_phase("determine", cb.determine);
+    append_phase("execute", cb.execute);
+    append_phase("update", cb.update);
+
     if (!explanation.empty() || !cb.answer.empty()) {
         out << "<answer>\n";
         for (const auto& step : explanation) {

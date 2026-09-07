@@ -54,6 +54,9 @@ struct ConceptBlock {
     std::vector<std::string> knowns;
     std::vector<std::string> unknowns;
     std::vector<std::string> intermediates;
+    std::string determine;
+    std::string execute;
+    std::string update;
     std::string answer;
     // Unstructured model-visible text. Raw blocks use this field instead of
     // overloading prompt/answer with artificial document segments.

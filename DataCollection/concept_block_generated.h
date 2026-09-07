@@ -285,7 +285,10 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_GOAL = 28,
     VT_RAW = 30,
     VT_KNOWNS = 32,
-    VT_UNKNOWNS = 34
+    VT_UNKNOWNS = 34,
+    VT_DETERMINE = 36,
+    VT_EXECUTE = 38,
+    VT_UPDATE = 40
   };
   const ::flatbuffers::String *id() const {
     return GetPointer<const ::flatbuffers::String *>(VT_ID);
@@ -335,6 +338,15 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *unknowns() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_UNKNOWNS);
   }
+  const ::flatbuffers::String *determine() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_DETERMINE);
+  }
+  const ::flatbuffers::String *execute() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_EXECUTE);
+  }
+  const ::flatbuffers::String *update() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_UPDATE);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_ID) &&
@@ -372,6 +384,12 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_UNKNOWNS) &&
            verifier.VerifyVector(unknowns()) &&
            verifier.VerifyVectorOfStrings(unknowns()) &&
+           VerifyOffset(verifier, VT_DETERMINE) &&
+           verifier.VerifyString(determine()) &&
+           VerifyOffset(verifier, VT_EXECUTE) &&
+           verifier.VerifyString(execute()) &&
+           VerifyOffset(verifier, VT_UPDATE) &&
+           verifier.VerifyString(update()) &&
            verifier.EndTable();
   }
 };
@@ -428,6 +446,15 @@ struct ConceptBlockBuilder {
   void add_unknowns(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> unknowns) {
     fbb_.AddOffset(ConceptBlock::VT_UNKNOWNS, unknowns);
   }
+  void add_determine(::flatbuffers::Offset<::flatbuffers::String> determine) {
+    fbb_.AddOffset(ConceptBlock::VT_DETERMINE, determine);
+  }
+  void add_execute(::flatbuffers::Offset<::flatbuffers::String> execute) {
+    fbb_.AddOffset(ConceptBlock::VT_EXECUTE, execute);
+  }
+  void add_update(::flatbuffers::Offset<::flatbuffers::String> update) {
+    fbb_.AddOffset(ConceptBlock::VT_UPDATE, update);
+  }
   explicit ConceptBlockBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -456,9 +483,15 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
     ::flatbuffers::Offset<GRIMConcept::Goal> goal = 0,
     ::flatbuffers::Offset<::flatbuffers::String> raw = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> knowns = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> unknowns = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> unknowns = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> determine = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> execute = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> update = 0) {
   ConceptBlockBuilder builder_(_fbb);
   builder_.add_timestamp(timestamp);
+  builder_.add_update(update);
+  builder_.add_execute(execute);
+  builder_.add_determine(determine);
   builder_.add_unknowns(unknowns);
   builder_.add_knowns(knowns);
   builder_.add_raw(raw);
@@ -494,7 +527,10 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
     ::flatbuffers::Offset<GRIMConcept::Goal> goal = 0,
     const char *raw = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *knowns = nullptr,
-    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *unknowns = nullptr) {
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *unknowns = nullptr,
+    const char *determine = nullptr,
+    const char *execute = nullptr,
+    const char *update = nullptr) {
   auto id__ = id ? _fbb.CreateString(id) : 0;
   auto name__ = name ? _fbb.CreateString(name) : 0;
   auto prompt__ = prompt ? _fbb.CreateString(prompt) : 0;
@@ -508,6 +544,9 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
   auto raw__ = raw ? _fbb.CreateString(raw) : 0;
   auto knowns__ = knowns ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*knowns) : 0;
   auto unknowns__ = unknowns ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*unknowns) : 0;
+  auto determine__ = determine ? _fbb.CreateString(determine) : 0;
+  auto execute__ = execute ? _fbb.CreateString(execute) : 0;
+  auto update__ = update ? _fbb.CreateString(update) : 0;
   return GRIMConcept::CreateConceptBlock(
       _fbb,
       id__,
@@ -525,7 +564,10 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
       goal,
       raw__,
       knowns__,
-      unknowns__);
+      unknowns__,
+      determine__,
+      execute__,
+      update__);
 }
 
 struct ConceptBlockDataset FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

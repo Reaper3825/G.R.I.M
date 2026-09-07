@@ -178,9 +178,6 @@ const char* classifyConfigSection(const std::string& key) {
     if (startsWith(key, "generation_")) {
         return "Generation";
     }
-    if (startsWith(key, "prediction_comparison_")) {
-        return "Prediction comparison";
-    }
     if (startsWith(key, "logit_update_trace_")) {
         return "Logit update trace";
     }
@@ -346,7 +343,6 @@ std::vector<DumpSection> collectSnapshotSections(
         "Decode-time selector",
         "CUDA execution mode",
         "Multi-token prediction",
-        "Prediction comparison",
         "Logit update trace",
         "Attention diagnostics",
         "Tokenizer",

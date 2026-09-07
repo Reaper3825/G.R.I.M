@@ -490,7 +490,6 @@ struct LanguageModelConfig {
     float generation_presence_penalty = 0.0f;
     int generation_no_repeat_ngram_size = 0;
     bool generation_do_sample = false;
-    bool generation_enable_scratchblock_reasoning = false;
     int generation_num_return_sequences = 0;
     int generation_eos_token_id = -1;
     int generation_pad_token_id = -1;
@@ -517,7 +516,6 @@ struct LanguageModelConfig {
     bool log_recorder_layer_residual = false;
     bool log_recorder_layer_encoding = false;
     bool log_recorder_layer_serialization = false;
-    bool log_recorder_layer_execution_block = false;
     std::string logging_default_level;
     bool logging_equation_csv_enabled = false;
     bool logging_stderr_enabled = false;
@@ -620,13 +618,6 @@ struct LanguageModelConfig {
     bool loss_focal_enabled = false;
     float loss_focal_gamma = 0.0f;
     float loss_focal_alpha = 0.0f;
-    bool loss_preference_enabled = false;
-    float loss_preference_beta = 0.0f;
-    bool loss_distillation_enabled = false;
-    float loss_distillation_temperature = 0.0f;
-    float loss_distillation_lambda = 0.0f;
-    bool loss_masking_enabled = true;
-    std::string loss_masking_tag;
     bool loss_entropy_reg_enabled = false;
     float loss_entropy_reg_lambda = 0.0f;
     bool loss_class_balanced_enabled = false;
@@ -648,20 +639,9 @@ struct LanguageModelConfig {
     int stability_override_max_seq_len = 0;
     float stability_override_clip_per_token = 0.0f;
 
-    bool scratch_blocks_enabled = false;
-    std::size_t scratch_max_tokens_per_block = 0;
-    std::size_t scratch_num_blocks = 0;
-    bool scratch_write_combined = false;
-
     bool single_stream_mode = false;
     bool disable_async_frees = false;
     bool synchronize_after_kernels = false;
-
-    bool prediction_comparison_enabled = false;
-    int prediction_comparison_interval = 0;
-    int prediction_comparison_top_k = 0;
-    int prediction_comparison_max_positions = 0;
-    std::string prediction_comparison_log_path;
 
     bool logit_update_trace_enabled = false;
     int logit_update_trace_interval = 0;
@@ -1571,134 +1551,12 @@ inline void validateRootConfigDocument(
         validationField("soft_restart_cooldown_steps", &LanguageModelConfig::soft_restart_cooldown_steps),
         validationField("auto_stop_plateau_patience", &LanguageModelConfig::auto_stop_plateau_patience),
         validationField("auto_stop_high_loss_patience", &LanguageModelConfig::auto_stop_high_loss_patience),
-        validationField("tokenizer_subword_mining_workers", &LanguageModelConfig::tokenizer_subword_mining_workers),
-        validationField("execution_block_num_steps", &LanguageModelConfig::execution_block_num_steps)
+        validationField("tokenizer_subword_mining_workers", &LanguageModelConfig::tokenizer_subword_mining_workers)
     }, caller);
 
-    if (params.use_atom_data || params.execution_block_enabled) {
+    if (params.use_atom_data) {
         validatePositiveFields(params, {
             validationField("atom_embedding_dim", &LanguageModelConfig::atom_embedding_dim)
-        }, caller);
-    }
-    if (params.structured_ce_enabled) {
-        validatePositiveFiniteFields(params, {
-            validationField("execution_block_structured_ce_weight", &LanguageModelConfig::structured_ce_weight)
-        }, caller);
-    }
-    validateNonNegativeFiniteFields(params, {
-        validationField("execution_block_step_x_multiplier", &LanguageModelConfig::step_x_multiplier),
-        validationField("execution_block_step_y_multiplier", &LanguageModelConfig::step_y_multiplier),
-        validationField("execution_block_entropy_aux_weight", &LanguageModelConfig::entropy_aux_weight),
-        validationField("execution_block_final_slot_consistency_weight", &LanguageModelConfig::final_slot_consistency_weight),
-        validationField("execution_block_execute_ce_weight", &LanguageModelConfig::execute_ce_weight),
-        validationField("execution_block_stop_ce_weight", &LanguageModelConfig::stop_ce_weight)
-    }, caller);
-    validatePositiveFiniteFields(params, {
-        validationField("execution_block_value_match_epsilon", &LanguageModelConfig::value_match_epsilon)
-    }, caller);
-    if (params.execution_block_enabled) {
-        if (!params.use_atom_data) {
-            throw std::runtime_error(
-                std::string(caller) + ": execution_block_enabled=true requires use_atom_data=true");
-        }
-        validateFieldsAtLeast(params, {
-            validationConstantBound("execution_block_layer", &LanguageModelConfig::execution_block_layer, -1, "-1"),
-            validationConstantBound("execution_block_num_scratch_slots", &LanguageModelConfig::execution_block_num_scratch_slots, 0, "0"),
-            validationConstantBound("execution_block_temp_schedule", &LanguageModelConfig::execution_block_temp_schedule, 0, "0"),
-            validationConstantBound("execution_block_gate_warmup_steps", &LanguageModelConfig::execution_block_gate_warmup_steps, 0, "0"),
-            validationConstantBound("execution_block_result_slot_index", &LanguageModelConfig::execution_block_result_slot_index, -1, "-1"),
-            validationConstantBound("execution_block_result_slot_mode", &LanguageModelConfig::execution_block_result_slot_mode, 0, "0")
-        }, caller);
-        validateFieldsAtMost(params, {
-            validationConstantBound("execution_block_d_key", &LanguageModelConfig::execution_block_d_key, 64, "64"),
-            validationConstantBound("execution_block_result_slot_mode", &LanguageModelConfig::execution_block_result_slot_mode, 1, "1")
-        }, caller);
-        validateLessThanFields(params, {
-            validationFieldRelation("execution_block_num_scratch_slots", &LanguageModelConfig::execution_block_num_scratch_slots,
-                                    "execution_block_num_slots", &LanguageModelConfig::execution_block_num_slots),
-            validationFieldRelation("execution_block_result_slot_index", &LanguageModelConfig::execution_block_result_slot_index,
-                                    "execution_block_num_slots", &LanguageModelConfig::execution_block_num_slots)
-        }, caller);
-        if (params.execution_block_layer >= params.num_layers) {
-            throw std::runtime_error(
-                std::string(caller) + ": execution_block_layer=" +
-                std::to_string(params.execution_block_layer) +
-                " exceeds num_layers=" + std::to_string(params.num_layers));
-        }
-        validatePositiveFields(params, {
-            validationField("execution_block_num_ops", &LanguageModelConfig::execution_block_num_ops),
-            validationField("execution_block_num_slots", &LanguageModelConfig::execution_block_num_slots),
-            validationField("execution_block_num_steps", &LanguageModelConfig::execution_block_num_steps),
-            validationField("execution_block_value_decode_input_dim", &LanguageModelConfig::execution_block_value_decode_input_dim),
-            validationField("execution_block_value_decode_hidden_dim", &LanguageModelConfig::execution_block_value_decode_hidden_dim),
-            validationField("execution_block_d_key", &LanguageModelConfig::execution_block_d_key),
-            validationField("execution_block_d_type", &LanguageModelConfig::execution_block_d_type),
-            validationField("execution_block_cross_attn_head_dim", &LanguageModelConfig::execution_block_cross_attn_head_dim),
-            validationField("execution_block_cross_attn_topk", &LanguageModelConfig::execution_block_cross_attn_topk)
-        }, caller);
-        if (params.execution_block_value_decode_input_dim + 16 > params.atom_embedding_dim) {
-            throw std::runtime_error(
-                std::string(caller) + ": execution_block_value_decode_input_dim + 16 must fit atom_embedding_dim");
-        }
-        if (params.execution_block_cross_attn_topk > params.execution_block_num_slots) {
-            throw std::runtime_error(
-                std::string(caller) + ": execution_block_cross_attn_topk=" +
-                std::to_string(params.execution_block_cross_attn_topk) +
-                " exceeds execution_block_num_slots=" +
-                std::to_string(params.execution_block_num_slots));
-        }
-        validatePositiveFiniteFields(params, {
-            validationField("execution_block_usage_decay", &LanguageModelConfig::execution_block_usage_decay),
-            validationField("execution_block_inject_gate_temp", &LanguageModelConfig::execution_block_inject_gate_temp),
-            validationField("execution_block_magnitude_limit", &LanguageModelConfig::execution_block_magnitude_limit),
-            validationField("execution_block_diversity_kappa", &LanguageModelConfig::execution_block_diversity_kappa),
-            validationField("execution_block_temp_start", &LanguageModelConfig::execution_block_temp_start),
-            validationField("execution_block_temp_end", &LanguageModelConfig::execution_block_temp_end)
-        }, caller);
-        if (params.execution_block_usage_decay > 1.0f) {
-            throw std::runtime_error(
-                std::string(caller) + ": execution_block_usage_decay must be <= 1, got " +
-                std::to_string(params.execution_block_usage_decay));
-        }
-        validateNonNegativeFiniteFields(params, {
-            validationField("execution_block_entropy_weight", &LanguageModelConfig::execution_block_entropy_weight),
-            validationField("execution_block_transition_hard_threshold", &LanguageModelConfig::execution_block_transition_hard_threshold),
-            validationField("execution_block_div_invalid_penalty_weight", &LanguageModelConfig::div_invalid_penalty_weight)
-        }, caller);
-        validateClosedUnitIntervalFields(params, {
-            validationField("execution_block_entropy_collapse_threshold", &LanguageModelConfig::execution_block_entropy_collapse_threshold),
-            validationField("execution_block_write_collapse_threshold", &LanguageModelConfig::execution_block_write_collapse_threshold)
-        }, caller);
-    }
-    if (params.number_encoder_enabled) {
-        if (!params.use_atom_data) {
-            throw std::runtime_error(
-                std::string(caller) + ": number_encoder_enabled=true requires use_atom_data=true");
-        }
-        validatePositiveFields(params, {
-            validationField("number_encoder_max_digit_slots", &LanguageModelConfig::number_encoder_max_digit_slots),
-            validationField("number_encoder_d_hidden", &LanguageModelConfig::number_encoder_d_hidden),
-            validationField("number_encoder_max_abs_pow10", &LanguageModelConfig::number_encoder_max_abs_pow10)
-        }, caller);
-        // arg_number stores pow10 as int16; the bucket table must stay inside that range.
-        if (params.number_encoder_max_abs_pow10 > 32766) {
-            throw std::runtime_error(
-                std::string(caller) + ": number_encoder_max_abs_pow10=" +
-                std::to_string(params.number_encoder_max_abs_pow10) +
-                " exceeds the int16 pow10 capacity of arg_number digit bindings");
-        }
-    }
-    if (params.slot_seed_encoder_enabled) {
-        if (!params.use_atom_data) {
-            throw std::runtime_error(
-                std::string(caller) + ": slot_seed_encoder_enabled=true requires use_atom_data=true");
-        }
-        if (!params.execution_block_enabled) {
-            throw std::runtime_error(
-                std::string(caller) + ": slot_seed_encoder_enabled=true requires execution_block_enabled=true");
-        }
-        validatePositiveFields(params, {
-            validationField("slot_seed_encoder_d_hidden", &LanguageModelConfig::slot_seed_encoder_d_hidden)
         }, caller);
     }
     if (params.generation_strategy == SamplingStrategy::UNSPECIFIED) {
@@ -1780,10 +1638,6 @@ inline void validateRootConfigDocument(
     if (params.execution_mode != ModelExecutionMode::TRAINING &&
         params.execution_mode != ModelExecutionMode::INFERENCE) {
         throw std::runtime_error(std::string(caller) + ": execution_mode is neither TRAINING nor INFERENCE");
-    }
-    if (params.structured_ce_enabled && params.structured_ce_weight <= 0.0f) {
-        throw std::runtime_error(std::string(caller) + ": structured_ce_enabled=true but structured_ce_weight=" +
-                                 std::to_string(params.structured_ce_weight) + " (must be > 0)");
     }
 }
 
@@ -2131,7 +1985,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(log_recorder_layer_residual);
     GRIM_LOAD_CONFIG_FIELD(log_recorder_layer_encoding);
     GRIM_LOAD_CONFIG_FIELD(log_recorder_layer_serialization);
-    GRIM_LOAD_CONFIG_FIELD(log_recorder_layer_execution_block);
     GRIM_LOAD_CONFIG_FIELD(loss_label_smoothing_enabled);
     GRIM_LOAD_CONFIG_FIELD(loss_label_smoothing_epsilon);
     GRIM_LOAD_CONFIG_FIELD(loss_focal_enabled);
@@ -2142,13 +1995,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_enabled);
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_beta);
     GRIM_LOAD_CONFIG_FIELD(loss_local_atom_retrieval_weight);
-    GRIM_LOAD_CONFIG_FIELD(loss_preference_enabled);
-    GRIM_LOAD_CONFIG_FIELD(loss_preference_beta);
-    GRIM_LOAD_CONFIG_FIELD(loss_distillation_enabled);
-    GRIM_LOAD_CONFIG_FIELD(loss_distillation_temperature);
-    GRIM_LOAD_CONFIG_FIELD(loss_distillation_lambda);
-    GRIM_LOAD_CONFIG_FIELD(loss_masking_enabled);
-    GRIM_LOAD_CONFIG_FIELD(loss_masking_tag);
     GRIM_LOAD_CONFIG_FIELD(lm_head_centering_enabled);
     GRIM_LOAD_CONFIG_FIELD(freeze_learned_rms_gammas);
     if (config.at("hardcoded_hidden_states_enabled").get<bool>()) {
@@ -2169,7 +2015,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(generation_frequency_penalty);
     GRIM_LOAD_CONFIG_FIELD(generation_presence_penalty);
     GRIM_LOAD_CONFIG_FIELD(generation_do_sample);
-    GRIM_LOAD_CONFIG_FIELD(generation_enable_scratchblock_reasoning);
     GRIM_LOAD_CONFIG_FIELD(embedding_freeze_enabled);
     GRIM_LOAD_CONFIG_FIELD(embedding_freeze_after_step);
     GRIM_LOAD_CONFIG_FIELD(optimizer_kind);
@@ -2181,37 +2026,9 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(stability_override_batch_size);
     GRIM_LOAD_CONFIG_FIELD(stability_override_max_seq_len);
     GRIM_LOAD_CONFIG_FIELD(stability_override_clip_per_token);
-    GRIM_LOAD_CONFIG_FIELD(scratch_blocks_enabled);
-    GRIM_LOAD_CONFIG_FIELD(scratch_num_blocks);
-    GRIM_LOAD_CONFIG_FIELD(scratch_write_combined);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_debug_mode);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_step_y_overrides_x", step_y_overrides_x);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_enabled", structured_ce_enabled);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_temp_schedule);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_entropy_collapse_threshold);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_write_collapse_threshold);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_diversity_kappa);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_temp_start);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_temp_end);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_entropy_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_step_x_multiplier", step_x_multiplier);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_step_y_multiplier", step_y_multiplier);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_entropy_aux_weight", entropy_aux_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_value_match_epsilon", value_match_epsilon);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_final_slot_consistency_weight", final_slot_consistency_weight);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_transition_hard_threshold);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_div_invalid_penalty_weight", div_invalid_penalty_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_execute_ce_weight", execute_ce_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_stop_ce_weight", stop_ce_weight);
     GRIM_LOAD_CONFIG_FIELD(single_stream_mode);
     GRIM_LOAD_CONFIG_FIELD(disable_async_frees);
     GRIM_LOAD_CONFIG_FIELD(synchronize_after_kernels);
-    GRIM_LOAD_CONFIG_FIELD(prediction_comparison_enabled);
-    GRIM_LOAD_CONFIG_FIELD(prediction_comparison_interval);
-    GRIM_LOAD_CONFIG_FIELD(prediction_comparison_top_k);
-    GRIM_LOAD_CONFIG_FIELD(prediction_comparison_max_positions);
-    GRIM_LOAD_CONFIG_FIELD(prediction_comparison_log_path);
     GRIM_LOAD_CONFIG_FIELD(logit_update_trace_enabled);
     GRIM_LOAD_CONFIG_FIELD(logit_update_trace_interval);
     GRIM_LOAD_CONFIG_FIELD(attention_diag_enabled);
@@ -2676,22 +2493,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_inject_gate_temp);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_result_slot_mode);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_result_slot_index);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_debug_mode);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_entropy_collapse_threshold);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_write_collapse_threshold);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_magnitude_limit);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_diversity_kappa);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_temp_start);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_temp_end);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_temp_schedule);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_entropy_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_hard_threshold);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_gate_warmup_steps);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(div_invalid_penalty_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execute_ce_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(stop_ce_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_digit_slots);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_d_hidden);
@@ -2700,12 +2502,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_d_hidden);
     GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_bias_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_type_embedding_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(step_x_multiplier);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_multiplier);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_overrides_x);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(entropy_aux_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(value_match_epsilon);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(final_slot_consistency_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_center_hidden_states);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_d_ff);
@@ -2738,7 +2534,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_unk_token_id);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_bad_words_ids);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_seed);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_enable_scratchblock_reasoning);
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_model_training);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_curriculum);
     GRIM_WRITE_FINAL_CONFIG_FIELD(training_curriculum);
@@ -2755,7 +2550,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_residual);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_encoding);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_serialization);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_execution_block);
     GRIM_WRITE_FINAL_CONFIG_FIELD(logging_default_level);
     GRIM_WRITE_FINAL_CONFIG_FIELD(logging_equation_csv_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(logging_stderr_enabled);
@@ -2851,13 +2645,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_focal_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_focal_gamma);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_focal_alpha);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_preference_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_preference_beta);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_distillation_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_distillation_temperature);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_distillation_lambda);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_masking_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_masking_tag);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_entropy_reg_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_entropy_reg_lambda);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_enabled);
@@ -2878,11 +2665,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(single_stream_mode);
     GRIM_WRITE_FINAL_CONFIG_FIELD(disable_async_frees);
     GRIM_WRITE_FINAL_CONFIG_FIELD(synchronize_after_kernels);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_interval);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_top_k);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_max_positions);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_log_path);
     GRIM_WRITE_FINAL_CONFIG_FIELD(logit_update_trace_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(logit_update_trace_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_enabled);

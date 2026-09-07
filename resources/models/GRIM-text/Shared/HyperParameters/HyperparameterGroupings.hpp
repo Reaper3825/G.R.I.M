@@ -139,7 +139,6 @@ struct GenerationHP {
     bool do_sample = false;
     std::vector<int> bad_words_ids;
     unsigned int seed = 0;
-    bool enable_scratchblock_reasoning = false;
 };
 
 struct TapeLogHP {
@@ -158,7 +157,6 @@ struct LogRecorderLayerEnablesHP {
     bool residual = false;
     bool encoding = false;
     bool serialization = false;
-    bool execution_block = false;
 };
 
 struct LogRecorderHP {
@@ -720,7 +718,6 @@ inline LogRecorderHP logRecorderHP(
     view.layers.residual = hp.log_recorder_layer_residual;
     view.layers.encoding = hp.log_recorder_layer_encoding;
     view.layers.serialization = hp.log_recorder_layer_serialization;
-    view.layers.execution_block = hp.log_recorder_layer_execution_block;
     return view;
 }
 
@@ -1127,7 +1124,6 @@ inline LogRecorderHP logRecorderHP(
     view.layers.residual = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_residual");
     view.layers.encoding = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_encoding");
     view.layers.serialization = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_serialization");
-    view.layers.execution_block = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_execution_block");
     return view;
 }
 
@@ -1432,22 +1428,8 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.execution_block_inject_gate_temp = requireFloat("execution_block_inject_gate_temp");
     view.execution_block_result_slot_mode = requireInt("execution_block_result_slot_mode");
     view.execution_block_result_slot_index = requireInt("execution_block_result_slot_index");
-    view.execution_block_debug_mode = requireBool("execution_block_debug_mode");
-    view.execution_block_entropy_collapse_threshold = requireFloat("execution_block_entropy_collapse_threshold");
-    view.execution_block_write_collapse_threshold = requireFloat("execution_block_write_collapse_threshold");
     view.execution_block_magnitude_limit = requireFloat("execution_block_magnitude_limit");
-    view.execution_block_diversity_kappa = requireFloat("execution_block_diversity_kappa");
-    view.execution_block_temp_start = requireFloat("execution_block_temp_start");
-    view.execution_block_temp_end = requireFloat("execution_block_temp_end");
-    view.execution_block_temp_schedule = requireInt("execution_block_temp_schedule");
-    view.execution_block_entropy_weight = requireFloat("execution_block_entropy_weight");
-    view.execution_block_transition_hard_threshold = requireFloat("execution_block_transition_hard_threshold");
     view.execution_block_gate_warmup_steps = 0;
-    view.execution_block_div_invalid_penalty_weight = requireFloat("execution_block_div_invalid_penalty_weight");
-    view.execution_block_entropy_aux_weight = requireFloat("execution_block_entropy_aux_weight");
-    view.execution_block_structured_ce_weight = requireFloat("execution_block_structured_ce_weight");
-    view.execution_block_execute_ce_weight = requireFloat("execution_block_execute_ce_weight");
-    view.execution_block_stop_ce_weight = requireFloat("execution_block_stop_ce_weight");
 
     view.number_encoder_enabled = requireBool("number_encoder_enabled");
     view.number_encoder_d_model = d_model;
@@ -1464,7 +1446,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
 
     view.positional_encoding = parsePositionalEncodingFlags(
         requireBool("use_rope"), requireBool("use_alibi"));
-    view.structured_ce_enabled = requireBool("execution_block_structured_ce_enabled");
     return view;
 }
 
@@ -1667,7 +1648,6 @@ inline GenerationHP generationHP(const LanguageModelConfig& cfg)
     view.do_sample = cfg.generation_do_sample;
     view.bad_words_ids = cfg.generation_bad_words_ids;
     view.seed = cfg.generation_seed;
-    view.enable_scratchblock_reasoning = cfg.generation_enable_scratchblock_reasoning;
     return view;
 }
 
@@ -1694,8 +1674,6 @@ inline GenerationHP generationHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.no_repeat_ngram_size = snapshotTrainingConfigField<int>(snapshot, "generation_no_repeat_ngram_size");
     view.do_sample = snapshotTrainingConfigField<bool>(snapshot, "generation_do_sample");
     view.seed = 0;
-    view.enable_scratchblock_reasoning =
-        snapshotTrainingConfigField<bool>(snapshot, "generation_enable_scratchblock_reasoning");
     return view;
 }
 

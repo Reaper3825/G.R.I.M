@@ -132,9 +132,6 @@ struct TrainingLoopState {
     // high-loss patience is owned by GRIM::Loss::LossSignalBus.
     int plateau_epochs_without_improvement = 0;
     
-    // Prediction comparison counter
-    int prediction_comparison_good_batch_counter = 0;
-    
     // Last optimizer step that emitted a sample
     int last_sample_step = -1;
 

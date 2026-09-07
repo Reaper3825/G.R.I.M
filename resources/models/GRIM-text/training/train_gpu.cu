@@ -149,9 +149,6 @@ GRIM::HyperParameters::GenerationHP generationHPFromRequest(
     if (request.contains("presence_penalty")) gen_config.presence_penalty = request.at("presence_penalty").get<float>();
     if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request.at("no_repeat_ngram_size").get<int>();
     if (request.contains("seed")) gen_config.seed = request.at("seed").get<unsigned int>();
-    if (request.contains("enable_scratchblock_reasoning")) {
-        gen_config.enable_scratchblock_reasoning = request.at("enable_scratchblock_reasoning").get<bool>();
-    }
     if (request.contains("strategy")) {
         const std::string strategy_name = request.at("strategy").get<std::string>();
         gen_config.strategy = GRIM::HyperParameters::parseGenerationSamplingStrategy(strategy_name);

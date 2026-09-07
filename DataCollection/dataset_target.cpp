@@ -59,6 +59,9 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     cb.id                 = j.value("id", std::string());
     cb.name               = j.value("name", std::string());
     cb.prompt             = j.value("prompt", std::string());
+    cb.determine          = j.value("determine", std::string());
+    cb.execute            = j.value("execute", std::string());
+    cb.update             = j.value("update", std::string());
     cb.answer             = j.value("answer", std::string());
     cb.raw                = j.value("raw", std::string());
     cb.format_type        = j.value("format_type", std::string("chain_of_thought"));
@@ -781,6 +784,9 @@ std::vector<size_t> DatasetTarget::searchConceptBlocks(
         if (!lq.empty()) {
             bool match = toLower(cb.name).find(lq) != std::string::npos
                       || toLower(cb.prompt).find(lq) != std::string::npos
+                      || toLower(cb.determine).find(lq) != std::string::npos
+                      || toLower(cb.execute).find(lq) != std::string::npos
+                      || toLower(cb.update).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos
                       || toLower(cb.raw).find(lq) != std::string::npos;
             if (!match) {
@@ -820,6 +826,9 @@ std::vector<size_t> DatasetTarget::filterConceptBlocks(
         if (!lq.empty()) {
             bool match = toLower(cb.name).find(lq) != std::string::npos
                       || toLower(cb.prompt).find(lq) != std::string::npos
+                      || toLower(cb.determine).find(lq) != std::string::npos
+                      || toLower(cb.execute).find(lq) != std::string::npos
+                      || toLower(cb.update).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos;
             if (!match) {
                 for (const auto& line : cb.intermediates) {

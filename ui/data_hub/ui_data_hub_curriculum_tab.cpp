@@ -542,8 +542,30 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
     } // end if (conceptMode) — EXP / EXEC hidden in PT mode
 
-    // ─── A: Answer (concept mode only) ────────────────────
+    // ─── Determine / Execute / Update (concept mode only) ─
     if (structuredEditorMode) {
+    struct PhaseField {
+        const char* label;
+        std::shared_ptr<UITextArea> area;
+    };
+    const PhaseField phaseFields[] = {
+        {"Determine", cbDetermineArea_},
+        {"Execute", cbExecuteArea_},
+        {"Update", cbUpdateArea_}
+    };
+    for (const auto& field : phaseFields) {
+        renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+        ey += sectionGap;
+        renderer.drawText({editorX + ePad, ey}, field.label,
+                          UITheme::Colors::TextSecondary);
+        ey += 20.0f;
+        field.area->setPosition(editorX + ePad, ey);
+        field.area->setSize(eInnerW, areaH);
+        field.area->drawOverlay(renderer, position);
+        ey += areaH + 18.0f;
+    }
+
+    // ─── A: Answer ────────────────────────────────────────
     renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
     ey += sectionGap;
     std::string aLabel = std::string("A: ") + preset.answerLabel;
@@ -772,6 +794,9 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     for (size_t i = 0; i < cb.unknowns.size(); ++i) {
         cbUnknownAreas_[i]->setText(cb.unknowns[i]);
     }
+    if (cbDetermineArea_) cbDetermineArea_->setText(cb.determine);
+    if (cbExecuteArea_)   cbExecuteArea_->setText(cb.execute);
+    if (cbUpdateArea_)    cbUpdateArea_->setText(cb.update);
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
 
     int pi = GRIM::presetIndexForKey(cb.format_type);
@@ -822,6 +847,9 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbNameInput_)    cbNameInput_->setText("");
     if (cbPromptArea_) cbPromptArea_->setText("");
     if (cbTargetStateArea_) cbTargetStateArea_->setText("");
+    if (cbDetermineArea_) cbDetermineArea_->setText("");
+    if (cbExecuteArea_) cbExecuteArea_->setText("");
+    if (cbUpdateArea_) cbUpdateArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
     cbSuccessCriterionRows_.clear();
     cbConstraintAreas_.clear();
@@ -924,6 +952,9 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     out = GRIM::ConceptBlock{};
     out.name = cbNameInput_ ? cbNameInput_->getText() : "";
     out.prompt = cbPromptArea_ ? cbPromptArea_->getText() : "";
+    out.determine = cbDetermineArea_ ? cbDetermineArea_->getText() : "";
+    out.execute = cbExecuteArea_ ? cbExecuteArea_->getText() : "";
+    out.update = cbUpdateArea_ ? cbUpdateArea_->getText() : "";
     out.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
     auto trim = [](std::string value) {
         const auto first = value.find_first_not_of(" \t\r\n");
@@ -992,6 +1023,9 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     if (out.format_type == "raw") {
         out.raw = std::move(out.prompt);
         out.prompt.clear();
+        out.determine.clear();
+        out.execute.clear();
+        out.update.clear();
         out.answer.clear();
         out.goal.reset();
         if (trim(out.raw).empty()) {

@@ -44,6 +44,9 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.knowns = stringVectorValue(source.knowns());
     block.unknowns = stringVectorValue(source.unknowns());
     block.intermediates = stringVectorValue(source.intermediates());
+    block.determine = stringValue(source.determine());
+    block.execute = stringValue(source.execute());
+    block.update = stringValue(source.update());
     block.answer = stringValue(source.answer());
     block.raw = stringValue(source.raw());
     block.explanation = stringVectorValue(source.explanation());
@@ -105,6 +108,9 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     const auto knowns = createStringVector(builder, block.knowns);
     const auto unknowns = createStringVector(builder, block.unknowns);
     const auto intermediates = createStringVector(builder, block.intermediates);
+    const auto determine = builder.CreateString(block.determine);
+    const auto execute = builder.CreateString(block.execute);
+    const auto update = builder.CreateString(block.update);
     const auto answer = builder.CreateString(block.answer);
     const auto raw = builder.CreateString(block.raw);
     const auto explanation = createStringVector(builder, block.explanation);
@@ -158,7 +164,10 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
         goal,
         raw,
         knowns,
-        unknowns);
+        unknowns,
+        determine,
+        execute,
+        update);
 }
 
 size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
@@ -175,6 +184,7 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
     };
     for (const auto& block : blocks) {
         add(256 + block.id.size() + block.name.size() + block.prompt.size()
+            + block.determine.size() + block.execute.size() + block.update.size()
             + block.answer.size() + block.raw.size() + block.format_type.size()
             + block.source_sequence_id.size());
         for (const auto& text : block.knowns) add(8 + text.size());

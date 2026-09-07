@@ -54,7 +54,6 @@ The GRIM project uses a three-tier configuration system:
       "current_model_training": "",
       "clear_merged_cache_on_merge": false,
       "loss_label_smoothing_enabled": true,
-      "scratch_blocks_enabled": true,
       "subprocess_tokenizer_only_mode": false,
       // ... etc
     }

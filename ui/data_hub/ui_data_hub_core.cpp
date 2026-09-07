@@ -598,6 +598,9 @@ UIDataHubPanel::UIDataHubPanel()
             if (std::string(newKey) == "raw") {
                 cb.raw = GRIM::ConceptCanonical::renderPlainText(cb);
                 cb.prompt.clear();
+                cb.determine.clear();
+                cb.execute.clear();
+                cb.update.clear();
                 cb.answer.clear();
                 cb.intermediates.clear();
                 cb.explanation.clear();
@@ -665,6 +668,12 @@ UIDataHubPanel::UIDataHubPanel()
     cbPromptArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
     cbTargetStateArea_ = std::make_shared<UITextArea>("", "",
+        [](const std::string&) {});
+    cbDetermineArea_ = std::make_shared<UITextArea>("", "",
+        [](const std::string&) {});
+    cbExecuteArea_ = std::make_shared<UITextArea>("", "",
+        [](const std::string&) {});
+    cbUpdateArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
     cbAnswerArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
@@ -983,7 +992,8 @@ UIDataHubPanel::UIDataHubPanel()
         cbRandomizeCourseOrderToggle_, cbRandomizeConceptBlockOrderToggle_,
         cbModelDropdown_, cbCurriculumDropdown_, cbTrainingStageDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
-        cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbAnswerArea_, cbCustomPromptArea_,
+        cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbDetermineArea_, cbExecuteArea_,
+        cbUpdateArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, successCriteriaActionMenu_, constraintsActionMenu_, knownsActionMenu_, unknownsActionMenu_,
         stepActionMenu_, execStepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_

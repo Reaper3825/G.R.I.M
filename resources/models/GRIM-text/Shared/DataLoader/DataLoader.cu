@@ -185,6 +185,9 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	j["id"] = fbString(source.id());
 	j["name"] = fbString(source.name());
 	j["prompt"] = fbString(source.prompt());
+	j["determine"] = fbString(source.determine());
+	j["execute"] = fbString(source.execute());
+	j["update"] = fbString(source.update());
 	j["answer"] = fbString(source.answer());
 	j["raw"] = fbString(source.raw());
 	j["format_type"] = fbString(source.format_type());

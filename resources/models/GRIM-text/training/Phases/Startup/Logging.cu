@@ -130,7 +130,7 @@ void LoggingReady(TrainingContext& ctx) {
             layers.residual,
             layers.encoding,
             layers.serialization,
-            layers.execution_block);
+            false);
     } else {
         GRIM::Logging::ConfigureLayerLogging(
             false, false, false, false, false, false, false, false, false);
