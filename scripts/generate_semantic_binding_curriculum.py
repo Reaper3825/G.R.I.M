@@ -38,6 +38,7 @@ ATOM_MARKERS = (
     "<INT>", "</INT>", "<FLOAT>", "</FLOAT>",
     "<STRING>", "</STRING>", "<BOOL>", "</BOOL>",
     "<ENTITY>", "</ENTITY>",
+    "<TOOL>", "</TOOL>",
 )
 
 

@@ -1339,10 +1339,10 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     const std::string text =
         "value=<INT> 42 </INT> ratio=<FLOAT>-3.5</FLOAT> "
         "label=<STRING>  hello world  </STRING> enabled=<BOOL> true </BOOL> "
-        "owner=<ENTITY>Ada Lovelace</ENTITY>";
+        "owner=<ENTITY>Ada Lovelace</ENTITY> tool=<TOOL>ui.create_surface</TOOL>";
     const auto detections = registry.scan(text, options);
 
-    ASSERT_EQ(detections.size(), static_cast<size_t>(5),
+    ASSERT_EQ(detections.size(), static_cast<size_t>(6),
               "Authored atom delimiters must claim their complete spans");
 
     const auto& integer = detections[0];
@@ -1380,14 +1380,20 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     ASSERT_STR_EQ(text.substr(entity.content_offset, entity.content_length),
                   "Ada Lovelace",
                   "Authored entity content span mismatch");
+    const auto& tool = detections[5];
+    ASSERT_TRUE(tool.atom_type == AtomType::ATOM_TOOL,
+                "Authored tool span has the wrong atom type");
+    ASSERT_STR_EQ(text.substr(tool.content_offset, tool.content_length),
+                  "ui.create_surface",
+                  "Authored tool content span mismatch");
 
     const AtomTableFromDetectionsResult table_result =
         createAtomTableFromRawTextDetections(
             text,
             detections,
             "testAuthoredAtomDelimiterDetector");
-    ASSERT_EQ(table_result.atom_tokens.size(), static_cast<size_t>(5),
-              "Authored delimiter detections must register five atom payloads");
+    ASSERT_EQ(table_result.atom_tokens.size(), static_cast<size_t>(6),
+              "Authored delimiter detections must register six atom payloads");
     ASSERT_TRUE(table_result.local_atom_table != nullptr,
                 "Detection finalization must create a sequence-local atom table");
     for (const auto& payload : table_result.atom_tokens) {
@@ -1441,6 +1447,12 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     ASSERT_EQ(table_result.atom_tokens[4].span.close_token_id,
               atomTypeToCloseTokenId(AtomType::ATOM_ENTITY),
               "Authored entity closing token mismatch");
+    ASSERT_EQ(table_result.atom_tokens[5].span.open_token_id,
+              atomTypeToOpenTokenId(AtomType::ATOM_TOOL),
+              "Authored tool opening token mismatch");
+    ASSERT_EQ(table_result.atom_tokens[5].span.close_token_id,
+              atomTypeToCloseTokenId(AtomType::ATOM_TOOL),
+              "Authored tool closing token mismatch");
 
     const auto string_entry = table_result.atom_table->getAtom(
         table_result.atom_tokens[2].span.atom_entry_id);
@@ -1474,6 +1486,17 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     ASSERT_FALSE(table_result.atom_table->getNumericValue(entity_entry->id).has_value(),
                  "Authored entity must not expose a numeric payload");
 
+    const auto tool_entry = table_result.atom_table->getAtom(
+        table_result.atom_tokens[5].span.atom_entry_id);
+    ASSERT_TRUE(tool_entry.has_value(), "Authored tool AtomTable entry is missing");
+    ASSERT_TRUE(tool_entry->type == AtomType::ATOM_TOOL,
+                "Authored tool AtomTable type mismatch");
+    ASSERT_STR_EQ(std::string(table_result.atom_table->getString(tool_entry->raw_text_ref)),
+                  "ui.create_surface",
+                  "Authored tool AtomTable value mismatch");
+    ASSERT_FALSE(table_result.atom_table->getNumericValue(tool_entry->id).has_value(),
+                 "Authored tool must not expose a numeric payload");
+
     std::stringstream persisted(std::ios::in | std::ios::out | std::ios::binary);
     table_result.atom_table->serializeToStreamOrThrow(
         persisted,
@@ -1483,7 +1506,7 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     restored.deserializeFromStreamOrThrow(
         persisted,
         "testAuthoredAtomDelimiterDetector");
-    ASSERT_EQ(restored.size(), static_cast<size_t>(5),
+    ASSERT_EQ(restored.size(), static_cast<size_t>(6),
               "Persisted authored atom table entry count mismatch");
     const auto restored_string = restored.getAtom(string_entry->id);
     ASSERT_TRUE(restored_string.has_value() &&
@@ -1505,6 +1528,13 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     ASSERT_STR_EQ(std::string(restored.getString(restored_entity->raw_text_ref)),
                   "Ada Lovelace",
                   "Persisted entity atom value mismatch");
+    const auto restored_tool = restored.getAtom(tool_entry->id);
+    ASSERT_TRUE(restored_tool.has_value() &&
+                    restored_tool->type == AtomType::ATOM_TOOL,
+                "Persisted tool atom type mismatch");
+    ASSERT_STR_EQ(std::string(restored.getString(restored_tool->raw_text_ref)),
+                  "ui.create_surface",
+                  "Persisted tool atom value mismatch");
 
     const ParseResult false_bool = AtomTable::parseAtom(AtomType::ATOM_BOOL, "false");
     ASSERT_TRUE(false_bool.success, "Lowercase false must parse as an authored boolean");
@@ -1516,6 +1546,10 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
                 "Non-empty UTF-8 entity bytes must parse");
     ASSERT_FALSE(AtomTable::parseAtom(AtomType::ATOM_ENTITY, "").success,
                  "Empty entity content must be rejected");
+    ASSERT_TRUE(AtomTable::parseAtom(AtomType::ATOM_TOOL, "ui.create_surface").success,
+                "Non-empty tool identifier bytes must parse");
+    ASSERT_FALSE(AtomTable::parseAtom(AtomType::ATOM_TOOL, "").success,
+                 "Empty tool content must be rejected");
 
     return true;
 }

@@ -67,6 +67,10 @@ struct AtomString {};
 // general authored strings after parsing.
 struct AtomEntity {};
 
+// Tool identifier bytes are stored once in AtomEntry::raw_text_ref. Keeping a
+// distinct marker preserves the authored tool type through parse and storage.
+struct AtomTool {};
+
 struct AtomBoolean {
     bool value = false;
 };
@@ -79,7 +83,8 @@ using AtomValue = std::variant<
     AtomFloat,
     AtomString,
     AtomBoolean,
-    AtomEntity
+    AtomEntity,
+    AtomTool
 >;
 
 enum class NumericPayloadKind : uint8_t {
@@ -297,6 +302,7 @@ public:
     static ParseResult parseString(std::string_view text);
     static ParseResult parseBoolean(std::string_view text);
     static ParseResult parseEntity(std::string_view text);
+    static ParseResult parseTool(std::string_view text);
 
 
     //--------------------------------------------------//

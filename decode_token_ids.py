@@ -6,10 +6,10 @@ Token ID Layout (current UniByte tokenizer):
   [0-3]       = Special tokens: <unk>=0, <pad>=1, <s>=2, </s>=3
   [4-259]     = Byte fallback (byte value = token_id - 4)
     [260-305]   = Fixed numeric tokens
-    [306-315]   = Typed atom opening/closing boundaries
-    [316+]      = Unigram vocabulary pieces (from vocab.bin)
+    [306-317]   = Typed atom opening/closing boundaries
+    [318+]      = Unigram vocabulary pieces (from vocab.bin)
 
-Current vocab.bin format is KTMG v6. The saved record count is the number of
+Current vocab.bin format is KTMG v7. The saved record count is the number of
 serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + numeric + atoms + learned pieces.
@@ -67,15 +67,16 @@ ATOM_TYPE_LABELS = {
     2: "STRING",
     3: "BOOL",
     4: "ENTITY",
+    5: "TOOL",
 }
 NUM_ATOM_TYPES = len(ATOM_TYPE_LABELS)
 
-ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + 2 * NUM_ATOM_TYPES  # 316
+ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + 2 * NUM_ATOM_TYPES  # 318
 UNIGRAM_TOKEN_START = ATOM_TOKEN_END
-KTMG_VOCAB_VERSION = 6
+KTMG_VOCAB_VERSION = 7
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 28
+GRMT_FORMAT_VERSION = 29
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 

@@ -37,10 +37,10 @@ void setDecision(std::vector<float>& logits,
 void testAuthoredTargetsUseGenericExit() {
     const auto example = GRIM::AtomInsertion::buildAtomInsertionExample(
         "<INT>42</INT><FLOAT>3.5</FLOAT><STRING>x</STRING><BOOL>true</BOOL>"
-        "<ENTITY>東京</ENTITY>",
+        "<ENTITY>東京</ENTITY><TOOL>ui.create_surface</TOOL>",
         true,
         "testAuthoredTargetsUseGenericExit");
-    require(example.spans.size() == 5, "expected five authored atom spans");
+    require(example.spans.size() == 6, "expected six authored atom spans");
 
     for (const auto& span : example.spans) {
         const int open_class =
@@ -77,8 +77,8 @@ void testAuthoredTargetsUseGenericExit() {
     require(payload.atom_insertion_gap_targets.size() ==
                 static_cast<std::size_t>(payload.atomInsertionGapRowCount()) *
                     GRIM::AtomInsertion::kAtomDecisionClassCount,
-            "payload decision rectangle width is not six");
-    require(payload.atom_insertion_positive_label_count == 10,
+            "payload decision rectangle width is not seven");
+    require(payload.atom_insertion_positive_label_count == 12,
             "each span must author exactly one OPEN and one EXIT target");
 }
 
@@ -191,8 +191,8 @@ void testAdjacentExitThenOpen() {
 
 int main() {
     try {
-        static_assert(GRIM::AtomInsertion::kAtomDecisionClassCount == 6);
-        static_assert(GRIM::AtomInsertion::kExitDecisionClassIndex == 5);
+        static_assert(GRIM::AtomInsertion::kAtomDecisionClassCount == 7);
+        static_assert(GRIM::AtomInsertion::kExitDecisionClassIndex == 6);
         testAuthoredTargetsUseGenericExit();
         testEntityUsesExactByteInput();
         testExitRendersPersistedType();

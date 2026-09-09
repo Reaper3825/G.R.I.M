@@ -314,10 +314,11 @@ AtomInsertionExample buildAtomInsertionExample(
                 prefix + ": atom content is not contained between its delimiters");
         }
         if (detection.atom_type == Tokenizer::AtomType::ATOM_STRING ||
-            detection.atom_type == Tokenizer::AtomType::ATOM_ENTITY) {
+            detection.atom_type == Tokenizer::AtomType::ATOM_ENTITY ||
+            detection.atom_type == Tokenizer::AtomType::ATOM_TOOL) {
             if (content_begin != inner_begin || content_end != inner_end) {
                 throw std::runtime_error(
-                    prefix + ": STRING/ENTITY content must exactly equal its delimiter interior");
+                    prefix + ": STRING/ENTITY/TOOL content must exactly equal its delimiter interior");
             }
         } else {
             for (std::size_t index = inner_begin; index < content_begin; ++index) {

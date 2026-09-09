@@ -78,7 +78,7 @@ AtomIdentifierBatchDiagnostic computeAtomIdentifierBatchDiagnostic(
     float decision_logit = 0.0f);
 
 // Per-batch live entry point. The caller owns cadence and supplies the active
-// CUDA stream and global step explicitly. It copies only the five atom
+// CUDA stream and global step explicitly. It copies only the six atom
 // decision columns to the host, computes target/prediction confusion metrics,
 // and emits aggregate, per-open-type, and EXIT module log lines.
 void runAtomIdentifierDiagnostic(

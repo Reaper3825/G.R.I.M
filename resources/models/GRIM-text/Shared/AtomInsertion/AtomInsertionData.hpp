@@ -80,7 +80,8 @@ struct AtomInsertionExample {
 // whitespace inside authored delimiters remains in plain_text_bytes but stays
 // outside the labeled atom span, matching the tokenizer's trimmed content
 // contract without deleting source bytes. STRING and ENTITY preserve their
-// exact delimiter-interior UTF-8 bytes.
+// exact delimiter-interior UTF-8 bytes; TOOL identifiers follow the same
+// exact-byte contract.
 //
 // EnableAtomIdentification is the explicit task gate and must be true. The
 // shared model entry validates it against the compiled full-context model

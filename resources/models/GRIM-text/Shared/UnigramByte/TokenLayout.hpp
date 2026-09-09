@@ -79,6 +79,7 @@ enum class AtomType : int {
     ATOM_STRING = 2,   // Authored string values
     ATOM_BOOL   = 3,   // Authored boolean values: true, false
     ATOM_ENTITY = 4,   // Authored named entities in their exact UTF-8 byte form
+    ATOM_TOOL   = 5,   // Authored tool identifiers in their exact UTF-8 byte form
     ATOM_ACTIVE_COUNT,
     ATOM_TYPE_COUNT = ATOM_ACTIVE_COUNT
 };
@@ -87,8 +88,8 @@ constexpr int kAtomTypeCount = static_cast<int>(AtomType::ATOM_ACTIVE_COUNT);
 
 // Each active atom type owns an opening and closing boundary token. Opening
 // tokens begin after the fixed numeric sub-vocabulary: <INT>=306,
-// <FLOAT>=307, <STRING>=308, <BOOL>=309, and <ENTITY>=310. Closing tokens
-// follow as a second type-indexed block beginning at 311.
+// <FLOAT>=307, <STRING>=308, <BOOL>=309, <ENTITY>=310, and <TOOL>=311.
+// Closing tokens follow as a second type-indexed block beginning at 312.
 enum class AtomBoundaryKind : uint8_t {
     OPEN = 0,
     CLOSE = 1
@@ -106,7 +107,7 @@ inline constexpr uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFF
 inline constexpr uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
 static_assert(NUMERIC_TOKEN_OFFSET == 260, "Numeric token range must begin at ID 260");
 static_assert(ATOM_TOKEN_OFFSET == 306, "Atom token range must begin at ID 306");
-static_assert(UNIGRAM_VOCAB_OFFSET == 316, "Learned unigram range must begin at ID 316");
+static_assert(UNIGRAM_VOCAB_OFFSET == 318, "Learned unigram range must begin at ID 318");
 // Sentinel: position has no registered AtomTable entry (0 is a valid AtomTable ID)
 constexpr uint32_t kAtomEntryNone = UINT32_MAX;
 // Sequence-local atom addresses use a separate typed index space and never
@@ -244,6 +245,7 @@ inline int atomTypeIndexOrThrow(AtomType type, const char* caller) {
         case AtomType::ATOM_STRING:
         case AtomType::ATOM_BOOL:
         case AtomType::ATOM_ENTITY:
+        case AtomType::ATOM_TOOL:
             return static_cast<int>(type);
         default:
             throw std::runtime_error(std::string(caller) +
@@ -290,6 +292,8 @@ inline AtomType tokenIdToAtomType(int token_id) {
             return AtomType::ATOM_BOOL;
         case static_cast<int>(AtomType::ATOM_ENTITY):
             return AtomType::ATOM_ENTITY;
+        case static_cast<int>(AtomType::ATOM_TOOL):
+            return AtomType::ATOM_TOOL;
         default:
             throw std::runtime_error("tokenIdToAtomType: token_id=" + std::to_string(token_id) +
                                      " does not map to a live atom type");
@@ -303,6 +307,7 @@ inline const char* atomTypeName(AtomType type) {
         case AtomType::ATOM_STRING: return "STRING";
         case AtomType::ATOM_BOOL:   return "BOOL";
         case AtomType::ATOM_ENTITY: return "ENTITY";
+        case AtomType::ATOM_TOOL:   return "TOOL";
         default: return "UNKNOWN";
     }
 }

@@ -63,7 +63,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 28;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 29;
 
 } // namespace GRIM
 
