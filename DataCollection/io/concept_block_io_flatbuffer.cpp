@@ -254,7 +254,13 @@ bool loadFlatBuffer(const std::filesystem::path& path,
             return false;
         }
 
-        flatbuffers::Verifier verifier(buffer.data(), buffer.size());
+        flatbuffers::Verifier::Options verifier_options;
+        // Large curricula can contain more than FlatBuffers' default limit of
+        // one million nested tables even when the file is valid. Keep structural
+        // verification enabled, but give concept-block datasets a bounded budget
+        // appropriate for the corpus size.
+        verifier_options.max_tables = 2'000'000;
+        flatbuffers::Verifier verifier(buffer.data(), buffer.size(), verifier_options);
         if (!GRIMConcept::VerifyConceptBlockDatasetBuffer(verifier)) {
             if (error) *error = "FlatBuffer verification failed";
             return false;

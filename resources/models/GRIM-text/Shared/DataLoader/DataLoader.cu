@@ -301,7 +301,13 @@ void loadConceptBlocks(const fs::path& cache_dir,
 				"[DataLoader] FATAL: failed to read " + flatbuffer_path.string());
 		}
 
-		flatbuffers::Verifier verifier(buffer.data(), buffer.size());
+		flatbuffers::Verifier::Options verifier_options;
+		// Large curricula can contain more than FlatBuffers' default limit of
+		// one million nested tables even when the file is valid. Keep structural
+		// verification enabled, but give concept-block datasets a bounded budget
+		// appropriate for the corpus size.
+		verifier_options.max_tables = 2'000'000;
+		flatbuffers::Verifier verifier(buffer.data(), buffer.size(), verifier_options);
 		if (!GRIMConcept::VerifyConceptBlockDatasetBuffer(verifier)) {
 			throw std::runtime_error(
 				"[DataLoader] FATAL: FlatBuffer verification failed for " +
