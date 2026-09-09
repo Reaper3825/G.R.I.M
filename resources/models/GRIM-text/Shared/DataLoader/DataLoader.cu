@@ -1014,7 +1014,7 @@ bool PrepareTrainingDataFromCache(
 			  << " AtomTable entries" << std::endl;
 	if (encode_atom_tokens == 0) {
 		std::cerr << "[DataLoader] WARNING: Zero atoms detected during encoding! "
-				  << "Check scratch_block_reasoning.enabled in ai_config.json" << std::endl;
+				  << "Check tokenizer_enable_atom_reasoning in model_config.json" << std::endl;
 	}
 
 	GRIM::TokenizerArtifacts::TokenizerBundleSaveReport save_report;
@@ -1252,7 +1252,7 @@ void logAtomSideChannelDiagnostics(const std::vector<GrmtSequence>& sequences)
 	if (atom_tokens_total == 0) {
 		std::cerr << "[DataLoader] WARNING: Zero atom tokens in GRMT! "
 		          << "Atom detection may not have been enabled during encoding. "
-		          << "Delete .grmt files and regenerate with scratch_block_reasoning.enabled=true"
+		          << "Delete .grmt files and regenerate with tokenizer_enable_atom_reasoning=true"
 		          << std::endl;
 	}
 }

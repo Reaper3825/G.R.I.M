@@ -21,10 +21,8 @@ struct AiConfigSnapshot;
 namespace HyperParameters {
 struct EmbeddingLayerConstructionHP;
 struct EncoderLayerConstructionHP;
-struct ExecutionBlockConstructionHP;
 struct LMHeadLayerConstructionHP;
 struct AtomInsertionBoundaryProjectionHP;
-struct NumberEncoderConstructionHP;
 struct LoRATrainingHP;
 }
 }

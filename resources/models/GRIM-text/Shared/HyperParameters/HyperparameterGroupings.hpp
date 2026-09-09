@@ -86,7 +86,6 @@ struct TokenizerHP {
     std::string tokenizer_curriculum;
     std::string training_curriculum;
     std::string current_model_training;
-    int execution_block_num_steps = 0;
 };
 
 struct LearningRateScheduleInputs {
@@ -423,69 +422,6 @@ struct AtomInsertionBoundaryProjectionHP {
     int d_model = 0;
 };
 
-struct ExecutionBlockConstructionHP {
-    bool enabled = false;
-    bool decode_bias_enabled = false;
-    bool value_embedding_bias_enabled = false;
-    bool scalar_bias_enabled = false;
-    bool trace_bias_enabled = false;
-    int layer = -1;
-    int d_model = 0;
-    int atom_embedding_dim = 0;
-    int num_ops = 0;
-    int num_slots = 0;
-    int num_scratch_slots = 0;
-    int num_exec_steps = 0;
-    int value_decode_input_dim = 0;
-    int value_decode_hidden_dim = 0;
-    int d_key = 0;
-    int d_type = 0;
-    int cross_attn_head_dim = 0;
-    int cross_attn_topk = 0;
-    float usage_decay = 0.0f;
-    float inject_gate_temp = 0.0f;
-    int result_slot_mode = 0;
-    int result_slot_index = 0;
-    bool debug_mode = false;
-    float entropy_collapse_threshold = 0.0f;
-    float write_collapse_threshold = 0.0f;
-    float magnitude_limit = 0.0f;
-    float diversity_kappa = 0.0f;
-    float temp_start = 0.0f;
-    float temp_end = 0.0f;
-    int temp_schedule = 0;
-    float entropy_weight = 0.0f;
-    float transition_hard_threshold = 0.0f;
-    int gate_warmup_steps = 0;
-    float div_invalid_penalty_weight = 0.0f;
-};
-
-// NumberEncoder construction view — numeric-meaning input path.
-// Encodes (digit, pow10) contribution slots plus a global mantissa/exponent
-// feature head. Selection-side
-// representation; execution consumes downstream results only.
-struct NumberEncoderConstructionHP {
-    bool enabled = false;
-    int d_model = 0;
-    int d_hidden = 0;          // contribution-MLP hidden width
-    int max_digit_slots = 0;   // fixed digit-slot capacity per numeric atom
-    int max_abs_pow10 = 0;     // place-exponent range; buckets span [-max, +max]
-    int pow10_buckets = 0;     // derived: 2 * max_abs_pow10 + 1
-    bool contribution_bias_enabled = false;
-    bool global_bias_enabled = false;
-};
-
-// SlotSeedEncoder construction view — contextual numeric-placeholder path.
-// The encoder consumes the causal hidden state at an authored <INT>/<FLOAT>
-// position and produces the d_model seed used to initialize its execution slot.
-struct SlotSeedEncoderConstructionHP {
-    bool enabled = false;
-    int d_model = 0;
-    int d_hidden = 0;
-    bool bias_enabled = false;
-    bool type_embedding_enabled = false;
-};
-
 // Unified model-side config payload for future Phase2 handoff -> Phase2 training.
 // Immutable read view rooted on AiConfigSnapshot (raw document owner) and
 // assembled from training.config authored leaves plus explicit derived formulas.
@@ -547,54 +483,7 @@ struct ModelHP {
     bool local_atom_retrieval_enabled = false;
     int atom_embedding_dim = 0;
 
-    bool execution_block_enabled = false;
-    int execution_block_layer = -1;
-    int execution_block_d_model = 0;
-    int execution_block_num_ops = 0;
-    int execution_block_num_slots = 0;
-    int execution_block_num_scratch_slots = 0;
-    int execution_block_num_exec_steps = 0;
-    int execution_block_value_decode_input_dim = 0;
-    int execution_block_value_decode_hidden_dim = 0;
-    int execution_block_d_key = 0;
-    int execution_block_d_type = 0;
-    int execution_block_cross_attn_head_dim = 0;
-    int execution_block_cross_attn_topk = 0;
-    float execution_block_usage_decay = 0.0f;
-    float execution_block_inject_gate_temp = 0.0f;
-    int execution_block_result_slot_mode = 0;
-    int execution_block_result_slot_index = 0;
-    bool execution_block_debug_mode = false;
-    float execution_block_entropy_collapse_threshold = 0.0f;
-    float execution_block_write_collapse_threshold = 0.0f;
-    float execution_block_magnitude_limit = 0.0f;
-    float execution_block_diversity_kappa = 0.0f;
-    float execution_block_temp_start = 0.0f;
-    float execution_block_temp_end = 0.0f;
-    int execution_block_temp_schedule = 0;
-    float execution_block_entropy_weight = 0.0f;
-    float execution_block_transition_hard_threshold = 0.0f;
-    int execution_block_gate_warmup_steps = 0;
-    float execution_block_div_invalid_penalty_weight = 0.0f;
-    float execution_block_entropy_aux_weight = 0.0f;
-    float execution_block_structured_ce_weight = 0.0f;
-    float execution_block_execute_ce_weight = 0.0f;
-    float execution_block_stop_ce_weight = 0.0f;
-
-    bool number_encoder_enabled = false;
-    int number_encoder_d_model = 0;
-    int number_encoder_d_hidden = 0;
-    int number_encoder_max_digit_slots = 0;
-    int number_encoder_max_abs_pow10 = 0;
-
-    bool slot_seed_encoder_enabled = false;
-    int slot_seed_encoder_d_model = 0;
-    int slot_seed_encoder_d_hidden = 0;
-    bool slot_seed_encoder_bias_enabled = false;
-    bool slot_seed_encoder_type_embedding_enabled = false;
-
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
-    bool structured_ce_enabled = false;
 };
 
 inline TrainingFixedShapeHP trainingFixedShapeHP(
@@ -1053,7 +942,6 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.tokenizer_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_curriculum");
     view.training_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "training_curriculum");
     view.current_model_training = snapshotTrainingConfigField<std::string>(snapshot, "current_model_training");
-    view.execution_block_num_steps = snapshotTrainingConfigField<int>(snapshot, "execution_block_num_steps");
     view.max_seq_len = snapshotTrainingConfigField<int>(snapshot, "max_seq_len");
     return view;
 }
@@ -1411,39 +1299,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
         requireBool("local_atom_retrieval_enabled");
     view.atom_embedding_dim = requireInt("atom_embedding_dim");
 
-    view.execution_block_enabled = requireBool("execution_block_enabled");
-    view.execution_block_layer = requireInt("execution_block_layer");
-    view.execution_block_d_model = d_model;
-    view.execution_block_num_ops = requireInt("execution_block_num_ops");
-    view.execution_block_num_slots = requireInt("execution_block_num_slots");
-    view.execution_block_num_scratch_slots = requireInt("execution_block_num_scratch_slots");
-    view.execution_block_num_exec_steps = requireInt("execution_block_num_steps");
-    view.execution_block_value_decode_input_dim = requireInt("execution_block_value_decode_input_dim");
-    view.execution_block_value_decode_hidden_dim = requireInt("execution_block_value_decode_hidden_dim");
-    view.execution_block_d_key = head_dim;
-    view.execution_block_d_type = requireInt("execution_block_d_type");
-    view.execution_block_cross_attn_head_dim = head_dim;
-    view.execution_block_cross_attn_topk = requireInt("execution_block_cross_attn_topk");
-    view.execution_block_usage_decay = requireFloat("execution_block_usage_decay");
-    view.execution_block_inject_gate_temp = requireFloat("execution_block_inject_gate_temp");
-    view.execution_block_result_slot_mode = requireInt("execution_block_result_slot_mode");
-    view.execution_block_result_slot_index = requireInt("execution_block_result_slot_index");
-    view.execution_block_magnitude_limit = requireFloat("execution_block_magnitude_limit");
-    view.execution_block_gate_warmup_steps = 0;
-
-    view.number_encoder_enabled = requireBool("number_encoder_enabled");
-    view.number_encoder_d_model = d_model;
-    view.number_encoder_d_hidden = requireInt("number_encoder_d_hidden");
-    view.number_encoder_max_digit_slots = requireInt("number_encoder_max_digit_slots");
-    view.number_encoder_max_abs_pow10 = requireInt("number_encoder_max_abs_pow10");
-
-    view.slot_seed_encoder_enabled = requireBool("slot_seed_encoder_enabled");
-    view.slot_seed_encoder_d_model = d_model;
-    view.slot_seed_encoder_d_hidden = requireInt("slot_seed_encoder_d_hidden");
-    view.slot_seed_encoder_bias_enabled = requireBool("slot_seed_encoder_bias_enabled");
-    view.slot_seed_encoder_type_embedding_enabled =
-        requireBool("slot_seed_encoder_type_embedding_enabled");
-
     view.positional_encoding = parsePositionalEncodingFlags(
         requireBool("use_rope"), requireBool("use_alibi"));
     return view;
@@ -1546,81 +1401,6 @@ inline AtomInsertionBoundaryProjectionHP atomInsertionBoundaryProjectionHP(
     AtomInsertionBoundaryProjectionHP view;
     view.enabled = model.atom_insertion_enabled;
     view.d_model = model.encoder_d_model;
-    return view;
-}
-
-inline ExecutionBlockConstructionHP executionBlockConstructionHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    ExecutionBlockConstructionHP view;
-    view.enabled = model.execution_block_enabled;
-    view.decode_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_decode_bias_enabled");
-    view.value_embedding_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_value_embedding_bias_enabled");
-    view.scalar_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_scalar_bias_enabled");
-    view.trace_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_trace_bias_enabled");
-    view.layer = model.execution_block_layer;
-    view.d_model = model.execution_block_d_model;
-    view.atom_embedding_dim = model.atom_embedding_dim;
-    view.num_ops = model.execution_block_num_ops;
-    view.num_slots = model.execution_block_num_slots;
-    view.num_scratch_slots = model.execution_block_num_scratch_slots;
-    view.num_exec_steps = model.execution_block_num_exec_steps;
-    view.value_decode_input_dim = model.execution_block_value_decode_input_dim;
-    view.value_decode_hidden_dim = model.execution_block_value_decode_hidden_dim;
-    view.d_key = model.execution_block_d_key;
-    view.d_type = model.execution_block_d_type;
-    view.cross_attn_head_dim = model.execution_block_cross_attn_head_dim;
-    view.cross_attn_topk = model.execution_block_cross_attn_topk;
-    view.usage_decay = model.execution_block_usage_decay;
-    view.inject_gate_temp = model.execution_block_inject_gate_temp;
-    view.result_slot_mode = model.execution_block_result_slot_mode;
-    view.result_slot_index = model.execution_block_result_slot_index;
-    view.debug_mode = model.execution_block_debug_mode;
-    view.entropy_collapse_threshold = model.execution_block_entropy_collapse_threshold;
-    view.write_collapse_threshold = model.execution_block_write_collapse_threshold;
-    view.magnitude_limit = model.execution_block_magnitude_limit;
-    view.diversity_kappa = model.execution_block_diversity_kappa;
-    view.temp_start = model.execution_block_temp_start;
-    view.temp_end = model.execution_block_temp_end;
-    view.temp_schedule = model.execution_block_temp_schedule;
-    view.entropy_weight = model.execution_block_entropy_weight;
-    view.transition_hard_threshold = model.execution_block_transition_hard_threshold;
-    view.gate_warmup_steps = model.execution_block_gate_warmup_steps;
-    view.div_invalid_penalty_weight = model.execution_block_div_invalid_penalty_weight;
-    return view;
-}
-
-inline NumberEncoderConstructionHP numberEncoderConstructionHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    NumberEncoderConstructionHP view;
-    view.enabled = model.number_encoder_enabled;
-    view.d_model = model.number_encoder_d_model;
-    view.d_hidden = model.number_encoder_d_hidden;
-    view.max_digit_slots = model.number_encoder_max_digit_slots;
-    view.max_abs_pow10 = model.number_encoder_max_abs_pow10;
-    view.pow10_buckets = snapshotTrainingConfigField<int>(
-        snapshot, "number_encoder_pow10_buckets");
-    view.contribution_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_contribution_bias_enabled");
-    view.global_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_global_bias_enabled");
-    return view;
-}
-
-inline SlotSeedEncoderConstructionHP slotSeedEncoderConstructionHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    SlotSeedEncoderConstructionHP view;
-    view.enabled = model.slot_seed_encoder_enabled;
-    view.d_model = model.slot_seed_encoder_d_model;
-    view.d_hidden = model.slot_seed_encoder_d_hidden;
-    view.bias_enabled = model.slot_seed_encoder_bias_enabled;
-    view.type_embedding_enabled = model.slot_seed_encoder_type_embedding_enabled;
     return view;
 }
 

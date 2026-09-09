@@ -27,7 +27,7 @@ using json = nlohmann::json;
 namespace {
 
 constexpr std::uint32_t kSchemaVersion = 8;
-constexpr std::uint32_t kSemanticVersion = 8;
+constexpr std::uint32_t kSemanticVersion = 9;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -100,39 +100,7 @@ struct EffectiveConfig {
     bool lora_model = false;
     bool use_atom_data = false;
     std::uint32_t atom_embedding_dim = 0;
-    bool execution_block_enabled = false;
-    std::int32_t execution_block_layer = -1;
-    std::uint32_t execution_block_num_ops = 0;
-    std::uint32_t execution_block_num_slots = 0;
-    std::uint32_t execution_block_num_scratch_slots = 0;
-    std::uint32_t execution_block_num_steps = 0;
-    std::uint32_t execution_block_value_decode_input_dim = 0;
-    std::uint32_t execution_block_value_decode_hidden_dim = 0;
-    std::uint32_t execution_block_d_type = 0;
-    std::uint32_t execution_block_cross_attn_topk = 0;
-    float execution_block_usage_decay = 0.0f;
-    float execution_block_inject_gate_temp = 0.0f;
-    std::uint32_t execution_block_result_slot_mode = 0;
-    std::int32_t execution_block_result_slot_index = -1;
-    float execution_block_magnitude_limit = 0.0f;
-    float execution_block_causal_w1_transition = 0.0f;
-    bool execution_block_decode_bias = false;
-    bool execution_block_value_embedding_bias = false;
-    bool execution_block_scalar_bias = false;
-    bool execution_block_trace_bias = false;
-
-    bool number_encoder_enabled = false;
-    std::uint32_t number_encoder_max_digit_slots = 0;
-    std::uint32_t number_encoder_d_hidden = 0;
-    std::uint32_t number_encoder_max_abs_pow10 = 0;
-    bool number_encoder_contribution_bias = false;
-    bool number_encoder_global_bias = false;
-
     bool arg_selector_enabled = false;
-    bool slot_seed_encoder_enabled = false;
-    std::uint32_t slot_seed_encoder_d_hidden = 0;
-    bool slot_seed_encoder_bias = false;
-    bool slot_seed_encoder_type_embedding = false;
 
     std::string tokenizer_model_type;
     std::vector<std::string> tokenizer_special_tokens;
@@ -574,81 +542,8 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     c.lora_model = required<bool>(j, "lora_model");
     c.use_atom_data = required<bool>(j, "use_atom_data");
     c.atom_embedding_dim = requiredU32(j, "atom_embedding_dim", !c.use_atom_data);
-    c.execution_block_enabled = required<bool>(j, "execution_block_enabled");
-    if (c.execution_block_enabled) {
-        if (!c.use_atom_data) throw std::runtime_error("execution_block_enabled requires use_atom_data");
-        c.execution_block_layer = requiredI32(j, "execution_block_layer");
-        c.execution_block_num_ops = requiredU32(j, "execution_block_num_ops");
-        c.execution_block_num_slots = requiredU32(j, "execution_block_num_slots");
-        c.execution_block_num_scratch_slots = requiredU32(j, "execution_block_num_scratch_slots", true);
-        c.execution_block_num_steps = requiredU32(j, "execution_block_num_steps");
-        c.execution_block_value_decode_input_dim = requiredU32(j, "execution_block_value_decode_input_dim");
-        c.execution_block_value_decode_hidden_dim = requiredU32(j, "execution_block_value_decode_hidden_dim");
-        c.execution_block_d_type = requiredU32(j, "execution_block_d_type");
-        c.execution_block_cross_attn_topk = requiredU32(j, "execution_block_cross_attn_topk");
-        c.execution_block_usage_decay = requiredFinite(j, "execution_block_usage_decay");
-        c.execution_block_inject_gate_temp = requiredFinite(j, "execution_block_inject_gate_temp");
-        c.execution_block_result_slot_mode = requiredU32(j, "execution_block_result_slot_mode", true);
-        c.execution_block_result_slot_index = requiredI32(j, "execution_block_result_slot_index");
-        c.execution_block_magnitude_limit = requiredFinite(j, "execution_block_magnitude_limit");
-        c.execution_block_causal_w1_transition = requiredFinite(j, "execution_block_causal_w1_transition");
-        c.execution_block_decode_bias = required<bool>(j, "execution_block_decode_bias_enabled");
-        c.execution_block_value_embedding_bias = required<bool>(j, "execution_block_value_embedding_bias_enabled");
-        c.execution_block_scalar_bias = required<bool>(j, "execution_block_scalar_bias_enabled");
-        c.execution_block_trace_bias = required<bool>(j, "execution_block_trace_bias_enabled");
-        requireBiasParent(c.use_bias, c.execution_block_decode_bias, "execution_block_decode_bias_enabled");
-        requireBiasParent(c.use_bias, c.execution_block_value_embedding_bias, "execution_block_value_embedding_bias_enabled");
-        requireBiasParent(c.use_bias, c.execution_block_scalar_bias, "execution_block_scalar_bias_enabled");
-        requireBiasParent(c.use_bias, c.execution_block_trace_bias, "execution_block_trace_bias_enabled");
-        if (c.execution_block_layer < -1 || c.execution_block_layer >= static_cast<std::int32_t>(c.num_layers)) {
-            throw std::runtime_error("execution_block_layer is outside [-1, num_layers)");
-        }
-        if (c.execution_block_num_scratch_slots > c.execution_block_num_slots) {
-            throw std::runtime_error("execution_block_num_scratch_slots exceeds num_slots");
-        }
-        if (c.execution_block_result_slot_index < -1 ||
-            c.execution_block_result_slot_index >= static_cast<std::int32_t>(c.execution_block_num_slots)) {
-            throw std::runtime_error("execution_block_result_slot_index is outside the slot range");
-        }
-        if (c.execution_block_cross_attn_topk > c.execution_block_num_slots) {
-            throw std::runtime_error("execution_block_cross_attn_topk exceeds num_slots");
-        }
-        if (c.execution_block_value_decode_input_dim + 16u > c.atom_embedding_dim) {
-            throw std::runtime_error("execution block value decode input plus type width exceeds atom_embedding_dim");
-        }
-        if (!(c.execution_block_usage_decay > 0.0f && c.execution_block_usage_decay <= 1.0f)) {
-            throw std::runtime_error("execution_block_usage_decay must be in (0, 1]");
-        }
-        requirePositive(c.execution_block_inject_gate_temp, "execution_block_inject_gate_temp");
-        requirePositive(c.execution_block_magnitude_limit, "execution_block_magnitude_limit");
-    }
-
-    c.number_encoder_enabled = required<bool>(j, "number_encoder_enabled");
-    if (c.number_encoder_enabled) {
-        if (!c.use_atom_data) throw std::runtime_error("number_encoder_enabled requires use_atom_data");
-        c.number_encoder_max_digit_slots = requiredU32(j, "number_encoder_max_digit_slots");
-        c.number_encoder_d_hidden = requiredU32(j, "number_encoder_d_hidden");
-        c.number_encoder_max_abs_pow10 = requiredU32(j, "number_encoder_max_abs_pow10");
-        if (c.number_encoder_max_abs_pow10 > 32766u) throw std::runtime_error("number_encoder_max_abs_pow10 exceeds 32766");
-        c.number_encoder_contribution_bias = required<bool>(j, "number_encoder_contribution_bias_enabled");
-        c.number_encoder_global_bias = required<bool>(j, "number_encoder_global_bias_enabled");
-        requireBiasParent(c.use_bias, c.number_encoder_contribution_bias, "number_encoder_contribution_bias_enabled");
-        requireBiasParent(c.use_bias, c.number_encoder_global_bias, "number_encoder_global_bias_enabled");
-    }
-
     c.arg_selector_enabled = required<bool>(j, "selector_enabled");
     if (c.arg_selector_enabled && !c.use_atom_data) throw std::runtime_error("selector_enabled requires use_atom_data");
-    c.slot_seed_encoder_enabled = required<bool>(j, "slot_seed_encoder_enabled");
-    if (c.slot_seed_encoder_enabled) {
-        if (!c.use_atom_data || !c.execution_block_enabled) {
-            throw std::runtime_error("slot_seed_encoder_enabled requires atom data and execution block");
-        }
-        c.slot_seed_encoder_d_hidden = requiredU32(j, "slot_seed_encoder_d_hidden");
-        c.slot_seed_encoder_bias = required<bool>(j, "slot_seed_encoder_bias_enabled");
-        c.slot_seed_encoder_type_embedding = required<bool>(j, "slot_seed_encoder_type_embedding_enabled");
-        requireBiasParent(c.use_bias, c.slot_seed_encoder_bias, "slot_seed_encoder_bias_enabled");
-    }
-
     c.tokenizer_model_type = required<std::string>(j, "tokenizer_model_type");
     c.tokenizer_special_tokens = required<std::vector<std::string>>(j, "tokenizer_special_tokens");
     c.tokenizer_add_bos = required<bool>(j, "tokenizer_add_bos");
@@ -691,10 +586,7 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     addCapability(c.qk_norm, GRIMConfig::ModelCapability_QkNorm);
     addCapability(c.attention_off_by_one, GRIMConfig::ModelCapability_AttentionOffByOne);
     addCapability(c.attention_residual_gate, GRIMConfig::ModelCapability_AttentionResidualGate);
-    addCapability(c.execution_block_enabled, GRIMConfig::ModelCapability_ExecutionBlock);
-    addCapability(c.number_encoder_enabled, GRIMConfig::ModelCapability_NumberEncoder);
     addCapability(c.arg_selector_enabled, GRIMConfig::ModelCapability_ArgSelector);
-    addCapability(c.slot_seed_encoder_enabled, GRIMConfig::ModelCapability_SlotSeedEncoder);
     addCapability(c.lm_head_mlp_enabled, GRIMConfig::ModelCapability_LmHeadMlp);
     addCapability(c.use_atom_data, GRIMConfig::ModelCapability_AtomData);
     addCapability(c.atom_insertion_enabled, GRIMConfig::ModelCapability_AtomInsertion);
@@ -760,33 +652,12 @@ std::vector<std::uint8_t> buildArtifact(
         c.center_logits, c.project_out_pc1, c.pc1_power_iters,
         c.lm_head_mlp_enabled, c.lm_head_mlp_d_ff, c.lm_head_mlp_alpha);
 
+    // Retired feature tables remain reserved in the FlatBuffer schema for
+    // compatibility with historical artifacts, but new artifacts never emit
+    // live ExecutionBlock, NumberEncoder, or SlotSeedEncoder configuration.
     flatbuffers::Offset<GRIMConfig::ExecutionBlockConfig> execution;
-    if (c.execution_block_enabled) {
-        execution = GRIMConfig::CreateExecutionBlockConfig(
-            builder, c.execution_block_layer, c.execution_block_num_ops,
-            c.execution_block_num_slots, c.execution_block_num_scratch_slots,
-            c.execution_block_num_steps, c.execution_block_value_decode_input_dim,
-            c.execution_block_value_decode_hidden_dim, c.head_dim,
-            c.execution_block_d_type, c.head_dim, c.execution_block_cross_attn_topk,
-            c.execution_block_usage_decay, c.execution_block_inject_gate_temp,
-            c.execution_block_result_slot_mode, c.execution_block_result_slot_index,
-            c.execution_block_magnitude_limit, c.execution_block_causal_w1_transition,
-            c.execution_block_decode_bias, c.execution_block_value_embedding_bias,
-            c.execution_block_scalar_bias, c.execution_block_trace_bias);
-    }
     flatbuffers::Offset<GRIMConfig::NumberEncoderConfig> number_encoder;
-    if (c.number_encoder_enabled) {
-        number_encoder = GRIMConfig::CreateNumberEncoderConfig(
-            builder, c.number_encoder_max_digit_slots, c.number_encoder_d_hidden,
-            c.number_encoder_max_abs_pow10, c.number_encoder_max_abs_pow10 * 2u + 1u,
-            c.number_encoder_contribution_bias, c.number_encoder_global_bias);
-    }
     flatbuffers::Offset<GRIMConfig::SlotSeedEncoderConfig> slot_seed;
-    if (c.slot_seed_encoder_enabled) {
-        slot_seed = GRIMConfig::CreateSlotSeedEncoderConfig(
-            builder, c.slot_seed_encoder_d_hidden, c.slot_seed_encoder_bias,
-            c.slot_seed_encoder_type_embedding);
-    }
     const auto features = GRIMConfig::CreateModelFeatures(
         builder, c.use_atom_data, c.atom_embedding_dim, bias, attention, positional,
         encoder, lm_head, execution, number_encoder, c.arg_selector_enabled,

@@ -168,7 +168,7 @@ table LmHeadConfig {
   mlp_alpha:float32;
 }
 
-// Presence of this table means the compiled model contains ExecutionBlock.
+// Reserved legacy table. Semantic version 9 artifacts must leave this absent.
 table ExecutionBlockConfig {
   layer:int32 = -1;
   num_ops:uint32;
@@ -195,7 +195,7 @@ table ExecutionBlockConfig {
   trace_bias_enabled:bool;
 }
 
-// Presence of this table means the compiled model contains NumberEncoder.
+// Reserved legacy table. Semantic version 9 artifacts must leave this absent.
 table NumberEncoderConfig {
   max_digit_slots:uint32;
   d_hidden:uint32;
@@ -208,7 +208,7 @@ table NumberEncoderConfig {
   global_bias_enabled:bool;
 }
 
-// Presence of this table means the compiled model contains SlotSeedEncoder.
+// Reserved legacy table. Semantic version 9 artifacts must leave this absent.
 table SlotSeedEncoderConfig {
   d_hidden:uint32;
   bias_enabled:bool;
@@ -224,7 +224,7 @@ table ModelFeatures {
   encoder:EncoderConfig (required);
   lm_head:LmHeadConfig (required);
 
-  // Optional topology components. Absence means the model omits the component.
+  // Reserved legacy slots. Semantic version 9 artifacts leave these absent.
   execution_block:ExecutionBlockConfig;
   number_encoder:NumberEncoderConfig;
   arg_selector_enabled:bool;

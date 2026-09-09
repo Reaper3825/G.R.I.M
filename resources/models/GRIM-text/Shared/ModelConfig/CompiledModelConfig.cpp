@@ -21,7 +21,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::uint32_t kSupportedSchemaVersion = 8;
-constexpr std::uint32_t kSupportedSemanticVersion = 8;
+constexpr std::uint32_t kSupportedSemanticVersion = 9;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -346,36 +346,17 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
             "compiled local-atom retrieval requires causal attention, atom "
             "reasoning metadata, and the ordinary language-model path");
     }
-    if (f.execution_block) {
-        const auto& e = *f.execution_block;
-        requireBiasParent(e.decode_bias_enabled, "execution_block.decode_bias");
-        requireBiasParent(e.value_embedding_bias_enabled, "execution_block.value_embedding_bias");
-        requireBiasParent(e.scalar_bias_enabled, "execution_block.scalar_bias");
-        requireBiasParent(e.trace_bias_enabled, "execution_block.trace_bias");
-        if (!f.use_atom_data || e.num_ops == 0 || e.num_slots == 0 || e.num_steps == 0 ||
-            e.d_key != d.head_dim || e.cross_attention_head_dim != d.head_dim ||
-            e.num_scratch_slots > e.num_slots || e.cross_attention_top_k > e.num_slots ||
-            e.layer < -1 || e.layer >= static_cast<std::int32_t>(a.num_layers)) {
-            throw std::runtime_error("compiled execution-block contract is invalid");
-        }
-    }
-    if (f.number_encoder) {
-        const auto& n = *f.number_encoder;
-        requireBiasParent(n.contribution_bias_enabled, "number_encoder.contribution_bias");
-        requireBiasParent(n.global_bias_enabled, "number_encoder.global_bias");
-        if (!f.use_atom_data || n.max_digit_slots == 0 || n.d_hidden == 0 ||
-            n.pow10_buckets != n.max_abs_pow10 * 2u + 1u) {
-            throw std::runtime_error("compiled number-encoder contract is invalid");
-        }
+    if (c.required_capabilities.end() != std::find_if(
+            c.required_capabilities.begin(), c.required_capabilities.end(),
+            [](CompiledModelCapability capability) {
+                return capability == CompiledModelCapability::ExecutionBlock ||
+                       capability == CompiledModelCapability::NumberEncoder ||
+                       capability == CompiledModelCapability::SlotSeedEncoder;
+            })) {
+        throw std::runtime_error("compiled model advertises a retired execution feature");
     }
     if (f.arg_selector_enabled && !f.use_atom_data) {
         throw std::runtime_error("compiled arg selector requires atom data");
-    }
-    if (f.slot_seed_encoder && (!f.use_atom_data || !f.execution_block || f.slot_seed_encoder->d_hidden == 0)) {
-        throw std::runtime_error("compiled slot-seed encoder contract is invalid");
-    }
-    if (f.slot_seed_encoder) {
-        requireBiasParent(f.slot_seed_encoder->bias_enabled, "slot_seed_encoder.bias");
     }
     if (c.tokenizer.model_type.empty() || c.tokenizer.special_tokens.size() != 4 ||
         c.tokenizer.unk_token_id != 0 || c.tokenizer.pad_token_id != 1 ||
@@ -397,10 +378,7 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     add(f.attention.qk_norm_enabled, CompiledModelCapability::QkNorm);
     add(f.attention.off_by_one_enabled, CompiledModelCapability::AttentionOffByOne);
     add(f.attention.residual_gate_enabled, CompiledModelCapability::AttentionResidualGate);
-    add(f.execution_block.has_value(), CompiledModelCapability::ExecutionBlock);
-    add(f.number_encoder.has_value(), CompiledModelCapability::NumberEncoder);
     add(f.arg_selector_enabled, CompiledModelCapability::ArgSelector);
-    add(f.slot_seed_encoder.has_value(), CompiledModelCapability::SlotSeedEncoder);
     add(f.lm_head.mlp_enabled, CompiledModelCapability::LmHeadMlp);
     add(f.use_atom_data, CompiledModelCapability::AtomData);
     add(f.atom_insertion_enabled, CompiledModelCapability::AtomInsertion);
@@ -560,6 +538,10 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         !f->positional_encoding() || !f->encoder() || !f->lm_head()) {
         throw std::runtime_error("model config is missing a required table");
     }
+    if (f->execution_block() || f->number_encoder() || f->slot_seed_encoder()) {
+        throw std::runtime_error(
+            "model config contains retired ExecutionBlock/NumberEncoder configuration");
+    }
 
     result.architecture = {a->d_model(), a->num_layers(), a->num_heads(), a->num_kv_heads(),
         a->d_ff(), a->max_seq_len(), a->tie_embeddings(), a->embedding_scale()};
@@ -592,25 +574,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         f->lm_head()->center_hidden_states(), f->lm_head()->center_logits(),
         f->lm_head()->project_out_pc1(), f->lm_head()->pc1_power_iters(),
         f->lm_head()->mlp_enabled(), f->lm_head()->mlp_d_ff(), f->lm_head()->mlp_alpha()};
-    if (const auto* e = f->execution_block()) {
-        result.features.execution_block = CompiledExecutionBlockConfig{
-            e->layer(), e->num_ops(), e->num_slots(), e->num_scratch_slots(), e->num_steps(),
-            e->value_decode_input_dim(), e->value_decode_hidden_dim(), e->d_key(), e->d_type(),
-            e->cross_attention_head_dim(), e->cross_attention_top_k(), e->usage_decay(),
-            e->inject_gate_temperature(), e->result_slot_mode(), e->result_slot_index(),
-            e->magnitude_limit(), e->causal_w1_transition(), e->decode_bias_enabled(),
-            e->value_embedding_bias_enabled(), e->scalar_bias_enabled(), e->trace_bias_enabled()};
-    }
-    if (const auto* n = f->number_encoder()) {
-        result.features.number_encoder = CompiledNumberEncoderConfig{
-            n->max_digit_slots(), n->d_hidden(), n->max_abs_pow10(), n->pow10_buckets(),
-            n->contribution_bias_enabled(), n->global_bias_enabled()};
-    }
     result.features.arg_selector_enabled = f->arg_selector_enabled();
-    if (const auto* s = f->slot_seed_encoder()) {
-        result.features.slot_seed_encoder = CompiledSlotSeedEncoderConfig{
-            s->d_hidden(), s->bias_enabled(), s->type_embedding_enabled()};
-    }
 
     result.tokenizer.model_type = copyString(t->model_type(), "tokenizer.model_type");
     if (!t->special_tokens()) throw std::runtime_error("model config tokenizer special_tokens is missing");

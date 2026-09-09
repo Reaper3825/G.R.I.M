@@ -39,6 +39,7 @@ enum class CompiledModelCapability : std::uint16_t {
     QkNorm = 5,
     AttentionOffByOne = 6,
     AttentionResidualGate = 7,
+    // Reserved legacy capability values. Do not reuse.
     ExecutionBlock = 8,
     NumberEncoder = 9,
     ArgSelector = 10,
@@ -125,45 +126,6 @@ struct CompiledLmHeadConfig {
     float mlp_alpha = 0.0f;
 };
 
-struct CompiledExecutionBlockConfig {
-    std::int32_t layer = -1;
-    std::uint32_t num_ops = 0;
-    std::uint32_t num_slots = 0;
-    std::uint32_t num_scratch_slots = 0;
-    std::uint32_t num_steps = 0;
-    std::uint32_t value_decode_input_dim = 0;
-    std::uint32_t value_decode_hidden_dim = 0;
-    std::uint32_t d_key = 0;
-    std::uint32_t d_type = 0;
-    std::uint32_t cross_attention_head_dim = 0;
-    std::uint32_t cross_attention_top_k = 0;
-    float usage_decay = 0.0f;
-    float inject_gate_temperature = 0.0f;
-    std::uint32_t result_slot_mode = 0;
-    std::int32_t result_slot_index = -1;
-    float magnitude_limit = 0.0f;
-    float causal_w1_transition = 0.0f;
-    bool decode_bias_enabled = false;
-    bool value_embedding_bias_enabled = false;
-    bool scalar_bias_enabled = false;
-    bool trace_bias_enabled = false;
-};
-
-struct CompiledNumberEncoderConfig {
-    std::uint32_t max_digit_slots = 0;
-    std::uint32_t d_hidden = 0;
-    std::uint32_t max_abs_pow10 = 0;
-    std::uint32_t pow10_buckets = 0;
-    bool contribution_bias_enabled = false;
-    bool global_bias_enabled = false;
-};
-
-struct CompiledSlotSeedEncoderConfig {
-    std::uint32_t d_hidden = 0;
-    bool bias_enabled = false;
-    bool type_embedding_enabled = false;
-};
-
 struct CompiledModelFeatures {
     bool atom_insertion_enabled = false;
     bool local_atom_retrieval_enabled = false;
@@ -175,10 +137,7 @@ struct CompiledModelFeatures {
     CompiledPositionalEncodingConfig positional_encoding;
     CompiledEncoderConfig encoder;
     CompiledLmHeadConfig lm_head;
-    std::optional<CompiledExecutionBlockConfig> execution_block;
-    std::optional<CompiledNumberEncoderConfig> number_encoder;
     bool arg_selector_enabled = false;
-    std::optional<CompiledSlotSeedEncoderConfig> slot_seed_encoder;
 };
 
 struct CompiledTokenizerConfig {

@@ -211,7 +211,6 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("architecture.tie_embeddings", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings")));
     emitInitFactKeyValue("architecture.use_bias", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_bias")));
     emitInitFactKeyValue("architecture.use_atom_data", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_atom_data")));
-    emitInitFactKeyValue("architecture.execution_block_enabled", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "execution_block_enabled")));
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
     emitInitFactLine("[INIT_FACTS] --- Fixed training shape -------------------------------------------------");
     emitInitFactKeyValue("fixed_shape.batch_size", fmtInt(fixed_shape.batch_size));

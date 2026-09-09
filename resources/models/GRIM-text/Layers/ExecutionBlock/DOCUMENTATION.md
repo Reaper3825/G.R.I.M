@@ -10,10 +10,10 @@ Shared forward now stops at contextual argument bootstrap seeding:
    without an execution gate, register bootstrap, op/arg/write/stop steps, or
    execution-memory readback.
 
-The `ExecutionMemory` storage view and registry-owned ExecutionBlock parameter
-tensors are deleted. The `execution_block_enabled` config field remains only
-as migration plumbing and is not consumed by shared forward, training loss,
-or inference.
+The `ExecutionMemory` storage view, registry-owned ExecutionBlock parameter
+tensors, and live ExecutionBlock/NumberEncoder/SlotSeedEncoder hyperparameters
+are deleted. Their FlatBuffer and checkpoint identifiers remain reserved only
+to prevent serialized-value reuse.
 
 SlotSeedEncoder parameter tensors and graph-output placeholders are also
 deleted. Its compiled config fields remain reserved migration metadata.

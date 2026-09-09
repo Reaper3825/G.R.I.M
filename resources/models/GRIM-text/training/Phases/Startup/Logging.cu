@@ -129,11 +129,10 @@ void LoggingReady(TrainingContext& ctx) {
             layers.feed_forward,
             layers.residual,
             layers.encoding,
-            layers.serialization,
-            false);
+            layers.serialization);
     } else {
         GRIM::Logging::ConfigureLayerLogging(
-            false, false, false, false, false, false, false, false, false);
+            false, false, false, false, false, false, false, false);
     }
 
     if (!paths_hp.log_dir.empty()) {

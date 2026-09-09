@@ -95,7 +95,6 @@ struct AutogradContext {
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    bool execution_block_enabled = false;
     ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -168,7 +167,6 @@ AutogradContext initAutogradContext(
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
-    bool execution_block_enabled,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,

@@ -399,65 +399,6 @@ struct LanguageModelConfig {
     bool use_atom_data = false;
     int atom_embedding_dim = 0;
 
-    // ExecutionBlock config — differentiable register machine
-    bool execution_block_enabled = false;
-    int execution_block_layer = -1;
-    int execution_block_num_ops = 0;
-    int execution_block_num_slots = 0;
-    int execution_block_num_scratch_slots = 0;
-    int execution_block_num_steps = 0;
-    int execution_block_value_decode_input_dim = 0;
-    int execution_block_value_decode_hidden_dim = 0;
-    int execution_block_d_key = 0;
-    int execution_block_d_type = 0;
-    int execution_block_cross_attn_head_dim = 0;
-    int execution_block_cross_attn_topk = 0;
-    float execution_block_usage_decay = 0.0f;
-    float execution_block_inject_gate_temp = 0.0f;
-    int execution_block_result_slot_mode = 0;
-    int execution_block_result_slot_index = 0;
-    bool execution_block_debug_mode = false;
-    float execution_block_entropy_collapse_threshold = 0.0f;
-    float execution_block_write_collapse_threshold = 0.0f;
-    float execution_block_magnitude_limit = 0.0f;
-    float execution_block_diversity_kappa = 0.0f;
-    float execution_block_temp_start = 0.0f;
-    float execution_block_temp_end = 0.0f;
-    int   execution_block_temp_schedule = 0;
-    float execution_block_entropy_weight = 0.0f;
-
-    // Causal state loss weights
-    float execution_block_transition_hard_threshold = 0.0f;
-    int   execution_block_gate_warmup_steps = 0;
-    float div_invalid_penalty_weight = 0.0f;
-
-    bool  structured_ce_enabled = false;
-    float structured_ce_weight  = 0.0f;
-    float execute_ce_weight = 0.0f;
-    float stop_ce_weight = 0.0f;
-
-    // NumberEncoder (numeric-meaning input path) config.
-    bool  number_encoder_enabled = false;
-    int   number_encoder_max_digit_slots = 0;
-    int   number_encoder_d_hidden = 0;
-    int   number_encoder_max_abs_pow10 = 0;
-
-    // SlotSeedEncoder (contextual numeric-placeholder -> execution-slot seed).
-    // Consumes the causal hidden state at authored <INT>/<FLOAT> positions and
-    // constructs the learned d_model representation used to initialize slots.
-    bool  slot_seed_encoder_enabled = false;
-    int   slot_seed_encoder_d_hidden = 0;
-    bool  slot_seed_encoder_bias_enabled = false;
-    bool  slot_seed_encoder_type_embedding_enabled = false;
-
-    // Execution-first structured CE loss config (Step X / Y multipliers)
-    float step_x_multiplier = 0.0f;
-    float step_y_multiplier = 0.0f;
-    bool  step_y_overrides_x = false;
-    float entropy_aux_weight = 0.0f;
-    float value_match_epsilon = 0.0f;
-    float final_slot_consistency_weight = 0.0f;
-
     // LM Head / RMSNorm gamma config
     bool lm_head_center_hidden_states = false;
     bool freeze_learned_rms_gammas = false;
@@ -1782,52 +1723,6 @@ inline void applyCompiledModelConfig(
     params.lora_model = f.lora_model;
     params.use_atom_data = f.use_atom_data;
     params.atom_embedding_dim = compiledU32ToInt(f.atom_embedding_dim, "features.atom_embedding_dim");
-    params.execution_block_enabled = f.execution_block.has_value();
-    if (f.execution_block) {
-        const auto& x = *f.execution_block;
-        params.execution_block_layer = x.layer;
-        params.execution_block_num_ops = compiledU32ToInt(x.num_ops, "execution_block.num_ops");
-        params.execution_block_num_slots = compiledU32ToInt(x.num_slots, "execution_block.num_slots");
-        params.execution_block_num_scratch_slots = compiledU32ToInt(
-            x.num_scratch_slots, "execution_block.num_scratch_slots");
-        params.execution_block_num_steps = compiledU32ToInt(x.num_steps, "execution_block.num_steps");
-        params.execution_block_value_decode_input_dim = compiledU32ToInt(
-            x.value_decode_input_dim, "execution_block.value_decode_input_dim");
-        params.execution_block_value_decode_hidden_dim = compiledU32ToInt(
-            x.value_decode_hidden_dim, "execution_block.value_decode_hidden_dim");
-        params.execution_block_d_key = compiledU32ToInt(x.d_key, "execution_block.d_key");
-        params.execution_block_d_type = compiledU32ToInt(x.d_type, "execution_block.d_type");
-        params.execution_block_cross_attn_head_dim = compiledU32ToInt(
-            x.cross_attention_head_dim, "execution_block.cross_attention_head_dim");
-        params.execution_block_cross_attn_topk = compiledU32ToInt(
-            x.cross_attention_top_k, "execution_block.cross_attention_top_k");
-        params.execution_block_usage_decay = x.usage_decay;
-        params.execution_block_inject_gate_temp = x.inject_gate_temperature;
-        params.execution_block_result_slot_mode = compiledU32ToInt(
-            x.result_slot_mode, "execution_block.result_slot_mode");
-        params.execution_block_result_slot_index = x.result_slot_index;
-        params.execution_block_magnitude_limit = x.magnitude_limit;
-    }
-
-    params.number_encoder_enabled = f.number_encoder.has_value();
-    if (f.number_encoder) {
-        const auto& n = *f.number_encoder;
-        params.number_encoder_max_digit_slots = compiledU32ToInt(
-            n.max_digit_slots, "number_encoder.max_digit_slots");
-        params.number_encoder_d_hidden = compiledU32ToInt(n.d_hidden, "number_encoder.d_hidden");
-        params.number_encoder_max_abs_pow10 = compiledU32ToInt(
-            n.max_abs_pow10, "number_encoder.max_abs_pow10");
-    }
-
-    params.slot_seed_encoder_enabled = f.slot_seed_encoder.has_value();
-    if (f.slot_seed_encoder) {
-        const auto& s = *f.slot_seed_encoder;
-        params.slot_seed_encoder_d_hidden = compiledU32ToInt(
-            s.d_hidden, "slot_seed_encoder.d_hidden");
-        params.slot_seed_encoder_bias_enabled = s.bias_enabled;
-        params.slot_seed_encoder_type_embedding_enabled = s.type_embedding_enabled;
-    }
-
     params.tokenizer_model_type = t.model_type;
     params.tokenizer_special_tokens = t.special_tokens;
     params.tokenizer_add_bos = t.add_bos;
@@ -2271,14 +2166,7 @@ inline void validateRootBiasConfig(
     require_global("attention_qkv_bias_enabled");
     require_global("attention_output_bias_enabled");
     require_global("ffn_output_bias_enabled");
-    require_global("number_encoder_contribution_bias_enabled");
-    require_global("number_encoder_global_bias_enabled");
-    require_global("slot_seed_encoder_bias_enabled");
     require_global("lm_head_bias_enabled");
-    require_global("execution_block_decode_bias_enabled");
-    require_global("execution_block_value_embedding_bias_enabled");
-    require_global("execution_block_scalar_bias_enabled");
-    require_global("execution_block_trace_bias_enabled");
     if (snapshotTrainingConfigField<bool>(snapshot, "lm_head_unigram_bias") &&
         !snapshotTrainingConfigField<bool>(snapshot, "lm_head_bias_enabled")) {
         throw std::runtime_error(std::string(caller) +
@@ -2476,31 +2364,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(local_atom_retrieval_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_embedding_dim);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_layer);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_ops);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_slots);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_scratch_slots);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_steps);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_value_decode_input_dim);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_value_decode_hidden_dim);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_d_key);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_d_type);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_cross_attn_head_dim);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_cross_attn_topk);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_usage_decay);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_inject_gate_temp);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_result_slot_mode);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_result_slot_index);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_magnitude_limit);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_digit_slots);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_d_hidden);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_abs_pow10);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_d_hidden);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_bias_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_type_embedding_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_center_hidden_states);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_d_ff);
@@ -2725,34 +2588,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     finalized_config["ffn_output_bias_enabled"] = features.bias.ffn_output;
     finalized_config["lm_head_bias_enabled"] = features.bias.lm_head;
     finalized_config["selector_enabled"] = features.arg_selector_enabled;
-
-    if (features.execution_block) {
-        const auto& x = *features.execution_block;
-        finalized_config["execution_block_causal_w1_transition"] = x.causal_w1_transition;
-        finalized_config["execution_block_decode_bias_enabled"] = x.decode_bias_enabled;
-        finalized_config["execution_block_value_embedding_bias_enabled"] =
-            x.value_embedding_bias_enabled;
-        finalized_config["execution_block_scalar_bias_enabled"] = x.scalar_bias_enabled;
-        finalized_config["execution_block_trace_bias_enabled"] = x.trace_bias_enabled;
-    } else {
-        finalized_config["execution_block_causal_w1_transition"] = 0.0f;
-        finalized_config["execution_block_decode_bias_enabled"] = false;
-        finalized_config["execution_block_value_embedding_bias_enabled"] = false;
-        finalized_config["execution_block_scalar_bias_enabled"] = false;
-        finalized_config["execution_block_trace_bias_enabled"] = false;
-    }
-
-    if (features.number_encoder) {
-        const auto& n = *features.number_encoder;
-        finalized_config["number_encoder_pow10_buckets"] = n.pow10_buckets;
-        finalized_config["number_encoder_contribution_bias_enabled"] =
-            n.contribution_bias_enabled;
-        finalized_config["number_encoder_global_bias_enabled"] = n.global_bias_enabled;
-    } else {
-        finalized_config["number_encoder_pow10_buckets"] = 0;
-        finalized_config["number_encoder_contribution_bias_enabled"] = false;
-        finalized_config["number_encoder_global_bias_enabled"] = false;
-    }
 
     return finalized_config;
 }

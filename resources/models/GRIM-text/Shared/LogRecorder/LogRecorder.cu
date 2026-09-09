@@ -323,8 +323,7 @@ void ConfigureLayerLogging(bool master_enabled,
                            bool feed_forward,
                            bool residual,
                            bool encoding,
-                           bool serialization,
-                           bool execution_block) {
+                           bool serialization) {
     std::lock_guard<std::mutex> lock(g_host_mutex);
     g_layer_logging_master_enabled = master_enabled;
     g_layer_enables[static_cast<int>(LayerType::kUnknown)] = false;
@@ -336,7 +335,7 @@ void ConfigureLayerLogging(bool master_enabled,
     g_layer_enables[static_cast<int>(LayerType::kResidual)] = residual;
     g_layer_enables[static_cast<int>(LayerType::kEncoding)] = encoding;
     g_layer_enables[static_cast<int>(LayerType::kSerialization)] = serialization;
-    g_layer_enables[static_cast<int>(LayerType::kExecutionBlock)] = execution_block;
+    g_layer_enables[static_cast<int>(LayerType::kExecutionBlock)] = false;
 }
 
 bool IsLayerLoggingEnabled(LayerType type) {

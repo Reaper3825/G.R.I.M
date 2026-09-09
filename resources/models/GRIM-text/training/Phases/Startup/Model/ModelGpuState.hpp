@@ -7,8 +7,6 @@
 
 #include "ParameterRegistry.hpp"
 
-#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
-
 namespace GRIM {
 class GPUGrimEncoder;
 }
@@ -17,7 +15,6 @@ namespace GRIMText::Training::Startup {
 
 struct ForwardTopologyView {
     GRIM::GPUGrimEncoder* gpu_encoder = nullptr;
-    bool execution_block_enabled = false;
 };
 
 struct GpuModelState {
@@ -36,15 +33,9 @@ struct GpuModelState {
         return *gpu_encoder;
     }
 
-    ForwardTopologyView requireForwardTopology(
-        const GRIM::Config::AiConfigSnapshot& config,
-        const char* caller) {
-        const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
-
+    ForwardTopologyView requireForwardTopology(const char* caller) {
         ForwardTopologyView topology{};
         topology.gpu_encoder = &requireGpuEncoder(caller);
-        topology.execution_block_enabled = execution_hp.enabled;
-
         return topology;
     }
 

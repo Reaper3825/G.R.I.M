@@ -197,26 +197,6 @@ const char* classifyConfigSection(const std::string& key) {
     if (startsWith(key, "stability_")) {
         return "Stability overrides";
     }
-    if (startsWith(key, "scratch_block_")) {
-        return "ScratchBlock reasoning";
-    }
-    if (startsWith(key, "scratch_")) {
-        return "Scratch blocks";
-    }
-    if (startsWith(key, "execution_block_") ||
-        isOneOf(key, {
-            "step_x_multiplier",
-            "step_y_multiplier",
-            "step_y_overrides_x",
-            "entropy_aux_weight",
-            "value_match_epsilon",
-            "final_slot_consistency_weight",
-            "div_invalid_penalty_weight",
-            "structured_ce_enabled",
-            "structured_ce_weight"
-        })) {
-        return "ExecutionBlock";
-    }
     if (isOneOf(key, {"single_stream_mode", "disable_async_frees", "synchronize_after_kernels"})) {
         return "CUDA execution mode";
     }
@@ -337,9 +317,6 @@ std::vector<DumpSection> collectSnapshotSections(
         "Embedding freeze",
         "Optimizer",
         "Stability overrides",
-        "Scratch blocks",
-        "ScratchBlock reasoning",
-        "ExecutionBlock",
         "Decode-time selector",
         "CUDA execution mode",
         "Multi-token prediction",

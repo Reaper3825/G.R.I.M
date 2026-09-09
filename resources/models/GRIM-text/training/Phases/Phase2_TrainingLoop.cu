@@ -555,14 +555,13 @@ void runOptimizerWindowFromEpoch(
 }
 
 GRIMText::Training::Startup::ForwardTopologyView validateTrainingForwardInputs(
-    const GRIM::Config::AiConfigSnapshot& config,
     GRIMText::Training::Startup::GpuModelState& gpu_model,
     const GRIM::Batching::BatchPayload& payload,
     const char* caller)
 {
     payload.validate(caller);
 
-    return gpu_model.requireForwardTopology(config, caller);
+    return gpu_model.requireForwardTopology(caller);
 }
 
 void configureAutogradLossInputs(
@@ -730,7 +729,6 @@ BatchResult processBatch(
     const auto& model_config = ctx.config;
 
     const auto forward_topology = validateTrainingForwardInputs(
-        ctx.config,
         ctx.gpu_model,
         payload,
         "processBatch");
@@ -810,7 +808,6 @@ BatchResult processBatch(
         forward_outputs,
         autograd_loss_state,
         forward_topology.gpu_encoder,
-        forward_topology.execution_block_enabled,
         ctx.parameter_registry,
         training_state.cublas_handle.get(),
         stream,
@@ -1171,7 +1168,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
             ctx.config, val_payload, stream);
 
         const auto forward_topology = validateTrainingForwardInputs(
-            ctx.config, ctx.gpu_model, val_payload, "runValidation");
+            ctx.gpu_model, val_payload, "runValidation");
 
         GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
             buildTrainingForwardRuntimePayload();
@@ -1217,7 +1214,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
             forward_outputs,
             autograd_loss_state,
             forward_topology.gpu_encoder,
-            forward_topology.execution_block_enabled,
             ctx.parameter_registry,
             training_state.cublas_handle.get(),
             stream,

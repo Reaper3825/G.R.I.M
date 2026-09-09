@@ -165,8 +165,7 @@ void ConfigureLayerLogging(bool master_enabled,
                            bool feed_forward,
                            bool residual,
                            bool encoding,
-                           bool serialization,
-                           bool execution_block);
+                           bool serialization);
 
 bool IsLayerLoggingEnabled(LayerType type);
 
