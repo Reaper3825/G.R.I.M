@@ -77,6 +77,9 @@ std::string decodeAggregateTokenForDisplay(const GRIM::Tokenizer::TokenLayout& l
             << static_cast<int>(byte);
         return oss.str();
     }
+    if (layout.isNewline(token_id)) {
+        return "\\n";
+    }
     if (layout.isUnigram(token_id)) {
         return std::string("<UNI:") + std::to_string(GRIM::Tokenizer::indexForTokenId(token_id)) + ">";
     }

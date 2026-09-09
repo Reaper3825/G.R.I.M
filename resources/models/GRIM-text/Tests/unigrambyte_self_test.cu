@@ -37,6 +37,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <tuple>
 #include <utility>
 
 namespace GRIM {
@@ -1664,6 +1665,8 @@ bool testUniByteRoundTrip(std::string& message) {
         } else if (tid >= static_cast<int>(GRIM::Tokenizer::BYTE_TOKEN_OFFSET) &&
                tid < static_cast<int>(GRIM::Tokenizer::BYTE_TOKEN_OFFSET + GRIM::Tokenizer::BYTE_VOCAB_SIZE)) {
             std::cout << " (byte: '" << static_cast<char>(tid - GRIM::Tokenizer::BYTE_TOKEN_OFFSET) << "')\n";
+        } else if (tid == NEWLINE_TOKEN_ID) {
+            std::cout << " (newline: \\n)\n";
         } else if (tid >= UNIGRAM_VOCAB_OFFSET) {
             const auto* piece = tokenizer.unigramLM().getPiece(tid);
             if (piece) {
@@ -2306,14 +2309,20 @@ bool testEdgeCaseAsciiSpacingRewriteToSpiece(std::string& message) {
     auto result = tokenizer.tokenizeWithMetadata(input);
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result));
 
-    ASSERT_STR_EQ(decoded, "hello world tab crlf",
-                  "ASCII newline/tab bytes should rewrite through the shared ▁ marker and decode as spaces");
+    ASSERT_STR_EQ(decoded, "hello\nworld tab\ncrlf",
+                  "LF/CRLF must use canonical newline tokens while tabs retain SentencePiece spacing");
+
+    ASSERT_EQ(result.newline_tokens, static_cast<size_t>(2),
+              "LF and CRLF must each emit one canonical newline token");
+    ASSERT_EQ(static_cast<size_t>(std::count(result.token_ids.begin(), result.token_ids.end(), NEWLINE_TOKEN_ID)),
+              static_cast<size_t>(2),
+              "Canonical newline token count mismatch");
 
     for (size_t token_index = 0; token_index < result.token_ids.size(); ++token_index) {
         if (result.is_byte_fallback[token_index]) {
             const int token_id = result.token_ids[token_index];
             ASSERT_FALSE(token_id == byteToTokenId(static_cast<uint8_t>('\n')),
-                         "Newline must not survive normalization as a byte fallback token");
+                         "Newline must use NEWLINE_TOKEN_ID, not byte fallback");
             ASSERT_FALSE(token_id == byteToTokenId(static_cast<uint8_t>('\r')),
                          "Carriage return must not survive normalization as a byte fallback token");
             ASSERT_FALSE(token_id == byteToTokenId(static_cast<uint8_t>('\t')),
@@ -2321,6 +2330,38 @@ bool testEdgeCaseAsciiSpacingRewriteToSpiece(std::string& message) {
         }
     }
 
+    return true;
+}
+
+bool testEdgeCaseCanonicalNewlineToken(std::string& message) {
+    auto config = makeSelfTestTokenizerHP();
+    config.enable_byte_fallback = true;
+    UniByte tokenizer(config);
+
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81", -0.5f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "a", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "b", -1.0f, false);
+    tokenizer.unigramLM().buildTrie();
+
+    for (const auto& [input, expected, expected_newlines] :
+         std::vector<std::tuple<std::string, std::string, size_t>>{
+             {"a\nb", "a\nb", 1},
+             {"a\r\nb", "a\nb", 1},
+             {"a\rb", "a\nb", 1},
+             {"\na\n\n", "\na\n\n", 3}}) {
+        auto result = tokenizer.tokenizeWithMetadata(input);
+        result.validate("testEdgeCaseCanonicalNewlineToken");
+        ASSERT_EQ(result.newline_tokens, expected_newlines,
+                  "Unexpected canonical newline count");
+        ASSERT_STR_EQ(tokenizer.decode(DecodeRequest(result)), expected,
+                      "Canonical newline round-trip mismatch");
+        for (int token_id : result.token_ids) {
+            if (token_id == NEWLINE_TOKEN_ID) continue;
+            ASSERT_FALSE(token_id == byteToTokenId(static_cast<uint8_t>('\n')) ||
+                         token_id == byteToTokenId(static_cast<uint8_t>('\r')),
+                         "Source line ending leaked into byte fallback");
+        }
+    }
     return true;
 }
 
@@ -3813,6 +3854,7 @@ int main(int argc, char** argv) {
     suite.addTest("EdgeCase.SingleChar", testEdgeCaseSingleChar);
     suite.addTest("EdgeCase.OnlyWhitespace", testEdgeCaseOnlyWhitespace);
     suite.addTest("EdgeCase.AsciiSpacingRewriteToSpiece", testEdgeCaseAsciiSpacingRewriteToSpiece);
+    suite.addTest("EdgeCase.CanonicalNewlineToken", testEdgeCaseCanonicalNewlineToken);
     suite.addTest("EdgeCase.LongSequence", testEdgeCaseLongSequence);
     suite.addTest("EdgeCase.SpecialTokenLiterals", testEdgeCaseSpecialTokenLiterals);
     

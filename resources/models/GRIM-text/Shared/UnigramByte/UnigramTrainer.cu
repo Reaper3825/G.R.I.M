@@ -476,6 +476,18 @@ static size_t maxTrainingSegmentLengthForTrainingUnits(
     }
 
     size_t max_segment_length = 0;
+    auto observeViterbiRange = [&](const std::string& text, size_t start, size_t end) {
+        size_t pos = start;
+        while (pos < end) {
+            const size_t newline = text.find('\n', pos);
+            const size_t segment_end = newline == std::string::npos || newline >= end
+                ? end
+                : newline;
+            max_segment_length = std::max(max_segment_length, segment_end - pos);
+            if (segment_end == end) break;
+            pos = segment_end + 1;
+        }
+    };
     for (size_t text_idx = 0; text_idx < training_units.size(); ++text_idx) {
         const auto& text = training_units[text_idx];
         const auto& spans = atom_spans[text_idx];
@@ -484,7 +496,7 @@ static size_t maxTrainingSegmentLengthForTrainingUnits(
         }
 
         if (spans.empty()) {
-            max_segment_length = std::max(max_segment_length, text.size());
+            observeViterbiRange(text, 0, text.size());
             continue;
         }
 
@@ -510,12 +522,12 @@ static size_t maxTrainingSegmentLengthForTrainingUnits(
                                          ", previous_end=" + std::to_string(pos));
             }
             if (span.start > pos) {
-                max_segment_length = std::max(max_segment_length, span.start - pos);
+                observeViterbiRange(text, pos, span.start);
             }
             pos = span.end;
         }
         if (pos < text.size()) {
-            max_segment_length = std::max(max_segment_length, text.size() - pos);
+            observeViterbiRange(text, pos, text.size());
         }
     }
 
@@ -659,7 +671,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         norm_texts.push_back(normalizeWithSpans(texts[i], spans_copy));
         norm_atom_spans.push_back(std::move(spans_copy));
     }
-    std::cout << "[UnigramLM] Applied SentencePiece whitespace normalization (space -> ▁)" << std::endl;
+    std::cout << "[UnigramLM] Applied whitespace normalization (space/tab -> ▁, LF/CR/CRLF -> fixed newline boundary)"
+              << std::endl;
 
     const std::vector<std::string>& training_units = norm_texts;
     const size_t training_segment_max_length =
@@ -707,8 +720,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             
             if (i + seq_len <= text.size()) {
                 std::string ch = text.substr(i, seq_len);
-                char_counts[ch]++;
-                total_chars++;
+                if (ch != "\n") {
+                    char_counts[ch]++;
+                    total_chars++;
+                }
             }
             i += seq_len;
         }
@@ -969,9 +984,18 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             if (text.empty()) continue;
 
             auto processSegment = [&](const std::string& segment) {
-                if (segment.empty()) return;
-                lattice.accumulateSegment(
-                    segment, stats, "UnigramLM::trainFromCorpus forward-backward E-step");
+                size_t pos = 0;
+                while (pos < segment.size()) {
+                    const size_t newline = segment.find('\n', pos);
+                    const size_t end = newline == std::string::npos ? segment.size() : newline;
+                    if (end > pos) {
+                        lattice.accumulateSegment(
+                            segment.substr(pos, end - pos), stats,
+                            "UnigramLM::trainFromCorpus forward-backward E-step");
+                    }
+                    if (newline == std::string::npos) break;
+                    pos = newline + 1;
+                }
             };
 
             if (spans.empty()) {

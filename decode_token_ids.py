@@ -7,12 +7,13 @@ Token ID Layout (current UniByte tokenizer):
   [4-259]     = Byte fallback (byte value = token_id - 4)
     [260-305]   = Fixed numeric tokens
     [306-317]   = Typed atom opening/closing boundaries
-    [318+]      = Unigram vocabulary pieces (from vocab.bin)
+    [318]       = Canonical newline (LF/CR/CRLF)
+    [319+]      = Unigram vocabulary pieces (from vocab.bin)
 
-Current vocab.bin format is KTMG v7. The saved record count is the number of
+Current vocab.bin format is KTMG v8. The saved record count is the number of
 serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
-header and must equal special + bytes + numeric + atoms + learned pieces.
+header and must equal special + bytes + numeric + atoms + newline + learned pieces.
 
 Current training_data.grmt format is GRMT v28. Rows persist atom side channels,
 per-sequence AtomTable and sequence-local atom data, row-level Goal metadata,
@@ -72,8 +73,10 @@ ATOM_TYPE_LABELS = {
 NUM_ATOM_TYPES = len(ATOM_TYPE_LABELS)
 
 ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + 2 * NUM_ATOM_TYPES  # 318
-UNIGRAM_TOKEN_START = ATOM_TOKEN_END
-KTMG_VOCAB_VERSION = 7
+NEWLINE_TOKEN_ID = ATOM_TOKEN_END
+NEWLINE_VOCAB_SIZE = 1
+UNIGRAM_TOKEN_START = NEWLINE_TOKEN_ID + NEWLINE_VOCAB_SIZE  # 319
+KTMG_VOCAB_VERSION = 8
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
 GRMT_FORMAT_VERSION = 29
@@ -346,6 +349,7 @@ def load_vocab_bin(path: Path) -> dict[int, str]:
     for atom_index in range(2 * NUM_ATOM_TYPES):
         token_id = ATOM_TOKEN_OFFSET + atom_index
         id_to_text[token_id] = atom_type_label_for_token_id(token_id)
+    id_to_text[NEWLINE_TOKEN_ID] = "\n"
 
     # Special-token metadata + learned unigram pieces from vocab.bin.
     with open(path, "rb") as f:
@@ -364,7 +368,9 @@ def load_vocab_bin(path: Path) -> dict[int, str]:
         _checksum = read_u32(f, source)
         serialized_record_count = read_u32(f, source)
         max_length = read_u32(f, source)
-        _flags = read_exact(f, 3, source)
+        flags = read_exact(f, 3, source)
+        if (flags[0] & 0x01) == 0:
+            raise ValueError(f"KTMG v8 vocab lacks canonical-newline layout flag: {source}")
         token_space_size = read_u32(f, source)
 
         if max_length != KTMG_MAX_PIECE_LENGTH:
@@ -422,6 +428,7 @@ def load_vocab_bin(path: Path) -> dict[int, str]:
                 f"computed={expected_token_space_size} "
                 f"({NUM_SPECIAL_TOKENS} special + {BYTE_VOCAB_SIZE} bytes + "
                 f"{len(NUMERIC_TOKEN_TEXT)} numeric + {2 * NUM_ATOM_TYPES} atoms + "
+                f"{NEWLINE_VOCAB_SIZE} newline + "
                 f"{learned_piece_count} unigrams)"
             )
 

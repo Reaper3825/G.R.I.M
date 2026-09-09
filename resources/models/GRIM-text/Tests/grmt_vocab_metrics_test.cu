@@ -70,6 +70,7 @@ std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string&
     for (int a = 0; a < ATOM_VOCAB_SIZE; ++a) {
         id_to_text[ATOM_TOKEN_OFFSET + a] = "<ATOM" + std::to_string(a) + ">";
     }
+    id_to_text[NEWLINE_TOKEN_ID] = "\n";
 
     // Read unigram pieces from KTMG binary
     std::ifstream f(path, std::ios::binary);
@@ -85,7 +86,7 @@ std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string&
 
     uint16_t version;
     f.read(reinterpret_cast<char*>(&version), 2);
-    if (version != 3 && version != 4 && version != 5 && version != 6 && version != 7) {
+    if (version != 8) {
         throw std::runtime_error("loadVocabMap: unsupported vocab version " + std::to_string(version));
     }
 
@@ -187,6 +188,8 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
                 ++m.numeric_count;
             } else if (tid >= ATOM_TOKEN_OFFSET && tid < static_cast<uint32_t>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)) {
                 ++m.atom_count;
+            } else if (tid == static_cast<uint32_t>(NEWLINE_TOKEN_ID)) {
+                ++m.unigram_count;
             } else {
                 ++m.unigram_count;
             }

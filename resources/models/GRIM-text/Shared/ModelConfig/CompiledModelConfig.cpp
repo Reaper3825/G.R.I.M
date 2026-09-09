@@ -21,7 +21,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::uint32_t kSupportedSchemaVersion = 8;
-constexpr std::uint32_t kSupportedSemanticVersion = 7;
+constexpr std::uint32_t kSupportedSemanticVersion = 8;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {

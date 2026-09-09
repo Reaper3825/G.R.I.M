@@ -166,6 +166,10 @@ bool isValidUnigramVocabCharacterImpl(const std::string& ch) {
 bool isValidUnigramSubwordImpl(const std::string& s) {
     if (s.empty()) return false;
 
+    // Canonical LF is represented by NEWLINE_TOKEN_ID and must never become
+    // part of a learned unigram piece.
+    if (s.find('\n') != std::string::npos) return false;
+
     if (s.size() == 1 || utf8SequenceLength(static_cast<unsigned char>(s[0])) == s.size()) {
         return isValidUnigramVocabCharacterImpl(s);
     }

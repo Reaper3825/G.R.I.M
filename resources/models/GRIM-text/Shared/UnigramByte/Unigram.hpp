@@ -141,8 +141,8 @@ public:
     //--------------------------------------------------//
     
     // Encode text using Viterbi (best segmentation)
-    // prepend_space=true: prepend ▁ (start of text / first segment)
-    // prepend_space=false: skip prepend (mid-text segment after atom)
+    // Horizontal whitespace uses ▁; LF/CR/CRLF emit NEWLINE_TOKEN_ID.
+    // prepend_space controls only the synthetic leading ▁ boundary.
     std::vector<int> encode(const std::string& text, bool prepend_space = true) const;
     
     //--------------------------------------------------//

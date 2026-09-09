@@ -12,7 +12,8 @@
 //    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
 //    [4-259]                  = Byte tokens (fallback)
 //    [260-305]                = Fixed numeric tokens
-//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Typed atom boundary tokens
+//    [ATOM_TOKEN_OFFSET..ATOM_TOKEN_END-1] = Typed atom boundary tokens
+//    [NEWLINE_TOKEN_ID]        = Canonical newline token
 //    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
 //  
 //  Author: GRIM Team
@@ -57,6 +58,7 @@ struct UniByteResult {
     size_t byte_tokens = 0;
     size_t numeric_tokens = 0;
     size_t atom_tokens = 0;                     // Emitted opening + closing boundary token count
+    size_t newline_tokens = 0;                  // Canonical LF/CR/CRLF structural tokens
     
     // ═══════════════════════════════════════════════════════════════════════════
     // Pipeline validation: ensures all per-token arrays are consistent before
@@ -104,13 +106,14 @@ struct UniByteResult {
             throw std::runtime_error(
                 std::string(caller) + ": UniByteResult.local_atom_table is NULL");
         }
-        if (unigram_tokens + byte_tokens + numeric_tokens + atom_tokens != n) {
+        if (unigram_tokens + byte_tokens + numeric_tokens + atom_tokens + newline_tokens != n) {
             throw std::runtime_error(
                 std::string(caller) + ": UniByteResult token count mismatch: unigram=" +
                 std::to_string(unigram_tokens) + " + byte=" +
-            std::to_string(byte_tokens) + " + numeric=" +
-            std::to_string(numeric_tokens) + " + atom=" +
-                std::to_string(atom_tokens) + " != total=" +
+                std::to_string(byte_tokens) + " + numeric=" +
+                std::to_string(numeric_tokens) + " + atom=" +
+                std::to_string(atom_tokens) + " + newline=" +
+                std::to_string(newline_tokens) + " != total=" +
                 std::to_string(n));
         }
         for (size_t i = 0; i < n; ++i) {

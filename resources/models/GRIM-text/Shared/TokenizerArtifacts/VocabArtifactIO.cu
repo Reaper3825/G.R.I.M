@@ -104,9 +104,9 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
     }
 
     const std::uint16_t version = readScalar<std::uint16_t>(bin_file, source);
-    if (version != 7) {
+    if (version != 8) {
         throw std::runtime_error("[TokenizerVocabFile] vocab file version " + std::to_string(version) +
-                                 " is unsupported; required version 7. Retrain tokenizer: " + source);
+                                 " is unsupported; required version 8 with canonical newline tokens. Retrain tokenizer: " + source);
     }
 
     (void)readScalar<std::uint32_t>(bin_file, source); // checksum placeholder
@@ -115,6 +115,9 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
 
     char flags[3]{};
     readExact(bin_file, flags, sizeof(flags), source);
+    if ((flags[0] & 0x01) == 0) {
+        throw std::runtime_error("[TokenizerVocabFile] vocab file lacks canonical-newline layout flag: " + source);
+    }
 
     const std::uint32_t saved_token_space_size = readScalar<std::uint32_t>(bin_file, source);
 
@@ -186,6 +189,7 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
               << GRIM::Tokenizer::BYTE_VOCAB_SIZE << " bytes + "
               << GRIM::Tokenizer::NUMERIC_VOCAB_SIZE << " fixed numeric + "
               << GRIM::Tokenizer::ATOM_VOCAB_SIZE << " typed atom boundaries + "
+              << GRIM::Tokenizer::NEWLINE_VOCAB_SIZE << " canonical newline + "
               << unigram.pieceCount() << " unigram pieces)" << std::endl;
 }
 
@@ -207,7 +211,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
     const char magic[4] = {'K', 'T', 'M', 'G'};
     writeExact(bin_file, magic, sizeof(magic), sink);
 
-    const std::uint16_t version = 7;
+    const std::uint16_t version = 8;
     writeScalar(bin_file, version, sink);
 
     const std::uint32_t checksum = 0;
@@ -221,7 +225,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
     const std::uint32_t max_length = GRIM::Tokenizer::MAX_PIECE_LENGTH;
     writeScalar(bin_file, max_length, sink);
 
-    const char flags[3] = {0, 0, 0};
+    const char flags[3] = {0x01, 0, 0}; // bit 0: canonical LF/CR/CRLF newline token
     writeExact(bin_file, flags, sizeof(flags), sink);
 
     const std::uint32_t token_space_size =
@@ -272,6 +276,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
               << GRIM::Tokenizer::BYTE_VOCAB_SIZE << " bytes + "
               << GRIM::Tokenizer::NUMERIC_VOCAB_SIZE << " fixed numeric + "
               << GRIM::Tokenizer::ATOM_VOCAB_SIZE << " typed atom boundaries + "
+              << GRIM::Tokenizer::NEWLINE_VOCAB_SIZE << " canonical newline + "
               << piece_count << " unigram pieces) to " << sink << std::endl;
 
     if (tokenizer_hp.save_text_vocab) {

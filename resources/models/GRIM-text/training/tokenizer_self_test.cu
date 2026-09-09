@@ -126,6 +126,9 @@ std::string tokenTextForDisplay(const GrimTokenizer& tokenizer, int token_id) {
     if (layout.isAtom(token_id)) {
         return GRIM::Tokenizer::atomTokenText(token_id);
     }
+    if (layout.isNewline(token_id)) {
+        return GRIM::Tokenizer::newlineTokenText(token_id);
+    }
     if (layout.isUnigram(token_id)) {
         const auto* piece = tokenizer.unigramLM().getPiece(token_id);
         if (!piece) {

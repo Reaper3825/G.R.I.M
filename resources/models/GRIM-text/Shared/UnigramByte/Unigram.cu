@@ -98,12 +98,25 @@ void UnigramLM::buildTrie() {
 std::vector<int> UnigramLM::encode(const std::string& text, bool prepend_space) const {
     if (text.empty()) return {};
 
-    // SentencePiece-style normalization: spaces → ▁
-    // prepend_space=true adds leading ▁ (start of text / first segment)
-    // prepend_space=false skips prepend (mid-text segment after atom)
+    // SentencePiece-style normalization: horizontal spaces → ▁, line endings → LF.
+    // LF is a fixed structural token and never enters the unigram Viterbi lattice.
     std::string normalized = normalizeSpaces(text, prepend_space);
-    UnigramViterbiSession session(*this, normalized, "UnigramLM::encode");
-    return session.takeTokens();
+    std::vector<int> tokens;
+    size_t pos = 0;
+    while (pos < normalized.size()) {
+        const size_t newline = normalized.find('\n', pos);
+        const size_t end = newline == std::string::npos ? normalized.size() : newline;
+        if (end > pos) {
+            UnigramViterbiSession session(
+                *this, normalized.substr(pos, end - pos), "UnigramLM::encode");
+            std::vector<int> segment_tokens = session.takeTokens();
+            tokens.insert(tokens.end(), segment_tokens.begin(), segment_tokens.end());
+        }
+        if (newline == std::string::npos) break;
+        tokens.push_back(NEWLINE_TOKEN_ID);
+        pos = newline + 1;
+    }
+    return tokens;
 }
 
 } // namespace Tokenizer

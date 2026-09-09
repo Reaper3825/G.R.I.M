@@ -61,8 +61,11 @@ GRIM_TOKEN_GATE_HD inline TokenTypeGateClass tokenTypeGateClassForTokenId(
         return TokenTypeGateClass::UNIGRAM;
     }
     if (token_id >= GRIM::Tokenizer::ATOM_TOKEN_OFFSET &&
-        token_id < TOKEN_TYPE_GATE_UNIGRAM_OFFSET) {
+        token_id < GRIM::Tokenizer::ATOM_TOKEN_END) {
         return TokenTypeGateClass::ATOM;
+    }
+    if (token_id == GRIM::Tokenizer::NEWLINE_TOKEN_ID) {
+        return TokenTypeGateClass::UNIGRAM;
     }
     if (token_id >= TOKEN_TYPE_GATE_UNIGRAM_OFFSET && token_id < vocab_size) {
         return TokenTypeGateClass::UNIGRAM;

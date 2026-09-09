@@ -11,7 +11,8 @@
 //    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
 //    [4-259]                  = Byte tokens (fallback)
 //    [260-305]                = Fixed numeric tokens
-//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Atom span boundary tokens
+//    [ATOM_TOKEN_OFFSET..ATOM_TOKEN_END-1] = Atom span boundary tokens
+//    [NEWLINE_TOKEN_ID]        = Canonical newline token (LF/CR/CRLF)
 //    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
 //
 //  Author: GRIM Team
@@ -102,12 +103,16 @@ constexpr int ATOM_TOKEN_OFFSET = NUMERIC_TOKEN_END;  // Atoms start after numer
 inline constexpr int ATOM_OPEN_TOKEN_OFFSET = ATOM_TOKEN_OFFSET;
 inline constexpr int ATOM_CLOSE_TOKEN_OFFSET = ATOM_OPEN_TOKEN_OFFSET + kAtomTypeCount;
 inline constexpr int ATOM_VOCAB_SIZE = kAtomTypeCount * 2;
-inline constexpr int UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
+inline constexpr int ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
+inline constexpr int NEWLINE_TOKEN_ID = ATOM_TOKEN_END;
+inline constexpr int NEWLINE_VOCAB_SIZE = 1;
+inline constexpr int UNIGRAM_VOCAB_OFFSET = NEWLINE_TOKEN_ID + NEWLINE_VOCAB_SIZE;
 inline constexpr uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFFSET);
-inline constexpr uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
+inline constexpr uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(ATOM_TOKEN_END);
 static_assert(NUMERIC_TOKEN_OFFSET == 260, "Numeric token range must begin at ID 260");
 static_assert(ATOM_TOKEN_OFFSET == 306, "Atom token range must begin at ID 306");
-static_assert(UNIGRAM_VOCAB_OFFSET == 318, "Learned unigram range must begin at ID 318");
+static_assert(NEWLINE_TOKEN_ID == 318, "Canonical newline token must use ID 318");
+static_assert(UNIGRAM_VOCAB_OFFSET == 319, "Learned unigram range must begin at ID 319");
 // Sentinel: position has no registered AtomTable entry (0 is a valid AtomTable ID)
 constexpr uint32_t kAtomEntryNone = UINT32_MAX;
 // Sequence-local atom addresses use a separate typed index space and never
@@ -165,19 +170,22 @@ struct TokenLayout {
     int num_bytes    = 0;
     int num_numeric  = 0;
     int num_atoms    = 0;
+    int num_newlines = 0;
     int num_unigram  = 0;
 
     int special_offset() const { return SPECIAL_TOKEN_OFFSET; }
     int byte_offset()    const { return num_special; }
     int numeric_offset() const { return num_special + num_bytes; }
     int atom_offset()    const { return num_special + num_bytes + num_numeric; }
-    int unigram_offset() const { return num_special + num_bytes + num_numeric + num_atoms; }
-    int total_vocab()    const { return num_special + num_bytes + num_numeric + num_atoms + num_unigram; }
+    int newline_offset() const { return num_special + num_bytes + num_numeric + num_atoms; }
+    int unigram_offset() const { return newline_offset() + num_newlines; }
+    int total_vocab()    const { return unigram_offset() + num_unigram; }
 
     bool isSpecial(int id) const { return id >= special_offset() && id < byte_offset(); }
     bool isByte(int id)    const { return id >= byte_offset()    && id < numeric_offset(); }
     bool isNumeric(int id) const { return id >= numeric_offset() && id < atom_offset(); }
-    bool isAtom(int id)    const { return id >= atom_offset()    && id < unigram_offset(); }
+    bool isAtom(int id)    const { return id >= atom_offset()    && id < newline_offset(); }
+    bool isNewline(int id) const { return id >= newline_offset() && id < unigram_offset(); }
     bool isUnigram(int id) const { return id >= unigram_offset() && id < total_vocab(); }
 
     int firstContentTokenId() const { return num_special; }
@@ -189,7 +197,7 @@ inline TokenLayout tokenLayoutFromActualVocabOrThrow(
 {
     if (actual_vocab_size < static_cast<std::uint32_t>(UNIGRAM_VOCAB_OFFSET)) {
         throw std::runtime_error(std::string(caller) +
-            ": actual_vocab_size must include special+byte+numeric+atom ranges (>= " +
+            ": actual_vocab_size must include special+byte+numeric+atom+newline ranges (>= " +
             std::to_string(UNIGRAM_VOCAB_OFFSET) + "), got " +
             std::to_string(actual_vocab_size));
     }
@@ -204,6 +212,7 @@ inline TokenLayout tokenLayoutFromActualVocabOrThrow(
     layout.num_bytes = BYTE_VOCAB_SIZE;
     layout.num_numeric = NUMERIC_VOCAB_SIZE;
     layout.num_atoms = ATOM_VOCAB_SIZE;
+    layout.num_newlines = NEWLINE_VOCAB_SIZE;
     layout.num_unigram = static_cast<int>(actual_vocab_size) - UNIGRAM_VOCAB_OFFSET;
     if (layout.num_unigram < 0) {
         throw std::runtime_error(std::string(caller) +
@@ -224,7 +233,19 @@ inline TokenLayout tokenLayoutFromActualVocabOrThrow(
 inline int tokenIdForIndex(int index) { return UNIGRAM_VOCAB_OFFSET + index; }
 inline int indexForTokenId(int token_id) { return token_id - UNIGRAM_VOCAB_OFFSET; }
 inline bool isAtomTokenId(int token_id) {
-    return token_id >= ATOM_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
+    return token_id >= ATOM_TOKEN_OFFSET && token_id < ATOM_TOKEN_END;
+}
+
+inline bool isNewlineTokenId(int token_id) {
+    return token_id == NEWLINE_TOKEN_ID;
+}
+
+inline const char* newlineTokenText(int token_id) {
+    if (!isNewlineTokenId(token_id)) {
+        throw std::runtime_error("newlineTokenText: token_id=" + std::to_string(token_id) +
+                                 " is not the canonical newline token");
+    }
+    return "\n";
 }
 
 inline bool isAtomOpenTokenId(int token_id) {
@@ -232,7 +253,7 @@ inline bool isAtomOpenTokenId(int token_id) {
 }
 
 inline bool isAtomCloseTokenId(int token_id) {
-    return token_id >= ATOM_CLOSE_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
+    return token_id >= ATOM_CLOSE_TOKEN_OFFSET && token_id < ATOM_TOKEN_END;
 }
 
 //======================================================//

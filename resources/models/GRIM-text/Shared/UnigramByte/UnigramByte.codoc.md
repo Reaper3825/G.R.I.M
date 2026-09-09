@@ -7,12 +7,13 @@
 
 ## What this tokenizer is
 
-`UnigramByte` is a composed tokenizer with four jobs:
+`UnigramByte` is a composed tokenizer with five jobs:
 
 1. `Detectors/DetectorRegistry` scans raw text for numeric atoms and non-token text features.
 2. `AtomTable` stores parsed numeric values and per-entry numeric decomposition metadata (`AtomEntry::arg_number`) as a separate auxiliary target while the model-visible value remains between typed boundary tokens.
 3. `UnigramLM` does learned subword tokenization on the residual non-atom text.
 4. `TokenLayout.hpp` owns the byte-token IDs and conversion helpers used when finalized unigram coverage overflows to raw bytes.
+5. `TokenLayout.hpp` also owns the fixed canonical newline token emitted for LF, CR, and CRLF.
 
 The top-level class is `UniByte`. Everything else exists to support it.
 
@@ -104,7 +105,8 @@ The live layout comes from `TokenLayout.hpp`.
 |---|---|---|
 | `0..3` | reserved layout special tokens | `UNK=0`, `PAD=1`, `BOS=2`, `EOS=3`; metadata lives in `TokenLayout.hpp` |
 | `4..259` | byte fallback tokens | one token per raw byte |
-| `ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1` | atom tokens | typed opening/closing boundaries |
+| `ATOM_TOKEN_OFFSET..ATOM_TOKEN_END-1` | atom tokens | typed opening/closing boundaries |
+| `NEWLINE_TOKEN_ID` | newline token | canonical LF for source LF, CR, or CRLF |
 | `UNIGRAM_VOCAB_OFFSET+` | learned unigram pieces | subword pieces only |
 
 ### Vocab-size ownership
@@ -156,9 +158,10 @@ flowchart LR
 3. Each atom payload carries the finalized `StructuralSpan`, matching opening/closing token IDs, durable `atom_entry_id`, independent `local_atom_index`, packed numeric value, and atom flags used by the merge step.
 4. The original text is segmented around atom spans; non-atom gaps go through unigram segmentation, while atom gaps emit the returned atom payload directly.
 5. Text normalization happens before unigram segmentation of each non-atom gap.
-6. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized gap text.
-7. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw byte tokens through `TokenLayout.hpp` byte helpers.
-8. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
+6. Canonical LF boundaries emit `NEWLINE_TOKEN_ID` and split the text passed to Viterbi.
+7. `UnigramLM::encode()` creates a `UnigramViterbiSession` over each normalized non-newline span.
+8. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw byte tokens through `TokenLayout.hpp` byte helpers.
+9. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
 
 `AtomNumberPopulationPayload` is now summary-only diagnostics. The durable numeric decomposition lives on `AtomEntry::arg_number`, which means deduped atom entries also dedupe their digit bindings and AtomTable save/load persists them with the entry.
 
@@ -371,7 +374,7 @@ Atom emission is placement-only: the authored delimiter determines the atom type
 
    Production CUDA Viterbi walks the uploaded forward trie from each reachable start position (`text[pos]`, then `text[pos + 1]`, ...). The GPU upload is not a reverse trie; reverse-scanning candidate pieces breaks normal tokens like `ab`.
 
-   ASCII spacing bytes are rewritten by `TextUtils::normalizeSpaces()` before unigram segmentation: `' '`, `\t`, `\n`, `\r`, and CRLF all become the shared SentencePiece `▁` marker, with CRLF collapsed to one marker. This is an intentional rewrite, not a detector decision. Decode maps the marker back to plain space, so the tokenizer no longer preserves the exact source kind for tabs/newlines/carriage returns.
+   Horizontal ASCII spacing bytes are rewritten by `TextUtils::normalizeSpaces()` before unigram segmentation: `' '` and `\t` become the shared SentencePiece `▁` marker. LF, CR, and CRLF canonicalize to LF and emit the fixed `NEWLINE_TOKEN_ID`; decode renders that token as LF. The tokenizer intentionally preserves line structure while normalizing the source line-ending convention.
 
    GPU trie uploads are generation-checked. If `buildTrie()` or score mutation advances the live trie generation, CUDA Viterbi must fail loudly until the runtime finalization path refreshes the uploaded generation.
 

@@ -317,36 +317,57 @@ UniByteResult UniByte::tokenizeWithMetadata(
             }
         };
 
-        if (!encode_numeric_tokens) {
-            appendViterbiText(normalized_segment);
-            return;
-        }
-
-        const std::vector<NumericTokenSpan> numeric_spans =
-            findNumericTokenSpans(normalized_segment);
-        size_t normalized_pos = 0;
-        for (const NumericTokenSpan& numeric_span : numeric_spans) {
-            appendViterbiText(std::string_view(normalized_segment).substr(
-                normalized_pos, numeric_span.start - normalized_pos));
-
-            const size_t first_numeric_token = result.token_ids.size();
-            appendNumericLiteralTokenIds(
-                std::string_view(normalized_segment).substr(
-                    numeric_span.start, numeric_span.end - numeric_span.start),
-                result.token_ids);
-            const size_t emitted_numeric_tokens = result.token_ids.size() - first_numeric_token;
-            for (size_t i = 0; i < emitted_numeric_tokens; ++i) {
-                result.is_byte_fallback.push_back(false);
-                result.token_numeric_values.push_back(0.0f);
-                result.token_atom_flags.push_back(0);
-                result.atom_entry_ids.push_back(kAtomEntryNone);
-                result.token_local_atom_indices.push_back(kLocalAtomIndexNone);
-                appendNonAtomSideChannels();
+        auto appendNormalizedLine = [&](std::string_view line) {
+            if (!encode_numeric_tokens) {
+                appendViterbiText(line);
+                return;
             }
-            result.numeric_tokens += emitted_numeric_tokens;
-            normalized_pos = numeric_span.end;
+
+            const std::vector<NumericTokenSpan> numeric_spans = findNumericTokenSpans(line);
+            size_t normalized_pos = 0;
+            for (const NumericTokenSpan& numeric_span : numeric_spans) {
+                appendViterbiText(line.substr(
+                    normalized_pos, numeric_span.start - normalized_pos));
+
+                const size_t first_numeric_token = result.token_ids.size();
+                appendNumericLiteralTokenIds(
+                    line.substr(numeric_span.start, numeric_span.end - numeric_span.start),
+                    result.token_ids);
+                const size_t emitted_numeric_tokens = result.token_ids.size() - first_numeric_token;
+                for (size_t i = 0; i < emitted_numeric_tokens; ++i) {
+                    result.is_byte_fallback.push_back(false);
+                    result.token_numeric_values.push_back(0.0f);
+                    result.token_atom_flags.push_back(0);
+                    result.atom_entry_ids.push_back(kAtomEntryNone);
+                    result.token_local_atom_indices.push_back(kLocalAtomIndexNone);
+                    appendNonAtomSideChannels();
+                }
+                result.numeric_tokens += emitted_numeric_tokens;
+                normalized_pos = numeric_span.end;
+            }
+            appendViterbiText(line.substr(normalized_pos));
+        };
+
+        size_t normalized_pos = 0;
+        while (normalized_pos < normalized_segment.size()) {
+            const size_t newline_pos = normalized_segment.find('\n', normalized_pos);
+            const size_t line_end = newline_pos == std::string::npos
+                ? normalized_segment.size()
+                : newline_pos;
+            appendNormalizedLine(std::string_view(normalized_segment).substr(
+                normalized_pos, line_end - normalized_pos));
+            if (newline_pos == std::string::npos) break;
+
+            result.token_ids.push_back(NEWLINE_TOKEN_ID);
+            result.is_byte_fallback.push_back(false);
+            result.token_numeric_values.push_back(0.0f);
+            result.token_atom_flags.push_back(0);
+            result.atom_entry_ids.push_back(kAtomEntryNone);
+            result.token_local_atom_indices.push_back(kLocalAtomIndexNone);
+            appendNonAtomSideChannels();
+            ++result.newline_tokens;
+            normalized_pos = newline_pos + 1;
         }
-        appendViterbiText(std::string_view(normalized_segment).substr(normalized_pos));
     };
 
     while (pos < text.size()) {
@@ -498,6 +519,8 @@ std::string UniByte::decode(const DecodeRequest& request) const {
             // Metadata remains available to downstream auxiliary objectives,
             // but decode never substitutes it for in-band span content.
             result += atomTokenText(tid);
+        } else if (layout.isNewline(tid)) {
+            result += newlineTokenText(tid);
         } else if (layout.isUnigram(tid)) {
             const UnigramPiece* piece = unigram_.getPiece(tid);
             if (!piece) {

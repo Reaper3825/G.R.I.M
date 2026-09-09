@@ -15,20 +15,34 @@ namespace Tokenizer {
 
 namespace {
 
-size_t spieceRewriteSourceLength(const std::string& text, size_t pos) {
+enum class SpacingRewriteKind {
+    None,
+    Horizontal,
+    Newline
+};
+
+struct SpacingRewrite {
+    SpacingRewriteKind kind = SpacingRewriteKind::None;
+    size_t source_length = 0;
+};
+
+SpacingRewrite spacingRewriteAt(const std::string& text, size_t pos) {
     if (pos >= text.size()) {
-        throw std::runtime_error("spieceRewriteSourceLength: pos is outside text");
+        throw std::runtime_error("spacingRewriteAt: pos is outside text");
     }
     if (text[pos] == '\r') {
         if (pos + 1 < text.size() && text[pos + 1] == '\n') {
-            return 2;
+            return {SpacingRewriteKind::Newline, 2};
         }
-        return 1;
+        return {SpacingRewriteKind::Newline, 1};
     }
-    if (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\n') {
-        return 1;
+    if (text[pos] == '\n') {
+        return {SpacingRewriteKind::Newline, 1};
     }
-    return 0;
+    if (text[pos] == ' ' || text[pos] == '\t') {
+        return {SpacingRewriteKind::Horizontal, 1};
+    }
+    return {};
 }
 
 } // namespace
@@ -128,28 +142,33 @@ bool isStructuralEdgeWhitespace(uint32_t cp) {
 std::string normalizeSpaces(const std::string& text, bool prepend_space) {
     if (text.empty()) return text;
 
-    size_t rewrite_count = 0;
+    size_t horizontal_rewrite_count = 0;
     for (size_t i = 0; i < text.size(); ) {
-        const size_t rewrite_source_len = spieceRewriteSourceLength(text, i);
-        if (rewrite_source_len != 0) {
-            ++rewrite_count;
-            i += rewrite_source_len;
+        const SpacingRewrite rewrite = spacingRewriteAt(text, i);
+        if (rewrite.kind != SpacingRewriteKind::None) {
+            if (rewrite.kind == SpacingRewriteKind::Horizontal) {
+                ++horizontal_rewrite_count;
+            }
+            i += rewrite.source_length;
         } else {
             ++i;
         }
     }
 
     std::string result;
-    result.reserve(text.size() + (prepend_space ? SPIECE_UNDERLINE_LEN : 0) + rewrite_count * 2);
+    result.reserve(text.size() + (prepend_space ? SPIECE_UNDERLINE_LEN : 0) + horizontal_rewrite_count * 2);
     if (prepend_space) {
         result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
     }
 
     for (size_t i = 0; i < text.size(); ) {
-        const size_t rewrite_source_len = spieceRewriteSourceLength(text, i);
-        if (rewrite_source_len != 0) {
+        const SpacingRewrite rewrite = spacingRewriteAt(text, i);
+        if (rewrite.kind == SpacingRewriteKind::Horizontal) {
             result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
-            i += rewrite_source_len;
+            i += rewrite.source_length;
+        } else if (rewrite.kind == SpacingRewriteKind::Newline) {
+            result.push_back('\n');
+            i += rewrite.source_length;
         } else {
             result.push_back(text[i]);
             ++i;
@@ -175,9 +194,9 @@ std::string denormalizeSpaces(const std::string& text) {
         }
     }
 
-    // Strip leading space (from the prepended ▁). All source ASCII spacing bytes
-    // are intentionally rewritten through the same ▁ marker, so decode returns
-    // plain spaces rather than reconstructing tabs/newlines/carriage returns.
+    // Strip leading space (from the prepended ▁). Horizontal ASCII spacing bytes
+    // are intentionally rewritten through the same ▁ marker. Canonical LF bytes
+    // remain intact and are represented by the fixed newline token.
     if (!result.empty() && result[0] == ' ') {
         result.erase(0, 1);
     }
@@ -200,13 +219,15 @@ std::string normalizeWithSpans(const std::string& text, std::vector<AtomSpan>& s
 
     for (size_t i = 0; i < text.size(); ) {
         orig_to_norm[i] = norm_pos;
-        const size_t rewrite_source_len = spieceRewriteSourceLength(text, i);
-        if (rewrite_source_len != 0) {
-            if (rewrite_source_len == 2) {
+        const SpacingRewrite rewrite = spacingRewriteAt(text, i);
+        if (rewrite.kind != SpacingRewriteKind::None) {
+            if (rewrite.source_length == 2) {
                 orig_to_norm[i + 1] = norm_pos;
             }
-            norm_pos += SPIECE_UNDERLINE_LEN;
-            i += rewrite_source_len;
+            norm_pos += rewrite.kind == SpacingRewriteKind::Horizontal
+                ? SPIECE_UNDERLINE_LEN
+                : 1;
+            i += rewrite.source_length;
         } else {
             ++norm_pos;
             ++i;
