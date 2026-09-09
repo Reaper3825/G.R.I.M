@@ -1221,7 +1221,6 @@ inline void deriveTrainingRuntimeConfig(LanguageModelConfig& params) {
             std::to_string(params.max_seq_len));
     }
     params.min_seq_len_for_flash = params.max_seq_len / 4;
-    params.scratch_max_tokens_per_block = static_cast<size_t>(params.max_seq_len);
     params.attention_dropout = params.dropout_rate;
     refreshMutableTrainingDerivedValues(
         params, params.max_seq_len, "deriveTrainingRuntimeConfig");
