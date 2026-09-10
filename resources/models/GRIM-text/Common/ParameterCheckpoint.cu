@@ -238,15 +238,6 @@ std::vector<CompatibilityFactValue> buildCompatibilityFacts(
     addInt("max_seq_len");
     addInt("rope_base_seq_len");
     addInt("alibi_min_locality_distance");
-    addInt("execution_block_layer");
-    addInt("execution_block_num_ops");
-    addInt("execution_block_num_slots");
-    addInt("execution_block_num_scratch_slots");
-    addInt("execution_block_num_steps");
-    addInt("execution_block_result_slot_mode");
-    addInt("execution_block_result_slot_index");
-    addInt("number_encoder_max_digit_slots");
-    addInt("number_encoder_max_abs_pow10");
 
     addFloat("embedding_scale");
     addFloat("rms_epsilon");
@@ -265,10 +256,7 @@ std::vector<CompatibilityFactValue> buildCompatibilityFacts(
     addBool("attention_residual_gate_enabled");
     addBool("use_layer_scale");
     addBool("use_atom_data");
-    addBool("execution_block_enabled");
-    addBool("number_encoder_enabled");
     addBool("selector_enabled");
-    addBool("slot_seed_encoder_enabled");
     addBool("lm_head_center_hidden_states");
     addBool("project_out_pc1");
     addBool("center_logits");

@@ -529,6 +529,7 @@ void ConsolePanel::addTemporarySession()
     rebuildSessionWidgets();
 }
 
+
 void ConsolePanel::deleteSession(const std::string& sessionId)
 {
     const auto it = std::find_if(
