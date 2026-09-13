@@ -2,8 +2,9 @@
 """Generate and optionally merge the single-step arithmetic tool curriculum.
 
 Every ConceptBlock teaches one symbolic Determine phase followed by one
-grounded arithmetic expression inside an authored TOOL span. The tool result is
-never included in the span, and Update remains deliberately empty for a later
+variable-based arithmetic expression inside an authored TOOL span. The
+postfix pointer binds the pending tool result to the unknown, and the answer
+references that same variable. Update remains deliberately empty for a later
 state-update curriculum.
 """
 
@@ -150,6 +151,10 @@ def format_decimal(value: Decimal) -> str:
     return rendered or "0"
 
 
+def variable_reference(name: str) -> str:
+    return f"${{{name}}}"
+
+
 def arithmetic_values(operation: str, occurrence: int, decimal_values: bool) -> tuple[Decimal, Decimal, Decimal]:
     first = 10 + (occurrence * 37) % 490
     second = 2 + (occurrence * 53) % 97
@@ -231,10 +236,14 @@ def make_entry(index: int, seed: int = DEFAULT_SEED) -> tuple[dict[str, Any], di
     result = format_decimal(result_value)
     symbol = SYMBOLS[operation]
     parenthesized = occurrence % 2 == 0
-    expression = f"{lhs} {symbol} {rhs}"
-    tool_expression = f"({expression})" if parenthesized else expression
     names = variable_names(operation, spec.slug)
     lhs_name, rhs_name, result_name = names
+    expression = (
+        f"{variable_reference(lhs_name)} {symbol} "
+        f"{variable_reference(rhs_name)}"
+    )
+    tool_expression = f"({expression})" if parenthesized else expression
+    result_reference = variable_reference(result_name)
     templates = DIRECT_TEMPLATES if mode == "direct" else CONTEXT_TEMPLATES
     prompt = templates[operation][occurrence % len(templates[operation])].format(
         a=lhs, b=rhs, unit=spec.unit, subject=spec.subject)
@@ -252,9 +261,9 @@ def make_entry(index: int, seed: int = DEFAULT_SEED) -> tuple[dict[str, Any], di
         "knowns": known_bindings(operation, names, lhs, rhs, spec.unit),
         "unknowns": [result_name],
         "determine": f"{lhs_name} {symbol} {rhs_name} = {result_name}",
-        "execute": f"<TOOL>{tool_expression}</TOOL>",
+        "execute": f"<TOOL>{tool_expression}</TOOL> -> {result_reference}",
         "update": "",
-        "answer": answer_text(operation, result, spec.unit),
+        "answer": answer_text(operation, result_reference, spec.unit),
         "goal": {
             "target_state": f"{result_name} is correctly determined",
             "success_criteria": [{
@@ -277,6 +286,7 @@ def make_entry(index: int, seed: int = DEFAULT_SEED) -> tuple[dict[str, Any], di
         "category": category,
         "unit": spec.unit,
         "parenthesized": parenthesized,
+        "names": names,
         "lhs": lhs_value,
         "rhs": rhs_value,
         "result": result_value,
@@ -304,13 +314,19 @@ def validate_entry(entry: dict[str, Any], metadata: dict[str, Any], seen_ids: se
         raise ValueError(f"{block_id}: Update must remain empty")
     if entry["execute"].count("<TOOL>") != 1 or entry["execute"].count("</TOOL>") != 1:
         raise ValueError(f"{block_id}: expected exactly one TOOL span")
-    payload = entry["execute"][len("<TOOL>"):-len("</TOOL>")]
+    close_index = entry["execute"].find("</TOOL>")
+    payload = entry["execute"][len("<TOOL>"):close_index]
+    lhs_name, rhs_name, result_name = metadata["names"]
     expected_expression = (
-        f"{format_decimal(metadata['lhs'])} {SYMBOLS[metadata['operation']]} "
-        f"{format_decimal(metadata['rhs'])}"
+        f"{variable_reference(lhs_name)} {SYMBOLS[metadata['operation']]} "
+        f"{variable_reference(rhs_name)}"
     )
     expected_payload = f"({expected_expression})" if metadata["parenthesized"] else expected_expression
-    if payload != expected_payload or "=" in payload:
+    expected_execute = (
+        f"<TOOL>{expected_payload}</TOOL> -> "
+        f"{variable_reference(result_name)}"
+    )
+    if entry["execute"] != expected_execute or payload != expected_payload or "=" in payload:
         raise ValueError(f"{block_id}: invalid TOOL payload {payload!r}")
     if metadata["operation"] == "add":
         computed = metadata["lhs"] + metadata["rhs"]
@@ -324,9 +340,11 @@ def validate_entry(entry: dict[str, Any], metadata: dict[str, Any], seen_ids: se
         computed = metadata["lhs"] / metadata["rhs"]
     if computed != metadata["result"]:
         raise ValueError(f"{block_id}: arithmetic result mismatch")
-    result_text = format_decimal(metadata["result"])
-    if result_text not in entry["answer"] or metadata["unit"] not in entry["answer"]:
-        raise ValueError(f"{block_id}: answer does not preserve result and unit")
+    result_reference = variable_reference(result_name)
+    if result_reference not in entry["answer"] or metadata["unit"] not in entry["answer"]:
+        raise ValueError(f"{block_id}: answer does not preserve result reference and unit")
+    if format_decimal(metadata["result"]) in entry["answer"]:
+        raise ValueError(f"{block_id}: answer leaks the resolved arithmetic value")
     goal = entry["goal"]
     if set(goal) != {"target_state", "success_criteria", "constraints"}:
         raise ValueError(f"{block_id}: malformed goal")
@@ -452,7 +470,10 @@ def generate_dataset(output_dir: Path, count: int, seed: int) -> dict[str, Any]:
         "parenthesized_tool_calls": parenthesized_count,
         "non_parenthesized_tool_calls": count - parenthesized_count,
         "update_policy": "the update field is intentionally empty in every entry",
-        "tool_payload_policy": "one grounded arithmetic expression with no result inside one TOOL span",
+        "tool_payload_policy": (
+            "one variable-based arithmetic expression inside one TOOL span, "
+            "followed by one ${variable} result pointer"
+        ),
         "sha256_concept_blocks_jsonl": digest.hexdigest(),
     }
     write_json_atomic(manifest_path, manifest)

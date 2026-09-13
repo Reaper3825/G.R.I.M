@@ -32,14 +32,22 @@ class SingleStepArithmeticToolCurriculumTests(unittest.TestCase):
             self.assertEqual(entry["update"], "")
             self.assertEqual(entry["execute"].count("<TOOL>"), 1)
             self.assertNotIn("=", entry["execute"])
+            self.assertEqual(entry["execute"].count(" -> "), 1)
 
-    def test_tool_payload_is_grounded_while_determine_is_symbolic(self):
+    def test_tool_payload_and_answer_use_variable_references(self):
         entry, metadata = MODULE.make_entry(0)
         self.assertIn("<TOOL>(", entry["execute"])
         self.assertIn(MODULE.SYMBOLS[metadata["operation"]], entry["execute"])
         self.assertIn("=", entry["determine"])
         self.assertIn(entry["unknowns"][0], entry["determine"])
-        self.assertNotIn(entry["unknowns"][0], entry["execute"])
+        result_reference = MODULE.variable_reference(entry["unknowns"][0])
+        self.assertTrue(entry["execute"].endswith(f" -> {result_reference}"))
+        self.assertIn(result_reference, entry["answer"])
+        self.assertNotIn(MODULE.format_decimal(metadata["result"]), entry["answer"])
+
+        payload = entry["execute"].split("<TOOL>", 1)[1].split("</TOOL>", 1)[0]
+        self.assertNotIn(MODULE.format_decimal(metadata["lhs"]), payload)
+        self.assertNotIn(MODULE.format_decimal(metadata["rhs"]), payload)
 
     def test_count_values_are_integral(self):
         for index in range(60_000):
