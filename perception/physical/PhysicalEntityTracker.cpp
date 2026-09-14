@@ -1,5 +1,6 @@
 #include "PhysicalEntityTracker.hpp"
 
+#include "PhysicalKnownEntityRegistry.hpp"
 #include "PhysicalPerceptionPrimitivesLogTag.hpp"
 #include "logger.hpp"
 
@@ -414,6 +415,7 @@ void PhysicalEntityTracker::RouteDetectionsToPhysicalEntityTracker(
 void PhysicalEntityTracker::ResetPhysicalEntityTracker() {
     std::lock_guard<std::mutex> lk(mutex_);
     live_tracks_.clear();
+    ResetPhysicalKnownEntityRegistry();
     cfg_                   = PhysicalEntityTrackerConfig{};
     state_                 = PhysicalImageOperatorState::NoModelConfigured;
     last_error_reason_.clear();

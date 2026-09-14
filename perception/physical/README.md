@@ -205,6 +205,7 @@ world-state snapshot can include localization-derived facts.
 | `PhysicalWorldStateBuilder.*` | Fuses Stage-2/3 results into stable entity state. |
 | `PhysicalWorldStateContextProjector.*` | Projects world state into session/model context. |
 | `PhysicalWorldStateMemoryWriter.*` | Writes durable world-state diffs to memory. |
+| `PhysicalKnownEntityRegistry.*` | Session-scoped stable known IDs, user names, track history, and conservative automatic re-linking after an entity leaves frame. |
 | `PhysicalWorldStateLogTag.hpp` | Stage-4 log tag. |
 
 ## Adding or Moving Files

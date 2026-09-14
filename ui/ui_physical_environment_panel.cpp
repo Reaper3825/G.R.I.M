@@ -20,6 +20,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace PE = GRIM::Perception::Physical;
@@ -159,6 +160,21 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::Localization); });
     tab_world_btn_ = std::make_shared<UIButton>(" World ",
         [this]() { setActiveTab(Tab::World); });
+    tab_known_entities_btn_ = std::make_shared<UIButton>(" Known Entities ",
+        [this]() { setActiveTab(Tab::KnownEntities); });
+
+    // ── Known Entities tab controls ──
+    known_entity_list_ = std::make_shared<UIScrollBox>();
+    known_entity_list_->setChildSpacing(4.0f);
+    known_entity_name_box_ =
+        std::make_shared<UIInputBox>(&known_entity_name_buffer_);
+    known_entity_name_box_->setPlaceholder("Name selected entity");
+    known_entity_name_box_->OnTextSubmitted.Bind(
+        [this](const std::string&) { HandleApplyKnownEntityName(); });
+    known_entity_apply_btn_ = std::make_shared<UIButton>(" Set Name ",
+        [this]() { HandleApplyKnownEntityName(); });
+    known_entity_clear_btn_ = std::make_shared<UIButton>(" Clear Name ",
+        [this]() { HandleClearKnownEntityName(); });
 
     // ── Localization tab controls ──
     loc_reset_btn_ = std::make_shared<UIButton>(" Reset Pose ",
@@ -857,6 +873,12 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         tab_world_btn_->setPosition(position.x + kTabBarPad + 674.0f, tab_y);
         tab_world_btn_->update(input, dt);
     }
+    if (tab_known_entities_btn_) {
+        tab_known_entities_btn_->setSize(112.0f, kTabBarHeight - 4.0f);
+        tab_known_entities_btn_->setPosition(
+            position.x + kTabBarPad + 752.0f, tab_y);
+        tab_known_entities_btn_->update(input, dt);
+    }
 
     // ── Tab content ──
     switch (active_tab_) {
@@ -868,6 +890,7 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         case Tab::Spatial:      UpdateSpatialTab(input, dt);      break;
         case Tab::Localization: UpdateLocalizationTab(input, dt); break;
         case Tab::World:        UpdateWorldTab(input, dt);        break;
+        case Tab::KnownEntities: UpdateKnownEntitiesTab(input, dt); break;
     }
 }
 
@@ -1126,6 +1149,8 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     if (tab_spatial_btn_)      tab_spatial_btn_->drawOverlay(renderer, position);
     if (tab_localization_btn_) tab_localization_btn_->drawOverlay(renderer, position);
     if (tab_world_btn_)        tab_world_btn_->drawOverlay(renderer, position);
+    if (tab_known_entities_btn_)
+        tab_known_entities_btn_->drawOverlay(renderer, position);
 
     // Active-tab underline indicator (matches DataHub/Training pattern).
     {
@@ -1148,6 +1173,8 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
                 ix = position.x + kTabBarPad + 560.0f; iw = 108.0f; break;
             case Tab::World:
                 ix = position.x + kTabBarPad + 674.0f; iw = 72.0f; break;
+            case Tab::KnownEntities:
+                ix = position.x + kTabBarPad + 752.0f; iw = 112.0f; break;
         }
         renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
     }
@@ -1167,6 +1194,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
         case Tab::Spatial:      DrawSpatialTab(renderer);      break;
         case Tab::Localization: DrawLocalizationTab(renderer); break;
         case Tab::World:        DrawWorldTab(renderer);        break;
+        case Tab::KnownEntities: DrawKnownEntitiesTab(renderer); break;
     }
 
     renderer.popClipRect();
@@ -3610,6 +3638,16 @@ uint32_t WorldVisibilityColor(PE::PhysicalEntityVisibility v) {
     return 0xFFCCCCCCu;
 }
 
+std::string WorldEntityDisplayName(const PE::PhysicalWorldEntity& entity) {
+    const std::string known_name =
+        PE::ResolvePhysicalEntityName(entity.object_id);
+    if (!known_name.empty()) {
+        return known_name + " (" + entity.class_label + '#'
+             + std::to_string(entity.object_id) + ')';
+    }
+    return entity.class_label + '#' + std::to_string(entity.object_id);
+}
+
 } // anonymous
 
 void UIPhysicalEnvironmentPanel::UpdateWorldTab(const InputState& /*input*/, float /*dt*/) {
@@ -3699,8 +3737,7 @@ void UIPhysicalEnvironmentPanel::DrawWorldEntitiesOverlay(
 
         // Label band above the box.
         std::stringstream ss;
-        ss << "#" << e.object_id;
-        if (!e.class_label.empty()) ss << " " << e.class_label;
+        ss << WorldEntityDisplayName(e);
         ss << "  " << PE::DescribePhysicalEntityVisibility(e.visibility);
         if (e.has_depth) {
             ss << "  ";
@@ -3776,8 +3813,7 @@ void UIPhysicalEnvironmentPanel::DrawWorldEntitiesSidebar(
         const auto& e = snap.entities[i];
         const uint32_t col = WorldVisibilityColor(e.visibility);
         std::stringstream ss;
-        ss << "#" << e.object_id;
-        if (!e.class_label.empty()) ss << " " << e.class_label;
+        ss << WorldEntityDisplayName(e);
         ss << " | " << PE::DescribePhysicalEntityVisibility(e.visibility);
         ss << " | conf=" << std::fixed << std::setprecision(2) << e.confidence;
         if (e.has_depth) {
@@ -3869,6 +3905,387 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
                              sidebar_w - 16, sidebar_h - 16,
                              world_snapshot_view_.snapshot,
                              have_any_world_results_);
+}
+
+// ============================================================================
+//  Known Entities tab — user-authored names for tracker identities
+// ============================================================================
+
+const UIPhysicalEnvironmentPanel::KnownEntityUiRow*
+UIPhysicalEnvironmentPanel::FindSelectedKnownEntityRow() const {
+    for (const auto& row : known_entity_rows_) {
+        if (row.object_id == known_selected_object_id_) return &row;
+    }
+    return nullptr;
+}
+
+void UIPhysicalEnvironmentPanel::LoadSelectedKnownEntityName() {
+    const auto* row = FindSelectedKnownEntityRow();
+    known_entity_name_buffer_ = row ? row->name : std::string{};
+    if (known_entity_name_box_) {
+        known_entity_name_box_->setText(known_entity_name_buffer_);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::RebuildKnownEntityRows() {
+    std::unordered_map<uint64_t, KnownEntityUiRow> by_id;
+    for (const auto& known : PE::GetPhysicalKnownEntitiesSnapshot()) {
+        KnownEntityUiRow row;
+        row.known_entity_id = known.known_entity_id;
+        row.object_id = known.object_id;
+        row.name = known.name;
+        row.entity = known.last_observation;
+        row.currently_tracked = known.currently_tracked;
+        row.track_history = known.track_history;
+        row.automatic_relink_count = known.automatic_relink_count;
+        row.last_automatic_relink_score = known.last_automatic_relink_score;
+        by_id[row.object_id] = std::move(row);
+    }
+
+    if (have_known_world_results_) {
+        for (const auto& entity : known_snapshot_view_.snapshot.entities) {
+            auto& row = by_id[entity.object_id];
+            row.object_id = entity.object_id;
+            row.name = PE::ResolvePhysicalEntityName(entity.object_id);
+            row.entity = entity;
+            row.currently_tracked = true;
+        }
+    }
+
+    known_entity_rows_.clear();
+    known_entity_rows_.reserve(by_id.size());
+    for (auto& item : by_id) known_entity_rows_.push_back(std::move(item.second));
+    std::sort(known_entity_rows_.begin(), known_entity_rows_.end(),
+        [](const KnownEntityUiRow& a, const KnownEntityUiRow& b) {
+            if (a.currently_tracked != b.currently_tracked)
+                return a.currently_tracked > b.currently_tracked;
+            if (a.name.empty() != b.name.empty()) return !a.name.empty();
+            if (a.name != b.name) return a.name < b.name;
+            return a.object_id < b.object_id;
+        });
+
+    bool selection_still_exists = false;
+    for (const auto& row : known_entity_rows_) {
+        if (row.object_id == known_selected_object_id_) {
+            selection_still_exists = true;
+            break;
+        }
+    }
+    const bool selection_changed = !selection_still_exists;
+    if (!selection_still_exists) {
+        known_selected_object_id_ = known_entity_rows_.empty()
+            ? 0 : known_entity_rows_.front().object_id;
+    }
+
+    known_entity_row_buttons_.clear();
+    if (known_entity_list_) known_entity_list_->clearChildren();
+    float row_y = 4.0f;
+    for (const auto& row : known_entity_rows_) {
+        std::ostringstream label;
+        label << (row.currently_tracked ? " LIVE  " : " STALE ");
+        if (!row.name.empty()) label << row.name << "  |  ";
+        label << row.entity.class_label << '#' << row.object_id;
+        auto button = std::make_shared<UIButton>(label.str(),
+            [this, object_id = row.object_id]() {
+                known_selected_object_id_ = object_id;
+                known_entity_status_.clear();
+                LoadSelectedKnownEntityName();
+            });
+        button->setPosition(4.0f, row_y);
+        button->setSize(246.0f, 30.0f);
+        row_y += 34.0f;
+        if (known_entity_list_) known_entity_list_->addChild(button);
+        known_entity_row_buttons_.push_back(std::move(button));
+    }
+    if (known_entity_list_) known_entity_list_->setContentHeight(row_y);
+    if (selection_changed) LoadSelectedKnownEntityName();
+}
+
+void UIPhysicalEnvironmentPanel::HandleApplyKnownEntityName() {
+    const auto* row = FindSelectedKnownEntityRow();
+    if (!row) {
+        known_entity_status_ = "Select a tracked entity first.";
+        return;
+    }
+    try {
+        PE::AssignPhysicalEntityName(row->entity, known_entity_name_buffer_);
+        known_entity_status_ = "Name bound to object #" +
+            std::to_string(row->object_id) + " for this tracker session.";
+        known_registry_revision_ = PE::GetPhysicalKnownEntityRegistryRevision();
+        RebuildKnownEntityRows();
+        LoadSelectedKnownEntityName();
+    } catch (const std::exception& e) {
+        known_entity_status_ = e.what();
+    }
+}
+
+void UIPhysicalEnvironmentPanel::HandleClearKnownEntityName() {
+    if (known_selected_object_id_ == 0) {
+        known_entity_status_ = "Select a named entity first.";
+        return;
+    }
+    const uint64_t selected = known_selected_object_id_;
+    const bool removed = PE::ClearPhysicalEntityName(selected);
+    known_entity_status_ = removed
+        ? "Name cleared from object #" + std::to_string(selected) + '.'
+        : "The selected entity has no assigned name.";
+    known_registry_revision_ = PE::GetPhysicalKnownEntityRegistryRevision();
+    RebuildKnownEntityRows();
+    LoadSelectedKnownEntityName();
+}
+
+void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
+    const InputState& input, float dt)
+{
+    bool rows_changed = false;
+    try {
+        PE::PhysicalWorldStateBus::SnapshotView next;
+        if (PE::PhysicalWorldStateBus::Instance()
+                .PullLatestPhysicalWorldStateSnapshotView(
+                    next, known_last_snapshot_frame_)) {
+            const auto& old_entities = known_snapshot_view_.snapshot.entities;
+            const auto& new_entities = next.snapshot.entities;
+            if (!have_known_world_results_ || old_entities.size() != new_entities.size()) {
+                rows_changed = true;
+            } else {
+                for (size_t i = 0; i < new_entities.size(); ++i) {
+                    if (old_entities[i].object_id != new_entities[i].object_id) {
+                        rows_changed = true;
+                        break;
+                    }
+                }
+            }
+            known_snapshot_view_ = std::move(next);
+            known_last_snapshot_frame_ =
+                known_snapshot_view_.snapshot.source_frame_counter;
+            have_known_world_results_ = true;
+
+            // Keep detail values current without reallocating row widgets.
+            if (!rows_changed) {
+                for (auto& row : known_entity_rows_) {
+                    row.currently_tracked = false;
+                    for (const auto& entity :
+                         known_snapshot_view_.snapshot.entities) {
+                        if (entity.object_id != row.object_id) continue;
+                        row.entity = entity;
+                        row.currently_tracked = true;
+                        break;
+                    }
+                }
+            }
+        }
+        const uint64_t revision = PE::GetPhysicalKnownEntityRegistryRevision();
+        if (revision != known_registry_revision_) {
+            known_registry_revision_ = revision;
+            rows_changed = true;
+        }
+        if (rows_changed || known_entity_rows_.empty()) RebuildKnownEntityRows();
+    } catch (const std::exception& e) {
+        known_entity_status_ = std::string("Known entity refresh failed: ") + e.what();
+        LOG_ERROR(kPanelLogTag, known_entity_status_);
+    }
+
+    const float top = position.y + titleBarHeight + kTabBarHeight + 12.0f;
+    const float bottom = position.y + size.y - 12.0f;
+    if (known_entity_list_) {
+        known_entity_list_->setPosition(position.x + 12.0f, top + 24.0f);
+        known_entity_list_->setSize(260.0f, bottom - (top + 24.0f));
+        known_entity_list_->update(input, dt);
+    }
+    for (size_t i = 0;
+         i < known_entity_row_buttons_.size() && i < known_entity_rows_.size();
+         ++i) {
+        if (known_entity_rows_[i].object_id == known_selected_object_id_) {
+            known_entity_row_buttons_[i]->setColors(
+                UITheme::Colors::RowSelected,
+                UITheme::Colors::RowSelected,
+                UITheme::Colors::WidgetBgActive);
+        } else {
+            known_entity_row_buttons_[i]->setColors(
+                UITheme::Colors::WidgetBg,
+                UITheme::Colors::WidgetBgHover,
+                UITheme::Colors::WidgetBgActive);
+        }
+    }
+    const float editor_x = position.x + 292.0f;
+    if (known_entity_name_box_) {
+        known_entity_name_box_->setPosition(editor_x, top + 42.0f);
+        known_entity_name_box_->setSize(280.0f, 32.0f);
+        known_entity_name_box_->update(input, dt);
+    }
+    if (known_entity_apply_btn_) {
+        known_entity_apply_btn_->setPosition(editor_x + 290.0f, top + 42.0f);
+        known_entity_apply_btn_->setSize(116.0f, 32.0f);
+        known_entity_apply_btn_->update(input, dt);
+    }
+    if (known_entity_clear_btn_) {
+        known_entity_clear_btn_->setPosition(editor_x + 414.0f, top + 42.0f);
+        known_entity_clear_btn_->setSize(126.0f, 32.0f);
+        known_entity_clear_btn_->update(input, dt);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
+    OverlayRenderer& renderer)
+{
+    const float top = position.y + titleBarHeight + kTabBarHeight + 12.0f;
+    renderer.drawText({position.x + 16.0f, top}, "Entities",
+                      UITheme::Colors::TextPrimary);
+    if (known_entity_list_) known_entity_list_->drawOverlay(renderer, position);
+
+    const float x = position.x + 292.0f;
+    renderer.drawText({x, top},
+        "Known entity identity (session scoped)", UITheme::Colors::TextPrimary);
+    renderer.drawText({x, top + 20.0f},
+        "Select any live entity, enter a name, then Set Name.",
+        UITheme::Colors::TextSecondary);
+    if (known_entity_name_box_)
+        known_entity_name_box_->drawOverlay(renderer, position);
+    if (known_entity_apply_btn_)
+        known_entity_apply_btn_->drawOverlay(renderer, position);
+    if (known_entity_clear_btn_)
+        known_entity_clear_btn_->drawOverlay(renderer, position);
+
+    float y = top + 88.0f;
+    if (!known_entity_status_.empty()) {
+        renderer.drawText({x, y}, known_entity_status_,
+                          UITheme::Colors::TextSecondary);
+        y += 20.0f;
+    }
+    const auto* row = FindSelectedKnownEntityRow();
+    if (!row) {
+        renderer.drawText({x, y},
+            have_known_world_results_
+                ? "No entities are currently available."
+                : "World-state bus: no snapshots published yet.",
+            UITheme::Colors::TextSecondary);
+        return;
+    }
+
+    const auto& e = row->entity;
+    const uint32_t state_color = row->currently_tracked
+        ? 0xFF22DD66u : UITheme::Colors::TextSecondary;
+    auto line = [&](const std::string& text, uint32_t color) {
+        renderer.drawText({x, y}, text, color);
+        y += 18.0f;
+    };
+    {
+        std::ostringstream ss;
+        ss << (row->name.empty() ? "(unnamed)" : row->name)
+           << "  |  " << e.class_label << '#' << e.object_id
+           << "  |  " << (row->currently_tracked ? "LIVE" : "STALE");
+        if (row->known_entity_id != 0) {
+            ss << "  |  known#" << row->known_entity_id;
+        }
+        line(ss.str(), state_color);
+    }
+    {
+        std::ostringstream ss;
+        ss << "track=" << PE::DescribePhysicalEntityTrackState(e.track_state)
+           << "  visibility=" << PE::DescribePhysicalEntityVisibility(e.visibility)
+           << "  confidence=" << std::fixed << std::setprecision(3)
+           << e.confidence;
+        line(ss.str(), UITheme::Colors::TextPrimary);
+    }
+    {
+        std::ostringstream ss;
+        ss << "age=" << e.age_in_frames << " frames  hits=" << e.hit_streak
+           << "  misses=" << e.miss_streak
+           << "  last_frame=" << e.last_seen_frame_counter;
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    if (!row->track_history.empty()) {
+        std::ostringstream ss;
+        ss << "track history:";
+        for (uint64_t track_id : row->track_history) ss << " #" << track_id;
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    if (row->automatic_relink_count != 0) {
+        std::ostringstream ss;
+        ss << "automatic relinks=" << row->automatic_relink_count
+           << "  last_match_score=" << std::fixed << std::setprecision(3)
+           << row->last_automatic_relink_score;
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    {
+        std::ostringstream ss;
+        ss << "raw box: x=" << std::fixed << std::setprecision(1) << e.raw_box.x
+           << " y=" << e.raw_box.y << " w=" << e.raw_box.width
+           << " h=" << e.raw_box.height;
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    {
+        std::ostringstream ss;
+        ss << "model centre: (" << std::fixed << std::setprecision(1)
+           << e.model_centre.x << ", " << e.model_centre.y << ')'
+           << "  velocity=(" << e.velocity_model_px_per_sec_x << ", "
+           << e.velocity_model_px_per_sec_y << ") px/s";
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    {
+        std::ostringstream ss;
+        ss << "motion=" << PE::DescribePhysicalEntityMotionState(e.motion_state)
+           << "  surface="
+           << PE::DescribePhysicalSupportSurfaceClass(e.support_surface);
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    {
+        std::ostringstream ss;
+        if (!e.has_depth) {
+            ss << "depth: unavailable";
+        } else if (e.depth_units == PE::DepthUnits::Meters) {
+            ss << "depth=" << std::fixed << std::setprecision(2)
+               << e.range_value_meters << "m";
+        } else {
+            ss << "depth=" << std::fixed << std::setprecision(3)
+               << e.range_value << " (relative)";
+        }
+        ss << "  range_conf=" << std::fixed << std::setprecision(2)
+           << e.range_confidence;
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    {
+        std::ostringstream ss;
+        ss << "path_blocked=" << (e.path_blocked ? "yes" : "no")
+           << "  score=" << std::fixed << std::setprecision(2)
+           << e.path_block_score << "  relations=" << e.relations.size();
+        line(ss.str(), e.path_blocked ? 0xFFFF9933u
+                                      : UITheme::Colors::TextSecondary);
+    }
+    if (!e.text_on_object.empty()) {
+        std::ostringstream ss;
+        ss << "OCR:";
+        for (size_t i = 0; i < e.text_on_object.size() && i < 4; ++i)
+            ss << " \"" << e.text_on_object[i] << '"';
+        if (e.text_on_object.size() > 4) ss << " ...";
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    for (size_t i = 0; i < e.relations.size() && i < 6; ++i) {
+        const auto& relation = e.relations[i];
+        std::string other = PE::ResolvePhysicalEntityName(
+            relation.other_object_id);
+        if (other.empty()) {
+            for (const auto& candidate : known_entity_rows_) {
+                if (candidate.object_id != relation.other_object_id) continue;
+                other = candidate.entity.class_label + '#'
+                      + std::to_string(candidate.object_id);
+                break;
+            }
+        }
+        if (other.empty()) other = '#' + std::to_string(relation.other_object_id);
+        std::ostringstream ss;
+        ss << "relation: " << PE::DescribePhysicalEntityRelationKind(relation.kind)
+           << ' ' << other << "  strength=" << std::fixed
+           << std::setprecision(2) << relation.strength;
+        line(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    y += 8.0f;
+    line("Names bind to tracker IDs; tracker reset clears all names.",
+         UITheme::Colors::TextSecondary);
+    line("Automatic re-link uses conservative class/geometry matching.",
+         UITheme::Colors::TextSecondary);
+    line("Biometric/appearance recognition is not implemented yet.",
+         UITheme::Colors::TextSecondary);
 }
 
 // ============================================================================

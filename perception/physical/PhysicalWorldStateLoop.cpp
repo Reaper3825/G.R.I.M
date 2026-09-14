@@ -1,6 +1,7 @@
 #include "PhysicalWorldStateLoop.hpp"
 
 #include "PhysicalPerceptionPrimitiveBus.hpp"
+#include "PhysicalKnownEntityRegistry.hpp"
 #include "PhysicalSpatialGroundingBus.hpp"
 #include "PhysicalWorldStateBus.hpp"
 #include "PhysicalWorldStateLogTag.hpp"
@@ -115,6 +116,7 @@ void TickPhysicalWorldState() {
                                      : PhysicalSpatialGroundingResults{},
             s.cfg,
             snapshot);
+        ObservePhysicalWorldStateForKnownEntities(snapshot);
         snapshot.build_wall_ms = PhysicalWorldElapsedMsSince(build_start);
         snapshot.perception_bus_pull_ms = perc_pull_ms;
         snapshot.grounding_bus_pull_ms = ground_pull_ms;

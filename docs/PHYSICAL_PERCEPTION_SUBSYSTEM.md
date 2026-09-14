@@ -394,7 +394,7 @@ RequestResetPhysicalLocalization();   // drop world frame + grid (teleport)
 
 ## 7. Stage 4 — `PhysicalWorldStateLoop`
 
-**Files:** [PhysicalWorldStateLoop.hpp](../perception/physical/PhysicalWorldStateLoop.hpp), [PhysicalWorldStateBus.hpp](../perception/physical/PhysicalWorldStateBus.hpp), [PhysicalWorldStateResult.hpp](../perception/physical/PhysicalWorldStateResult.hpp), [PhysicalWorldStateBuilder.hpp](../perception/physical/PhysicalWorldStateBuilder.hpp).
+**Files:** [PhysicalWorldStateLoop.hpp](../perception/physical/PhysicalWorldStateLoop.hpp), [PhysicalWorldStateBus.hpp](../perception/physical/PhysicalWorldStateBus.hpp), [PhysicalWorldStateResult.hpp](../perception/physical/PhysicalWorldStateResult.hpp), [PhysicalWorldStateBuilder.hpp](../perception/physical/PhysicalWorldStateBuilder.hpp), [PhysicalKnownEntityRegistry.hpp](../perception/physical/PhysicalKnownEntityRegistry.hpp).
 
 **Responsibility:** the **single bridge between raw perception and
 GRIM's reasoning**. Fuses Stage-2 + Stage-3 outputs into one
@@ -425,6 +425,32 @@ stable diffing across frames.
 * Every coordinate stored in **both** model and raw space.
 * No magic constants in the result — `PhysicalWorldStateBuilderConfig`
   owns thresholds (occlusion overlap, depth velocity threshold, etc.).
+
+### Known entities and user-authored names
+
+`PhysicalKnownEntityRegistry` binds a user-authored name to a current
+`object_id`. The Physical Environment panel's **Known Entities** tab lists all
+live tracks plus named entities that have left view, provides a name editor,
+and displays the selected entity's latest class, track state, visibility,
+confidence, geometry, velocity, depth, support surface, path-block state, OCR,
+and relation count. The World overlay and model-facing context use the assigned
+name while retaining `class#object_id` as provenance.
+
+Bindings are deliberately session-scoped. The current tracker has no face,
+appearance, or biometric re-identification embedding, and its monotonic IDs
+restart after reset. `ResetPhysicalEntityTracker()` therefore clears the known
+entity registry so a newly allocated ID cannot silently inherit an old name.
+Ordinary culling does not clear a binding, allowing the UI to retain a stale
+last observation for the remainder of the tracker session.
+
+When a named track is culled, the registry automatically considers later
+confirmed, currently-unbound tracks for re-association. Candidates must have
+the same detector class, arrive within 900 source frames, remain within 0.55 of
+the model-frame diagonal from the last centre, retain at least 0.40 bounding-box
+area similarity, and clear a bidirectional best-match margin of 0.12. Accepted
+matches advance the known entity's current `object_id` and append the new ID to
+its track history. Ambiguous candidates remain unnamed. This is conservative
+spatiotemporal matching, not biometric recognition.
 
 ---
 

@@ -19,6 +19,7 @@
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "perception/physical/PhysicalLocalizationBus.hpp"
 #include "perception/physical/PhysicalLocalizationLoop.hpp"
+#include "perception/physical/PhysicalKnownEntityRegistry.hpp"
 #include "perception/physical/PhysicalWorldStateBus.hpp"
 #include "perception/physical/PhysicalWorldStateLoop.hpp"
 
@@ -54,7 +55,8 @@ public:
         Interaction  = 4,
         Spatial      = 5,
         Localization = 6,
-        World        = 7
+        World        = 7,
+        KnownEntities = 8
     };
 
     UIPhysicalEnvironmentPanel();
@@ -210,6 +212,7 @@ private:
     std::shared_ptr<UIButton>   tab_spatial_btn_;
     std::shared_ptr<UIButton>   tab_localization_btn_;
     std::shared_ptr<UIButton>   tab_world_btn_;
+    std::shared_ptr<UIButton>   tab_known_entities_btn_;
     Tab                         active_tab_ = Tab::Camera;
 
     // ── Shared frame pull state (one bus, one cached frame) ──
@@ -442,6 +445,44 @@ private:
     uint64_t world_last_seen_counter_ = 0;
     bool     have_any_world_results_  = false;
     PreviewBlitCache world_blit_cache_;
+
+    // ── Known Entities tab ──
+    // Shows every currently tracked object (including unnamed candidates)
+    // plus named records retained after they leave view. A name is a
+    // session-scoped binding to object_id and is cleared when tracking resets.
+    struct KnownEntityUiRow {
+        uint64_t known_entity_id = 0;
+        uint64_t object_id = 0;
+        std::string name;
+        GRIM::Perception::Physical::PhysicalWorldEntity entity;
+        bool currently_tracked = false;
+        std::vector<uint64_t> track_history;
+        uint32_t automatic_relink_count = 0;
+        float last_automatic_relink_score = 0.0f;
+    };
+
+    void UpdateKnownEntitiesTab(const InputState& input, float dt);
+    void DrawKnownEntitiesTab(OverlayRenderer& renderer);
+    void RebuildKnownEntityRows();
+    void LoadSelectedKnownEntityName();
+    void HandleApplyKnownEntityName();
+    void HandleClearKnownEntityName();
+    const KnownEntityUiRow* FindSelectedKnownEntityRow() const;
+
+    std::shared_ptr<UIScrollBox> known_entity_list_;
+    std::vector<std::shared_ptr<UIButton>> known_entity_row_buttons_;
+    std::shared_ptr<UIInputBox> known_entity_name_box_;
+    std::shared_ptr<UIButton> known_entity_apply_btn_;
+    std::shared_ptr<UIButton> known_entity_clear_btn_;
+    std::vector<KnownEntityUiRow> known_entity_rows_;
+    std::string known_entity_name_buffer_;
+    std::string known_entity_status_;
+    uint64_t known_selected_object_id_ = 0;
+    uint64_t known_registry_revision_ = 0;
+    uint64_t known_last_snapshot_frame_ = 0;
+    GRIM::Perception::Physical::PhysicalWorldStateBus::SnapshotView
+        known_snapshot_view_;
+    bool have_known_world_results_ = false;
 
     // ── Localization tab (Stage-5) ──
     // Pulls the latest PhysicalLocalizationSnapshot (camera pose,

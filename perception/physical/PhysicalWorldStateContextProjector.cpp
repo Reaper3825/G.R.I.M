@@ -1,5 +1,6 @@
 #include "PhysicalWorldStateContextProjector.hpp"
 
+#include "PhysicalKnownEntityRegistry.hpp"
 #include "PhysicalWorldStateBus.hpp"
 #include "PhysicalWorldStateLogTag.hpp"
 #include "PhysicalWorldStateResult.hpp"
@@ -64,7 +65,12 @@ std::string DescribeSurface(PhysicalSupportSurfaceClass s) {
 
 std::string ComposeEntityLine(const PhysicalWorldEntity& e) {
     std::ostringstream oss;
-    oss << e.class_label << '#' << e.object_id;
+    const std::string known_name = ResolvePhysicalEntityName(e.object_id);
+    if (!known_name.empty()) {
+        oss << known_name << " (" << e.class_label << '#' << e.object_id << ')';
+    } else {
+        oss << e.class_label << '#' << e.object_id;
+    }
     auto surface = DescribeSurface(e.support_surface);
     if (!surface.empty()) oss << " on " << surface;
     auto depth = FormatRangeMeters(e);
@@ -87,9 +93,15 @@ std::string ComposeEntityLine(const PhysicalWorldEntity& e) {
 std::string ComposeRelationLine(const PhysicalWorldEntity& e,
                                 const PhysicalEntitySpatialRelation& r) {
     std::ostringstream oss;
-    oss << e.class_label << '#' << e.object_id
-        << ' ' << DescribePhysicalEntityRelationKind(r.kind)
-        << " #" << r.other_object_id;
+    const std::string known_name = ResolvePhysicalEntityName(e.object_id);
+    if (!known_name.empty()) oss << known_name;
+    else oss << e.class_label << '#' << e.object_id;
+    const std::string other_known_name =
+        ResolvePhysicalEntityName(r.other_object_id);
+    oss << ' ' << DescribePhysicalEntityRelationKind(r.kind)
+        << ' ';
+    if (!other_known_name.empty()) oss << other_known_name;
+    else oss << '#' << r.other_object_id;
     char buf[16];
     std::snprintf(buf, sizeof(buf), " (%.2f)", r.strength);
     oss << buf;
