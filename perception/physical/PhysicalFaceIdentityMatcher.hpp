@@ -9,7 +9,9 @@
 namespace GRIM { namespace Perception { namespace Physical {
 
 struct PhysicalFaceIdentityMatcherConfig {
-    float minimum_similarity = 0.50f;
+    // OpenCV's published SFace LFW operating point for cosine similarity.
+    // Keep the independent runner-up margin below to reject ambiguous matches.
+    float minimum_similarity = 0.363f;
     float minimum_runner_up_margin = 0.08f;
 };
 

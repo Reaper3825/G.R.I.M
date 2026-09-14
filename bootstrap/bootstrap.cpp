@@ -32,6 +32,7 @@
 #include "../perception/physical/PhysicalMonocularDepthEstimator.hpp"
 
 #include <cstdlib>
+#include <algorithm>
 #include <filesystem>
 #include <sstream>
 #include <vector>
@@ -182,6 +183,20 @@ static std::string FormatMissingPhysicalVisionPaths(
     return oss.str();
 }
 
+static bool MissingPhysicalVisionPathWithFilename(
+    const std::vector<RequiredPhysicalVisionPath>& missing,
+    const std::vector<std::string>& filenames)
+{
+    for (const auto& item : missing) {
+        const std::string filename = item.path.filename().string();
+        if (std::find(filenames.begin(), filenames.end(), filename) !=
+            filenames.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 #ifdef _WIN32
 static std::string QuoteWindowsCommandArg(const fs::path& path) {
     std::string s = path.string();
@@ -221,9 +236,19 @@ static void EnsurePhysicalVisionModelsAvailable(GRIM::MMO::ModelRegistry& regist
     LOG_DEBUG("Bootstrap", "Running Windows physical vision setup script: " + setup_script.string());
     LOG_PHASE("Physical vision model auto-setup start", true);
 
-    const std::string command =
+    const bool needs_python_exports = MissingPhysicalVisionPathWithFilename(
+        missing,
+        {"mobileclip_s0_image.onnx", "mobileclip_text_embeddings.bin",
+         "depth_anything_v2_metric_indoor_small.onnx"});
+    const bool needs_sam2 = MissingPhysicalVisionPathWithFilename(
+        missing,
+        {"sam2_hiera_tiny_encoder.onnx", "sam2_hiera_tiny_decoder.onnx"});
+
+    std::string command =
         "powershell -NoProfile -ExecutionPolicy Bypass -File "
         + QuoteWindowsCommandArg(setup_script);
+    if (!needs_python_exports) command += " -SkipPythonExports";
+    if (!needs_sam2) command += " -SkipSam2";
     const int rc = std::system(command.c_str());
     if (rc != 0) {
         throw std::runtime_error(

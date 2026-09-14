@@ -12,6 +12,10 @@
 
 namespace GRIM {
 
+// Version 30 persists token spans for reasoning and the authored
+// Determine/Execute/Update phases so Phase 1 can apply field-list SFT
+// supervision instead of a single selected target.
+
 // Version 28 reorders model-visible ConceptBlock state to target state ->
 // success criteria/evidence -> constraints -> knowns/unknowns -> reasoning ->
 // answer, stores the neutral authored answer span, and defers SFT target
@@ -63,7 +67,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 29;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 30;
 
 } // namespace GRIM
 

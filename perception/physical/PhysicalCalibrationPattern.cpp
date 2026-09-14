@@ -6,6 +6,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 
@@ -147,20 +148,35 @@ void DetectChessboardCornersInBgrFrame(const cv::Mat&               bgr,
             + ", rows=" + std::to_string(rows) + ")");
     }
 
-    cv::Mat gray;
-    PreprocessFrameForLightingRobustDetection(bgr, gray, out.gray_mean, out.preprocess_path);
-
+    cv::Mat raw_gray;
+    cv::cvtColor(bgr, raw_gray, cv::COLOR_BGR2GRAY);
+    out.gray_mean = cv::mean(raw_gray)[0];
     const cv::Size pattern(cols, rows);
     std::vector<cv::Point2f> corners;
 
-    // First try: SB detector. Lighting-robust by design.
+    const int sb_flags = cv::CALIB_CB_NORMALIZE_IMAGE
+                       | cv::CALIB_CB_EXHAUSTIVE
+                       | cv::CALIB_CB_ACCURACY;
+    auto try_sb = [&](const cv::Mat& gray, int path,
+                      float coordinate_scale = 1.0f) {
+        corners.clear();
+        bool detected = cv::findChessboardCornersSB(
+            gray, pattern, corners, sb_flags);
+        if (detected && coordinate_scale != 1.0f) {
+            for (auto& corner : corners) corner *= coordinate_scale;
+        }
+        if (detected) {
+            out.detector_used = path == 3 ? "SB-upscaled" : "SB";
+            out.preprocess_path = path;
+        }
+        return detected;
+    };
+
+    // Preserve printed edge contrast on the primary path. SB already performs
+    // its own normalization, so unconditional CLAHE is counterproductive.
     bool found = false;
     try {
-        const int sb_flags = cv::CALIB_CB_NORMALIZE_IMAGE
-                           | cv::CALIB_CB_EXHAUSTIVE
-                           | cv::CALIB_CB_ACCURACY;
-        found = cv::findChessboardCornersSB(gray, pattern, corners, sb_flags);
-        if (found) out.detector_used = "SB";
+        found = try_sb(raw_gray, 0);
     } catch (const cv::Exception& e) {
         // Treat as a non-detection but log it once — SB shouldn't throw on
         // valid input, so this is interesting.
@@ -169,25 +185,66 @@ void DetectChessboardCornersInBgrFrame(const cv::Mat&               bgr,
         found = false;
     }
 
+    cv::Mat enhanced_gray;
+    int enhanced_path = 0;
     if (!found) {
+        double measured_brightness = 0.0;
+        PreprocessFrameForLightingRobustDetection(
+            bgr, enhanced_gray, measured_brightness, enhanced_path);
+        try {
+            found = try_sb(enhanced_gray, enhanced_path);
+        } catch (const cv::Exception& e) {
+            LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                std::string("DetectChessboardCornersInBgrFrame: enhanced SB threw: ")
+                + e.what());
+            found = false;
+        }
+    }
+
+    // At VGA-like resolutions a distant printed board can have corners too
+    // small for stable localization. A 1.5x cubic retry improves sampling but
+    // returns points in the original raw-frame coordinate system.
+    if (!found && bgr.cols <= 1280 && bgr.rows <= 720) {
+        try {
+            cv::Mat enlarged;
+            cv::resize(raw_gray, enlarged, cv::Size(), 1.5, 1.5,
+                       cv::INTER_CUBIC);
+            found = try_sb(enlarged, 3, 1.0f / 1.5f);
+        } catch (const cv::Exception& e) {
+            LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                std::string("DetectChessboardCornersInBgrFrame: upscaled SB threw: ")
+                + e.what());
+            found = false;
+        }
+    }
+
+    auto try_legacy = [&](const cv::Mat& gray, int path) {
+        corners.clear();
         const int legacy_flags = cv::CALIB_CB_ADAPTIVE_THRESH
-                               | cv::CALIB_CB_NORMALIZE_IMAGE
-                               | cv::CALIB_CB_FAST_CHECK;
-        found = cv::findChessboardCorners(gray, pattern, corners, legacy_flags);
-        if (found) {
+                               | cv::CALIB_CB_NORMALIZE_IMAGE;
+        const bool detected = cv::findChessboardCorners(
+            gray, pattern, corners, legacy_flags);
+        if (detected) {
             cv::cornerSubPix(
                 gray, corners, cv::Size(11,11), cv::Size(-1,-1),
                 cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::MAX_ITER, 30, 1e-3));
             out.detector_used   = "legacy";
-            out.preprocess_path = 3;
+            out.preprocess_path = path;
         }
+        return detected;
+    };
+    if (!found) found = try_legacy(raw_gray, 4);
+    if (!found && !enhanced_gray.empty()) {
+        found = try_legacy(enhanced_gray, 5);
     }
 
     if (!found) {
         out.found          = false;
-        out.failure_reason = "no chessboard pattern visible "
-                             "(brightness=" + std::to_string(out.gray_mean)
-                           + ", pattern=" + std::to_string(cols) + "x" + std::to_string(rows) + ")";
+        out.failure_reason = "no complete " + std::to_string(cols) + "x"
+                           + std::to_string(rows) + " inner-corner pattern found"
+                             " (printed board must be " + std::to_string(cols + 1)
+                           + "x" + std::to_string(rows + 1)
+                           + " squares, brightness=" + std::to_string(out.gray_mean) + ")";
         return;
     }
 

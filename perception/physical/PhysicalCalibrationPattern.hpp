@@ -17,16 +17,11 @@ namespace GRIM { namespace Perception { namespace Physical {
 //  We achieve that with a per-frame preprocessing pipeline:
 //
 //    1. Convert to grayscale and measure gray-mean.
-//    2. Apply gamma correction toward mid-gray (brighten very dark frames,
-//       darken very bright ones) — pure pixel math, no auto-exposure
-//       feedback to the camera.
-//    3. Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-//       with a clip-limit chosen from the brightness bucket.
-//    4. Run cv::findChessboardCornersSB which is the modern, lighting-
-//       robust detector. SB internally normalizes; our preprocessing only
-//       helps the truly extreme cases (gray-mean < 20 or > 235).
-//    5. If SB fails, fall back to legacy cv::findChessboardCorners with
-//       adaptive threshold + cv::cornerSubPix refinement.
+//    2. Try cv::findChessboardCornersSB on the untouched grayscale image.
+//    3. Only after that fails, apply lighting-adaptive gamma/CLAHE and retry.
+//    4. If SB still fails, retry at modest up-scale for small printed boards,
+//       then fall back to legacy adaptive-threshold detection without its
+//       false-negative-prone FAST_CHECK shortcut.
 //
 //  Every public function fails loud (throws std::runtime_error with a
 //  message that names the function, the input shape/type, and the OpenCV
@@ -40,7 +35,7 @@ struct DetectedCalibrationPattern {
     std::vector<cv::Point2f>   image_points;               // size == cols*rows when found
     cv::Point2f                centroid_px      = {0,0};   // mean of image_points
     double                     gray_mean        = 0.0;     // per-frame brightness used for adapt
-    int                        preprocess_path  = 0;       // 0=raw, 1=clahe, 2=gamma+clahe, 3=legacy fallback
+    int                        preprocess_path  = -1;      // -1=none/all failed; 0=raw SB, 1=CLAHE SB, 2=gamma+CLAHE SB, 3=upscaled SB, 4=legacy raw, 5=legacy enhanced
     std::string                detector_used;              // "SB" or "legacy"
     std::string                failure_reason;             // populated when found==false
 };

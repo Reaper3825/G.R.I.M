@@ -22,7 +22,9 @@ struct PhysicalFaceRecognizerConfig {
     int         dnn_backend_id = cv::dnn::DNN_BACKEND_OPENCV;
     int         dnn_target_id  = cv::dnn::DNN_TARGET_CPU;
     int         minimum_face_pixels = 48;
-    float       minimum_detection_confidence = 0.70f;
+    // Match the shared YuNet detector's default cutoff. Recognition quality
+    // and multi-frame identity evidence provide the later safety gates.
+    float       minimum_detection_confidence = 0.60f;
     PhysicalOperatorCadenceConfig cadence{};
 };
 

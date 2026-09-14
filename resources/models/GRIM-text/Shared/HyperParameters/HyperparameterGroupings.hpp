@@ -35,8 +35,8 @@ struct DataLoadingHP {
     int min_seq_valid_tokens = 0;
     int sliding_window_stride = 0;
     TrainingStage training_stage = TrainingStage::UNSPECIFIED;
-    GRIM::Config::ConceptSupervisionTarget concept_supervision_target =
-        GRIM::Config::ConceptSupervisionTarget::Unspecified;
+    std::vector<std::string> supervised_fields;
+    std::vector<std::string> unsupervised_fields;
 };
 
 struct PathsHP {
@@ -871,12 +871,10 @@ inline DataLoadingHP dataLoadingHP(const GRIM::Config::AiConfigSnapshot& snapsho
     view.min_seq_valid_tokens = snapshotTrainingConfigField<int>(snapshot, "min_seq_valid_tokens");
     view.sliding_window_stride = snapshotTrainingConfigField<int>(snapshot, "sliding_window_stride");
     view.training_stage = snapshotTrainingConfigField<TrainingStage>(snapshot, "training_stage");
-    if (!snapshot.model_config.has_value()) {
-        throw std::runtime_error(
-            "dataLoadingHP: selected compiled model config is required");
-    }
-    view.concept_supervision_target =
-        snapshot.model_config->concept_supervision_target;
+    view.supervised_fields = snapshotTrainingConfigField<std::vector<std::string>>(
+        snapshot, "supervised_fields");
+    view.unsupervised_fields = snapshotTrainingConfigField<std::vector<std::string>>(
+        snapshot, "unsupervised_fields");
     return view;
 }
 

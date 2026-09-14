@@ -401,7 +401,7 @@ void validateConceptBlockSpanMetadata(
     if (spans->empty()) {
         throw std::runtime_error(
             "[GRMT] " + source +
-            ": concept_block_spans has no known or unknown entries");
+            ": concept_block_spans has no populated fields");
     }
 
     auto validate_entries = [&source](
@@ -441,6 +441,16 @@ void validateConceptBlockSpanMetadata(
 
     validate_entries(spans->knowns, "knowns");
     validate_entries(spans->unknowns, "unknowns");
+    const auto validate_optional = [&validate_entries](
+        const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
+        const char* field) {
+        if (!entry) return;
+        validate_entries(std::vector<GRIM::ConceptBlockSpanEntry>{*entry}, field);
+    };
+    validate_optional(spans->reasoning, "reasoning");
+    validate_optional(spans->determine, "determine");
+    validate_optional(spans->execute, "execute");
+    validate_optional(spans->update, "update");
     if (!spans->knowns.empty() && !spans->unknowns.empty() &&
         spans->knowns.back().span.end > spans->unknowns.front().span.begin) {
         throw std::runtime_error(
@@ -475,6 +485,16 @@ void validateConceptBlockSpanTokenSlices(
     };
     validate_entries(spans->knowns, "knowns");
     validate_entries(spans->unknowns, "unknowns");
+    const auto validate_optional = [&validate_entries](
+        const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
+        const char* field) {
+        if (!entry) return;
+        validate_entries(std::vector<GRIM::ConceptBlockSpanEntry>{*entry}, field);
+    };
+    validate_optional(spans->reasoning, "reasoning");
+    validate_optional(spans->determine, "determine");
+    validate_optional(spans->execute, "execute");
+    validate_optional(spans->update, "update");
 }
 
 void validateConceptBlockSpanTokenRange(
@@ -503,6 +523,16 @@ void validateConceptBlockSpanTokenRange(
     };
     validate_entries(spans->knowns, "knowns");
     validate_entries(spans->unknowns, "unknowns");
+    const auto validate_optional = [&validate_entries](
+        const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
+        const char* field) {
+        if (!entry) return;
+        validate_entries(std::vector<GRIM::ConceptBlockSpanEntry>{*entry}, field);
+    };
+    validate_optional(spans->reasoning, "reasoning");
+    validate_optional(spans->determine, "determine");
+    validate_optional(spans->execute, "execute");
+    validate_optional(spans->update, "update");
 }
 
 void validateSequenceTokenRange(const GrmtSequence& sequence,
@@ -713,14 +743,29 @@ void writeConceptBlockSpansForSequence(
             writeGoalSpan(output, entry.span, sink);
         }
     };
+	const auto write_optional = [&output, &sink](
+		const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
+		const char* field) {
+		writeScalar(output, static_cast<std::uint8_t>(entry.has_value()), sink);
+		if (!entry) return;
+		writeTokenIds(output, entry->token_ids, field, sink);
+		writeGoalSpan(output, entry->span, sink);
+	};
 
     if (!sequence.concept_block_spans) {
         writeScalar(output, std::uint32_t{0}, sink);
         writeScalar(output, std::uint32_t{0}, sink);
+        for (int index = 0; index < 4; ++index) {
+            writeScalar(output, std::uint8_t{0}, sink);
+        }
         return;
     }
     write_entries(sequence.concept_block_spans->knowns, "knowns");
     write_entries(sequence.concept_block_spans->unknowns, "unknowns");
+    write_optional(sequence.concept_block_spans->reasoning, "reasoning");
+    write_optional(sequence.concept_block_spans->determine, "determine");
+    write_optional(sequence.concept_block_spans->execute, "execute");
+    write_optional(sequence.concept_block_spans->update, "update");
 }
 
 std::shared_ptr<const GRIM::ConceptBlockSpans>
@@ -742,6 +787,23 @@ readConceptBlockSpansForSequence(
     };
     read_entries(spans->knowns);
     read_entries(spans->unknowns);
+    const auto read_optional = [&input, &source](
+        std::optional<GRIM::ConceptBlockSpanEntry>& destination) {
+        const std::uint8_t present = readScalar<std::uint8_t>(input, source);
+        if (present > 1) {
+            throw std::runtime_error(
+                "[GRMT] invalid optional concept-field span flag in " + source);
+        }
+        if (present == 0) return;
+        GRIM::ConceptBlockSpanEntry entry;
+        entry.token_ids = readTokenIds(input, source);
+        entry.span = readGoalSpan(input, source);
+        destination = std::move(entry);
+    };
+    read_optional(spans->reasoning);
+    read_optional(spans->determine);
+    read_optional(spans->execute);
+    read_optional(spans->update);
     if (spans->empty()) {
         return nullptr;
     }

@@ -70,6 +70,19 @@ int main() {
         Require(match.accepted && match.persistent_entity_id == "person-a",
                 "clear face match was not accepted");
 
+        // Lock the OpenCV SFace LFW operating point into the focused test:
+        // 0.40 is a valid same-identity cosine even though it is below the
+        // overly strict 0.50 cutoff used by the first integration.
+        observation.embedding = Unit(0.40f, -std::sqrt(0.84f));
+        match = PE::MatchPhysicalFaceIdentity(observation, loaded);
+        Require(match.accepted && match.persistent_entity_id == "person-a",
+                "SFace-calibrated cosine match was rejected");
+
+        observation.embedding = Unit(0.35f, -std::sqrt(0.8775f));
+        match = PE::MatchPhysicalFaceIdentity(observation, loaded);
+        Require(!match.accepted,
+                "face below the SFace cosine operating point was accepted");
+
         observation.embedding_model_id = "different-model";
         match = PE::MatchPhysicalFaceIdentity(observation, loaded);
         Require(!match.accepted,

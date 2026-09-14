@@ -580,6 +580,10 @@ bool PrepareTrainingDataFromCache(
 		for (const auto& unknown : rendered.unknowns) {
 			add_span(unknown);
 		}
+		add_span(rendered.reasoning);
+		add_span(rendered.determine);
+		add_span(rendered.execute);
+		add_span(rendered.update);
 		add_span(rendered.answer);
 		if (rendered.prompt_byte_end > rendered.prompt_byte_begin) {
 			boundaries.push_back(rendered.prompt_byte_begin);
@@ -843,6 +847,21 @@ bool PrepareTrainingDataFromCache(
 
 		materialize_entries("knowns", rendered.knowns, spans->knowns);
 		materialize_entries("unknowns", rendered.unknowns, spans->unknowns);
+		auto materialize_optional = [&](
+			const char* field,
+			const GRIM::ConceptCanonical::LogicalByteSpan& rendered_span,
+			std::optional<GRIM::ConceptBlockSpanEntry>& destination) {
+			if (!rendered_span.present) return;
+			GRIM::ConceptBlockSpanEntry entry;
+			entry.span = token_span(
+				rendered_span, boundaries, token_counts, field);
+			entry.token_ids = span_token_ids(sequence, entry.span, field);
+			destination = std::move(entry);
+		};
+		materialize_optional("reasoning", rendered.reasoning, spans->reasoning);
+		materialize_optional("determine", rendered.determine, spans->determine);
+		materialize_optional("execute", rendered.execute, spans->execute);
+		materialize_optional("update", rendered.update, spans->update);
 		if (spans->empty()) {
 			return nullptr;
 		}
@@ -1313,7 +1332,8 @@ SequenceData buildPhase1SequenceData(
 	logger.log("[Data] Applying sliding windows to train split...");
 	applySlidingWindows(data.train_seqs, "train",
 						data_hp.training_stage,
-						data_hp.concept_supervision_target,
+						data_hp.supervised_fields,
+						data_hp.unsupervised_fields,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Train split post-window sequence count=" +
@@ -1332,7 +1352,8 @@ SequenceData buildPhase1SequenceData(
 	logger.log("[Data] Applying sliding windows to validation split...");
 	applySlidingWindows(data.val_seqs, "val",
 						data_hp.training_stage,
-						data_hp.concept_supervision_target,
+						data_hp.supervised_fields,
+						data_hp.unsupervised_fields,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Validation split post-window sequence count=" +

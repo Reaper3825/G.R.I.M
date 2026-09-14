@@ -224,18 +224,14 @@ private:
     // Camera tab: raw frame → blit cache.
     PreviewBlitCache camera_blit_cache_;
 
-    // Calibration tab: raw → [optional undistort] → [throttled chessboard
-    // overlay baked into BGR Mat] → blit cache. Heavy work runs only when a
-    // new source frame arrives or the undistort toggle flips. The chessboard
-    // re-detection is further throttled to ~5 Hz so a 30-Hz source does not
-    // pay findChessboardCornersSB on every redraw.
+    // Calibration tab: raw → [optional undistort] → authoritative
+    // calibrator corners → blit cache. Detection is owned by the calibrator;
+    // the UI never runs a competing detector or reuses corners across frames.
     cv::Mat            calib_display_frame_;                // BGR, ready to blit
     uint64_t           calib_display_source_id_      = 0;   // 0 = not yet built
+    uint64_t           calib_display_detection_id_   = 0;
     bool               calib_display_undistort_      = false;
     PreviewBlitCache   calib_blit_cache_;
-    GRIM::Perception::Physical::DetectedCalibrationPattern calib_overlay_pattern_;
-    bool               calib_overlay_pattern_valid_  = false;
-    double             calib_overlay_seconds_since_  = 1.0e9;  // start "stale"
 
     // ── Perception tab ──
     void HandleTogglePerceptionObjectDetector();

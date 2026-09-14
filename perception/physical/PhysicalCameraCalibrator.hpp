@@ -17,10 +17,9 @@ namespace GRIM { namespace Perception { namespace Physical {
 //  Owns the per-process calibration state machine. Responsibilities:
 //    - When the active FrameBus source changes, load only the intrinsic
 //      profile matching that source URL and capture resolution.
-//    - When capture is active, every TickPhysicalCameraCalibration() pulls
-//      the latest frame from PhysicalFrameBus, runs lighting-adaptive
-//      detection, and (if a pattern is found AND coverage policy permits)
-//      adds an accepted sample to the pool.
+//    - Every TickPhysicalCameraCalibration() checks PhysicalFrameBus and runs
+//      detection only when a fresh raw frame is available. While capture is
+//      active, a found pattern is accepted when coverage policy permits.
 //    - Exposes Request* mutators for the UI:
 //        Start/Stop capture, Capture-Now, Run intrinsic calibration, Save,
 //        Clear samples, Reconfigure pattern.
@@ -55,11 +54,13 @@ struct PhysicalCalibrationStatus {
     bool        last_frame_present       = false;
     bool        last_pattern_found       = false;
     std::string last_detector_used;
-    int         last_preprocess_path     = 0;
+    int         last_preprocess_path     = -1;
     double      last_frame_brightness    = 0.0;          // 0..255 grayscale mean
     int         last_frame_width         = 0;
     int         last_frame_height        = 0;
+    uint64_t    last_detection_frame_counter = 0;
     cv::Point2f last_pattern_centroid_px = {0, 0};
+    std::vector<cv::Point2f> last_detected_image_points;
     std::string last_failure_reason;
 
     // Calibration result (valid when stage is LoadedFromDisk or Calibrated)

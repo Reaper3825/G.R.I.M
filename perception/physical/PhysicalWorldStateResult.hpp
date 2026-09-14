@@ -136,6 +136,13 @@ struct PhysicalWorldEntity {
     std::string                    display_name;
     PhysicalEntityIdentityState    identity_state = PhysicalEntityIdentityState::Unknown;
     float                          identity_confidence = 0.0f;
+    // Diagnostic-only nearest profile. This never promotes an entity's name;
+    // display_name remains empty until the multi-frame evidence gate passes.
+    std::string                    identity_candidate_display_name;
+    uint32_t                       identity_evidence_hits = 0;
+    uint32_t                       identity_evidence_required = 0;
+    bool                           identity_face_embedding_present = false;
+    float                          identity_face_quality = 0.0f;
 
     // ── Position (both spaces; never re-derive) ──
     cv::Rect2f                     model_box;

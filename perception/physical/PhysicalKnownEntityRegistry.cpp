@@ -1,6 +1,8 @@
 #include "PhysicalKnownEntityRegistry.hpp"
 #include "PhysicalIdentityStore.hpp"
 #include "PhysicalFaceIdentityMatcher.hpp"
+#include "PhysicalWorldStateLogTag.hpp"
+#include "logger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +30,8 @@ struct CandidateEvidence {
     uint32_t consecutive_hits = 0;
     float last_score = 0.0f;
     uint64_t last_evidence_frame = 0;
+    bool logged_first_attempt = false;
+    bool logged_first_accepted_candidate = false;
 };
 
 struct RegistryState {
@@ -93,6 +97,14 @@ void LoadProfilesLocked(RegistryState& state) {
     }
     state.loaded = true;
     ++state.revision;
+    size_t template_count = 0;
+    for (const auto& profile : state.profiles) {
+        template_count += profile.face_templates.size();
+    }
+    LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
+        std::string("PhysicalIdentityRegistry: loaded profiles=")
+        + std::to_string(state.profiles.size())
+        + " face_templates=" + std::to_string(template_count));
 }
 
 PhysicalIdentityProfile* FindProfileLocked(RegistryState& state, const std::string& id) {
@@ -204,22 +216,57 @@ void ObservePhysicalWorldStateForKnownEntities(PhysicalWorldStateSnapshot& snaps
             auto face_it = state.latest_face_by_track_id.find(entity.object_id);
             if (face_it != state.latest_face_by_track_id.end()) {
                 const auto& face = face_it->second;
+                entity.identity_face_embedding_present = true;
+                entity.identity_face_quality = face.quality_score;
                 auto& evidence = state.candidate_by_track_id[entity.object_id];
                 if (face.source_frame_counter > evidence.last_evidence_frame) {
                     const auto match = MatchPhysicalFaceIdentity(face, state.profiles);
-                    if (match.accepted) {
-                        if (evidence.persistent_entity_id == match.persistent_entity_id) ++evidence.consecutive_hits;
-                        else { evidence.persistent_entity_id = match.persistent_entity_id; evidence.consecutive_hits = 1; }
-                        evidence.last_score = match.best_similarity;
-                    } else {
-                        evidence = {};
+                    if (!evidence.logged_first_attempt) {
+                        LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
+                            std::string("PhysicalIdentityRegistry: first match attempt person#")
+                            + std::to_string(entity.object_id)
+                            + " nearest_cosine=" + std::to_string(match.best_similarity)
+                            + " accepted=" + (match.accepted ? "true" : "false")
+                            + " embedding_model='" + face.embedding_model_id + "'");
+                        evidence.logged_first_attempt = true;
                     }
+                    if (match.accepted) {
+                        if (evidence.persistent_entity_id == match.persistent_entity_id) {
+                            ++evidence.consecutive_hits;
+                        } else {
+                            evidence.persistent_entity_id = match.persistent_entity_id;
+                            evidence.consecutive_hits = 1;
+                        }
+                        if (!evidence.logged_first_accepted_candidate) {
+                            const auto* profile = FindProfileLocked(
+                                state, match.persistent_entity_id);
+                            LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
+                                std::string("PhysicalIdentityRegistry: candidate person#")
+                                + std::to_string(entity.object_id) + " nearest='"
+                                + (profile ? profile->display_name : std::string("unknown"))
+                                + "' cosine=" + std::to_string(match.best_similarity));
+                            evidence.logged_first_accepted_candidate = true;
+                        }
+                    } else {
+                        // Preserve the nearest score/name for UI diagnosis, but
+                        // clear accumulated evidence so rejected observations
+                        // can never contribute to automatic recognition.
+                        evidence.persistent_entity_id = match.persistent_entity_id;
+                        evidence.consecutive_hits = 0;
+                    }
+                    evidence.last_score = match.best_similarity;
                     evidence.last_evidence_frame = face.source_frame_counter;
                     ++state.revision;
                 }
                 entity.identity_state = evidence.consecutive_hits == 0
                     ? PhysicalEntityIdentityState::Unknown : PhysicalEntityIdentityState::Candidate;
                 entity.identity_confidence = evidence.last_score;
+                entity.identity_evidence_hits = evidence.consecutive_hits;
+                entity.identity_evidence_required = kRecognitionEvidenceRequired;
+                if (const auto* candidate = FindProfileLocked(
+                        state, evidence.persistent_entity_id)) {
+                    entity.identity_candidate_display_name = candidate->display_name;
+                }
                 if (evidence.consecutive_hits >= kRecognitionEvidenceRequired) {
                     const auto known = state.known_id_by_persistent_id.find(evidence.persistent_entity_id);
                     if (known != state.known_id_by_persistent_id.end()) {
@@ -227,6 +274,16 @@ void ObservePhysicalWorldStateForKnownEntities(PhysicalWorldStateSnapshot& snaps
                         if (record != state.records_by_known_id.end() && !record->second.currently_tracked) {
                             BindTrackLocked(state, record->second, entity,
                                 PhysicalEntityIdentityState::Recognized, evidence.last_score);
+                            ++record->second.automatic_relink_count;
+                            record->second.last_automatic_relink_score = evidence.last_score;
+                            LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
+                                std::string("PhysicalIdentityRegistry: recognized '")
+                                + record->second.name + "' on person#"
+                                + std::to_string(entity.object_id)
+                                + " cosine=" + std::to_string(evidence.last_score)
+                                + " evidence="
+                                + std::to_string(evidence.consecutive_hits) + "/"
+                                + std::to_string(kRecognitionEvidenceRequired));
                             binding = state.known_id_by_track_id.find(entity.object_id);
                             ++state.revision;
                         }
@@ -247,11 +304,17 @@ void ObservePhysicalWorldStateForKnownEntities(PhysicalWorldStateSnapshot& snaps
                 record.last_face_quality = face->second.quality_score;
                 ++state.revision;
             }
+            if (face != state.latest_face_by_track_id.end()) {
+                entity.identity_face_embedding_present = true;
+                entity.identity_face_quality = face->second.quality_score;
+            }
             entity.persistent_entity_id = record.persistent_entity_id;
             entity.display_name = record.name;
             entity.identity_state = record.face_template_count == 0
                 ? PhysicalEntityIdentityState::NamedOnly : record.identity_state;
             entity.identity_confidence = record.last_face_match_score;
+            entity.identity_evidence_hits = kRecognitionEvidenceRequired;
+            entity.identity_evidence_required = kRecognitionEvidenceRequired;
         }
     }
 }

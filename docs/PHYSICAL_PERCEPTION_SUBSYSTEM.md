@@ -217,6 +217,18 @@ Calibration is its own subsystem layered on top of Stage 1:
 The calibrator is consumed by **Stage 5** (visual odometry refuses to run
 without intrinsics).
 
+The pattern dimensions are **inner-corner counts**, not square counts: the
+default `9 x 6` configuration expects a printed board with `10 x 7` squares.
+Detection operates on the unconditioned raw camera frame. It tries the raw SB
+detector first, then lighting-enhanced and small-board upscaled paths, and a
+legacy adaptive-threshold fallback. The calibration UI displays only the
+authoritative result for the exact raw frame being previewed; raw corner
+coordinates are intentionally hidden on the undistorted view. Intrinsic solves
+use the standard five-coefficient distortion model and reject non-finite,
+implausible, or greater-than-5-pixel RMS results rather than persisting them.
+Samples that are effectively the same board pose are rejected even for manual
+capture; useful sets vary image position, distance, and tilt.
+
 ---
 
 ## 4. Stage 2 — `PhysicalPerceptionPrimitivesLoop`
@@ -426,10 +438,20 @@ stable diffing across frames.
 * No magic constants in the result — `PhysicalWorldStateBuilderConfig`
   owns thresholds (occlusion overlap, depth velocity threshold, etc.).
 
+### Physical Environment editor layout
+
+The Physical Environment panel uses a persistent left section rail, a stable
+central viewport, and a contextual inspector on the right. Camera, Perception,
+World, and Identities reuse the same viewport region instead of each owning an
+unrelated tab layout. Viewport badges state whether the displayed pixels are
+the raw camera image or the conditioned model input; camera signal controls in
+the inspector change the latter. Preview enlargement uses linear interpolation,
+while reductions retain area filtering.
+
 ### Known entities and user-authored names
 
 `PhysicalKnownEntityRegistry` binds a durable user-authored profile to an
-optional current `object_id`. The Physical Environment panel's **Identities** tab lists all
+optional current `object_id`. The Physical Environment panel's **Identities** section lists all
 live tracks plus named entities that have left view, provides a name editor,
 and displays the selected entity's latest class, track state, visibility,
 confidence, geometry, velocity, depth, support surface, path-block state, OCR,
@@ -449,7 +471,11 @@ with its exact model/version ID. Stage 4 associates a face only with a confirmed
 `person` track whose upper body contains the face. Recognition compares only
 templates from the same model space, requires a similarity threshold and a
 runner-up margin, and requires three fresh accepted observations before binding
-a durable identity to a new track. Cached frames do not count as new evidence.
+a durable identity to a new track. The default cosine threshold is `0.363`, the
+published OpenCV SFace LFW operating point; the independent runner-up margin
+still rejects ambiguous multi-profile matches. Cached frames do not count as
+new evidence. The Identities UI shows the nearest profile, live cosine score,
+and accumulated evidence without exposing or copying the embedding itself.
 Embeddings never enter generic semantic memory or model-facing context.
 
 ---

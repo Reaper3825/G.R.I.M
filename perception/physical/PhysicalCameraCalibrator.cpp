@@ -7,7 +7,9 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <mutex>
@@ -46,6 +48,7 @@ constexpr int kCoverageGridCols          = 8;
 constexpr int kCoverageGridRows          = 6;
 constexpr int kMinSamplesRequired        = 10;
 constexpr int kMaxSamplesPerCell         = 1;
+constexpr double kMinimumDistinctPoseRmsFraction = 0.015;
 
 struct PhysicalCalibrationModuleState {
     std::mutex                                          mutex;
@@ -68,6 +71,7 @@ struct PhysicalCalibrationModuleState {
     bool                                                last_frame_present = false;
     int                                                 last_frame_width   = 0;
     int                                                 last_frame_height  = 0;
+    uint64_t                                            last_detection_frame_counter = 0;
 
     // Latest pulled FrameBus content
     PhysicalFrameBus::FrameView                         pull_view;
@@ -193,6 +197,8 @@ void ActivateFrameProfileLocked(PhysicalCalibrationModuleState& s) {
     s.active_source_label = s.pull_view.source_label;
     s.active_image_size = frame_size;
     s.active_profile_path.clear();
+    s.last_detection = {};
+    s.last_detection_frame_counter = 0;
     LoadActiveProfileLocked(s);
 }
 
@@ -225,6 +231,7 @@ void RunDetectionOnPulledFrameLocked(PhysicalCalibrationModuleState& s) {
         LOG_ERROR(PHYSICAL_ENV_LOG_TAG,
                   std::string("RunDetectionOnPulledFrame: ") + e.what());
     }
+    s.last_detection_frame_counter = s.pull_view.frame_counter;
 }
 
 bool TryAddSampleLocked(PhysicalCalibrationModuleState& s,
@@ -248,6 +255,37 @@ bool TryAddSampleLocked(PhysicalCalibrationModuleState& s,
                    + std::to_string(s.samples_image_size.height)
                    + " — clear samples to switch sources";
         return false;
+    }
+
+    // A manual click may legitimately add another view in the same coverage
+    // cell, but accepting an effectively identical pose makes the sample
+    // count look healthier without adding calibration information.
+    const double image_diagonal = std::hypot(
+        static_cast<double>(img_sz.width), static_cast<double>(img_sz.height));
+    for (const auto& prior : s.accepted_image_points) {
+        if (prior.size() != s.last_detection.image_points.size()) continue;
+        double direct_squared_displacement_sum = 0.0;
+        double reversed_squared_displacement_sum = 0.0;
+        for (size_t i = 0; i < prior.size(); ++i) {
+            const cv::Point2f direct_delta =
+                prior[i] - s.last_detection.image_points[i];
+            const cv::Point2f reversed_delta =
+                prior[i] - s.last_detection.image_points[prior.size() - 1 - i];
+            direct_squared_displacement_sum +=
+                static_cast<double>(direct_delta.dot(direct_delta));
+            reversed_squared_displacement_sum +=
+                static_cast<double>(reversed_delta.dot(reversed_delta));
+        }
+        const double point_rms = std::sqrt(
+            std::min(direct_squared_displacement_sum,
+                     reversed_squared_displacement_sum)
+            / static_cast<double>(prior.size()));
+        if (image_diagonal > 0.0
+            && point_rms / image_diagonal < kMinimumDistinctPoseRmsFraction) {
+            out_reason = "view is too similar to an accepted sample "
+                         "(move, tilt, or resize the board)";
+            return false;
+        }
     }
 
     EnsureCoverageGridSizedLocked(s);
@@ -293,9 +331,13 @@ void TickPhysicalCameraCalibration() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     LazyInitLocked(s);
-    PullLatestFrameLocked(s);
-    RunDetectionOnPulledFrameLocked(s);
-    AutoCaptureIfDueLocked(s);
+    // Detection and auto-capture belong to a concrete FrameBus frame. Running
+    // them again while the bus counter is unchanged wastes substantial CPU
+    // and can auto-accept the same physical image more than once.
+    if (PullLatestFrameLocked(s)) {
+        RunDetectionOnPulledFrameLocked(s);
+        AutoCaptureIfDueLocked(s);
+    }
 }
 
 PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
@@ -320,7 +362,9 @@ PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
     out.last_frame_brightness  = s.last_detection.gray_mean;
     out.last_frame_width       = s.last_frame_width;
     out.last_frame_height      = s.last_frame_height;
+    out.last_detection_frame_counter = s.last_detection_frame_counter;
     out.last_pattern_centroid_px = s.last_detection.centroid_px;
+    out.last_detected_image_points = s.last_detection.image_points;
     out.last_failure_reason    = s.last_detection.failure_reason;
 
     out.has_calibration_data   = s.calib_valid;
@@ -408,8 +452,11 @@ void RequestCapturePhysicalCalibrationSampleNow() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     LazyInitLocked(s);
-    PullLatestFrameLocked(s);
-    RunDetectionOnPulledFrameLocked(s);
+    const bool pulled_fresh_frame = PullLatestFrameLocked(s);
+    if (pulled_fresh_frame
+        || s.last_detection_frame_counter != s.pull_view.frame_counter) {
+        RunDetectionOnPulledFrameLocked(s);
+    }
     std::string reason;
     const bool ok = TryAddSampleLocked(s, /*allow_duplicate_cell=*/true, reason);
     s.status_reason = (ok ? "manual capture: " : "manual capture rejected: ") + reason;
@@ -446,6 +493,15 @@ void RequestRunIntrinsicCalibrationFromSamples() {
             + std::to_string(s.samples_image_size.width) + "x"
             + std::to_string(s.samples_image_size.height));
     }
+    if (s.active_source_url.empty() || s.active_image_size != s.samples_image_size) {
+        ThrowWithLocation(__FUNCTION__,
+            "sample pool is not bound to the active camera profile");
+    }
+
+    // Calibration consumes a stable snapshot of the sample pool. Without
+    // this transition, auto-capture would silently continue after the stage
+    // changed to Calibrated or Failed.
+    s.capturing = false;
 
     const auto object_points_one = BuildObjectPointsForChessboard(
         s.pattern_inner_cols, s.pattern_inner_rows, s.pattern_square_meters);
@@ -462,8 +518,7 @@ void RequestRunIntrinsicCalibrationFromSamples() {
     try {
         rms = cv::calibrateCamera(
             object_points, s.accepted_image_points, s.samples_image_size,
-            K, dist, rvecs, tvecs,
-            cv::CALIB_RATIONAL_MODEL); // 8-coef distortion model
+            K, dist, rvecs, tvecs, 0);
     } catch (const cv::Exception& e) {
         s.stage         = PhysicalCalibrationStage::Failed;
         s.status_reason = std::string("calibrateCamera threw: ") + e.what();
@@ -476,22 +531,32 @@ void RequestRunIntrinsicCalibrationFromSamples() {
         s.status_reason = "calibrateCamera returned malformed K or dist";
         ThrowWithLocation(__FUNCTION__, s.status_reason);
     }
-    if (!std::isfinite(rms) || rms <= 0.0 || rms > 5.0) {
-        // Soft warning, not a throw — but record it. RMS > 5 px is suspicious
-        // for any reasonable calibration; we still store the result so the UI
-        // can show what we got.
-        LOG_ERROR(PHYSICAL_ENV_LOG_TAG,
-                  "RequestRunIntrinsicCalibrationFromSamples: suspicious RMS="
-                  + std::to_string(rms) + " (expected < 1.0 for a good calibration)");
-    }
-
     K.convertTo(K,    CV_64F);
     dist.convertTo(dist, CV_64F);
 
-    if (s.active_source_url.empty() || s.active_image_size != s.samples_image_size) {
-        ThrowWithLocation(__FUNCTION__,
-            "sample pool is not bound to the active camera profile");
+    // Ten ordinary webcam views do not constrain the 8-coefficient rational
+    // model reliably, so use the standard 5-coefficient model above and reject
+    // numerically implausible results instead of saving poisoned data.
+    const double fx = K.at<double>(0, 0);
+    const double fy = K.at<double>(1, 1);
+    const double cx = K.at<double>(0, 2);
+    const double cy = K.at<double>(1, 2);
+    const bool plausible_intrinsics = cv::checkRange(K) && cv::checkRange(dist)
+        && std::isfinite(rms) && rms >= 0.0 && rms <= 5.0
+        && fx > 0.0 && fy > 0.0
+        && cx >= -s.samples_image_size.width
+        && cx <= 2.0 * s.samples_image_size.width
+        && cy >= -s.samples_image_size.height
+        && cy <= 2.0 * s.samples_image_size.height;
+    if (!plausible_intrinsics) {
+        s.stage = PhysicalCalibrationStage::Failed;
+        s.status_reason = "calibration rejected: implausible intrinsics or RMS > 5 px"
+            " (rms=" + std::to_string(rms) + ")";
+        LOG_ERROR(PHYSICAL_ENV_LOG_TAG,
+                  "RequestRunIntrinsicCalibrationFromSamples: " + s.status_reason);
+        ThrowWithLocation(__FUNCTION__, s.status_reason);
     }
+
     s.calib                          = {};
     s.calib.camera_matrix            = K;
     s.calib.dist_coeffs              = dist;
@@ -567,6 +632,11 @@ void RequestReconfigurePhysicalCalibrationPattern(int   inner_cols,
     s.samples_image_size    = cv::Size(0, 0);
     EnsureCoverageGridSizedLocked(s);
     std::fill(s.coverage_cell_counts.begin(), s.coverage_cell_counts.end(), 0);
+    // Corners detected for the previous geometry cannot be interpreted using
+    // the new row/column count. Wait for a fresh detection before drawing or
+    // accepting another sample.
+    s.last_detection = {};
+    s.last_detection_frame_counter = 0;
     s.status_reason = "pattern reconfigured (samples cleared)";
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "RequestReconfigurePhysicalCalibrationPattern: cols=" + std::to_string(inner_cols)
@@ -590,6 +660,7 @@ void ResetPhysicalCalibrationState() {
     s.stage       = PhysicalCalibrationStage::Uncalibrated;
     s.status_reason.clear();
     s.last_detection = {};
+    s.last_detection_frame_counter = 0;
     s.last_frame_present = false;
     s.last_seen_counter  = 0;
     s.initialized        = false; // next tick will lazy-init again

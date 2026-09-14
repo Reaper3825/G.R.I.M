@@ -50,12 +50,11 @@ struct GrmtSequence {
     GRIM::Execution::ExecutionGateTarget execution_gate_target =
         GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
     // Prefix geometry. GRMT stores the literal authored prompt; Phase 1
-    // rewrites it to every token before the selected SFT supervision span.
+    // rewrites it to every token before the first supervised SFT field.
     std::int32_t prompt_end_pos = -1;
     std::int32_t prompt_length = 0;
-    // Neutral authored answer location. Phase 1 selects this span only for an
-    // ANSWER-specialized model; other model roles project from structured
-    // Goal/ConceptBlock spans instead.
+    // Neutral authored answer location. Phase 1 may combine this with any
+    // other field spans named by the compiled SFT field policy.
     std::optional<GRIM::GoalTokenSpan> answer_span;
     std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
     std::vector<GRIM::Execution::CompiledTransitionBinding> compiled_transition_bindings;

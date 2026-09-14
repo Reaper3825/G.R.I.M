@@ -75,6 +75,19 @@ std::string FormatStage(PE::PhysicalCalibrationStage st) {
     return "Unknown";
 }
 
+const char* FormatCalibrationPreprocessPath(int path) {
+    switch (path) {
+        case -1: return "all failed";
+        case 0: return "raw SB";
+        case 1: return "CLAHE SB";
+        case 2: return "gamma+CLAHE SB";
+        case 3: return "upscaled SB";
+        case 4: return "legacy raw";
+        case 5: return "legacy enhanced";
+    }
+    return "unknown";
+}
+
 uint32_t MakeArgb(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return (static_cast<uint32_t>(a) << 24)
          | (static_cast<uint32_t>(r) << 16)
@@ -126,8 +139,15 @@ bool TryParseFloat(const std::string& s, float& out) {
 
 // Layout constants — tab bar takes a single row directly under the title bar,
 // content starts after that.
-constexpr float kTabBarHeight = 30.0f;
-constexpr float kTabBarPad    = 8.0f;
+// Blender-style editor chrome: section selection lives in a persistent rail
+// instead of consuming a horizontal row above every workspace.
+constexpr float kTabBarHeight     = 0.0f; // retained in legacy page geometry
+constexpr float kSectionRailWidth = 126.0f;
+constexpr float kSectionRailPad   = 8.0f;
+constexpr float kSectionButtonH   = 30.0f;
+constexpr float kSectionButtonGap = 4.0f;
+constexpr float kEditorInspectorWidth = 320.0f;
+constexpr float kEditorWorkspacePad = 12.0f;
 
 } // anonymous
 
@@ -835,56 +855,32 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
     }
     signal_status_ = PE::GetPhysicalSignalConditioningStatusSnapshot();
 
-    // ── Tab bar ──
-    const float tab_y = position.y + titleBarHeight + 4.0f;
-    if (tab_camera_btn_) {
-        tab_camera_btn_->setSize(78.0f, kTabBarHeight - 4.0f);
-        tab_camera_btn_->setPosition(position.x + kTabBarPad, tab_y);
-        tab_camera_btn_->update(input, dt);
-    }
-    if (tab_stereo_btn_) {
-        tab_stereo_btn_->setSize(78.0f, kTabBarHeight - 4.0f);
-        tab_stereo_btn_->setPosition(position.x + kTabBarPad + 84.0f, tab_y);
-        tab_stereo_btn_->update(input, dt);
-    }
-    if (tab_calibration_btn_) {
-        tab_calibration_btn_->setSize(98.0f, kTabBarHeight - 4.0f);
-        tab_calibration_btn_->setPosition(position.x + kTabBarPad + 168.0f, tab_y);
-        tab_calibration_btn_->update(input, dt);
-    }
-    if (tab_perception_btn_) {
-        tab_perception_btn_->setSize(96.0f, kTabBarHeight - 4.0f);
-        tab_perception_btn_->setPosition(position.x + kTabBarPad + 272.0f, tab_y);
-        tab_perception_btn_->update(input, dt);
-    }
-    if (tab_interaction_btn_) {
-        tab_interaction_btn_->setSize(98.0f, kTabBarHeight - 4.0f);
-        tab_interaction_btn_->setPosition(position.x + kTabBarPad + 374.0f, tab_y);
-        tab_interaction_btn_->update(input, dt);
-    }
-    if (tab_spatial_btn_) {
-        tab_spatial_btn_->setSize(76.0f, kTabBarHeight - 4.0f);
-        tab_spatial_btn_->setPosition(position.x + kTabBarPad + 478.0f, tab_y);
-        tab_spatial_btn_->update(input, dt);
-    }
-    if (tab_localization_btn_) {
-        tab_localization_btn_->setSize(108.0f, kTabBarHeight - 4.0f);
-        tab_localization_btn_->setPosition(position.x + kTabBarPad + 560.0f, tab_y);
-        tab_localization_btn_->update(input, dt);
-    }
-    if (tab_world_btn_) {
-        tab_world_btn_->setSize(72.0f, kTabBarHeight - 4.0f);
-        tab_world_btn_->setPosition(position.x + kTabBarPad + 674.0f, tab_y);
-        tab_world_btn_->update(input, dt);
-    }
-    if (tab_known_entities_btn_) {
-        tab_known_entities_btn_->setSize(112.0f, kTabBarHeight - 4.0f);
-        tab_known_entities_btn_->setPosition(
-            position.x + kTabBarPad + 752.0f, tab_y);
-        tab_known_entities_btn_->update(input, dt);
+    // ── Persistent section rail ──
+    const float section_x = position.x + kSectionRailPad;
+    const float section_y = position.y + titleBarHeight + 30.0f;
+    const float section_w = kSectionRailWidth - kSectionRailPad * 2.0f;
+    const std::array<std::shared_ptr<UIButton>, 9> section_buttons{{
+        tab_camera_btn_, tab_stereo_btn_, tab_calibration_btn_,
+        tab_perception_btn_, tab_interaction_btn_, tab_spatial_btn_,
+        tab_localization_btn_, tab_world_btn_, tab_known_entities_btn_
+    }};
+    for (size_t i = 0; i < section_buttons.size(); ++i) {
+        const auto& button = section_buttons[i];
+        if (!button) continue;
+        button->setSize(section_w, kSectionButtonH);
+        button->setPosition(section_x,
+            section_y + static_cast<float>(i) *
+                (kSectionButtonH + kSectionButtonGap));
+        button->update(input, dt);
     }
 
-    // ── Tab content ──
+    // Existing page implementations now operate inside the editor workspace
+    // to the right of the rail. Keeping this translation at the boundary
+    // prevents navigation geometry from leaking into subsystem controls.
+    const Vec2 panel_position = position;
+    const Vec2 panel_size = size;
+    position.x += kSectionRailWidth;
+    size.x = std::max(320.0f, size.x - kSectionRailWidth);
     switch (active_tab_) {
         case Tab::Camera:       UpdateCameraTab(input, dt);       break;
         case Tab::Stereo:       UpdateStereoTab(input, dt);       break;
@@ -896,41 +892,42 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         case Tab::World:        UpdateWorldTab(input, dt);        break;
         case Tab::KnownEntities: UpdateKnownEntitiesTab(input, dt); break;
     }
+    position = panel_position;
+    size = panel_size;
 }
 
 void UIPhysicalEnvironmentPanel::UpdateCameraTab(const InputState& input, float dt) {
-    const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
+    const float content_top = position.y + titleBarHeight + 12.0f;
+    const float inspector_x = position.x + size.x - kEditorInspectorWidth;
+    const float x = inspector_x + 10.0f;
+    const float w = kEditorInspectorWidth - 20.0f;
 
     if (refresh_button_) {
-        refresh_button_->setSize(90, 26);
-        refresh_button_->setPosition(position.x + 16, content_top);
+        refresh_button_->setSize(82.0f, 26.0f);
+        refresh_button_->setPosition(x, content_top + 24.0f);
         refresh_button_->update(input, dt);
     }
     if (source_dropdown_) {
-        source_dropdown_->setPosition(position.x + 116, content_top);
-        source_dropdown_->setSize(size.x - 132, 26);
+        source_dropdown_->setPosition(x + 88.0f, content_top + 24.0f);
+        source_dropdown_->setSize(w - 88.0f, 26.0f);
         source_dropdown_->update(input, dt);
     }
     if (url_inputbox_) {
-        url_inputbox_->setPosition(position.x + 16, content_top + 38);
-        url_inputbox_->setSize(size.x - 240, 26);
+        url_inputbox_->setPosition(x, content_top + 56.0f);
+        url_inputbox_->setSize(w, 26.0f);
         url_inputbox_->update(input, dt);
     }
     if (connect_button_) {
-        connect_button_->setSize(100, 26);
-        connect_button_->setPosition(position.x + size.x - 220, content_top + 38);
+        connect_button_->setSize((w - 6.0f) * 0.5f, 26.0f);
+        connect_button_->setPosition(x, content_top + 88.0f);
         connect_button_->update(input, dt);
     }
     if (disconnect_button_) {
-        disconnect_button_->setSize(110, 26);
-        disconnect_button_->setPosition(position.x + size.x - 116, content_top + 38);
+        disconnect_button_->setSize((w - 6.0f) * 0.5f, 26.0f);
+        disconnect_button_->setPosition(x + (w + 6.0f) * 0.5f,
+                                        content_top + 88.0f);
         disconnect_button_->update(input, dt);
     }
-
-    const float settings_y1 = content_top + 72.0f;
-    const float settings_y2 = content_top + 104.0f;
-    const float settings_y3 = content_top + 136.0f;
-    const float settings_y4 = content_top + 168.0f;
 
     auto place_btn = [&](std::shared_ptr<UIButton>& b, float x, float y, float w) {
         if (!b) return;
@@ -944,29 +941,29 @@ void UIPhysicalEnvironmentPanel::UpdateCameraTab(const InputState& input, float 
         box->setSize(w, 24.0f);
         box->update(input, dt);
     };
+    const float half = (w - 6.0f) * 0.5f;
+    place_btn(signal_view_toggle_btn_, x, content_top + 138.0f, w);
+    place_btn(signal_resize_btn_, x, content_top + 170.0f, half);
+    place_btn(signal_resize_mode_btn_, x + half + 6.0f, content_top + 170.0f, half);
+    place_btn(signal_denoise_btn_, x, content_top + 202.0f, half);
+    place_btn(signal_deblur_btn_, x + half + 6.0f, content_top + 202.0f, half);
+    place_btn(signal_auto_exposure_btn_, x, content_top + 234.0f, half);
+    place_btn(signal_stabilization_btn_, x + half + 6.0f, content_top + 234.0f, half);
+    place_btn(signal_color_mode_btn_, x, content_top + 266.0f, half);
+    place_btn(signal_quality_gate_btn_, x + half + 6.0f, content_top + 266.0f, half);
 
-    const float x0 = position.x + 16.0f;
-    place_btn(signal_view_toggle_btn_, x0, settings_y1, 170.0f);
-    place_btn(signal_auto_exposure_btn_, x0 + 178.0f, settings_y1, 150.0f);
-    place_btn(signal_denoise_btn_, x0 + 336.0f, settings_y1, 130.0f);
-    place_btn(signal_resize_btn_, x0 + 474.0f, settings_y1, 120.0f);
-    place_btn(signal_deblur_btn_, x0 + 602.0f, settings_y1, 120.0f);
-    place_btn(signal_stabilization_btn_, x0 + 730.0f, settings_y1, 130.0f);
-
-    place_btn(signal_color_mode_btn_, x0, settings_y2, 120.0f);
-    place_box(signal_width_box_, x0 + 128.0f, settings_y2, 72.0f);
-    place_box(signal_height_box_, x0 + 206.0f, settings_y2, 72.0f);
-    place_box(signal_target_luma_box_, x0 + 284.0f, settings_y2, 100.0f);
-    place_box(signal_manual_gain_box_, x0 + 390.0f, settings_y2, 94.0f);
-    place_box(signal_denoise_strength_box_, x0 + 490.0f, settings_y2, 90.0f);
-    place_box(signal_deblur_amount_box_, x0 + 586.0f, settings_y2, 90.0f);
-    place_btn(signal_apply_btn_, x0 + 682.0f, settings_y2, 178.0f);
-
-    place_btn(signal_reset_btn_, x0, settings_y3, 150.0f);
-    place_btn(signal_resize_mode_btn_, x0 + 158.0f, settings_y3, 140.0f);
-    place_btn(signal_quality_gate_btn_, x0 + 306.0f, settings_y3, 120.0f);
-
-    (void)settings_y4;
+    const float field_w = (w - 12.0f) / 3.0f;
+    place_box(signal_width_box_, x, content_top + 316.0f, field_w);
+    place_box(signal_height_box_, x + field_w + 6.0f, content_top + 316.0f, field_w);
+    place_box(signal_target_luma_box_, x + (field_w + 6.0f) * 2.0f,
+              content_top + 316.0f, field_w);
+    place_box(signal_manual_gain_box_, x, content_top + 348.0f, field_w);
+    place_box(signal_denoise_strength_box_, x + field_w + 6.0f,
+              content_top + 348.0f, field_w);
+    place_box(signal_deblur_amount_box_, x + (field_w + 6.0f) * 2.0f,
+              content_top + 348.0f, field_w);
+    place_btn(signal_apply_btn_, x, content_top + 380.0f, half);
+    place_btn(signal_reset_btn_, x + half + 6.0f, content_top + 380.0f, half);
 }
 
 void UIPhysicalEnvironmentPanel::UpdateStereoTab(const InputState& input, float dt) {
@@ -1013,17 +1010,15 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
     cal_last_status_ = PE::GetPhysicalCalibrationStatusSnapshot();
 
     // ── Production preview pipeline ──
-    // Heavy work (undistort + chessboard detect + corner overlay) runs here
-    // ONCE per new source frame, not on every UI redraw. Re-detection is
-    // further throttled to ~5 Hz so a 30-Hz source does not pay
-    // findChessboardCornersSB on every incoming frame either.
-    constexpr double kOverlayMinIntervalSec = 0.20;
-    calib_overlay_seconds_since_ += static_cast<double>(dt);
-
+    // The calibrator owns detection. The UI only draws its result when that
+    // result belongs to the exact raw frame currently being displayed.
     const bool counter_changed   = (last_seen_counter_ != calib_display_source_id_);
+    const bool detection_changed =
+        (cal_last_status_.last_detection_frame_counter
+            != calib_display_detection_id_);
     const bool undistort_changed = (cal_show_undistorted_ != calib_display_undistort_);
     if (have_any_frame_ && !last_view_.raw_image.empty()
-        && (counter_changed || undistort_changed)) {
+        && (counter_changed || detection_changed || undistort_changed)) {
         cv::Mat base;
         if (cal_show_undistorted_ && PE::IsPhysicalCalibrationDataAvailable()) {
             try {
@@ -1038,39 +1033,18 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
         }
         if (base.empty()) base = last_view_.raw_image;
 
-        // Force a fresh detect when the geometry of the displayed frame just
-        // changed (undistort toggled), otherwise the previously cached corners
-        // are in the wrong coordinate system.
-        if (undistort_changed) {
-            calib_overlay_seconds_since_ = kOverlayMinIntervalSec;
-            calib_overlay_pattern_valid_ = false;
-        }
-
-        if (cal_last_status_.last_pattern_found
-            && calib_overlay_seconds_since_ >= kOverlayMinIntervalSec) {
+        const bool matching_raw_detection = !cal_show_undistorted_
+            && cal_last_status_.last_pattern_found
+            && cal_last_status_.last_detection_frame_counter == last_seen_counter_
+            && !cal_last_status_.last_detected_image_points.empty();
+        if (matching_raw_detection) {
             try {
-                PE::DetectedCalibrationPattern p;
-                PE::DetectChessboardCornersInBgrFrame(
-                    base,
-                    cal_last_status_.pattern_inner_cols,
-                    cal_last_status_.pattern_inner_rows,
-                    p);
-                calib_overlay_pattern_       = p;
-                calib_overlay_pattern_valid_ = p.found;
-            } catch (const std::exception& e) {
-                LOG_ERROR(kPanelLogTag,
-                    std::string("UpdateCalibrationTab: overlay detect threw: ")
-                    + e.what());
-                calib_overlay_pattern_valid_ = false;
-            }
-            calib_overlay_seconds_since_ = 0.0;
-        }
-
-        if (calib_overlay_pattern_valid_) {
-            try {
+                PE::DetectedCalibrationPattern pattern;
+                pattern.found = true;
+                pattern.image_points = cal_last_status_.last_detected_image_points;
                 cv::Mat with_overlay;
                 PE::DrawDetectedCalibrationPatternOnBgr(
-                    base, calib_overlay_pattern_,
+                    base, pattern,
                     cal_last_status_.pattern_inner_cols,
                     cal_last_status_.pattern_inner_rows,
                     with_overlay);
@@ -1085,7 +1059,13 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
             calib_display_frame_ = base;
         }
 
+        // The authoritative overlay can arrive one UI tick after the raw
+        // frame while retaining the same source counter. Invalidate the blit
+        // cache so that late corner data becomes visible immediately.
+        calib_blit_cache_.source_id = 0;
         calib_display_source_id_  = last_seen_counter_;
+        calib_display_detection_id_ =
+            cal_last_status_.last_detection_frame_counter;
         calib_display_undistort_  = cal_show_undistorted_;
     }
 
@@ -1098,7 +1078,10 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
     auto place = [&](std::shared_ptr<UIButton>& b, int slot, float w = 110.0f) {
         if (!b) return;
         b->setSize(w, bh);
-        b->setPosition(bx + slot * (bw + 6.0f), by);
+        const int column = slot % 4;
+        const int row = slot / 4;
+        b->setPosition(bx + static_cast<float>(column) * (bw + 6.0f),
+                       by + static_cast<float>(row) * (bh + 6.0f));
         b->update(input, dt);
     };
     place(cal_start_btn_,       0);
@@ -1109,7 +1092,7 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
     place(cal_save_btn_,        5);
     place(cal_reload_btn_,      6);
 
-    const float by2 = by + bh + 8.0f;
+    const float by2 = by + (bh + 6.0f) * 2.0f + 8.0f;
     if (cal_pattern_cols_box_) {
         cal_pattern_cols_box_->setPosition(bx, by2);
         cal_pattern_cols_box_->setSize(80, bh);
@@ -1144,7 +1127,13 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
 bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     if (!UIPanel::drawOverlay(renderer)) return false;
 
-    // ── Tab buttons ──
+    // ── Persistent section rail ──
+    renderer.drawRect({position.x, position.y + titleBarHeight},
+                      {kSectionRailWidth, size.y - titleBarHeight},
+                      UITheme::Colors::PanelBg);
+    renderer.drawText({position.x + kSectionRailPad,
+                       position.y + titleBarHeight + 8.0f},
+                      "ENVIRONMENT", UITheme::Colors::TextSecondary);
     if (tab_camera_btn_)       tab_camera_btn_->drawOverlay(renderer, position);
     if (tab_stereo_btn_)       tab_stereo_btn_->drawOverlay(renderer, position);
     if (tab_calibration_btn_)  tab_calibration_btn_->drawOverlay(renderer, position);
@@ -1156,39 +1145,28 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     if (tab_known_entities_btn_)
         tab_known_entities_btn_->drawOverlay(renderer, position);
 
-    // Active-tab underline indicator (matches DataHub/Training pattern).
+    // Active-section stripe: compact, stable, and readable like an editor's
+    // properties/modifier rail.
     {
-        const float y = position.y + titleBarHeight + kTabBarHeight - 1.0f;
-        float ix = 0.0f, iw = 0.0f;
-        switch (active_tab_) {
-            case Tab::Camera:
-                ix = position.x + kTabBarPad;          iw = 78.0f; break;
-            case Tab::Stereo:
-                ix = position.x + kTabBarPad + 84.0f;  iw = 78.0f; break;
-            case Tab::Calibration:
-                ix = position.x + kTabBarPad + 168.0f; iw = 98.0f; break;
-            case Tab::Perception:
-                ix = position.x + kTabBarPad + 272.0f; iw = 96.0f; break;
-            case Tab::Interaction:
-                ix = position.x + kTabBarPad + 374.0f; iw = 98.0f; break;
-            case Tab::Spatial:
-                ix = position.x + kTabBarPad + 478.0f; iw = 76.0f; break;
-            case Tab::Localization:
-                ix = position.x + kTabBarPad + 560.0f; iw = 108.0f; break;
-            case Tab::World:
-                ix = position.x + kTabBarPad + 674.0f; iw = 72.0f; break;
-            case Tab::KnownEntities:
-                ix = position.x + kTabBarPad + 752.0f; iw = 112.0f; break;
-        }
-        renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
+        const int section_index = static_cast<int>(active_tab_);
+        const float active_y = position.y + titleBarHeight + 30.0f
+            + static_cast<float>(section_index) *
+                (kSectionButtonH + kSectionButtonGap);
+        renderer.drawRect({position.x + 2.0f, active_y},
+                          {3.0f, kSectionButtonH},
+                          UITheme::Colors::Primary);
     }
 
-    // Divider under tab bar.
-    renderer.drawRect({position.x + 4.0f,
-                       position.y + titleBarHeight + kTabBarHeight + 1.0f},
-                      {size.x - 8.0f, 1.0f},
+    // Divider between navigation and the active workspace.
+    renderer.drawRect({position.x + kSectionRailWidth - 1.0f,
+                       position.y + titleBarHeight},
+                      {1.0f, size.y - titleBarHeight},
                       UITheme::Colors::DividerLine);
 
+    const Vec2 panel_position = position;
+    const Vec2 panel_size = size;
+    position.x += kSectionRailWidth;
+    size.x = std::max(320.0f, size.x - kSectionRailWidth);
     switch (active_tab_) {
         case Tab::Camera:       DrawCameraTab(renderer);       break;
         case Tab::Stereo:       DrawStereoTab(renderer);       break;
@@ -1200,28 +1178,35 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
         case Tab::World:        DrawWorldTab(renderer);        break;
         case Tab::KnownEntities: DrawKnownEntitiesTab(renderer); break;
     }
+    position = panel_position;
+    size = panel_size;
 
     renderer.popClipRect();
     return true;
 }
 
 void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
-    const float pad        = 16.0f;
-    const float top_block  = 210.0f; // controls + signal settings rows
-    const float status_h   = 110.0f;
-    const float content_top = position.y + titleBarHeight + kTabBarHeight;
+    const float content_top = position.y + titleBarHeight + kEditorWorkspacePad;
+    const float inspector_x = position.x + size.x - kEditorInspectorWidth;
+    const float frame_x = position.x + kEditorWorkspacePad;
+    const float frame_y = content_top;
+    const float frame_w = std::max(64.0f,
+        inspector_x - frame_x - kEditorWorkspacePad);
+    const float frame_h = std::max(64.0f,
+        position.y + size.y - frame_y - kEditorWorkspacePad);
 
-    const float frame_x = position.x + pad;
-    const float frame_y = content_top + top_block;
-    const float frame_w = size.x - 2 * pad;
-    const float frame_h = size.y - (frame_y - position.y) - status_h - pad;
-
+    const cv::Mat& shown = camera_show_model_signal_
+        ? last_view_.model_image : last_view_.raw_image;
+    std::ostringstream preview_label;
+    preview_label << (camera_show_model_signal_ ? "MODEL INPUT" : "RAW CAMERA");
+    if (have_any_frame_ && !shown.empty()) {
+        preview_label << "  " << shown.cols << 'x' << shown.rows;
+    }
     renderer.drawRect({frame_x - 2, frame_y - 2}, {frame_w + 4, frame_h + 4},
                       UITheme::Colors::DividerLine);
     renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
                       UITheme::Colors::Background);
 
-    const cv::Mat& shown = camera_show_model_signal_ ? last_view_.model_image : last_view_.raw_image;
     if (have_any_frame_ && !shown.empty()) {
         DrawBgrFrameIntoOverlay(renderer, shown,
                                 last_seen_counter_, camera_show_model_signal_,
@@ -1231,83 +1216,66 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
                           "No frame yet — choose a source and click Connect.",
                           UITheme::Colors::TextSecondary);
     }
+    renderer.drawRect({frame_x + 6.0f, frame_y + 6.0f},
+                      {196.0f, 20.0f}, 0xCC10151Cu);
+    renderer.drawText({frame_x + 10.0f, frame_y + 8.0f}, preview_label.str(),
+                      camera_show_model_signal_
+                          ? UITheme::Colors::Warning
+                          : UITheme::Colors::TextPrimary);
 
-    // Status block under frame
-    const float stat_y = frame_y + frame_h + 6.0f;
-    {
-        std::ostringstream ss;
-        ss << "Active: " << (PE::IsPhysicalCameraStreamActive() ? "STREAMING"
-                           : PE::IsPhysicalCameraStreamFailed() ? "FAILED"
-                           : "idle")
-           << "  |  url=" << PE::GetActivePhysicalCameraUrl()
-           << "  |  label=" << PE::GetActivePhysicalCameraLabel();
-        renderer.drawText({frame_x, stat_y}, ss.str(), UITheme::Colors::TextPrimary);
-    }
-    {
-        std::ostringstream ss2;
-        ss2 << "Frames=" << PE::GetActiveStreamFrameCounter()
-            << "  fps=" << std::fixed << std::setprecision(1) << PE::GetActiveStreamFps();
-        if (have_any_frame_) {
-            ss2 << "  shown=" << shown.cols << "x" << shown.rows
-                << "  view=" << (camera_show_model_signal_ ? "model" : "raw");
-        }
-        renderer.drawText({frame_x, stat_y + 18}, ss2.str(), UITheme::Colors::TextSecondary);
-    }
-    {
-        std::ostringstream ss3;
-        ss3 << "Signal: " << signal_status_.last_pipeline_summary
-            << "| in=" << signal_status_.last_input_width << "x" << signal_status_.last_input_height
-            << " out=" << signal_status_.last_output_width << "x" << signal_status_.last_output_height
-            << " luma " << FormatDouble(signal_status_.last_input_luma, 1)
-            << "→" << FormatDouble(signal_status_.last_output_luma, 1)
-            << " gain=" << FormatDouble(signal_status_.last_applied_exposure_gain, 2);
-        renderer.drawText({frame_x, stat_y + 36}, ss3.str(), UITheme::Colors::TextSecondary);
-    }
-    {
-        std::ostringstream ss4;
-        ss4 << "Flow: points=" << signal_status_.last_flow_tracked_points
-            << " dx=" << FormatDouble(signal_status_.last_flow_dx, 2)
-            << " dy=" << FormatDouble(signal_status_.last_flow_dy, 2)
-            << " autoExp=" << (signal_status_.using_auto_exposure ? "yes" : "no");
-        renderer.drawText({frame_x, stat_y + 54}, ss4.str(), UITheme::Colors::TextSecondary);
-    }
-    {
-        // Quality gate diagnostics — gives the operator a hard reason any time
-        // a frame was withheld from the model.
-        std::ostringstream ss5;
-        ss5 << "QGate: " << (signal_status_.last_quality_gate_passed ? "PASS" : "DROP")
-            << " lapVar=" << FormatDouble(signal_status_.last_laplacian_variance, 1)
-            << " clip=" << FormatDouble(signal_status_.last_clipped_pixel_ratio * 100.0, 1) << "%"
-            << " dropped=" << signal_status_.total_frames_dropped_by_quality_gate;
-        if (!signal_status_.last_quality_gate_passed
-            && !signal_status_.last_quality_gate_reason.empty()) {
-            ss5 << "  reason=" << signal_status_.last_quality_gate_reason;
-        }
-        renderer.drawText({frame_x, stat_y + 72}, ss5.str(),
-                          signal_status_.last_quality_gate_passed
-                              ? UITheme::Colors::TextSecondary
-                              : UITheme::Colors::Danger);
-    }
-    {
-        // Geometric provenance: raw->model transform. Critical for any
-        // downstream consumer that wants to back-project model coords.
-        const auto& t = signal_status_.last_raw_to_model;
-        std::ostringstream ss6;
-        ss6 << "Geom: scale=("
-            << FormatDouble(t.scale_x, 3) << "," << FormatDouble(t.scale_y, 3)
-            << ")  offset=("
-            << FormatDouble(t.offset_x, 1) << "," << FormatDouble(t.offset_y, 1) << ")";
-        renderer.drawText({frame_x, stat_y + 90}, ss6.str(), UITheme::Colors::TextSecondary);
-    }
+    renderer.drawRect({inspector_x - 1.0f, position.y + titleBarHeight},
+                      {1.0f, size.y - titleBarHeight},
+                      UITheme::Colors::DividerLine);
+    renderer.drawRect({inspector_x, position.y + titleBarHeight},
+                      {kEditorInspectorWidth, size.y - titleBarHeight},
+                      UITheme::Colors::PanelBg);
+    const float ix = inspector_x + 10.0f;
+    const float top = content_top;
+    renderer.drawText({ix, top}, "CAMERA SOURCE", UITheme::Colors::TextSecondary);
+    renderer.drawText({ix, top + 122.0f}, "MODEL SIGNAL",
+                      UITheme::Colors::TextSecondary);
+    renderer.drawText({ix, top + 300.0f}, "PARAMETERS",
+                      UITheme::Colors::TextSecondary);
+    renderer.drawText({ix, top + 420.0f}, "LIVE STATUS",
+                      UITheme::Colors::TextSecondary);
+
+    float sy = top + 442.0f;
+    auto status_line = [&](const std::string& text, uint32_t color) {
+        renderer.drawText({ix, sy}, text, color);
+        sy += 17.0f;
+    };
+    status_line(std::string("State: ")
+        + (PE::IsPhysicalCameraStreamActive() ? "STREAMING"
+           : PE::IsPhysicalCameraStreamFailed() ? "FAILED" : "idle")
+        + "  fps=" + FormatDouble(PE::GetActiveStreamFps(), 1),
+        UITheme::Colors::TextPrimary);
+    status_line("Frames: " + std::to_string(PE::GetActiveStreamFrameCounter()),
+                UITheme::Colors::TextSecondary);
+    status_line("Raw: " + std::to_string(signal_status_.last_input_width) + "x"
+        + std::to_string(signal_status_.last_input_height) + "  Model: "
+        + std::to_string(signal_status_.last_output_width) + "x"
+        + std::to_string(signal_status_.last_output_height),
+        UITheme::Colors::TextSecondary);
+    status_line("Pipeline: " + CompactPath(signal_status_.last_pipeline_summary),
+                UITheme::Colors::TextSecondary);
+    status_line("Luma: " + FormatDouble(signal_status_.last_input_luma, 1)
+        + " -> " + FormatDouble(signal_status_.last_output_luma, 1)
+        + "  gain=" + FormatDouble(signal_status_.last_applied_exposure_gain, 2),
+        UITheme::Colors::TextSecondary);
+    status_line(std::string("Quality: ")
+        + (signal_status_.last_quality_gate_passed ? "PASS" : "DROP")
+        + "  sharpness=" + FormatDouble(signal_status_.last_laplacian_variance, 1),
+        signal_status_.last_quality_gate_passed
+            ? UITheme::Colors::TextSecondary : UITheme::Colors::Danger);
+    const auto& transform = signal_status_.last_raw_to_model;
+    status_line("Raw -> model: scale " + FormatDouble(transform.scale_x, 3)
+        + "," + FormatDouble(transform.scale_y, 3) + " offset "
+        + FormatDouble(transform.offset_x, 1) + ","
+        + FormatDouble(transform.offset_y, 1), UITheme::Colors::TextSecondary);
     const std::string err = PE::GetLastEnvironmentError();
-    if (!err.empty()) {
-        renderer.drawText({frame_x, stat_y + 108}, "Last error: " + err,
-                          UITheme::Colors::Danger);
-    }
-    if (!selection_info_.empty()) {
-        renderer.drawText({frame_x, stat_y + 126}, selection_info_,
-                          UITheme::Colors::Warning);
-    }
+    if (!err.empty()) status_line("Error: " + CompactPath(err), UITheme::Colors::Danger);
+    if (!selection_info_.empty())
+        status_line(CompactPath(selection_info_), UITheme::Colors::Warning);
 
     if (refresh_button_)    refresh_button_->drawOverlay(renderer, position);
     if (url_inputbox_)      url_inputbox_->drawOverlay(renderer, position);
@@ -1431,9 +1399,9 @@ void UIPhysicalEnvironmentPanel::DrawStereoTab(OverlayRenderer& renderer) {
 
 void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
     const float pad        = 12.0f;
-    const float top_block  = 70.0f;   // two rows of controls
+    const float top_block  = 104.0f;  // wrapped action rows + pattern row
     const float right_pane = 280.0f;
-    const float bottom_h   = 60.0f;
+    const float bottom_h   = 78.0f;
     const float content_top = position.y + titleBarHeight + kTabBarHeight;
 
     const float frame_x = position.x + pad;
@@ -1484,7 +1452,9 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
                << "  |  detector=" << (cal_last_status_.last_pattern_found
                                           ? cal_last_status_.last_detector_used
                                           : std::string("(none)"))
-               << "  |  preprocess_path=" << cal_last_status_.last_preprocess_path;
+               << "  |  path="
+               << FormatCalibrationPreprocessPath(
+                      cal_last_status_.last_preprocess_path);
         }
         renderer.drawText({frame_x, stat_y + 18}, ss.str(), UITheme::Colors::TextSecondary);
     }
@@ -1492,6 +1462,12 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
         renderer.drawText({frame_x, stat_y + 36},
                           "Status: " + cal_last_status_.status_reason,
                           UITheme::Colors::Warning);
+    }
+    if (!cal_last_status_.last_pattern_found
+        && !cal_last_status_.last_failure_reason.empty()) {
+        renderer.drawText({frame_x, stat_y + 54},
+                          "Detector: " + cal_last_status_.last_failure_reason,
+                          UITheme::Colors::TextSecondary);
     }
 
     DrawBrightnessBar(renderer, frame_x, frame_y - 14.0f, frame_w, 8.0f,
@@ -1501,7 +1477,17 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
     const float right_y = frame_y;
     const float cov_h   = 160.0f;
     DrawCoverageGrid(renderer, right_x, right_y, right_pane, cov_h, cal_last_status_);
-    DrawCalibrationDataReadout(renderer, right_x, right_y + cov_h + 12.0f, cal_last_status_);
+    renderer.drawText({right_x, right_y + cov_h + 12.0f},
+                      "Pattern values are INNER corners.",
+                      UITheme::Colors::TextPrimary);
+    renderer.drawText({right_x, right_y + cov_h + 30.0f},
+                      "Printed board: "
+                          + std::to_string(cal_last_status_.pattern_inner_cols + 1)
+                          + " x "
+                          + std::to_string(cal_last_status_.pattern_inner_rows + 1)
+                          + " squares; keep all edges visible.",
+                      UITheme::Colors::TextSecondary);
+    DrawCalibrationDataReadout(renderer, right_x, right_y + cov_h + 58.0f, cal_last_status_);
 
     if (cal_start_btn_)            cal_start_btn_->drawOverlay(renderer, position);
     if (cal_stop_btn_)             cal_stop_btn_->drawOverlay(renderer, position);
@@ -1566,7 +1552,12 @@ void UIPhysicalEnvironmentPanel::DrawBgrFrameIntoOverlay(
 
     if (!cache_hit) {
         cv::Mat resized;
-        cv::resize(bgr, resized, cv::Size(out_w, out_h), 0, 0, cv::INTER_AREA);
+        // INTER_AREA is excellent for reduction but visibly soft when used to
+        // enlarge a model-resolution preview. Use linear reconstruction for
+        // enlargement while retaining area filtering for downsampling.
+        const int interpolation = scale > 1.0
+            ? cv::INTER_LINEAR : cv::INTER_AREA;
+        cv::resize(bgr, resized, cv::Size(out_w, out_h), 0, 0, interpolation);
         if (resized.empty() || resized.type() != CV_8UC3) return;
 
         cache.argb.assign(static_cast<size_t>(out_w) * static_cast<size_t>(out_h), 0);
@@ -1836,15 +1827,19 @@ void UIPhysicalEnvironmentPanel::UpdatePerceptionTab(const InputState& input, fl
                   std::string("UpdatePerceptionTab: results pull threw: ") + e.what());
     }
 
-    // Toolbar buttons across the top of the content area.
-    const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
-    const float bx0 = position.x + 16.0f;
-    const float btn_w = 116.0f;
+    // Operator switches live in the contextual inspector, leaving the preview
+    // geometry untouched as sections change.
+    const float content_top = position.y + titleBarHeight + 12.0f;
+    const float bx0 = position.x + size.x - kEditorInspectorWidth + 8.0f;
+    const float btn_w = (kEditorInspectorWidth - 22.0f) * 0.5f;
     const float btn_h = 24.0f;
     auto place = [&](std::shared_ptr<UIButton>& b, int slot) {
         if (!b) return;
         b->setSize(btn_w, btn_h);
-        b->setPosition(bx0 + slot * (btn_w + 4.0f), content_top);
+        const int column = slot % 2;
+        const int row = slot / 2;
+        b->setPosition(bx0 + static_cast<float>(column) * (btn_w + 6.0f),
+                       content_top + 24.0f + static_cast<float>(row) * 28.0f);
         b->update(input, dt);
     };
     place(perc_btn_obj_,  0);
@@ -2444,27 +2439,15 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
 // ── Draw: tab body ─────────────────────────────────────────────────────────
 
 void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
-    // Toolbar buttons (already laid out + ticked in UpdatePerceptionTab).
-    if (perc_btn_obj_)  perc_btn_obj_->drawOverlay(renderer, position);
-    if (perc_btn_seg_)  perc_btn_seg_->drawOverlay(renderer, position);
-    if (perc_btn_cls_)  perc_btn_cls_->drawOverlay(renderer, position);
-    if (perc_btn_pose_) perc_btn_pose_->drawOverlay(renderer, position);
-    if (perc_btn_text_) perc_btn_text_->drawOverlay(renderer, position);
-    if (perc_btn_face_) perc_btn_face_->drawOverlay(renderer, position);
-    if (perc_btn_track_)perc_btn_track_->drawOverlay(renderer, position);
-    if (perc_btn_inst_seg_)perc_btn_inst_seg_->drawOverlay(renderer, position);
-    if (perc_btn_class_policy_)perc_btn_class_policy_->drawOverlay(renderer, position);
+    const float pad         = kEditorWorkspacePad;
+    const float content_top = position.y + titleBarHeight + pad;
 
-    const float pad         = 12.0f;
-    const float toolbar_h   = 32.0f;
-    const float content_top = position.y + titleBarHeight + kTabBarHeight + toolbar_h + pad;
-
-    const float sidebar_w = 290.0f;
+    const float sidebar_w = kEditorInspectorWidth;
     const float frame_x = position.x + pad;
     const float frame_y = content_top;
-    const float frame_w = std::max(64.0f, size.x - sidebar_w - pad * 3.0f);
+    const float sidebar_x = position.x + size.x - sidebar_w;
+    const float frame_w = std::max(64.0f, sidebar_x - frame_x - pad);
     const float frame_h = std::max(64.0f, position.y + size.y - frame_y - pad);
-    const float sidebar_x = frame_x + frame_w + pad;
     const float sidebar_y = frame_y;
     const float sidebar_h = frame_h;
 
@@ -2527,8 +2510,26 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
                       {sidebar_w + 2, sidebar_h + 2}, UITheme::Colors::DividerLine);
     renderer.drawRect({sidebar_x, sidebar_y},
                       {sidebar_w, sidebar_h}, UITheme::Colors::PanelBg);
-    DrawPerceptionSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
-                          sidebar_w - 16, sidebar_h - 16,
+    renderer.drawText({sidebar_x + 8.0f, sidebar_y + 4.0f},
+                      "VISION OPERATORS", UITheme::Colors::TextSecondary);
+    renderer.drawRect({frame_x + 6.0f, frame_y + 6.0f},
+                      {174.0f, 20.0f}, 0xCC10151Cu);
+    renderer.drawText({frame_x + 10.0f, frame_y + 8.0f},
+                      "MODEL INPUT + RESULTS", UITheme::Colors::Warning);
+    if (perc_btn_obj_)  perc_btn_obj_->drawOverlay(renderer, position);
+    if (perc_btn_seg_)  perc_btn_seg_->drawOverlay(renderer, position);
+    if (perc_btn_cls_)  perc_btn_cls_->drawOverlay(renderer, position);
+    if (perc_btn_pose_) perc_btn_pose_->drawOverlay(renderer, position);
+    if (perc_btn_text_) perc_btn_text_->drawOverlay(renderer, position);
+    if (perc_btn_face_) perc_btn_face_->drawOverlay(renderer, position);
+    if (perc_btn_track_)perc_btn_track_->drawOverlay(renderer, position);
+    if (perc_btn_inst_seg_)perc_btn_inst_seg_->drawOverlay(renderer, position);
+    if (perc_btn_class_policy_)perc_btn_class_policy_->drawOverlay(renderer, position);
+    constexpr float operator_controls_h = 168.0f;
+    DrawPerceptionSidebar(renderer, sidebar_x + 8,
+                          sidebar_y + operator_controls_h,
+                          sidebar_w - 16,
+                          std::max(32.0f, sidebar_h - operator_controls_h - 8.0f),
                           perc_results_view_.results, have_any_perc_results_);
 }
 
@@ -3866,19 +3867,18 @@ void UIPhysicalEnvironmentPanel::DrawWorldEntitiesSidebar(
 }
 
 void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
-    const float pad         = 16.0f;
-    const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
+    const float pad         = kEditorWorkspacePad;
+    const float content_top = position.y + titleBarHeight + pad;
 
-    // Frame on the left (~62%), sidebar on the right.
-    const float total_w = size.x - 2.0f * pad;
-    const float frame_w = total_w * 0.62f;
+    // Same viewport/inspector split used by Camera, Perception, and Identity.
+    const float sidebar_x = position.x + size.x - kEditorInspectorWidth;
+    const float frame_w = std::max(64.0f, sidebar_x - (position.x + pad) - pad);
     const float frame_h = size.y - (content_top - position.y) - pad;
     const float frame_x = position.x + pad;
     const float frame_y = content_top;
 
-    const float sidebar_x = frame_x + frame_w + 8.0f;
     const float sidebar_y = content_top;
-    const float sidebar_w = size.x - pad - (sidebar_x - position.x);
+    const float sidebar_w = kEditorInspectorWidth;
     const float sidebar_h = frame_h;
 
     // Draw the latest raw frame as the canvas (Rule 20: if no frame is on
@@ -3978,6 +3978,7 @@ void UIPhysicalEnvironmentPanel::RebuildKnownEntityRows() {
             row.currently_tracked = true;
             row.identity_state = entity.identity_state;
             row.last_face_match_score = entity.identity_confidence;
+            row.last_face_quality = entity.identity_face_quality;
         }
     }
 
@@ -4138,6 +4139,7 @@ void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
                         row.currently_tracked = true;
                         row.identity_state = entity.identity_state;
                         row.last_face_match_score = entity.identity_confidence;
+                        row.last_face_quality = entity.identity_face_quality;
                         break;
                     }
                 }
@@ -4154,11 +4156,16 @@ void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
         LOG_ERROR(kPanelLogTag, known_entity_status_);
     }
 
-    const float top = position.y + titleBarHeight + kTabBarHeight + 12.0f;
-    const float bottom = position.y + size.y - 12.0f;
+    const float top = position.y + titleBarHeight + kEditorWorkspacePad;
+    const float inspector_x = position.x + size.x - kEditorInspectorWidth;
+    const float inner_x = inspector_x + 8.0f;
+    const float inner_w = kEditorInspectorWidth - 16.0f;
     if (known_entity_list_) {
-        known_entity_list_->setPosition(position.x + 12.0f, top + 24.0f);
-        known_entity_list_->setSize(260.0f, bottom - (top + 24.0f));
+        known_entity_list_->setPosition(inner_x, top + 24.0f);
+        known_entity_list_->setSize(inner_w, 152.0f);
+        for (const auto& button : known_entity_row_buttons_) {
+            if (button) button->setSize(inner_w - 22.0f, 30.0f);
+        }
         known_entity_list_->update(input, dt);
     }
     for (size_t i = 0;
@@ -4176,30 +4183,30 @@ void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
                 UITheme::Colors::WidgetBgActive);
         }
     }
-    const float editor_x = position.x + 292.0f;
     if (known_entity_name_box_) {
-        known_entity_name_box_->setPosition(editor_x, top + 42.0f);
-        known_entity_name_box_->setSize(280.0f, 32.0f);
+        known_entity_name_box_->setPosition(inner_x, top + 184.0f);
+        known_entity_name_box_->setSize(inner_w, 28.0f);
         known_entity_name_box_->update(input, dt);
     }
+    const float half = (inner_w - 6.0f) * 0.5f;
     if (known_entity_apply_btn_) {
-        known_entity_apply_btn_->setPosition(editor_x + 290.0f, top + 42.0f);
-        known_entity_apply_btn_->setSize(116.0f, 32.0f);
+        known_entity_apply_btn_->setPosition(inner_x, top + 218.0f);
+        known_entity_apply_btn_->setSize(half, 28.0f);
         known_entity_apply_btn_->update(input, dt);
     }
     if (known_entity_clear_btn_) {
-        known_entity_clear_btn_->setPosition(editor_x + 414.0f, top + 42.0f);
-        known_entity_clear_btn_->setSize(142.0f, 32.0f);
+        known_entity_clear_btn_->setPosition(inner_x + half + 6.0f, top + 218.0f);
+        known_entity_clear_btn_->setSize(half, 28.0f);
         known_entity_clear_btn_->update(input, dt);
     }
     if (known_entity_enroll_face_btn_) {
-        known_entity_enroll_face_btn_->setPosition(editor_x, top + 80.0f);
-        known_entity_enroll_face_btn_->setSize(132.0f, 32.0f);
+        known_entity_enroll_face_btn_->setPosition(inner_x, top + 252.0f);
+        known_entity_enroll_face_btn_->setSize(half, 28.0f);
         known_entity_enroll_face_btn_->update(input, dt);
     }
     if (known_entity_forget_face_btn_) {
-        known_entity_forget_face_btn_->setPosition(editor_x + 142.0f, top + 80.0f);
-        known_entity_forget_face_btn_->setSize(132.0f, 32.0f);
+        known_entity_forget_face_btn_->setPosition(inner_x + half + 6.0f, top + 252.0f);
+        known_entity_forget_face_btn_->setSize(half, 28.0f);
         known_entity_forget_face_btn_->update(input, dt);
     }
 }
@@ -4207,17 +4214,56 @@ void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
 void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
     OverlayRenderer& renderer)
 {
-    const float top = position.y + titleBarHeight + kTabBarHeight + 12.0f;
-    renderer.drawText({position.x + 16.0f, top}, "Entities",
+    const float top = position.y + titleBarHeight + kEditorWorkspacePad;
+    const float inspector_x = position.x + size.x - kEditorInspectorWidth;
+    const float frame_x = position.x + kEditorWorkspacePad;
+    const float frame_y = top;
+    const float frame_w = std::max(64.0f,
+        inspector_x - frame_x - kEditorWorkspacePad);
+    const float frame_h = std::max(64.0f,
+        position.y + size.y - frame_y - kEditorWorkspacePad);
+
+    renderer.drawRect({frame_x - 1.0f, frame_y - 1.0f},
+                      {frame_w + 2.0f, frame_h + 2.0f},
+                      UITheme::Colors::DividerLine);
+    renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
+                      UITheme::Colors::Background);
+    if (have_any_frame_ && !last_view_.raw_image.empty()) {
+        DrawBgrFrameIntoOverlay(renderer, last_view_.raw_image,
+                                last_seen_counter_, false,
+                                frame_x, frame_y, frame_w, frame_h,
+                                world_blit_cache_);
+        if (have_known_world_results_ && world_blit_cache_.out_w > 0 &&
+            world_blit_cache_.out_h > 0) {
+            const int out_w = world_blit_cache_.out_w;
+            const int out_h = world_blit_cache_.out_h;
+            const int out_x = static_cast<int>(frame_x + (frame_w - out_w) * 0.5f);
+            const int out_y = static_cast<int>(frame_y + (frame_h - out_h) * 0.5f);
+            DrawWorldEntitiesOverlay(renderer, known_snapshot_view_.snapshot,
+                                     out_x, out_y, out_w, out_h);
+        }
+    } else {
+        renderer.drawText({frame_x + 12.0f, frame_y + 12.0f},
+                          "No raw camera frame is available.",
+                          UITheme::Colors::TextSecondary);
+    }
+    renderer.drawRect({frame_x + 6.0f, frame_y + 6.0f},
+                      {174.0f, 20.0f}, 0xCC10151Cu);
+    renderer.drawText({frame_x + 10.0f, frame_y + 8.0f},
+                      "RAW CAMERA + IDENTITIES",
+                      UITheme::Colors::TextPrimary);
+
+    renderer.drawRect({inspector_x - 1.0f, position.y + titleBarHeight},
+                      {1.0f, size.y - titleBarHeight},
+                      UITheme::Colors::DividerLine);
+    renderer.drawRect({inspector_x, position.y + titleBarHeight},
+                      {kEditorInspectorWidth, size.y - titleBarHeight},
+                      UITheme::Colors::PanelBg);
+    const float x = inspector_x + 8.0f;
+    renderer.drawText({x, top}, "IDENTITY PROFILES",
                       UITheme::Colors::TextPrimary);
     if (known_entity_list_) known_entity_list_->drawOverlay(renderer, position);
 
-    const float x = position.x + 292.0f;
-    renderer.drawText({x, top},
-        "Persistent entity identity", UITheme::Colors::TextPrimary);
-    renderer.drawText({x, top + 20.0f},
-        "Name a live person, then explicitly enroll one or more good face samples.",
-        UITheme::Colors::TextSecondary);
     if (known_entity_name_box_)
         known_entity_name_box_->drawOverlay(renderer, position);
     if (known_entity_apply_btn_)
@@ -4229,7 +4275,7 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
     if (known_entity_forget_face_btn_)
         known_entity_forget_face_btn_->drawOverlay(renderer, position);
 
-    float y = top + 126.0f;
+    float y = top + 288.0f;
     if (!known_entity_status_.empty()) {
         renderer.drawText({x, y}, known_entity_status_,
                           UITheme::Colors::TextSecondary);
@@ -4269,9 +4315,18 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
            << "  face_templates=" << row->face_template_count
            << "  match=" << std::fixed << std::setprecision(3)
            << row->last_face_match_score
-           << "  face_quality=" << row->last_face_quality;
+           << "  face_quality=" << row->last_face_quality
+           << "  embedding=" << (e.identity_face_embedding_present ? "yes" : "no");
         line(ss.str(), row->identity_state == PE::PhysicalEntityIdentityState::Recognized
             ? 0xFF22DD66u : UITheme::Colors::TextSecondary);
+    }
+    if (!e.identity_candidate_display_name.empty()) {
+        std::ostringstream ss;
+        ss << "nearest=" << e.identity_candidate_display_name
+           << "  evidence=" << e.identity_evidence_hits
+           << '/' << e.identity_evidence_required;
+        line(ss.str(), row->identity_state == PE::PhysicalEntityIdentityState::Candidate
+            ? 0xFFFFCC44u : UITheme::Colors::TextSecondary);
     }
     if (!row->persistent_entity_id.empty()) {
         line("persistent id: " + row->persistent_entity_id,

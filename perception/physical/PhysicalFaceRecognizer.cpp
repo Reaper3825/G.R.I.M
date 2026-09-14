@@ -93,6 +93,12 @@ void PhysicalFaceRecognizer::LoadOnnxModelIntoPhysicalFaceRecognizer(
             throw std::runtime_error("cv::FaceRecognizerSF::create returned null");
         }
         state_ = PhysicalImageOperatorState::ModelLoaded;
+        LOG_DEBUG(PHYSICAL_PERC_PRIM_LOG_TAG,
+            std::string("PhysicalFaceRecognizer: ModelLoaded onnx='")
+            + cfg_.onnx_model_path + "' model_id='" + cfg_.model_id
+            + "' min_face_px=" + std::to_string(cfg_.minimum_face_pixels)
+            + " min_detection_conf="
+            + std::to_string(cfg_.minimum_detection_confidence));
     } catch (const std::exception& e) {
         recognizer_.reset();
         state_ = PhysicalImageOperatorState::ModelLoadFailed;

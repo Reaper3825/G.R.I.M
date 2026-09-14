@@ -3,6 +3,7 @@
 #include "../Goal/GoalTokenSpan.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace GRIM {
@@ -19,9 +20,14 @@ struct ConceptBlockSpanEntry {
 struct ConceptBlockSpans {
     std::vector<ConceptBlockSpanEntry> knowns;
     std::vector<ConceptBlockSpanEntry> unknowns;
+    std::optional<ConceptBlockSpanEntry> reasoning;
+    std::optional<ConceptBlockSpanEntry> determine;
+    std::optional<ConceptBlockSpanEntry> execute;
+    std::optional<ConceptBlockSpanEntry> update;
 
     bool empty() const noexcept {
-        return knowns.empty() && unknowns.empty();
+        return knowns.empty() && unknowns.empty() && !reasoning &&
+               !determine && !execute && !update;
     }
 };
 

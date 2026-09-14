@@ -12,6 +12,7 @@
 #include "../../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -36,6 +37,53 @@ struct AtomTokenSpan {
     size_t begin = 0;
     size_t end = 0;  // exclusive
 };
+
+enum class ConceptField : std::uint8_t {
+    Prompt = 0,
+    TargetState,
+    SuccessCriteriaAndEvidence,
+    Constraints,
+    KnownsAndUnknowns,
+    Reasoning,
+    Determine,
+    Execute,
+    Update,
+    Answer,
+};
+
+const char* conceptFieldName(ConceptField field) {
+    switch (field) {
+        case ConceptField::Prompt: return "prompt";
+        case ConceptField::TargetState: return "target_state";
+        case ConceptField::SuccessCriteriaAndEvidence:
+            return "success_criteria_and_evidence";
+        case ConceptField::Constraints: return "constraints";
+        case ConceptField::KnownsAndUnknowns:
+            return "knowns_and_unknowns";
+        case ConceptField::Reasoning: return "reasoning";
+        case ConceptField::Determine: return "determine";
+        case ConceptField::Execute: return "execute";
+        case ConceptField::Update: return "update";
+        case ConceptField::Answer: return "answer";
+    }
+    return "unknown";
+}
+
+ConceptField parseConceptField(const std::string& name, const std::string& source) {
+    if (name == "prompt") return ConceptField::Prompt;
+    if (name == "target_state") return ConceptField::TargetState;
+    if (name == "success_criteria_and_evidence")
+        return ConceptField::SuccessCriteriaAndEvidence;
+    if (name == "constraints") return ConceptField::Constraints;
+    if (name == "knowns_and_unknowns") return ConceptField::KnownsAndUnknowns;
+    if (name == "reasoning") return ConceptField::Reasoning;
+    if (name == "determine") return ConceptField::Determine;
+    if (name == "execute") return ConceptField::Execute;
+    if (name == "update") return ConceptField::Update;
+    if (name == "answer") return ConceptField::Answer;
+    throw std::runtime_error(
+        source + ": unknown concept field '" + name + "'");
+}
 
 std::vector<AtomTokenSpan> collectAtomTokenSpans(
     const std::vector<int>& token_ids,
@@ -265,6 +313,16 @@ std::shared_ptr<const GRIM::ConceptBlockSpans> offsetConceptBlockSpans(
     };
     shift_entries(shifted->knowns);
     shift_entries(shifted->unknowns);
+    auto shift_optional = [offset](
+        std::optional<GRIM::ConceptBlockSpanEntry>& entry) {
+        if (!entry) return;
+        entry->span.begin += offset;
+        entry->span.end += offset;
+    };
+    shift_optional(shifted->reasoning);
+    shift_optional(shifted->determine);
+    shift_optional(shifted->execute);
+    shift_optional(shifted->update);
     std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
         std::move(shifted);
     return immutable_spans;
@@ -284,7 +342,14 @@ bool conceptBlockSpansFitPrefix(
                 return static_cast<size_t>(entry.span.end) <= source_end;
             });
     };
-    return entries_fit(spans->knowns) && entries_fit(spans->unknowns);
+    const auto optional_fits = [source_end](
+        const std::optional<GRIM::ConceptBlockSpanEntry>& entry) {
+        return !entry || static_cast<size_t>(entry->span.end) <= source_end;
+    };
+    return entries_fit(spans->knowns) && entries_fit(spans->unknowns) &&
+           optional_fits(spans->reasoning) &&
+           optional_fits(spans->determine) &&
+           optional_fits(spans->execute) && optional_fits(spans->update);
 }
 
 std::shared_ptr<const GRIM::ConceptBlockSpans> sliceConceptBlockSpansForSftWindow(
@@ -319,6 +384,28 @@ std::shared_ptr<const GRIM::ConceptBlockSpans> sliceConceptBlockSpansForSftWindo
     };
     slice_entries(source->knowns, sliced->knowns);
     slice_entries(source->unknowns, sliced->unknowns);
+    auto slice_optional = [prefix_length, response_source_begin, response_source_end](
+        const std::optional<GRIM::ConceptBlockSpanEntry>& source_entry,
+        std::optional<GRIM::ConceptBlockSpanEntry>& destination) {
+        if (!source_entry) return;
+        GRIM::ConceptBlockSpanEntry entry = *source_entry;
+        if (entry.span.end <= static_cast<std::int32_t>(prefix_length)) {
+            destination = std::move(entry);
+            return;
+        }
+        if (entry.span.begin >= static_cast<std::int32_t>(response_source_begin) &&
+            entry.span.end <= static_cast<std::int32_t>(response_source_end)) {
+            const std::int32_t offset = static_cast<std::int32_t>(prefix_length) -
+                static_cast<std::int32_t>(response_source_begin);
+            entry.span.begin += offset;
+            entry.span.end += offset;
+            destination = std::move(entry);
+        }
+    };
+    slice_optional(source->reasoning, sliced->reasoning);
+    slice_optional(source->determine, sliced->determine);
+    slice_optional(source->execute, sliced->execute);
+    slice_optional(source->update, sliced->update);
     if (sliced->empty()) {
         return nullptr;
     }
@@ -347,83 +434,56 @@ bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
     return true;
 }
 
-GRIM::GoalTokenSpan supervisionSpanOrThrow(
+std::optional<GRIM::GoalTokenSpan> conceptFieldSpan(
     const GrmtSequence& sequence,
-    GRIM::Config::ConceptSupervisionTarget target,
-    const std::string& source) {
-    const auto require_goal = [&]() -> const GRIM::Goal& {
-        if (!sequence.goal) {
-            throw std::runtime_error(source + ": selected supervision target requires a goal");
-        }
-        return *sequence.goal;
-    };
-    const auto require_criteria_with_evidence = [&](const GRIM::Goal& goal) {
-        if (!goal.success_criteria.has_value() ||
-            goal.success_criteria->entries.empty()) {
-            throw std::runtime_error(
-                source + ": selected supervision target requires prior success criteria");
-        }
-        for (const auto& entry : goal.success_criteria->entries) {
-            if (!entry.evidence_span.valid()) {
-                throw std::runtime_error(
-                    source + ": selected supervision target requires evidence for every prior criterion");
-            }
-        }
-    };
-    switch (target) {
-        case GRIM::Config::ConceptSupervisionTarget::TargetState: {
-            const auto& goal = require_goal();
-            if (!goal.target_state.has_value()) {
-                throw std::runtime_error(source + ": target_state supervision requires goal.target_state");
-            }
-            return goal.target_state->span;
-        }
-        case GRIM::Config::ConceptSupervisionTarget::SuccessCriteriaAndEvidence: {
-            const auto& goal = require_goal();
-            if (!goal.target_state.has_value()) {
-                throw std::runtime_error(
-                    source + ": success-criteria supervision requires prior target_state");
-            }
-            require_criteria_with_evidence(goal);
-            return goal.success_criteria->span;
-        }
-        case GRIM::Config::ConceptSupervisionTarget::Constraints: {
-            const auto& goal = require_goal();
-            if (!goal.target_state.has_value() || !goal.constraints.has_value() ||
-                goal.constraints->entries.empty()) {
-                throw std::runtime_error(
-                    source + ": constraints supervision requires prior target_state, criteria, and constraints");
-            }
-            require_criteria_with_evidence(goal);
-            return goal.constraints->span;
-        }
-        case GRIM::Config::ConceptSupervisionTarget::KnownsAndUnknowns: {
-            const auto& goal = require_goal();
-            if (!goal.target_state.has_value() || !goal.constraints.has_value() ||
-                goal.constraints->entries.empty()) {
-                throw std::runtime_error(
-                    source + ": knowns/unknowns supervision requires the complete prior goal contract");
-            }
-            require_criteria_with_evidence(goal);
-            if (!sequence.concept_block_spans ||
-                sequence.concept_block_spans->knowns.empty() ||
-                sequence.concept_block_spans->unknowns.empty()) {
-                throw std::runtime_error(
-                    source + ": knowns/unknowns supervision requires both collections");
-            }
+    ConceptField field) {
+    switch (field) {
+        case ConceptField::Prompt:
+            if (sequence.prompt_length <= 0 || sequence.prompt_end_pos < 0) return std::nullopt;
             return GRIM::GoalTokenSpan{
-                sequence.concept_block_spans->knowns.front().span.begin,
-                sequence.concept_block_spans->unknowns.back().span.end};
-        }
-        case GRIM::Config::ConceptSupervisionTarget::Answer:
-            if (!sequence.answer_span.has_value()) {
-                throw std::runtime_error(source + ": answer supervision requires a non-empty answer");
+                sequence.prompt_end_pos - sequence.prompt_length + 1,
+                sequence.prompt_end_pos + 1};
+        case ConceptField::TargetState:
+            if (sequence.goal && sequence.goal->target_state)
+                return sequence.goal->target_state->span;
+            return std::nullopt;
+        case ConceptField::SuccessCriteriaAndEvidence:
+            if (sequence.goal && sequence.goal->success_criteria)
+                return sequence.goal->success_criteria->span;
+            return std::nullopt;
+        case ConceptField::Constraints:
+            if (sequence.goal && sequence.goal->constraints)
+                return sequence.goal->constraints->span;
+            return std::nullopt;
+        case ConceptField::KnownsAndUnknowns:
+            if (sequence.concept_block_spans &&
+                !sequence.concept_block_spans->knowns.empty() &&
+                !sequence.concept_block_spans->unknowns.empty()) {
+                return GRIM::GoalTokenSpan{
+                    sequence.concept_block_spans->knowns.front().span.begin,
+                    sequence.concept_block_spans->unknowns.back().span.end};
             }
-            return *sequence.answer_span;
-        case GRIM::Config::ConceptSupervisionTarget::Unspecified:
-            break;
+            return std::nullopt;
+        case ConceptField::Reasoning:
+            if (sequence.concept_block_spans && sequence.concept_block_spans->reasoning)
+                return sequence.concept_block_spans->reasoning->span;
+            return std::nullopt;
+        case ConceptField::Determine:
+            if (sequence.concept_block_spans && sequence.concept_block_spans->determine)
+                return sequence.concept_block_spans->determine->span;
+            return std::nullopt;
+        case ConceptField::Execute:
+            if (sequence.concept_block_spans && sequence.concept_block_spans->execute)
+                return sequence.concept_block_spans->execute->span;
+            return std::nullopt;
+        case ConceptField::Update:
+            if (sequence.concept_block_spans && sequence.concept_block_spans->update)
+                return sequence.concept_block_spans->update->span;
+            return std::nullopt;
+        case ConceptField::Answer:
+            return sequence.answer_span;
     }
-    throw std::runtime_error(source + ": concept supervision target is unspecified");
+    return std::nullopt;
 }
 
 void retainMetadataThrough(GrmtSequence& sequence, std::int32_t cut) {
@@ -459,21 +519,56 @@ void retainMetadataThrough(GrmtSequence& sequence, std::int32_t cut) {
         };
         copy_fitting(sequence.concept_block_spans->knowns, retained->knowns);
         copy_fitting(sequence.concept_block_spans->unknowns, retained->unknowns);
+        const auto copy_optional = [cut](
+            const std::optional<GRIM::ConceptBlockSpanEntry>& source_entry,
+            std::optional<GRIM::ConceptBlockSpanEntry>& destination) {
+            if (source_entry && source_entry->span.end <= cut) {
+                destination = source_entry;
+            }
+        };
+        copy_optional(sequence.concept_block_spans->reasoning, retained->reasoning);
+        copy_optional(sequence.concept_block_spans->determine, retained->determine);
+        copy_optional(sequence.concept_block_spans->execute, retained->execute);
+        copy_optional(sequence.concept_block_spans->update, retained->update);
         if (retained->empty()) sequence.concept_block_spans.reset();
         else sequence.concept_block_spans = std::move(retained);
     }
 }
 
-void projectConceptSupervision(
+bool projectConceptSupervision(
     GrmtSequence& sequence,
-    GRIM::Config::ConceptSupervisionTarget target,
+    const std::vector<ConceptField>& supervised_fields,
+    const std::vector<ConceptField>& unsupervised_fields,
     const std::string& source) {
-    const GRIM::GoalTokenSpan span = supervisionSpanOrThrow(sequence, target, source);
-    if (!span.valid() || span.begin <= 0 ||
-        static_cast<std::size_t>(span.end) > sequence.token_ids.size()) {
-        throw std::runtime_error(source + ": selected supervision span is invalid");
+    std::vector<GRIM::GoalTokenSpan> supervised_spans;
+    std::size_t cut = 0;
+    const auto collect = [&](const std::vector<ConceptField>& fields,
+                             bool supervised) {
+        for (const auto field : fields) {
+            const auto span = conceptFieldSpan(sequence, field);
+            if (!span) continue;
+            if (!span->valid() || span->begin < 0 ||
+                static_cast<std::size_t>(span->end) > sequence.token_ids.size()) {
+                throw std::runtime_error(
+                    source + ": invalid span for field " +
+                    conceptFieldName(field));
+            }
+            cut = std::max(cut, static_cast<std::size_t>(span->end));
+            if (supervised) supervised_spans.push_back(*span);
+        }
+    };
+    collect(supervised_fields, true);
+    collect(unsupervised_fields, false);
+    if (supervised_spans.empty()) {
+        return false;
     }
-    const std::size_t cut = static_cast<std::size_t>(span.end);
+    const auto first_supervised = std::min_element(
+        supervised_spans.begin(), supervised_spans.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.begin < rhs.begin; });
+    if (first_supervised->begin <= 0) {
+        throw std::runtime_error(
+            source + ": first supervised field has no preceding causal token");
+    }
     sequence.token_ids.resize(cut);
     sequence.targets.assign(cut, -1);
     sequence.token_numeric_values.resize(cut);
@@ -485,15 +580,23 @@ void projectConceptSupervision(
         sequence.token_atom_aux_target_mask.resize(cut);
     }
     sequence.token_exec_slot_indices.resize(cut);
-    for (std::int32_t position = span.begin; position < span.end; ++position) {
-        sequence.targets[static_cast<std::size_t>(position - 1)] =
-            sequence.token_ids[static_cast<std::size_t>(position)];
+    for (const auto& span : supervised_spans) {
+        for (std::int32_t position = span.begin; position < span.end; ++position) {
+            sequence.targets[static_cast<std::size_t>(position - 1)] =
+                sequence.token_ids[static_cast<std::size_t>(position)];
+        }
     }
-    sequence.prompt_length = span.begin;
-    sequence.prompt_end_pos = span.begin - 1;
-    retainMetadataThrough(sequence, span.end);
+    sequence.prompt_length = first_supervised->begin;
+    sequence.prompt_end_pos = first_supervised->begin - 1;
+    retainMetadataThrough(sequence, static_cast<std::int32_t>(cut));
     sequence.answer_span.reset();
-    if (target != GRIM::Config::ConceptSupervisionTarget::Answer) {
+    const bool retain_execution = std::any_of(
+        supervised_fields.begin(), supervised_fields.end(),
+        [](const auto field) {
+            return field == ConceptField::Execute ||
+                   field == ConceptField::Answer;
+        });
+    if (!retain_execution) {
         sequence.execution_active = false;
         sequence.execution_gate_target =
             GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
@@ -504,6 +607,7 @@ void projectConceptSupervision(
         sequence.compiled_bootstrap_bindings.clear();
         sequence.transition_targets.clear();
     }
+    return true;
 }
 
 void appendSftTokenRange(GrmtSequence& destination,
@@ -566,7 +670,7 @@ SftWindowConstruction constructSftWindows(
                 "Sliding window (" + split_name + "): invalid prompt span");
         }
 
-        // Pin every token before the selected supervision span through
+        // Pin every token before the first supervised field through
         // prompt_end_pos. A configured BOS may precede the authored span and
         // remains part of this prefix.
         const size_t prefix_length =
@@ -797,6 +901,10 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 
         // Add EOS if missing at end (controlled by config flag add_eos_token)
         if (add_eos_token && seq.token_ids.back() != GRIM::Tokenizer::EOS_TOKEN_ID) {
+            const bool final_token_is_supervised =
+                training_stage != GRIM::HyperParameters::TrainingStage::SFT ||
+                (seq.token_ids.size() > 1 &&
+                 seq.targets[seq.token_ids.size() - 2] == seq.token_ids.back());
             seq.token_ids.push_back(GRIM::Tokenizer::EOS_TOKEN_ID);
             seq.token_numeric_values.push_back(0.0f);
             seq.token_atom_mask.push_back(0);
@@ -806,7 +914,9 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             // Fix shift: the PREVIOUS position's target was -1 (no next token existed
             // when DataLoader ran). Now EOS follows it, so set target = EOS.
             if (!seq.targets.empty()) {
-                seq.targets.back() = GRIM::Tokenizer::EOS_TOKEN_ID;  // position before EOS → predict EOS
+                seq.targets.back() = final_token_is_supervised
+                    ? GRIM::Tokenizer::EOS_TOKEN_ID
+                    : -1;
             }
             seq.targets.push_back(-1);  // EOS position itself: nothing follows
             if (!seq.token_exec_slot_indices.empty())
@@ -819,7 +929,8 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
                          GRIM::HyperParameters::TrainingStage training_stage,
-                         GRIM::Config::ConceptSupervisionTarget supervision_target,
+                         const std::vector<std::string>& supervised_fields,
+                         const std::vector<std::string>& unsupervised_fields,
                          int max_seq_len,
                          int sliding_window_stride,
                          int min_seq_valid_tokens,
@@ -827,15 +938,72 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                          bool add_eos_token,
                          TrainingLogger& logger) {
     if (training_stage == GRIM::HyperParameters::TrainingStage::SFT) {
-        for (auto& sequence : sequences) {
-            projectConceptSupervision(
-                sequence, supervision_target,
-                "Sliding window (" + split_name + ", SFT, concept_block_id=" +
-                    sequence.concept_block_id + ")");
+        if (supervised_fields.empty()) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name +
+                "): SFT supervised_fields must not be empty");
         }
-        logger.log("[Data] SFT concept supervision target (" + split_name + ")=" +
-                   std::string(GRIM::Config::conceptSupervisionTargetToString(
-                       supervision_target)));
+        std::vector<ConceptField> parsed_supervised_fields;
+        std::vector<ConceptField> parsed_unsupervised_fields;
+        parsed_supervised_fields.reserve(supervised_fields.size());
+        parsed_unsupervised_fields.reserve(unsupervised_fields.size());
+        const std::string policy_source = "Sliding window (" + split_name + ")";
+        for (const auto& field : supervised_fields) {
+            parsed_supervised_fields.push_back(
+                parseConceptField(field, policy_source + " supervised_fields"));
+        }
+        for (const auto& field : unsupervised_fields) {
+            parsed_unsupervised_fields.push_back(
+                parseConceptField(field, policy_source + " unsupervised_fields"));
+        }
+        std::array<bool, 10> listed_fields{};
+        const auto validate_field_list = [&](const auto& fields, const char* name) {
+            for (const auto field : fields) {
+                const auto index = static_cast<std::size_t>(field);
+                if (index >= listed_fields.size()) {
+                    throw std::runtime_error(
+                        "Sliding window (" + split_name + "): invalid field in " + name);
+                }
+                if (listed_fields[index]) {
+                    throw std::runtime_error(
+                        "Sliding window (" + split_name +
+                        "): duplicate or overlapping field in SFT policy");
+                }
+                listed_fields[index] = true;
+            }
+        };
+        validate_field_list(parsed_supervised_fields, "supervised_fields");
+        validate_field_list(parsed_unsupervised_fields, "unsupervised_fields");
+        if (listed_fields[static_cast<std::size_t>(ConceptField::Prompt)] &&
+            std::find(parsed_supervised_fields.begin(), parsed_supervised_fields.end(),
+                      ConceptField::Prompt) != parsed_supervised_fields.end()) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name + "): prompt cannot be supervised");
+        }
+        const auto unprojected = std::remove_if(
+            sequences.begin(), sequences.end(), [&](auto& sequence) {
+                return !projectConceptSupervision(
+                    sequence, parsed_supervised_fields, parsed_unsupervised_fields,
+                    "Sliding window (" + split_name +
+                        ", SFT, concept_block_id=" +
+                        sequence.concept_block_id + ")");
+            });
+        const auto ignored_rows = static_cast<std::size_t>(
+            std::distance(unprojected, sequences.end()));
+        sequences.erase(unprojected, sequences.end());
+        const auto format_fields = [](const auto& fields) {
+            std::string result = "[";
+            for (std::size_t index = 0; index < fields.size(); ++index) {
+                if (index != 0) result += ",";
+                result += conceptFieldName(fields[index]);
+            }
+            return result + "]";
+        };
+        logger.log("[Data] SFT concept field policy (" + split_name +
+                   "): supervised=" + format_fields(parsed_supervised_fields) +
+                   " unsupervised=" + format_fields(parsed_unsupervised_fields) +
+                   " rows_without_supervised_fields=" +
+                   std::to_string(ignored_rows));
     }
 
     // Bracket sequences with BOS/EOS before windowing so window math sees

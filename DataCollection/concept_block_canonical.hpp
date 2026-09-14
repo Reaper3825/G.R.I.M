@@ -51,6 +51,7 @@ struct RenderResult {
     std::vector<LogicalByteSpan> knowns;
     std::vector<LogicalByteSpan> unknowns;
     // Authored Determine/Execute/Update phases immediately preceding Answer.
+    LogicalByteSpan reasoning;
     LogicalByteSpan determine;
     LogicalByteSpan execute;
     LogicalByteSpan update;
@@ -235,8 +236,14 @@ inline RenderResult render(const nlohmann::json& j) {
         explanation = &j["intermediates"];
     }
     if (explanation) {
+        const size_t reasoning_begin = static_cast<size_t>(out.tellp());
         for (const auto& step : *explanation) {
             if (step.is_string()) out << step.get<std::string>() << "\n";
+        }
+        const size_t reasoning_end = static_cast<size_t>(out.tellp());
+        if (reasoning_end > reasoning_begin) {
+            result.reasoning = LogicalByteSpan{
+                reasoning_begin, reasoning_end, true};
         }
     }
 
