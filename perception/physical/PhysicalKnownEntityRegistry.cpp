@@ -1,80 +1,63 @@
 #include "PhysicalKnownEntityRegistry.hpp"
+#include "PhysicalIdentityStore.hpp"
+#include "PhysicalFaceIdentityMatcher.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <ctime>
+#include <iomanip>
 #include <mutex>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 namespace GRIM { namespace Perception { namespace Physical {
-
 namespace {
+
+constexpr float kMinimumEnrollmentQuality = 0.65f;
+constexpr uint32_t kRecognitionEvidenceRequired = 3;
+constexpr size_t kMaximumTemplatesPerIdentity = 24;
+
+struct CandidateEvidence {
+    std::string persistent_entity_id;
+    uint32_t consecutive_hits = 0;
+    float last_score = 0.0f;
+    uint64_t last_evidence_frame = 0;
+};
 
 struct RegistryState {
     std::mutex mutex;
+    bool loaded = false;
+    std::vector<PhysicalIdentityProfile> profiles;
     std::unordered_map<uint64_t, PhysicalKnownEntityRecord> records_by_known_id;
+    std::unordered_map<std::string, uint64_t> known_id_by_persistent_id;
     std::unordered_map<uint64_t, uint64_t> known_id_by_track_id;
+    std::unordered_map<uint64_t, PhysicalFaceEmbedding> latest_face_by_track_id;
+    std::unordered_map<uint64_t, CandidateEvidence> candidate_by_track_id;
     uint64_t next_known_entity_id = 1;
     uint64_t revision = 0;
 };
 
-RegistryState& State() {
-    static RegistryState state;
-    return state;
-}
+RegistryState& State() { static RegistryState state; return state; }
 
-// Conservative re-association gates. This is deliberately not presented as
-// biometric recognition: it only reconnects an unambiguous same-class track
-// near the last known geometry during a bounded absence.
-constexpr uint64_t kMaxAutomaticRelinkGapFrames = 900;
-constexpr float kMaxAutomaticRelinkCentreDistance = 0.55f;
-constexpr float kMinAutomaticRelinkAreaSimilarity = 0.40f;
-constexpr float kMinAutomaticRelinkScore = 0.55f;
-constexpr float kMinAutomaticRelinkMargin = 0.12f;
-
-struct AutomaticRelinkCandidate {
-    uint64_t known_entity_id = 0;
-    const PhysicalWorldEntity* live_entity = nullptr;
-    float score = 0.0f;
-};
-
-float BoxArea(const cv::Rect2f& box) {
-    return std::max(0.0f, box.width) * std::max(0.0f, box.height);
-}
-
-float AutomaticRelinkScore(const PhysicalKnownEntityRecord& known,
-                           const PhysicalWorldEntity& live,
-                           const PhysicalWorldStateSnapshot& snapshot)
-{
-    if (known.last_observation.class_id != live.class_id) return -1.0f;
-    if (known.last_observation.class_label != live.class_label) return -1.0f;
-    if (live.track_state != PhysicalEntityTrackState::Confirmed) return -1.0f;
-    if (snapshot.source_frame_counter <
-        known.last_observation.last_seen_frame_counter) return -1.0f;
-    const uint64_t gap = snapshot.source_frame_counter -
-        known.last_observation.last_seen_frame_counter;
-    if (gap > kMaxAutomaticRelinkGapFrames) return -1.0f;
-
-    const float width = static_cast<float>(std::max(1, snapshot.model_image_width));
-    const float height = static_cast<float>(std::max(1, snapshot.model_image_height));
-    const float diagonal = std::sqrt(width * width + height * height);
-    const float dx = live.model_centre.x - known.last_observation.model_centre.x;
-    const float dy = live.model_centre.y - known.last_observation.model_centre.y;
-    const float normalized_distance = std::sqrt(dx * dx + dy * dy) / diagonal;
-    if (normalized_distance > kMaxAutomaticRelinkCentreDistance) return -1.0f;
-
-    const float old_area = BoxArea(known.last_observation.model_box);
-    const float new_area = BoxArea(live.model_box);
-    if (old_area <= 0.0f || new_area <= 0.0f) return -1.0f;
-    const float area_similarity = std::min(old_area, new_area) /
-                                  std::max(old_area, new_area);
-    if (area_similarity < kMinAutomaticRelinkAreaSimilarity) return -1.0f;
-
-    const float distance_score = 1.0f -
-        normalized_distance / kMaxAutomaticRelinkCentreDistance;
-    return 0.65f * distance_score + 0.25f * area_similarity
-         + 0.10f * std::clamp(live.confidence, 0.0f, 1.0f);
+std::string GeneratePersistentId() {
+    std::array<unsigned char, 16> bytes{};
+    std::random_device random;
+    for (auto& byte : bytes) byte = static_cast<unsigned char>(random());
+    bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0fU) | 0x40U);
+    bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3fU) | 0x80U);
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        out << std::setw(2) << static_cast<unsigned int>(bytes[i]);
+        if (i == 3 || i == 5 || i == 7 || i == 9) out << '-';
+    }
+    return out.str();
 }
 
 std::string TrimAndValidateName(const std::string& input) {
@@ -82,243 +65,383 @@ std::string TrimAndValidateName(const std::string& input) {
         [](unsigned char c) { return std::isspace(c) != 0; });
     auto last = std::find_if_not(input.rbegin(), input.rend(),
         [](unsigned char c) { return std::isspace(c) != 0; }).base();
-    if (first >= last) {
-        throw std::invalid_argument("Physical entity name must not be empty");
-    }
+    if (first >= last) throw std::invalid_argument("Physical entity name must not be empty");
     std::string name(first, last);
-    if (name.size() > 96) {
-        throw std::invalid_argument("Physical entity name must be at most 96 bytes");
-    }
+    if (name.size() > 96) throw std::invalid_argument("Physical entity name must be at most 96 bytes");
     for (unsigned char c : name) {
         if (c < 0x20 || c == 0x7f) {
-            throw std::invalid_argument(
-                "Physical entity name must not contain control characters");
+            throw std::invalid_argument("Physical entity name must not contain control characters");
         }
     }
     return name;
 }
 
-} // anonymous namespace
-
-void ObservePhysicalWorldStateForKnownEntities(
-    const PhysicalWorldStateSnapshot& snapshot)
-{
-    auto& state = State();
-    std::lock_guard<std::mutex> lock(state.mutex);
-    if (state.records_by_known_id.empty()) return;
-
-    std::unordered_map<uint64_t, const PhysicalWorldEntity*> live_by_id;
-    live_by_id.reserve(snapshot.entities.size());
-    bool membership_changed = false;
-    for (const auto& entity : snapshot.entities) {
-        if (entity.object_id == 0) continue;
-        live_by_id[entity.object_id] = &entity;
+void LoadProfilesLocked(RegistryState& state) {
+    if (state.loaded) return;
+    state.profiles = LoadPhysicalIdentityProfiles();
+    for (const auto& profile : state.profiles) {
+        PhysicalKnownEntityRecord record;
+        record.known_entity_id = state.next_known_entity_id++;
+        record.persistent_entity_id = profile.persistent_entity_id;
+        record.name = profile.display_name;
+        record.face_template_count = profile.face_templates.size();
+        record.identity_state = profile.face_templates.empty()
+            ? PhysicalEntityIdentityState::NamedOnly
+            : PhysicalEntityIdentityState::Enrolled;
+        state.known_id_by_persistent_id[profile.persistent_entity_id] = record.known_entity_id;
+        state.records_by_known_id.emplace(record.known_entity_id, std::move(record));
     }
-    for (auto& item : state.records_by_known_id) {
-        auto& record = item.second;
-        const auto live = live_by_id.find(record.object_id);
-        const bool is_live = live != live_by_id.end();
-        if (record.currently_tracked != is_live) membership_changed = true;
-        record.currently_tracked = is_live;
-        if (is_live) {
-            record.last_observation = *live->second;
-        }
-    }
-
-    // Reconnect stale known identities to newly confirmed tracks. A match is
-    // accepted only when it is the best choice from both directions and has a
-    // clear margin over the runner-up. Ambiguous scenes remain unlinked.
-    std::vector<AutomaticRelinkCandidate> candidates;
-    for (const auto& item : state.records_by_known_id) {
-        const auto& known = item.second;
-        if (known.currently_tracked) continue;
-        for (const auto& entity : snapshot.entities) {
-            if (state.known_id_by_track_id.find(entity.object_id) !=
-                state.known_id_by_track_id.end()) continue;
-            const float score = AutomaticRelinkScore(known, entity, snapshot);
-            if (score >= kMinAutomaticRelinkScore) {
-                candidates.push_back({item.first, &entity, score});
-            }
-        }
-    }
-    std::sort(candidates.begin(), candidates.end(),
-        [](const AutomaticRelinkCandidate& a,
-           const AutomaticRelinkCandidate& b) { return a.score > b.score; });
-
-    std::unordered_map<uint64_t, bool> linked_known_ids;
-    std::unordered_map<uint64_t, bool> linked_track_ids;
-    for (const auto& candidate : candidates) {
-        const uint64_t track_id = candidate.live_entity->object_id;
-        if (linked_known_ids[candidate.known_entity_id] ||
-            linked_track_ids[track_id]) continue;
-
-        float next_known_score = -1.0f;
-        float next_track_score = -1.0f;
-        bool best_for_known = true;
-        bool best_for_track = true;
-        for (const auto& other : candidates) {
-            if (&other == &candidate) continue;
-            if (other.known_entity_id == candidate.known_entity_id) {
-                if (other.score > candidate.score) best_for_known = false;
-                else next_known_score = std::max(next_known_score, other.score);
-            }
-            if (other.live_entity->object_id == track_id) {
-                if (other.score > candidate.score) best_for_track = false;
-                else next_track_score = std::max(next_track_score, other.score);
-            }
-        }
-        if (!best_for_known || !best_for_track) continue;
-        if (next_known_score >= 0.0f &&
-            candidate.score - next_known_score < kMinAutomaticRelinkMargin) continue;
-        if (next_track_score >= 0.0f &&
-            candidate.score - next_track_score < kMinAutomaticRelinkMargin) continue;
-
-        auto record_it = state.records_by_known_id.find(candidate.known_entity_id);
-        if (record_it == state.records_by_known_id.end()) continue;
-        auto& record = record_it->second;
-        record.object_id = track_id;
-        record.last_observation = *candidate.live_entity;
-        record.currently_tracked = true;
-        record.track_history.push_back(track_id);
-        ++record.automatic_relink_count;
-        record.last_automatic_relink_score = candidate.score;
-        state.known_id_by_track_id[track_id] = candidate.known_entity_id;
-        linked_known_ids[candidate.known_entity_id] = true;
-        linked_track_ids[track_id] = true;
-        membership_changed = true;
-    }
-    if (membership_changed) ++state.revision;
-}
-
-void AssignPhysicalEntityName(const PhysicalWorldEntity& entity,
-                              const std::string& requested_name)
-{
-    if (entity.object_id == 0) {
-        throw std::invalid_argument(
-            "Cannot name a physical entity with object_id 0");
-    }
-    const std::string name = TrimAndValidateName(requested_name);
-    auto& state = State();
-    std::lock_guard<std::mutex> lock(state.mutex);
-    const auto mapping = state.known_id_by_track_id.find(entity.object_id);
-    if (mapping != state.known_id_by_track_id.end()) {
-        auto record = state.records_by_known_id.find(mapping->second);
-        if (record == state.records_by_known_id.end()) {
-            throw std::logic_error("Known entity track map is internally inconsistent");
-        }
-        if (record->second.object_id != entity.object_id) {
-            throw std::invalid_argument(
-                "Cannot rename a historical track; select its current known entity record");
-        }
-        record->second.name = name;
-        record->second.last_observation = entity;
-        ++state.revision;
-        return;
-    }
-
-    PhysicalKnownEntityRecord record;
-    record.known_entity_id = state.next_known_entity_id++;
-    record.object_id = entity.object_id;
-    record.name = name;
-    record.last_observation = entity;
-    record.currently_tracked = true;
-    record.track_history.push_back(entity.object_id);
-    state.known_id_by_track_id[entity.object_id] = record.known_entity_id;
-    state.records_by_known_id.emplace(record.known_entity_id, std::move(record));
+    state.loaded = true;
     ++state.revision;
 }
 
-void LinkPhysicalEntityToKnownEntity(const PhysicalWorldEntity& live_entity,
-                                     uint64_t known_entity_id)
-{
-    if (live_entity.object_id == 0 || known_entity_id == 0) {
-        throw std::invalid_argument(
-            "LinkPhysicalEntityToKnownEntity requires non-zero IDs");
+PhysicalIdentityProfile* FindProfileLocked(RegistryState& state, const std::string& id) {
+    for (auto& profile : state.profiles) {
+        if (profile.persistent_entity_id == id) return &profile;
     }
+    return nullptr;
+}
+
+void SaveProfilesLocked(const RegistryState& state) {
+    SavePhysicalIdentityProfiles(state.profiles);
+}
+
+bool FaceBelongsToEntity(const PhysicalFaceEmbedding& face, const PhysicalWorldEntity& entity) {
+    if (entity.class_label != "person" || entity.track_state != PhysicalEntityTrackState::Confirmed) return false;
+    const cv::Point2f centre(face.model_bbox.x + face.model_bbox.width * 0.5f,
+                             face.model_bbox.y + face.model_bbox.height * 0.5f);
+    return centre.x >= entity.model_box.x && centre.x <= entity.model_box.x + entity.model_box.width &&
+           centre.y >= entity.model_box.y && centre.y <= entity.model_box.y + entity.model_box.height * 0.65f;
+}
+
+void AssociateFacesLocked(RegistryState& state, const PhysicalWorldStateSnapshot& snapshot,
+                          const std::vector<PhysicalFaceEmbedding>& faces) {
+    for (const auto& face : faces) {
+        const PhysicalWorldEntity* owner = nullptr;
+        float owner_area = 0.0f;
+        for (const auto& entity : snapshot.entities) {
+            if (!FaceBelongsToEntity(face, entity)) continue;
+            const float area = entity.model_box.area();
+            if (!owner || area < owner_area) { owner = &entity; owner_area = area; }
+        }
+        if (!owner) continue;
+        auto existing = state.latest_face_by_track_id.find(owner->object_id);
+        if (existing == state.latest_face_by_track_id.end() ||
+            existing->second.source_frame_counter < face.source_frame_counter ||
+            (existing->second.source_frame_counter == face.source_frame_counter &&
+             existing->second.quality_score < face.quality_score)) {
+            state.latest_face_by_track_id[owner->object_id] = face;
+        }
+    }
+}
+
+void BindTrackLocked(RegistryState& state, PhysicalKnownEntityRecord& record,
+                     const PhysicalWorldEntity& entity,
+                     PhysicalEntityIdentityState identity_state, float score) {
+    if (record.object_id != 0 && record.object_id != entity.object_id) {
+        state.known_id_by_track_id.erase(record.object_id);
+    }
+    record.object_id = entity.object_id;
+    record.currently_tracked = true;
+    record.last_observation = entity;
+    record.identity_state = identity_state;
+    record.last_face_match_score = score;
+    if (std::find(record.track_history.begin(), record.track_history.end(), entity.object_id) ==
+        record.track_history.end()) record.track_history.push_back(entity.object_id);
+    state.known_id_by_track_id[entity.object_id] = record.known_entity_id;
+}
+
+bool DeleteKnownEntityLocked(RegistryState& state, uint64_t known_entity_id) {
+    auto record = state.records_by_known_id.find(known_entity_id);
+    if (record == state.records_by_known_id.end()) return false;
+    const std::string persistent_id = record->second.persistent_entity_id;
+    if (record->second.object_id != 0) state.known_id_by_track_id.erase(record->second.object_id);
+    state.known_id_by_persistent_id.erase(persistent_id);
+    state.profiles.erase(std::remove_if(state.profiles.begin(), state.profiles.end(),
+        [&](const auto& profile) { return profile.persistent_entity_id == persistent_id; }),
+        state.profiles.end());
+    state.records_by_known_id.erase(record);
+    SaveProfilesLocked(state);
+    ++state.revision;
+    return true;
+}
+
+} // anonymous namespace
+
+void ObservePhysicalWorldStateForKnownEntities(PhysicalWorldStateSnapshot& snapshot,
+    const std::vector<PhysicalFaceEmbedding>& face_embeddings) {
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
-    const auto record_it = state.records_by_known_id.find(known_entity_id);
-    if (record_it == state.records_by_known_id.end()) {
-        throw std::invalid_argument("Selected known entity no longer exists");
+    LoadProfilesLocked(state);
+    AssociateFacesLocked(state, snapshot, face_embeddings);
+
+    std::unordered_set<uint64_t> live_tracks;
+    for (const auto& entity : snapshot.entities) live_tracks.insert(entity.object_id);
+    for (auto it = state.latest_face_by_track_id.begin();
+         it != state.latest_face_by_track_id.end();) {
+        if (live_tracks.count(it->first) == 0) it = state.latest_face_by_track_id.erase(it);
+        else ++it;
     }
-    auto& record = record_it->second;
-    if (record.currently_tracked && record.object_id != live_entity.object_id) {
-        throw std::invalid_argument(
-            "Known entity is still tracked; only out-of-frame identities can be linked");
+    for (auto it = state.candidate_by_track_id.begin();
+         it != state.candidate_by_track_id.end();) {
+        if (live_tracks.count(it->first) == 0) it = state.candidate_by_track_id.erase(it);
+        else ++it;
     }
-    const auto existing = state.known_id_by_track_id.find(live_entity.object_id);
-    if (existing != state.known_id_by_track_id.end() &&
-        existing->second != known_entity_id) {
-        throw std::invalid_argument(
-            "Live track is already bound to a different known entity");
+    for (auto& item : state.records_by_known_id) {
+        auto& record = item.second;
+        const bool live = record.object_id != 0 && live_tracks.count(record.object_id) != 0;
+        if (record.currently_tracked != live) ++state.revision;
+        record.currently_tracked = live;
+        if (!live && record.object_id != 0) {
+            state.known_id_by_track_id.erase(record.object_id);
+            record.object_id = 0;
+        }
     }
-    if (std::find(record.track_history.begin(), record.track_history.end(),
-                  live_entity.object_id) == record.track_history.end()) {
-        record.track_history.push_back(live_entity.object_id);
+
+    for (auto& entity : snapshot.entities) {
+        auto binding = state.known_id_by_track_id.find(entity.object_id);
+        if (binding == state.known_id_by_track_id.end()) {
+            auto face_it = state.latest_face_by_track_id.find(entity.object_id);
+            if (face_it != state.latest_face_by_track_id.end()) {
+                const auto& face = face_it->second;
+                auto& evidence = state.candidate_by_track_id[entity.object_id];
+                if (face.source_frame_counter > evidence.last_evidence_frame) {
+                    const auto match = MatchPhysicalFaceIdentity(face, state.profiles);
+                    if (match.accepted) {
+                        if (evidence.persistent_entity_id == match.persistent_entity_id) ++evidence.consecutive_hits;
+                        else { evidence.persistent_entity_id = match.persistent_entity_id; evidence.consecutive_hits = 1; }
+                        evidence.last_score = match.best_similarity;
+                    } else {
+                        evidence = {};
+                    }
+                    evidence.last_evidence_frame = face.source_frame_counter;
+                    ++state.revision;
+                }
+                entity.identity_state = evidence.consecutive_hits == 0
+                    ? PhysicalEntityIdentityState::Unknown : PhysicalEntityIdentityState::Candidate;
+                entity.identity_confidence = evidence.last_score;
+                if (evidence.consecutive_hits >= kRecognitionEvidenceRequired) {
+                    const auto known = state.known_id_by_persistent_id.find(evidence.persistent_entity_id);
+                    if (known != state.known_id_by_persistent_id.end()) {
+                        auto record = state.records_by_known_id.find(known->second);
+                        if (record != state.records_by_known_id.end() && !record->second.currently_tracked) {
+                            BindTrackLocked(state, record->second, entity,
+                                PhysicalEntityIdentityState::Recognized, evidence.last_score);
+                            binding = state.known_id_by_track_id.find(entity.object_id);
+                            ++state.revision;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (binding != state.known_id_by_track_id.end()) {
+            auto record_it = state.records_by_known_id.find(binding->second);
+            if (record_it == state.records_by_known_id.end()) continue;
+            auto& record = record_it->second;
+            record.last_observation = entity;
+            record.currently_tracked = true;
+            auto face = state.latest_face_by_track_id.find(entity.object_id);
+            if (face != state.latest_face_by_track_id.end() &&
+                record.last_face_quality != face->second.quality_score) {
+                record.last_face_quality = face->second.quality_score;
+                ++state.revision;
+            }
+            entity.persistent_entity_id = record.persistent_entity_id;
+            entity.display_name = record.name;
+            entity.identity_state = record.face_template_count == 0
+                ? PhysicalEntityIdentityState::NamedOnly : record.identity_state;
+            entity.identity_confidence = record.last_face_match_score;
+        }
     }
-    state.known_id_by_track_id[live_entity.object_id] = known_entity_id;
-    record.object_id = live_entity.object_id;
-    record.last_observation = live_entity;
-    record.currently_tracked = true;
+}
+
+void AssignPhysicalEntityName(const PhysicalWorldEntity& entity, const std::string& requested_name) {
+    if (entity.object_id == 0) throw std::invalid_argument("Cannot name a physical entity with object_id 0");
+    const std::string name = TrimAndValidateName(requested_name);
+    auto& state = State();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
+    const auto mapping = state.known_id_by_track_id.find(entity.object_id);
+    if (mapping != state.known_id_by_track_id.end()) {
+        auto& record = state.records_by_known_id.at(mapping->second);
+        auto* profile = FindProfileLocked(state, record.persistent_entity_id);
+        if (!profile) throw std::logic_error("identity profile is missing");
+        record.name = name;
+        record.last_observation = entity;
+        profile->display_name = name;
+        profile->updated_at_unix_seconds = static_cast<uint64_t>(std::time(nullptr));
+        SaveProfilesLocked(state);
+        ++state.revision;
+        return;
+    }
+    const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    PhysicalIdentityProfile profile;
+    profile.persistent_entity_id = GeneratePersistentId();
+    profile.display_name = name;
+    profile.created_at_unix_seconds = now;
+    profile.updated_at_unix_seconds = now;
+    state.profiles.push_back(profile);
+    PhysicalKnownEntityRecord record;
+    record.known_entity_id = state.next_known_entity_id++;
+    record.persistent_entity_id = profile.persistent_entity_id;
+    record.name = name;
+    BindTrackLocked(state, record, entity, PhysicalEntityIdentityState::NamedOnly, 0.0f);
+    state.known_id_by_persistent_id[record.persistent_entity_id] = record.known_entity_id;
+    state.records_by_known_id.emplace(record.known_entity_id, std::move(record));
+    SaveProfilesLocked(state);
+    ++state.revision;
+}
+
+void RenamePhysicalKnownEntity(uint64_t known_entity_id,
+                               const std::string& requested_name) {
+    const std::string name = TrimAndValidateName(requested_name);
+    auto& state = State();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
+    auto record = state.records_by_known_id.find(known_entity_id);
+    if (record == state.records_by_known_id.end()) {
+        throw std::invalid_argument("Selected identity no longer exists");
+    }
+    auto* profile = FindProfileLocked(state, record->second.persistent_entity_id);
+    if (!profile) throw std::logic_error("identity profile is missing");
+    record->second.name = name;
+    profile->display_name = name;
+    profile->updated_at_unix_seconds = static_cast<uint64_t>(std::time(nullptr));
+    SaveProfilesLocked(state);
+    ++state.revision;
+}
+
+void EnrollPhysicalEntityFace(uint64_t object_id) {
+    auto& state = State();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
+    const auto mapping = state.known_id_by_track_id.find(object_id);
+    if (mapping == state.known_id_by_track_id.end()) throw std::invalid_argument("Name the selected person before enrolling a face");
+    auto face = state.latest_face_by_track_id.find(object_id);
+    if (face == state.latest_face_by_track_id.end()) throw std::invalid_argument("No recognition embedding is available for this person");
+    if (face->second.quality_score < kMinimumEnrollmentQuality) throw std::invalid_argument("Face quality is too low for enrollment");
+    auto& record = state.records_by_known_id.at(mapping->second);
+    auto* profile = FindProfileLocked(state, record.persistent_entity_id);
+    if (!profile) throw std::logic_error("identity profile is missing");
+    if (profile->face_templates.size() >= kMaximumTemplatesPerIdentity) throw std::invalid_argument("This identity has reached its face-template limit");
+    for (const auto& stored : profile->face_templates) {
+        if (stored.model_id == face->second.embedding_model_id &&
+            ComputePhysicalFaceCosineSimilarity(stored.embedding, face->second.embedding) > 0.995f) {
+            throw std::invalid_argument("This face sample is a duplicate of an enrollment");
+        }
+    }
+    PhysicalFaceTemplateRecord stored;
+    stored.model_id = face->second.embedding_model_id;
+    stored.embedding = face->second.embedding;
+    stored.quality_score = face->second.quality_score;
+    stored.enrolled_at_unix_seconds = static_cast<uint64_t>(std::time(nullptr));
+    profile->face_templates.push_back(std::move(stored));
+    profile->updated_at_unix_seconds = static_cast<uint64_t>(std::time(nullptr));
+    record.face_template_count = profile->face_templates.size();
+    record.last_face_quality = face->second.quality_score;
+    record.identity_state = PhysicalEntityIdentityState::Enrolled;
+    SaveProfilesLocked(state);
+    ++state.revision;
+}
+
+bool ForgetPhysicalEntityFaceData(uint64_t known_entity_id) {
+    auto& state = State();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
+    auto record = state.records_by_known_id.find(known_entity_id);
+    if (record == state.records_by_known_id.end()) return false;
+    auto* profile = FindProfileLocked(state, record->second.persistent_entity_id);
+    if (!profile || profile->face_templates.empty()) return false;
+    profile->face_templates.clear();
+    profile->updated_at_unix_seconds = static_cast<uint64_t>(std::time(nullptr));
+    record->second.face_template_count = 0;
+    record->second.identity_state = PhysicalEntityIdentityState::NamedOnly;
+    record->second.last_face_match_score = 0.0f;
+    SaveProfilesLocked(state);
+    ++state.revision;
+    return true;
+}
+
+bool DeletePhysicalKnownEntity(uint64_t known_entity_id) {
+    auto& state = State();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
+    return DeleteKnownEntityLocked(state, known_entity_id);
+}
+
+void LinkPhysicalEntityToKnownEntity(const PhysicalWorldEntity& entity, uint64_t known_entity_id) {
+    if (entity.object_id == 0 || known_entity_id == 0) throw std::invalid_argument("LinkPhysicalEntityToKnownEntity requires non-zero IDs");
+    auto& state = State();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
+    auto record = state.records_by_known_id.find(known_entity_id);
+    if (record == state.records_by_known_id.end()) throw std::invalid_argument("Selected known entity no longer exists");
+    if (record->second.currently_tracked && record->second.object_id != entity.object_id) throw std::invalid_argument("Known entity is already bound to a live track");
+    const auto existing = state.known_id_by_track_id.find(entity.object_id);
+    if (existing != state.known_id_by_track_id.end() && existing->second != known_entity_id) throw std::invalid_argument("Live track is already bound to another identity");
+    BindTrackLocked(state, record->second, entity,
+                    record->second.face_template_count == 0
+                        ? PhysicalEntityIdentityState::NamedOnly
+                        : PhysicalEntityIdentityState::Enrolled,
+                    0.0f);
     ++state.revision;
 }
 
 bool ClearPhysicalEntityName(uint64_t object_id) {
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
     const auto mapping = state.known_id_by_track_id.find(object_id);
-    if (mapping == state.known_id_by_track_id.end()) return false;
-    const uint64_t known_id = mapping->second;
-    const auto record = state.records_by_known_id.find(known_id);
-    if (record != state.records_by_known_id.end()) {
-        for (uint64_t track_id : record->second.track_history) {
-            state.known_id_by_track_id.erase(track_id);
-        }
-        state.records_by_known_id.erase(record);
-    } else {
-        state.known_id_by_track_id.erase(mapping);
-    }
-    ++state.revision;
-    return true;
+    return mapping != state.known_id_by_track_id.end() && DeleteKnownEntityLocked(state, mapping->second);
 }
 
 std::string ResolvePhysicalEntityName(uint64_t object_id) {
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
     const auto mapping = state.known_id_by_track_id.find(object_id);
     if (mapping == state.known_id_by_track_id.end()) return {};
     const auto record = state.records_by_known_id.find(mapping->second);
-    return record == state.records_by_known_id.end()
-        ? std::string{} : record->second.name;
+    return record == state.records_by_known_id.end() ? std::string{} : record->second.name;
 }
 
 std::vector<PhysicalKnownEntityRecord> GetPhysicalKnownEntitiesSnapshot() {
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
     std::vector<PhysicalKnownEntityRecord> out;
-    out.reserve(state.records_by_known_id.size());
     for (const auto& item : state.records_by_known_id) out.push_back(item.second);
-    std::sort(out.begin(), out.end(),
-        [](const PhysicalKnownEntityRecord& a,
-           const PhysicalKnownEntityRecord& b) {
-            if (a.name != b.name) return a.name < b.name;
-            return a.object_id < b.object_id;
-        });
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        if (a.currently_tracked != b.currently_tracked) return a.currently_tracked > b.currently_tracked;
+        return a.name < b.name;
+    });
     return out;
 }
 
 uint64_t GetPhysicalKnownEntityRegistryRevision() {
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
+    LoadProfilesLocked(state);
     return state.revision;
 }
 
 void ResetPhysicalKnownEntityRegistry() {
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
-    state.records_by_known_id.clear();
+    LoadProfilesLocked(state);
     state.known_id_by_track_id.clear();
-    state.next_known_entity_id = 1;
+    state.latest_face_by_track_id.clear();
+    state.candidate_by_track_id.clear();
+    for (auto& item : state.records_by_known_id) {
+        item.second.object_id = 0;
+        item.second.currently_tracked = false;
+        item.second.track_history.clear();
+        item.second.identity_state = item.second.face_template_count == 0
+            ? PhysicalEntityIdentityState::NamedOnly
+            : PhysicalEntityIdentityState::Enrolled;
+        item.second.last_face_match_score = 0.0f;
+    }
     ++state.revision;
 }
 

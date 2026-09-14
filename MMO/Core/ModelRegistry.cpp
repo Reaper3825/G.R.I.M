@@ -498,11 +498,12 @@ VisionOperatorKind ModelRegistry::parseVisionOperatorKind(const std::string& str
     if (str == "facial_expression_detector") return VisionOperatorKind::FacialExpressionDetector;
     if (str == "monocular_depth_estimator")  return VisionOperatorKind::MonocularDepthEstimator;
     if (str == "instance_segmenter")         return VisionOperatorKind::InstanceSegmenter;
+    if (str == "face_recognizer")            return VisionOperatorKind::FaceRecognizer;
     throw std::runtime_error(
         "ModelRegistry: unknown vision operator '" + str
         + "' (valid: object_detector, semantic_segmenter, image_classifier, "
           "pose_estimator, scene_text_reader, facial_expression_detector, "
-          "monocular_depth_estimator, instance_segmenter)");
+          "monocular_depth_estimator, instance_segmenter, face_recognizer)");
 }
 
 std::string ModelRegistry::visionOperatorKindToString(VisionOperatorKind k) {
@@ -516,6 +517,7 @@ std::string ModelRegistry::visionOperatorKindToString(VisionOperatorKind k) {
         case VisionOperatorKind::FacialExpressionDetector: return "facial_expression_detector";
         case VisionOperatorKind::MonocularDepthEstimator:  return "monocular_depth_estimator";
         case VisionOperatorKind::InstanceSegmenter:        return "instance_segmenter";
+        case VisionOperatorKind::FaceRecognizer:           return "face_recognizer";
     }
     throw std::runtime_error(
         "ModelRegistry::visionOperatorKindToString: unknown VisionOperatorKind "
@@ -555,7 +557,8 @@ void ModelRegistry::validateModel(const ModelInfo& model, bool is_router) {
                 "ModelRegistry: vision sub-model '" + model.id
                 + "' is missing required vision.operator (one of: object_detector, "
                   "semantic_segmenter, image_classifier, pose_estimator, scene_text_reader, "
-                  "facial_expression_detector, monocular_depth_estimator, instance_segmenter).");
+                  "facial_expression_detector, monocular_depth_estimator, instance_segmenter, "
+                  "face_recognizer).");
         }
         if (model.model_path.empty()) {
             throw std::runtime_error(

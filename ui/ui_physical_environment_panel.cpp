@@ -160,7 +160,7 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::Localization); });
     tab_world_btn_ = std::make_shared<UIButton>(" World ",
         [this]() { setActiveTab(Tab::World); });
-    tab_known_entities_btn_ = std::make_shared<UIButton>(" Known Entities ",
+    tab_known_entities_btn_ = std::make_shared<UIButton>(" Identities ",
         [this]() { setActiveTab(Tab::KnownEntities); });
 
     // ── Known Entities tab controls ──
@@ -173,8 +173,12 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this](const std::string&) { HandleApplyKnownEntityName(); });
     known_entity_apply_btn_ = std::make_shared<UIButton>(" Set Name ",
         [this]() { HandleApplyKnownEntityName(); });
-    known_entity_clear_btn_ = std::make_shared<UIButton>(" Clear Name ",
+    known_entity_clear_btn_ = std::make_shared<UIButton>(" Delete Identity ",
         [this]() { HandleClearKnownEntityName(); });
+    known_entity_enroll_face_btn_ = std::make_shared<UIButton>(" Enroll Face ",
+        [this]() { HandleEnrollKnownEntityFace(); });
+    known_entity_forget_face_btn_ = std::make_shared<UIButton>(" Forget Face ",
+        [this]() { HandleForgetKnownEntityFace(); });
 
     // ── Localization tab controls ──
     loc_reset_btn_ = std::make_shared<UIButton>(" Reset Pose ",
@@ -1780,6 +1784,7 @@ void UIPhysicalEnvironmentPanel::HandleTogglePerceptionSceneTextReader() {
 void UIPhysicalEnvironmentPanel::HandleTogglePerceptionFacialExpressionDetector() {
     auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
     f.facial_expression_detector = !f.facial_expression_detector;
+    f.face_recognizer = f.facial_expression_detector;
     PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 }
@@ -1809,7 +1814,7 @@ void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsyste
     if (perc_btn_cls_)  perc_btn_cls_->setText(std::string(" Classifier: ") + OnOffStr(f.image_classifier)   + " ");
     if (perc_btn_pose_) perc_btn_pose_->setText(std::string(" Pose: ")      + OnOffStr(f.pose_estimator)     + " ");
     if (perc_btn_text_) perc_btn_text_->setText(std::string(" Text: ")      + OnOffStr(f.scene_text_reader)  + " ");
-    if (perc_btn_face_) perc_btn_face_->setText(std::string(" Face: ")      + OnOffStr(f.facial_expression_detector) + " ");
+    if (perc_btn_face_) perc_btn_face_->setText(std::string(" Face+ID: ")   + OnOffStr(f.facial_expression_detector && f.face_recognizer) + " ");
     if (perc_btn_track_)perc_btn_track_->setText(std::string(" Tracks: ")    + OnOffStr(f.entity_tracker) + " ");
     if (perc_btn_inst_seg_)perc_btn_inst_seg_->setText(std::string(" InstSeg: ") + OnOffStr(f.instance_segmenter) + " ");
     if (perc_btn_class_policy_)perc_btn_class_policy_->setText(std::string(" Policy: ") + OnOffStr(f.class_policy) + " ");
@@ -2314,6 +2319,14 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
         }
         sep();
     }
+    opStatus("Face identity",
+             r.face_recognizer.state, r.face_recognizer.last_error_reason,
+             r.face_recognizer.inference_count, r.face_recognizer.last_inference_ms,
+             std::string("embeddings=") + std::to_string(r.face_recognizer.faces.size())
+             + (r.face_recognizer.faces.empty()
+                    ? std::string{}
+                    : " dim=" + std::to_string(
+                        r.face_recognizer.faces.front().embedding.size())));
     {
         // Stage-3 tracker. Use last_route_ms (NOT last_inference_ms) because
         // tracker has no ONNX inference \u2014 it's a pure association step.
@@ -3914,7 +3927,7 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
 const UIPhysicalEnvironmentPanel::KnownEntityUiRow*
 UIPhysicalEnvironmentPanel::FindSelectedKnownEntityRow() const {
     for (const auto& row : known_entity_rows_) {
-        if (row.object_id == known_selected_object_id_) return &row;
+        if (row.selection_key == known_selected_object_id_) return &row;
     }
     return nullptr;
 }
@@ -3931,24 +3944,40 @@ void UIPhysicalEnvironmentPanel::RebuildKnownEntityRows() {
     std::unordered_map<uint64_t, KnownEntityUiRow> by_id;
     for (const auto& known : PE::GetPhysicalKnownEntitiesSnapshot()) {
         KnownEntityUiRow row;
+        row.selection_key = (uint64_t{1} << 63) | known.known_entity_id;
         row.known_entity_id = known.known_entity_id;
         row.object_id = known.object_id;
         row.name = known.name;
+        row.persistent_entity_id = known.persistent_entity_id;
         row.entity = known.last_observation;
         row.currently_tracked = known.currently_tracked;
         row.track_history = known.track_history;
         row.automatic_relink_count = known.automatic_relink_count;
         row.last_automatic_relink_score = known.last_automatic_relink_score;
-        by_id[row.object_id] = std::move(row);
+        row.face_template_count = known.face_template_count;
+        row.last_face_match_score = known.last_face_match_score;
+        row.last_face_quality = known.last_face_quality;
+        row.identity_state = known.identity_state;
+        by_id[row.selection_key] = std::move(row);
     }
 
     if (have_known_world_results_) {
         for (const auto& entity : known_snapshot_view_.snapshot.entities) {
-            auto& row = by_id[entity.object_id];
+            KnownEntityUiRow* existing = nullptr;
+            for (auto& item : by_id) {
+                if (item.second.object_id == entity.object_id) {
+                    existing = &item.second;
+                    break;
+                }
+            }
+            auto& row = existing ? *existing : by_id[entity.object_id];
+            if (row.selection_key == 0) row.selection_key = entity.object_id;
             row.object_id = entity.object_id;
             row.name = PE::ResolvePhysicalEntityName(entity.object_id);
             row.entity = entity;
             row.currently_tracked = true;
+            row.identity_state = entity.identity_state;
+            row.last_face_match_score = entity.identity_confidence;
         }
     }
 
@@ -3966,7 +3995,7 @@ void UIPhysicalEnvironmentPanel::RebuildKnownEntityRows() {
 
     bool selection_still_exists = false;
     for (const auto& row : known_entity_rows_) {
-        if (row.object_id == known_selected_object_id_) {
+        if (row.selection_key == known_selected_object_id_) {
             selection_still_exists = true;
             break;
         }
@@ -3974,7 +4003,7 @@ void UIPhysicalEnvironmentPanel::RebuildKnownEntityRows() {
     const bool selection_changed = !selection_still_exists;
     if (!selection_still_exists) {
         known_selected_object_id_ = known_entity_rows_.empty()
-            ? 0 : known_entity_rows_.front().object_id;
+            ? 0 : known_entity_rows_.front().selection_key;
     }
 
     known_entity_row_buttons_.clear();
@@ -3984,10 +4013,11 @@ void UIPhysicalEnvironmentPanel::RebuildKnownEntityRows() {
         std::ostringstream label;
         label << (row.currently_tracked ? " LIVE  " : " STALE ");
         if (!row.name.empty()) label << row.name << "  |  ";
-        label << row.entity.class_label << '#' << row.object_id;
+        if (row.entity.class_label.empty()) label << "profile";
+        else label << row.entity.class_label << '#' << row.object_id;
         auto button = std::make_shared<UIButton>(label.str(),
-            [this, object_id = row.object_id]() {
-                known_selected_object_id_ = object_id;
+            [this, selection_key = row.selection_key]() {
+                known_selected_object_id_ = selection_key;
                 known_entity_status_.clear();
                 LoadSelectedKnownEntityName();
             });
@@ -4008,9 +4038,15 @@ void UIPhysicalEnvironmentPanel::HandleApplyKnownEntityName() {
         return;
     }
     try {
-        PE::AssignPhysicalEntityName(row->entity, known_entity_name_buffer_);
-        known_entity_status_ = "Name bound to object #" +
-            std::to_string(row->object_id) + " for this tracker session.";
+        if (row->known_entity_id != 0) {
+            PE::RenamePhysicalKnownEntity(
+                row->known_entity_id, known_entity_name_buffer_);
+            known_entity_status_ = "Persistent identity renamed.";
+        } else {
+            PE::AssignPhysicalEntityName(row->entity, known_entity_name_buffer_);
+            known_entity_status_ = "Persistent identity saved for object #" +
+                std::to_string(row->object_id) + '.';
+        }
         known_registry_revision_ = PE::GetPhysicalKnownEntityRegistryRevision();
         RebuildKnownEntityRows();
         LoadSelectedKnownEntityName();
@@ -4020,18 +4056,49 @@ void UIPhysicalEnvironmentPanel::HandleApplyKnownEntityName() {
 }
 
 void UIPhysicalEnvironmentPanel::HandleClearKnownEntityName() {
-    if (known_selected_object_id_ == 0) {
+    const auto* row = FindSelectedKnownEntityRow();
+    if (!row || row->known_entity_id == 0) {
         known_entity_status_ = "Select a named entity first.";
         return;
     }
-    const uint64_t selected = known_selected_object_id_;
-    const bool removed = PE::ClearPhysicalEntityName(selected);
+    const bool removed = PE::DeletePhysicalKnownEntity(row->known_entity_id);
     known_entity_status_ = removed
-        ? "Name cleared from object #" + std::to_string(selected) + '.'
-        : "The selected entity has no assigned name.";
+        ? "Identity and all enrolled face data deleted."
+        : "The selected identity no longer exists.";
+    known_selected_object_id_ = 0;
     known_registry_revision_ = PE::GetPhysicalKnownEntityRegistryRevision();
     RebuildKnownEntityRows();
     LoadSelectedKnownEntityName();
+}
+
+void UIPhysicalEnvironmentPanel::HandleEnrollKnownEntityFace() {
+    const auto* row = FindSelectedKnownEntityRow();
+    if (!row || !row->currently_tracked || row->object_id == 0) {
+        known_entity_status_ = "Select a live named person before enrollment.";
+        return;
+    }
+    try {
+        PE::EnrollPhysicalEntityFace(row->object_id);
+        known_entity_status_ = "Face template enrolled locally for " + row->name + '.';
+        known_registry_revision_ = PE::GetPhysicalKnownEntityRegistryRevision();
+        RebuildKnownEntityRows();
+    } catch (const std::exception& e) {
+        known_entity_status_ = e.what();
+    }
+}
+
+void UIPhysicalEnvironmentPanel::HandleForgetKnownEntityFace() {
+    const auto* row = FindSelectedKnownEntityRow();
+    if (!row || row->known_entity_id == 0) {
+        known_entity_status_ = "Select a saved identity first.";
+        return;
+    }
+    const bool removed = PE::ForgetPhysicalEntityFaceData(row->known_entity_id);
+    known_entity_status_ = removed
+        ? "All enrolled face templates deleted; the name remains."
+        : "This identity has no enrolled face templates.";
+    known_registry_revision_ = PE::GetPhysicalKnownEntityRegistryRevision();
+    RebuildKnownEntityRows();
 }
 
 void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
@@ -4069,6 +4136,8 @@ void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
                         if (entity.object_id != row.object_id) continue;
                         row.entity = entity;
                         row.currently_tracked = true;
+                        row.identity_state = entity.identity_state;
+                        row.last_face_match_score = entity.identity_confidence;
                         break;
                     }
                 }
@@ -4095,7 +4164,7 @@ void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
     for (size_t i = 0;
          i < known_entity_row_buttons_.size() && i < known_entity_rows_.size();
          ++i) {
-        if (known_entity_rows_[i].object_id == known_selected_object_id_) {
+        if (known_entity_rows_[i].selection_key == known_selected_object_id_) {
             known_entity_row_buttons_[i]->setColors(
                 UITheme::Colors::RowSelected,
                 UITheme::Colors::RowSelected,
@@ -4120,8 +4189,18 @@ void UIPhysicalEnvironmentPanel::UpdateKnownEntitiesTab(
     }
     if (known_entity_clear_btn_) {
         known_entity_clear_btn_->setPosition(editor_x + 414.0f, top + 42.0f);
-        known_entity_clear_btn_->setSize(126.0f, 32.0f);
+        known_entity_clear_btn_->setSize(142.0f, 32.0f);
         known_entity_clear_btn_->update(input, dt);
+    }
+    if (known_entity_enroll_face_btn_) {
+        known_entity_enroll_face_btn_->setPosition(editor_x, top + 80.0f);
+        known_entity_enroll_face_btn_->setSize(132.0f, 32.0f);
+        known_entity_enroll_face_btn_->update(input, dt);
+    }
+    if (known_entity_forget_face_btn_) {
+        known_entity_forget_face_btn_->setPosition(editor_x + 142.0f, top + 80.0f);
+        known_entity_forget_face_btn_->setSize(132.0f, 32.0f);
+        known_entity_forget_face_btn_->update(input, dt);
     }
 }
 
@@ -4135,9 +4214,9 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
 
     const float x = position.x + 292.0f;
     renderer.drawText({x, top},
-        "Known entity identity (session scoped)", UITheme::Colors::TextPrimary);
+        "Persistent entity identity", UITheme::Colors::TextPrimary);
     renderer.drawText({x, top + 20.0f},
-        "Select any live entity, enter a name, then Set Name.",
+        "Name a live person, then explicitly enroll one or more good face samples.",
         UITheme::Colors::TextSecondary);
     if (known_entity_name_box_)
         known_entity_name_box_->drawOverlay(renderer, position);
@@ -4145,8 +4224,12 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
         known_entity_apply_btn_->drawOverlay(renderer, position);
     if (known_entity_clear_btn_)
         known_entity_clear_btn_->drawOverlay(renderer, position);
+    if (known_entity_enroll_face_btn_)
+        known_entity_enroll_face_btn_->drawOverlay(renderer, position);
+    if (known_entity_forget_face_btn_)
+        known_entity_forget_face_btn_->drawOverlay(renderer, position);
 
-    float y = top + 88.0f;
+    float y = top + 126.0f;
     if (!known_entity_status_.empty()) {
         renderer.drawText({x, y}, known_entity_status_,
                           UITheme::Colors::TextSecondary);
@@ -4172,12 +4255,27 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
     {
         std::ostringstream ss;
         ss << (row->name.empty() ? "(unnamed)" : row->name)
-           << "  |  " << e.class_label << '#' << e.object_id
+           << "  |  " << (e.class_label.empty() ? "profile" : e.class_label)
+           << (e.object_id == 0 ? std::string{} : '#' + std::to_string(e.object_id))
            << "  |  " << (row->currently_tracked ? "LIVE" : "STALE");
         if (row->known_entity_id != 0) {
             ss << "  |  known#" << row->known_entity_id;
         }
         line(ss.str(), state_color);
+    }
+    {
+        std::ostringstream ss;
+        ss << "identity=" << PE::DescribePhysicalEntityIdentityState(row->identity_state)
+           << "  face_templates=" << row->face_template_count
+           << "  match=" << std::fixed << std::setprecision(3)
+           << row->last_face_match_score
+           << "  face_quality=" << row->last_face_quality;
+        line(ss.str(), row->identity_state == PE::PhysicalEntityIdentityState::Recognized
+            ? 0xFF22DD66u : UITheme::Colors::TextSecondary);
+    }
+    if (!row->persistent_entity_id.empty()) {
+        line("persistent id: " + row->persistent_entity_id,
+             UITheme::Colors::TextSecondary);
     }
     {
         std::ostringstream ss;
@@ -4280,11 +4378,11 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
         line(ss.str(), UITheme::Colors::TextSecondary);
     }
     y += 8.0f;
-    line("Names bind to tracker IDs; tracker reset clears all names.",
+    line("Names and enrolled templates persist across tracker resets.",
          UITheme::Colors::TextSecondary);
-    line("Automatic re-link uses conservative class/geometry matching.",
+    line("Recognition requires 3 fresh matches plus an ambiguity margin.",
          UITheme::Colors::TextSecondary);
-    line("Biometric/appearance recognition is not implemented yet.",
+    line("Unknown faces are never stored automatically.",
          UITheme::Colors::TextSecondary);
 }
 

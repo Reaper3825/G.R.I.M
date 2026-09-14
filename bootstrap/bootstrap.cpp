@@ -628,6 +628,20 @@ static void bootstrapMMOLayer() {
                     PE::RequestConfigurePhysicalFacialExpressionDetector(c);
                     break;
                 }
+                case Op::FaceRecognizer: {
+                    PE::PhysicalFaceRecognizerConfig c;
+                    c.onnx_model_path = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.model_id = vm->id + ":" + vm->version;
+                    ApplyPhysicalDnnExecutionPolicy(c, *vm);
+                    if (vm->vision.confidence_threshold > 0.0f) {
+                        c.minimum_detection_confidence =
+                            vm->vision.confidence_threshold;
+                    }
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms = 200;
+                    PE::RequestConfigurePhysicalFaceRecognizer(c);
+                    break;
+                }
                 case Op::MonocularDepthEstimator: {
                     PE::PhysicalMonocularDepthEstimatorConfig c;
                     c.onnx_model_path = ResolveConfigPathAgainstGrimRoot(vm->model_path);

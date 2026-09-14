@@ -5,6 +5,7 @@
 #include "PhysicalFrameBus.hpp"
 
 #include <cstdint>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -178,10 +179,30 @@ struct PhysicalFacialExpression {
     cv::Rect2f               model_bbox;           // MODEL pixel space (always populated)
     cv::Rect2f               raw_bbox;            // RAW   pixel space (back-projected)
     float                    detection_confidence = 0.0f;  // YuNet face score
+    // YuNet's five alignment landmarks (right eye, left eye, nose,
+    // right mouth corner, left mouth corner). They are shared evidence for
+    // expression classification and identity embedding extraction; consumers
+    // must not re-run face detection to recover them.
+    std::array<cv::Point2f, 5> model_landmarks{};
+    std::array<cv::Point2f, 5> raw_landmarks{};
     int32_t                  expression_id        = -1;    // argmax over class scores
     std::string              expression_label;             // resolved from labels file
     float                    expression_score     = 0.0f;  // softmax probability of top class
     std::vector<float>       all_class_scores;             // full softmax distribution (size == K)
+};
+
+// 8b. Face identity embedding — biometric evidence for one detected face.
+// Embeddings stay in the Stage-2/identity boundary and MUST NOT be projected
+// into language-model context or generic semantic memory.
+struct PhysicalFaceEmbedding {
+    cv::Rect2f                 model_bbox;
+    cv::Rect2f                 raw_bbox;
+    std::array<cv::Point2f, 5> model_landmarks{};
+    float                      detection_confidence = 0.0f;
+    float                      quality_score        = 0.0f;
+    std::vector<float>         embedding; // L2-normalized
+    std::string                embedding_model_id;
+    uint64_t                   source_frame_counter = 0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,6 +291,16 @@ struct PhysicalFacialExpressionDetectorOutput {
     bool                        classifier_configured = false; // false → only face detection ran
     PhysicalCacheStatus         cache_status{};
     std::vector<PhysicalFacialExpression> faces;
+};
+
+struct PhysicalFaceRecognizerOutput {
+    PhysicalImageOperatorState  state = PhysicalImageOperatorState::NoModelConfigured;
+    std::string                 last_error_reason;
+    uint64_t                    inference_count = 0;
+    uint64_t                    last_frame_counter = 0;
+    double                      last_inference_ms = 0.0;
+    PhysicalCacheStatus         cache_status{};
+    std::vector<PhysicalFaceEmbedding> faces;
 };
 
 // PhysicalEntityTracker has no ONNX model — its "model" is its parameter
@@ -372,6 +403,7 @@ struct PhysicalPerceptionPrimitiveTelemetry {
     double   pose_estimator_wall_ms = 0.0;
     double   scene_text_reader_wall_ms = 0.0;
     double   facial_expression_wall_ms = 0.0;
+    double   face_recognizer_wall_ms = 0.0;
     double   entity_tracker_wall_ms = 0.0;
     double   instance_segmenter_wall_ms = 0.0;
     double   class_policy_wall_ms   = 0.0;
@@ -403,6 +435,7 @@ struct PhysicalPerceptionPrimitiveResults {
     PhysicalPoseKeypointEstimatorOutput   pose_estimator;
     PhysicalSceneTextReaderOutput         scene_text_reader;
     PhysicalFacialExpressionDetectorOutput facial_expression_detector;
+    PhysicalFaceRecognizerOutput             face_recognizer;
     PhysicalEntityTrackerOutput            entity_tracker;
     PhysicalClassPolicyOutput              class_policy;
     PhysicalPerceptionPrimitiveTelemetry    telemetry{};

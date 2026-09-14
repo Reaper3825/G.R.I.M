@@ -54,6 +54,26 @@ enum class PhysicalEntityVisibility : uint8_t {
     Coasting = 3    // tracker is coasting — no fresh visual evidence this frame
 };
 
+enum class PhysicalEntityIdentityState : uint8_t {
+    Unknown    = 0,
+    Candidate  = 1,
+    Recognized = 2,
+    NamedOnly  = 3,
+    Enrolled   = 4
+};
+
+inline const char* DescribePhysicalEntityIdentityState(
+    PhysicalEntityIdentityState state) {
+    switch (state) {
+        case PhysicalEntityIdentityState::Unknown:    return "Unknown";
+        case PhysicalEntityIdentityState::Candidate:  return "Candidate";
+        case PhysicalEntityIdentityState::Recognized: return "Recognized";
+        case PhysicalEntityIdentityState::NamedOnly:  return "NamedOnly";
+        case PhysicalEntityIdentityState::Enrolled:   return "Enrolled";
+    }
+    return "InvalidPhysicalEntityIdentityState";
+}
+
 inline const char* DescribePhysicalEntityVisibility(PhysicalEntityVisibility v) {
     switch (v) {
         case PhysicalEntityVisibility::Unknown:  return "Unknown";
@@ -110,6 +130,12 @@ struct PhysicalWorldEntity {
     std::string                    class_label;
     float                          confidence             = 0.0f;
     PhysicalEntityTrackState       track_state            = PhysicalEntityTrackState::Tentative;
+    // Durable identity resolution. The embedding that supported a match is
+    // intentionally not copied into world state.
+    std::string                    persistent_entity_id;
+    std::string                    display_name;
+    PhysicalEntityIdentityState    identity_state = PhysicalEntityIdentityState::Unknown;
+    float                          identity_confidence = 0.0f;
 
     // ── Position (both spaces; never re-derive) ──
     cv::Rect2f                     model_box;

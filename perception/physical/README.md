@@ -108,6 +108,7 @@ intrinsics.
 | `PhysicalPoseKeypointEstimator.*` | Per-entity keypoints. |
 | `PhysicalSceneTextReader.*` | Scene OCR/text regions. |
 | `PhysicalFacialExpressionDetector.*` | Face boxes + expression labels. |
+| `PhysicalFaceRecognizer.*` | SFace alignment + normalized identity embeddings from the shared YuNet face landmarks. |
 | `PhysicalEntityTracker.*` | Pure-C++ track IDs and temporal smoothing. |
 
 The default object detector asset is
@@ -205,7 +206,9 @@ world-state snapshot can include localization-derived facts.
 | `PhysicalWorldStateBuilder.*` | Fuses Stage-2/3 results into stable entity state. |
 | `PhysicalWorldStateContextProjector.*` | Projects world state into session/model context. |
 | `PhysicalWorldStateMemoryWriter.*` | Writes durable world-state diffs to memory. |
-| `PhysicalKnownEntityRegistry.*` | Session-scoped stable known IDs, user names, track history, and conservative automatic re-linking after an entity leaves frame. |
+| `PhysicalKnownEntityRegistry.*` | Durable named identity profiles, live track bindings, explicit enrollment, temporal recognition, and deletion. |
+| `PhysicalIdentityStore.*` | Versioned, atomic local persistence for named profiles and enrolled biometric templates. |
+| `PhysicalFaceIdentityMatcher.*` | Pure model-compatible cosine matching with absolute and runner-up-margin rejection. |
 | `PhysicalWorldStateLogTag.hpp` | Stage-4 log tag. |
 
 ## Adding or Moving Files

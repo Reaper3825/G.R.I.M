@@ -65,7 +65,8 @@ std::string DescribeSurface(PhysicalSupportSurfaceClass s) {
 
 std::string ComposeEntityLine(const PhysicalWorldEntity& e) {
     std::ostringstream oss;
-    const std::string known_name = ResolvePhysicalEntityName(e.object_id);
+    const std::string known_name = e.display_name.empty()
+        ? ResolvePhysicalEntityName(e.object_id) : e.display_name;
     if (!known_name.empty()) {
         oss << known_name << " (" << e.class_label << '#' << e.object_id << ')';
     } else {
@@ -93,7 +94,8 @@ std::string ComposeEntityLine(const PhysicalWorldEntity& e) {
 std::string ComposeRelationLine(const PhysicalWorldEntity& e,
                                 const PhysicalEntitySpatialRelation& r) {
     std::ostringstream oss;
-    const std::string known_name = ResolvePhysicalEntityName(e.object_id);
+    const std::string known_name = e.display_name.empty()
+        ? ResolvePhysicalEntityName(e.object_id) : e.display_name;
     if (!known_name.empty()) oss << known_name;
     else oss << e.class_label << '#' << e.object_id;
     const std::string other_known_name =

@@ -45,13 +45,16 @@ struct EntityMemoryState {
     bool                           had_metric_depth     = false;
     std::vector<std::string>       last_text_on_object;
     uint64_t                       last_seen_frame_ctr  = 0;
+    uint64_t                       last_object_id       = 0;
+    std::string                    persistent_entity_id;
+    std::string                    display_name;
 };
 
 struct WriterState {
     std::mutex                                       mutex;
     bool                                             shutting_down = false;
     uint64_t                                         last_seen_frame_counter = 0;
-    std::unordered_map<uint64_t, EntityMemoryState>  tracked;
+    std::unordered_map<std::string, EntityMemoryState> tracked;
 };
 
 WriterState& State() {
@@ -86,6 +89,27 @@ std::string MetricDepthOrEmpty(const PhysicalWorldEntity& e) {
     return buf;
 }
 
+std::string EntityStateKey(const PhysicalWorldEntity& e) {
+    return e.persistent_entity_id.empty()
+        ? "track:" + std::to_string(e.object_id)
+        : "identity:" + e.persistent_entity_id;
+}
+
+std::string EntityLabel(const PhysicalWorldEntity& e) {
+    return e.display_name.empty()
+        ? e.class_label + '#' + std::to_string(e.object_id)
+        : e.display_name + " (" + e.class_label + '#' +
+            std::to_string(e.object_id) + ')';
+}
+
+void AddIdentityTags(GRIM::UnifiedMemoryObject& record,
+                     const PhysicalWorldEntity& entity) {
+    record.tags.push_back("object:" + std::to_string(entity.object_id));
+    if (!entity.persistent_entity_id.empty()) {
+        record.tags.push_back("identity:" + entity.persistent_entity_id);
+    }
+}
+
 GRIM::UnifiedMemoryObject MakeBaseRecord(
     GRIM::TypeTag type,
     const std::string& normalized,
@@ -108,7 +132,7 @@ GRIM::UnifiedMemoryObject MakeBaseRecord(
 uint64_t EmitAppeared(GRIM::MMO::MemoryFacade& facade,
                       const PhysicalWorldEntity& e) {
     std::ostringstream txt;
-    txt << e.class_label << '#' << e.object_id << " appeared";
+    txt << EntityLabel(e) << " appeared";
     auto surface = SurfaceWord(e.support_surface);
     if (!surface.empty()) txt << " on " << surface;
     auto depth = MetricDepthOrEmpty(e);
@@ -118,7 +142,7 @@ uint64_t EmitAppeared(GRIM::MMO::MemoryFacade& facade,
                               txt.str(), e.confidence);
     rec.tags.push_back("entity_appeared");
     rec.tags.push_back("class:" + e.class_label);
-    rec.tags.push_back("object:" + std::to_string(e.object_id));
+    AddIdentityTags(rec, e);
     facade.recordInteraction(rec);
     return rec.id;
 }
@@ -127,7 +151,7 @@ void EmitOcrFact(GRIM::MMO::MemoryFacade& facade,
                  const PhysicalWorldEntity& e,
                  uint64_t parent_id) {
     std::ostringstream txt;
-    txt << e.class_label << '#' << e.object_id << " labelled [";
+    txt << EntityLabel(e) << " labelled [";
     for (size_t i = 0; i < e.text_on_object.size(); ++i) {
         if (i) txt << ", ";
         txt << '"' << e.text_on_object[i] << '"';
@@ -138,7 +162,7 @@ void EmitOcrFact(GRIM::MMO::MemoryFacade& facade,
     rec.parent_id = parent_id;
     rec.tags.push_back("ocr");
     rec.tags.push_back("class:" + e.class_label);
-    rec.tags.push_back("object:" + std::to_string(e.object_id));
+    AddIdentityTags(rec, e);
     facade.recordInteraction(rec);
 }
 
@@ -147,7 +171,7 @@ void EmitSurfaceChange(GRIM::MMO::MemoryFacade& facade,
                        PhysicalSupportSurfaceClass from,
                        uint64_t parent_id) {
     std::ostringstream txt;
-    txt << e.class_label << '#' << e.object_id << " moved from "
+    txt << EntityLabel(e) << " moved from "
         << (SurfaceWord(from).empty() ? std::string("unknown") : SurfaceWord(from))
         << " to "
         << (SurfaceWord(e.support_surface).empty()
@@ -157,7 +181,7 @@ void EmitSurfaceChange(GRIM::MMO::MemoryFacade& facade,
     rec.parent_id = parent_id;
     rec.tags.push_back("surface_change");
     rec.tags.push_back("class:" + e.class_label);
-    rec.tags.push_back("object:" + std::to_string(e.object_id));
+    AddIdentityTags(rec, e);
     facade.recordInteraction(rec);
 }
 
@@ -165,7 +189,7 @@ void EmitPathBlocked(GRIM::MMO::MemoryFacade& facade,
                      const PhysicalWorldEntity& e,
                      uint64_t parent_id) {
     std::ostringstream txt;
-    txt << "path blocked by " << e.class_label << '#' << e.object_id;
+    txt << "path blocked by " << EntityLabel(e);
     auto depth = MetricDepthOrEmpty(e);
     if (!depth.empty()) txt << " at " << depth;
     auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
@@ -173,7 +197,7 @@ void EmitPathBlocked(GRIM::MMO::MemoryFacade& facade,
     rec.parent_id = parent_id;
     rec.tags.push_back("path_blocked");
     rec.tags.push_back("class:" + e.class_label);
-    rec.tags.push_back("object:" + std::to_string(e.object_id));
+    AddIdentityTags(rec, e);
     facade.recordInteraction(rec);
 }
 
@@ -181,13 +205,18 @@ void EmitLost(GRIM::MMO::MemoryFacade& facade,
               const EntityMemoryState& s,
               uint64_t object_id) {
     std::ostringstream txt;
-    txt << s.class_label << '#' << object_id << " lost";
+    if (!s.display_name.empty()) txt << s.display_name << " (";
+    txt << s.class_label << '#' << object_id;
+    if (!s.display_name.empty()) txt << ')';
+    txt << " lost";
     auto rec = MakeBaseRecord(GRIM::TypeTag::STRING,
                               txt.str(), 1.0f);
     rec.parent_id = s.appeared_memory_id;
     rec.tags.push_back("entity_lost");
     rec.tags.push_back("class:" + s.class_label);
     rec.tags.push_back("object:" + std::to_string(object_id));
+    if (!s.persistent_entity_id.empty())
+        rec.tags.push_back("identity:" + s.persistent_entity_id);
     facade.recordInteraction(rec);
 }
 
@@ -196,7 +225,10 @@ void EmitSummary(GRIM::MMO::MemoryFacade& facade,
                  uint64_t object_id) {
     int64_t dwell_s = (s.last_seen_steady_ns - s.first_seen_steady_ns) / 1000000000LL;
     std::ostringstream txt;
-    txt << s.class_label << '#' << object_id << " seen for " << dwell_s << "s";
+    if (!s.display_name.empty()) txt << s.display_name << " (";
+    txt << s.class_label << '#' << object_id;
+    if (!s.display_name.empty()) txt << ')';
+    txt << " seen for " << dwell_s << "s";
     auto surface = SurfaceWord(s.last_surface);
     if (!surface.empty()) txt << " on " << surface;
     if (s.had_metric_depth) {
@@ -219,6 +251,8 @@ void EmitSummary(GRIM::MMO::MemoryFacade& facade,
     rec.tags.push_back("entity_summary");
     rec.tags.push_back("class:" + s.class_label);
     rec.tags.push_back("object:" + std::to_string(object_id));
+    if (!s.persistent_entity_id.empty())
+        rec.tags.push_back("identity:" + s.persistent_entity_id);
     facade.recordInteraction(rec);
 }
 
@@ -263,15 +297,27 @@ void TickPhysicalWorldStateMemoryWriter() {
         return false;
     };
 
-    std::unordered_set<uint64_t> seen_this_tick;
+    std::unordered_set<std::string> seen_this_tick;
     seen_this_tick.reserve(view.snapshot.entities.size());
 
     // Forward pass: appearances + per-entity transitions.
     for (const auto& e : view.snapshot.entities) {
         if (e.object_id == 0) continue;
-        seen_this_tick.insert(e.object_id);
+        const std::string state_key = EntityStateKey(e);
+        seen_this_tick.insert(state_key);
 
-        auto it = s.tracked.find(e.object_id);
+        auto it = s.tracked.find(state_key);
+        if (it == s.tracked.end() && !e.persistent_entity_id.empty()) {
+            // Promote the existing transient state to its durable key when
+            // recognition completes, avoiding a synthetic lost/appeared pair.
+            auto transient = s.tracked.find(
+                "track:" + std::to_string(e.object_id));
+            if (transient != s.tracked.end()) {
+                EntityMemoryState promoted = std::move(transient->second);
+                s.tracked.erase(transient);
+                it = s.tracked.emplace(state_key, std::move(promoted)).first;
+            }
+        }
         if (it == s.tracked.end()) {
             // First time we see this object_id. Only record an "appeared"
             // event once the tracker promotes it to Confirmed — Tentative
@@ -300,6 +346,9 @@ void TickPhysicalWorldStateMemoryWriter() {
             st.last_range_meters    = e.range_value_meters;
             st.had_metric_depth     = (e.has_depth && e.depth_units == DepthUnits::Meters);
             st.last_seen_frame_ctr  = view.snapshot.source_frame_counter;
+            st.last_object_id       = e.object_id;
+            st.persistent_entity_id = e.persistent_entity_id;
+            st.display_name         = e.display_name;
             st.appeared_memory_id   = EmitAppeared(facade, e);
             ++records_emitted;
 
@@ -315,7 +364,7 @@ void TickPhysicalWorldStateMemoryWriter() {
                     ++records_emitted;
                 }
             }
-            s.tracked.emplace(e.object_id, std::move(st));
+            s.tracked.emplace(state_key, std::move(st));
             continue;
         }
 
@@ -323,6 +372,9 @@ void TickPhysicalWorldStateMemoryWriter() {
         auto& st = it->second;
         st.last_seen_steady_ns = e.last_seen_steady_ns;
         st.last_seen_frame_ctr = view.snapshot.source_frame_counter;
+        st.last_object_id = e.object_id;
+        st.display_name = e.display_name;
+        st.persistent_entity_id = e.persistent_entity_id;
         if (e.has_depth && e.depth_units == DepthUnits::Meters) {
             st.last_range_meters = e.range_value_meters;
             st.had_metric_depth  = true;
@@ -373,14 +425,14 @@ void TickPhysicalWorldStateMemoryWriter() {
         if (seen_this_tick.find(it->first) == seen_this_tick.end()) {
             if (it->second.ever_confirmed) {
                 if (records_emitted < kMaxRecordsPerTick) {
-                    EmitLost(facade, it->second, it->first);
+                    EmitLost(facade, it->second, it->second.last_object_id);
                     ++records_emitted;
 
                     int64_t dwell_ns = it->second.last_seen_steady_ns
                                      - it->second.first_seen_steady_ns;
                     if (dwell_ns >= kSummaryMinDwellNs &&
                         records_emitted < kMaxRecordsPerTick) {
-                        EmitSummary(facade, it->second, it->first);
+                        EmitSummary(facade, it->second, it->second.last_object_id);
                         ++records_emitted;
                     }
                 }
@@ -407,12 +459,12 @@ void ShutdownPhysicalWorldStateMemoryWriter() {
     // tracked so their dwell time isn't lost. Best-effort: skip if the
     // facade is gone (memory subsystem may have shut down first).
     if (g_memoryFacade) {
-        for (const auto& [object_id, st] : s.tracked) {
+        for (const auto& [state_key, st] : s.tracked) {
             if (!st.ever_confirmed) continue;
             int64_t dwell_ns = st.last_seen_steady_ns - st.first_seen_steady_ns;
             if (dwell_ns < kSummaryMinDwellNs) continue;
             try {
-                EmitSummary(*g_memoryFacade, st, object_id);
+                EmitSummary(*g_memoryFacade, st, st.last_object_id);
             } catch (const std::exception& e) {
                 LOG_ERROR(PHYSICAL_WORLD_STATE_LOG_TAG,
                           std::string("MemoryWriter: shutdown summary failed: ")

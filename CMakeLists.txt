@@ -156,6 +156,17 @@ foreach(STB_HEADER ${STB_HEADERS})
 endforeach()
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
+
+option(GRIM_BUILD_PHYSICAL_IDENTITY_TESTS
+       "Build the focused physical identity persistence/matcher test" OFF)
+if(GRIM_BUILD_PHYSICAL_IDENTITY_TESTS)
+  add_executable(physical_identity_tests
+      tests/physical_identity_tests.cpp
+      perception/physical/PhysicalIdentityStore.cpp
+      perception/physical/PhysicalFaceIdentityMatcher.cpp)
+  target_include_directories(physical_identity_tests PRIVATE ${CMAKE_SOURCE_DIR})
+  target_compile_features(physical_identity_tests PRIVATE cxx_std_17)
+endif()
 # Allow GRIM.exe to export symbols for possible plugin use
 set_target_properties(GRIM PROPERTIES ENABLE_EXPORTS ON)
 

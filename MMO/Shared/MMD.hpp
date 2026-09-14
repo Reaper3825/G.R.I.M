@@ -48,7 +48,8 @@ enum class VisionOperatorKind : uint8_t {
     SceneTextReader          = 5,
     FacialExpressionDetector = 6,
     MonocularDepthEstimator  = 7,
-    InstanceSegmenter        = 8
+    InstanceSegmenter        = 8,
+    FaceRecognizer           = 9
 };
 
 struct VisionModelDescriptor {

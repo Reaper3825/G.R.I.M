@@ -14,6 +14,13 @@
 #include <stdexcept>
 #include <string>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace GRIM {
 
 class AtomicWriter {
@@ -38,11 +45,7 @@ public:
                     "AtomicWriter: write failed: " + tmp);
         }
 
-        std::error_code ec;
-        std::filesystem::rename(tmp, path, ec);
-        if (ec)
-            throw std::runtime_error(
-                "AtomicWriter: rename failed: " + ec.message());
+        replace(tmp, path);
     }
 
     // Write string data atomically.
@@ -72,11 +75,28 @@ public:
                     "AtomicWriter: write failed: " + tmp);
         }
 
+        replace(tmp, path);
+    }
+
+private:
+    static void replace(const std::string& tmp, const std::string& path) {
+#ifdef _WIN32
+        const auto source = std::filesystem::path(tmp).wstring();
+        const auto destination = std::filesystem::path(path).wstring();
+        if (!::MoveFileExW(source.c_str(), destination.c_str(),
+                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            throw std::runtime_error(
+                "AtomicWriter: replace failed with Win32 error " +
+                std::to_string(::GetLastError()));
+        }
+#else
         std::error_code ec;
         std::filesystem::rename(tmp, path, ec);
-        if (ec)
+        if (ec) {
             throw std::runtime_error(
                 "AtomicWriter: rename failed: " + ec.message());
+        }
+#endif
     }
 };
 

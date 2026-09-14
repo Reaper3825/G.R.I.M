@@ -447,18 +447,24 @@ private:
     PreviewBlitCache world_blit_cache_;
 
     // ── Known Entities tab ──
-    // Shows every currently tracked object (including unnamed candidates)
-    // plus named records retained after they leave view. A name is a
-    // session-scoped binding to object_id and is cleared when tracking resets.
+    // Shows live tracks plus durable named identity profiles. Biometric
+    // enrollment is always an explicit user action.
     struct KnownEntityUiRow {
+        uint64_t selection_key = 0;
         uint64_t known_entity_id = 0;
         uint64_t object_id = 0;
         std::string name;
+        std::string persistent_entity_id;
         GRIM::Perception::Physical::PhysicalWorldEntity entity;
         bool currently_tracked = false;
         std::vector<uint64_t> track_history;
         uint32_t automatic_relink_count = 0;
         float last_automatic_relink_score = 0.0f;
+        size_t face_template_count = 0;
+        float last_face_match_score = 0.0f;
+        float last_face_quality = 0.0f;
+        GRIM::Perception::Physical::PhysicalEntityIdentityState identity_state =
+            GRIM::Perception::Physical::PhysicalEntityIdentityState::Unknown;
     };
 
     void UpdateKnownEntitiesTab(const InputState& input, float dt);
@@ -467,6 +473,8 @@ private:
     void LoadSelectedKnownEntityName();
     void HandleApplyKnownEntityName();
     void HandleClearKnownEntityName();
+    void HandleEnrollKnownEntityFace();
+    void HandleForgetKnownEntityFace();
     const KnownEntityUiRow* FindSelectedKnownEntityRow() const;
 
     std::shared_ptr<UIScrollBox> known_entity_list_;
@@ -474,6 +482,8 @@ private:
     std::shared_ptr<UIInputBox> known_entity_name_box_;
     std::shared_ptr<UIButton> known_entity_apply_btn_;
     std::shared_ptr<UIButton> known_entity_clear_btn_;
+    std::shared_ptr<UIButton> known_entity_enroll_face_btn_;
+    std::shared_ptr<UIButton> known_entity_forget_face_btn_;
     std::vector<KnownEntityUiRow> known_entity_rows_;
     std::string known_entity_name_buffer_;
     std::string known_entity_status_;

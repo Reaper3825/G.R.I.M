@@ -116,7 +116,8 @@ void TickPhysicalWorldState() {
                                      : PhysicalSpatialGroundingResults{},
             s.cfg,
             snapshot);
-        ObservePhysicalWorldStateForKnownEntities(snapshot);
+        ObservePhysicalWorldStateForKnownEntities(
+            snapshot, s.perc_view.results.face_recognizer.faces);
         snapshot.build_wall_ms = PhysicalWorldElapsedMsSince(build_start);
         snapshot.perception_bus_pull_ms = perc_pull_ms;
         snapshot.grounding_bus_pull_ms = ground_pull_ms;

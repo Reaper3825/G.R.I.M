@@ -197,6 +197,7 @@ void PhysicalFacialExpressionDetector::RouteFrameToPhysicalFacialExpressionDetec
         for (int i = 0; i < N; ++i) {
             const float* row = faces.ptr<float>(i);
             cv::Rect2f bb(row[0], row[1], row[2], row[3]);
+            const cv::Rect2f detected_bb = bb;
             const float det_score = row[14];
 
             // Pad the bbox by face_crop_padding_ratio for context.
@@ -217,14 +218,30 @@ void PhysicalFacialExpressionDetector::RouteFrameToPhysicalFacialExpressionDetec
             bb_int &= cv::Rect(0, 0, model_image.cols, model_image.rows);
             if (bb_int.width < 2 || bb_int.height < 2) continue;
 
+            cv::Rect detected_int(
+                static_cast<int>(std::floor(detected_bb.x)),
+                static_cast<int>(std::floor(detected_bb.y)),
+                static_cast<int>(std::ceil(detected_bb.width)),
+                static_cast<int>(std::ceil(detected_bb.height)));
+            detected_int &= cv::Rect(0, 0, model_image.cols, model_image.rows);
+            if (detected_int.width < 2 || detected_int.height < 2) continue;
+
             PhysicalFacialExpression face;
-            face.model_bbox = cv::Rect2f(static_cast<float>(bb_int.x),
-                                         static_cast<float>(bb_int.y),
-                                         static_cast<float>(bb_int.width),
-                                         static_cast<float>(bb_int.height));
+            face.model_bbox = cv::Rect2f(static_cast<float>(detected_int.x),
+                                         static_cast<float>(detected_int.y),
+                                         static_cast<float>(detected_int.width),
+                                         static_cast<float>(detected_int.height));
             face.raw_bbox  = BackProjectRectClipped(face.model_bbox, raw_to_model,
                                                     raw_image_width, raw_image_height);
             face.detection_confidence = det_score;
+            for (size_t landmark = 0; landmark < face.model_landmarks.size(); ++landmark) {
+                const cv::Point2f model_point(
+                    row[4 + static_cast<int>(landmark) * 2],
+                    row[5 + static_cast<int>(landmark) * 2]);
+                face.model_landmarks[landmark] = model_point;
+                face.raw_landmarks[landmark] = BackProjectPoint(
+                    model_point, raw_to_model);
+            }
 
             if (classifier_configured_ && classifier_ && K > 0) {
                 cv::Mat roi = model_image(bb_int);

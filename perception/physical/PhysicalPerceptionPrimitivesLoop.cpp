@@ -138,6 +138,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalPoseKeypointEstimator>   pose_estimator;
     std::unique_ptr<PhysicalSceneTextReader>         scene_text_reader;
     std::unique_ptr<PhysicalFacialExpressionDetector> facial_expression_detector;
+    std::unique_ptr<PhysicalFaceRecognizer>           face_recognizer;
     std::unique_ptr<PhysicalEntityTracker>           entity_tracker;
     std::unique_ptr<PhysicalClassPolicy>             class_policy;
 
@@ -151,6 +152,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalPoseKeypointEstimatorConfig>   pending_pose_cfg;
     std::unique_ptr<PhysicalSceneTextReaderConfig>         pending_text_cfg;
     std::unique_ptr<PhysicalFacialExpressionDetectorConfig> pending_face_cfg;
+    std::unique_ptr<PhysicalFaceRecognizerConfig>            pending_face_recognizer_cfg;
     std::unique_ptr<PhysicalEntityTrackerConfig>            pending_track_cfg;
     std::unique_ptr<PhysicalClassPolicyConfig>              pending_class_policy_cfg;
 
@@ -209,6 +211,11 @@ struct PhysicalPerceptionPrimitivesState {
     PhysicalFacialExpressionDetectorOutput   cached_face_output{};
     uint64_t last_face_run_steady_ns       = 0;
     uint64_t last_face_fresh_frame_counter = 0;
+
+    PhysicalOperatorCadenceConfig cached_face_recognizer_cadence{};
+    PhysicalFaceRecognizerOutput  cached_face_recognizer_output{};
+    uint64_t last_face_recognizer_run_steady_ns = 0;
+    uint64_t last_face_recognizer_fresh_frame_counter = 0;
 };
 
 PhysicalPerceptionPrimitivesState& GetState() {
@@ -323,6 +330,7 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     s.pose_estimator     = std::make_unique<PhysicalPoseKeypointEstimator>();
     s.scene_text_reader  = std::make_unique<PhysicalSceneTextReader>();
     s.facial_expression_detector = std::make_unique<PhysicalFacialExpressionDetector>();
+    s.face_recognizer    = std::make_unique<PhysicalFaceRecognizer>();
     s.entity_tracker     = std::make_unique<PhysicalEntityTracker>();
     s.class_policy       = std::make_unique<PhysicalClassPolicy>();
 
@@ -361,6 +369,9 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     apply(s.pending_face_cfg,
           [&](auto& c){ s.facial_expression_detector->LoadOnnxModelsIntoPhysicalFacialExpressionDetector(c); },
           "PhysicalFacialExpressionDetector");
+    apply(s.pending_face_recognizer_cfg,
+          [&](auto& c){ s.face_recognizer->LoadOnnxModelIntoPhysicalFaceRecognizer(c); },
+          "PhysicalFaceRecognizer");
     // Tracker has no model file. If no pending config was supplied, install
     // the default config so the operator transitions to ModelLoaded and
     // starts running on first frame. This matches the user-facing contract:
@@ -667,6 +678,44 @@ void RunPhysicalPerceptionPrimitivesOnce() {
             results.facial_expression_detector.state);
     }
 
+    // Identity embedding consumes the shared YuNet detections and landmarks.
+    // It is deliberately cadence-gated independently from expression inference:
+    // identity is slow-changing and should not pay a per-frame model cost.
+    if (s.enable_flags.face_recognizer && s.face_recognizer) {
+        const auto op_start = std::chrono::steady_clock::now();
+        const bool has_cached =
+            s.cached_face_recognizer_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_face_recognizer_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_face_recognizer_cadence, scene, has_cached,
+            s.last_face_recognizer_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.face_recognizer->RouteFrameAndFacesToPhysicalFaceRecognizer(
+                s.frame_view.model_image,
+                results.facial_expression_detector.faces,
+                frame_ctr,
+                results.face_recognizer);
+            StampPhysicalCacheStatus(results.face_recognizer.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.face_recognizer.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_face_recognizer_output = results.face_recognizer;
+                s.last_face_recognizer_run_steady_ns = now_steady_ns;
+                s.last_face_recognizer_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.face_recognizer = s.cached_face_recognizer_output;
+            StampPhysicalCacheStatus(results.face_recognizer.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_face_recognizer_fresh_frame_counter);
+        }
+        results.telemetry.face_recognizer_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.face_recognizer.cache_status,
+            results.telemetry,
+            results.face_recognizer.state);
+    }
+
     // Entity tracker runs LAST among the operators because it consumes
     // the object detector's output as its input. It is given the same
     // raw_to_model + raw dims so its raw-space track boxes are coherent
@@ -800,6 +849,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     if (s.pose_estimator)     s.pose_estimator->ResetPhysicalPoseKeypointEstimator();
     if (s.scene_text_reader)  s.scene_text_reader->ResetPhysicalSceneTextReader();
     if (s.facial_expression_detector) s.facial_expression_detector->ResetPhysicalFacialExpressionDetector();
+    if (s.face_recognizer) s.face_recognizer->ResetPhysicalFaceRecognizer();
     if (s.entity_tracker)     s.entity_tracker->ResetPhysicalEntityTracker();
     if (s.class_policy)       s.class_policy->ResetPhysicalClassPolicy();
     s.object_detector.reset();
@@ -809,6 +859,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.pose_estimator.reset();
     s.scene_text_reader.reset();
     s.facial_expression_detector.reset();
+    s.face_recognizer.reset();
     s.entity_tracker.reset();
     s.class_policy.reset();
     s.pending_obj_cfg.reset();
@@ -818,6 +869,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.pending_pose_cfg.reset();
     s.pending_text_cfg.reset();
     s.pending_face_cfg.reset();
+    s.pending_face_recognizer_cfg.reset();
     s.pending_track_cfg.reset();
     s.pending_class_policy_cfg.reset();
     PhysicalPerceptionPrimitiveBus::Instance().ResetPhysicalPerceptionPrimitiveBus();
@@ -833,6 +885,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.cached_pose_output           = {};
     s.cached_text_output           = {};
     s.cached_face_output           = {};
+    s.cached_face_recognizer_output = {};
     s.last_obj_run_steady_ns = s.last_obj_fresh_frame_counter = 0;
     s.last_seg_run_steady_ns = s.last_seg_fresh_frame_counter = 0;
     s.last_inst_seg_run_steady_ns = s.last_inst_seg_fresh_frame_counter = 0;
@@ -842,6 +895,8 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.last_pose_run_steady_ns = s.last_pose_fresh_frame_counter = 0;
     s.last_text_run_steady_ns = s.last_text_fresh_frame_counter = 0;
     s.last_face_run_steady_ns = s.last_face_fresh_frame_counter = 0;
+    s.last_face_recognizer_run_steady_ns =
+        s.last_face_recognizer_fresh_frame_counter = 0;
     LOG_DEBUG(PHYSICAL_PERC_PRIM_LOG_TAG, "ShutdownPhysicalPerceptionPrimitives: complete");
 }
 
@@ -887,6 +942,7 @@ void RequestSetPhysicalPerceptionPrimitivesEnableFlags(
               + " pose="+ (flags.pose_estimator     ? "1" : "0")
               + " text="+ (flags.scene_text_reader  ? "1" : "0")
               + " face="+ (flags.facial_expression_detector ? "1" : "0")
+              + " face_id="+ (flags.face_recognizer ? "1" : "0")
               + " track="+ (flags.entity_tracker ? "1" : "0")
               + " inst_seg="+ (flags.instance_segmenter ? "1" : "0")
               + " class_policy="+ (flags.class_policy ? "1" : "0"));
@@ -979,6 +1035,25 @@ void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpres
         throw std::runtime_error("RequestConfigurePhysicalFacialExpressionDetector: facial_expression_detector is null");
     }
     s.facial_expression_detector->LoadOnnxModelsIntoPhysicalFacialExpressionDetector(cfg);
+}
+
+void RequestConfigurePhysicalFaceRecognizer(const PhysicalFaceRecognizerConfig& cfg) {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_face_recognizer_cadence = cfg.cadence;
+    s.cached_face_recognizer_output = {};
+    s.last_face_recognizer_run_steady_ns = 0;
+    s.last_face_recognizer_fresh_frame_counter = 0;
+    if (!s.initialized) {
+        s.pending_face_recognizer_cfg =
+            std::make_unique<PhysicalFaceRecognizerConfig>(cfg);
+        return;
+    }
+    if (!s.face_recognizer) {
+        throw std::runtime_error(
+            "RequestConfigurePhysicalFaceRecognizer: face_recognizer is null");
+    }
+    s.face_recognizer->LoadOnnxModelIntoPhysicalFaceRecognizer(cfg);
 }
 
 void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cfg) {

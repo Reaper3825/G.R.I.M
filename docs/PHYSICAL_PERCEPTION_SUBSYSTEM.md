@@ -428,29 +428,29 @@ stable diffing across frames.
 
 ### Known entities and user-authored names
 
-`PhysicalKnownEntityRegistry` binds a user-authored name to a current
-`object_id`. The Physical Environment panel's **Known Entities** tab lists all
+`PhysicalKnownEntityRegistry` binds a durable user-authored profile to an
+optional current `object_id`. The Physical Environment panel's **Identities** tab lists all
 live tracks plus named entities that have left view, provides a name editor,
 and displays the selected entity's latest class, track state, visibility,
 confidence, geometry, velocity, depth, support surface, path-block state, OCR,
 and relation count. The World overlay and model-facing context use the assigned
 name while retaining `class#object_id` as provenance.
 
-Bindings are deliberately session-scoped. The current tracker has no face,
-appearance, or biometric re-identification embedding, and its monotonic IDs
-restart after reset. `ResetPhysicalEntityTracker()` therefore clears the known
-entity registry so a newly allocated ID cannot silently inherit an old name.
-Ordinary culling does not clear a binding, allowing the UI to retain a stale
-last observation for the remainder of the tracker session.
+Each profile has a persistent UUID and is stored under
+`data/perception/physical/identities/profiles.json`. Tracker resets clear only
+live bindings and temporal evidence; names and explicitly enrolled templates
+remain durable. Unknown faces are never persisted automatically. The UI exposes
+separate actions to enroll a current high-quality face, forget all face data
+while keeping the name, and delete the entire identity.
 
-When a named track is culled, the registry automatically considers later
-confirmed, currently-unbound tracks for re-association. Candidates must have
-the same detector class, arrive within 900 source frames, remain within 0.55 of
-the model-frame diagonal from the last centre, retain at least 0.40 bounding-box
-area similarity, and clear a bidirectional best-match margin of 0.12. Accepted
-matches advance the known entity's current `object_id` and append the new ID to
-its track history. Ambiguous candidates remain unnamed. This is conservative
-spatiotemporal matching, not biometric recognition.
+`PhysicalFaceRecognizer` consumes YuNet's shared five-landmark detection,
+aligns the crop through OpenCV SFace, and emits an L2-normalized embedding tagged
+with its exact model/version ID. Stage 4 associates a face only with a confirmed
+`person` track whose upper body contains the face. Recognition compares only
+templates from the same model space, requires a similarity threshold and a
+runner-up margin, and requires three fresh accepted observations before binding
+a durable identity to a new track. Cached frames do not count as new evidence.
+Embeddings never enter generic semantic memory or model-facing context.
 
 ---
 

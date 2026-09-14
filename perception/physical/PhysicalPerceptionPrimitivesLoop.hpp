@@ -7,6 +7,7 @@
 #include "PhysicalSceneTextReader.hpp"
 #include "PhysicalSemanticSegmenter.hpp"
 #include "PhysicalFacialExpressionDetector.hpp"
+#include "PhysicalFaceRecognizer.hpp"
 #include "PhysicalEntityTracker.hpp"
 #include "PhysicalClassPolicy.hpp"
 
@@ -49,6 +50,7 @@ struct PhysicalPerceptionPrimitivesEnableFlags {
     bool pose_estimator     = true;
     bool scene_text_reader  = true;
     bool facial_expression_detector = true;
+    bool face_recognizer = true;
     // Entity tracker consumes the object detector's output; if
     // object_detector is off OR has no model loaded, the tracker still runs
     // but sees an empty detection list (it will simply age out tracks).
@@ -92,6 +94,7 @@ void RequestConfigurePhysicalImageClassifier(const PhysicalImageClassifierConfig
 void RequestConfigurePhysicalPoseKeypointEstimator(const PhysicalPoseKeypointEstimatorConfig& cfg);
 void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig& cfg);
 void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpressionDetectorConfig& cfg);
+void RequestConfigurePhysicalFaceRecognizer(const PhysicalFaceRecognizerConfig& cfg);
 void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cfg);
 void RequestConfigurePhysicalInstanceSegmenter(const PhysicalInstanceSegmenterConfig& cfg);
 void RequestConfigurePhysicalClassPolicy(const PhysicalClassPolicyConfig& cfg);

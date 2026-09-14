@@ -118,6 +118,8 @@ Download-ModelFile "https://github.com/opencv/opencv_zoo/raw/main/models/text_re
     (Join-Path $VisionDir "crnn_en.onnx") 1000000
 Download-ModelFile "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" `
     (Join-Path $VisionDir "yunet_face_detector.onnx") 100000
+Download-ModelFile "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx" `
+    (Join-Path $VisionDir "sface_recognizer.onnx") 10000000
 Download-ModelFile "https://github.com/onnx/models/raw/main/validated/vision/body_analysis/emotion_ferplus/model/emotion-ferplus-8.onnx" `
     (Join-Path $VisionDir "ferplus_emotion.onnx") 100000
 Download-ModelFile "https://github.com/isl-org/MiDaS/releases/download/v2_1/model-small.onnx" `
@@ -163,6 +165,7 @@ Require-File (Join-Path $VisionDir "yolov8n_pose.onnx") 5000000
 Require-File (Join-Path $VisionDir "ppocrv3_en_det.onnx") 1000000
 Require-File (Join-Path $VisionDir "crnn_en.onnx") 1000000
 Require-File (Join-Path $VisionDir "yunet_face_detector.onnx") 100000
+Require-File (Join-Path $VisionDir "sface_recognizer.onnx") 10000000
 Require-File (Join-Path $VisionDir "ferplus_emotion.onnx") 100000
 Require-File (Join-Path $VisionDir "midas_v21_small_256.onnx") 10000000
 if (-not $SkipPythonExports) {
