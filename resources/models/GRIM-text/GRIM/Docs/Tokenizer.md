@@ -1,9 +1,27 @@
 # Tokenizer — Atoms, Unigram, and Byte Overflow
 
 All tokenizer configuration lives in `ai_config.json`.
+
+`training.config.tokenizer_manual_vocab_path` optionally names a JSON source
+for protected ordinary unigram pieces. The tracked empty example is
+`resources/models/GRIM-text/training/manual_vocab.json`:
+
+```json
+{"tokens": {"▁GRIM": -5.0, "▁example": -6.0}}
+```
+
+Each key is the exact normalized piece text (word-initial spaces use `▁`),
+and each value is its negative log score. Entries enter the initial learned
+vocabulary before EM and pruning; exact duplicates from mined subwords are
+skipped. They count toward `tokenizer_target_vocab_size` and remain ordinary
+Viterbi candidates. Their scores determine whether encoding selects them,
+so training concepts must contain examples that actually encode to these IDs
+if the model is to learn to predict them. This source is read only when a new
+shared vocabulary is trained.
 - `GrimTokenizer.hpp` — alias to UniByte
 - `Detectors/` — raw-text detector parent class, registry, authored atom-delimiter placement, and whitespace/uppercase feature detectors
 - `Unigram.cu` — learned vocab, trie build, encode/decode wrappers
+- `ManualVocabSource.hpp/.cpp` — authored JSON source parsing and piece validation
 - `UnigramViterbi.hpp/.cu` — RAII Viterbi segmentation session and Viterbi CUDA kernels
 - `Training/SubwordMining.hpp/.cu` — training-only subword candidate mining, deterministic byte-proportional sampling, atom-aware count aggregation, and overflow-checked count math
 - `Training/UnigramForwardBackward.hpp/.cu` — training-only true Unigram forward-backward expected-count estimator over learned-piece paths on non-atom residual spans

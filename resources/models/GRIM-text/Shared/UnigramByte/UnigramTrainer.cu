@@ -24,6 +24,7 @@
 #include "Training/UnigramForwardBackward.hpp"
 #include "VocabWriteOp.hpp"
 #include "HyperParameters/HyperparameterGroupings.hpp"
+#include "ManualVocabSource.hpp"
 
 #include <algorithm>
 #include <array>
@@ -600,6 +601,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
               << " non-atom numeric spans (fixed numeric vocabulary; will skip during learned-vocab training)"
               << std::endl;
 
+    const auto manual_pieces = loadManualVocabPieces(tokenizer_hp.manual_vocab_path);
     const bool trained = trainFromCorpus(texts, all_atom_spans,
                                          tokenizer_hp.target_vocab_size,
                                          tokenizer_hp.character_coverage,
@@ -607,7 +609,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                          tokenizer_hp.prune_during_mining,
                                          tokenizer_hp.enable_parallel_subword_mining,
                                          tokenizer_hp.subword_mining_workers,
-                                         tokenizer_hp.subword_mining_max_bytes);
+                                         tokenizer_hp.subword_mining_max_bytes,
+                                         manual_pieces);
     if (trained) {
         requireRuntimeReadyForLastTraining("UnigramLM::trainFromCorpus(TokenizerHP)");
     }
@@ -626,7 +629,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  bool prune_during_mining,
                                  bool enable_parallel_subword_mining,
                                  int subword_mining_workers,
-                                 size_t subword_mining_max_bytes) {
+                                 size_t subword_mining_max_bytes,
+                                 const std::vector<UnigramPiece>& manual_pieces) {
     validateTrainFromCorpusParameters(texts, target_vocab_size, character_coverage,
                                       min_subword_freq, subword_mining_workers);
 
@@ -864,6 +868,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int repetition_filtered = 0;
     int structural_dedup_rejected = 0;
 
+    appendManualVocabPieces(*this, manual_pieces, target_vocab_size);
+
     std::unordered_set<std::string> dedup_keys_seen;
     dedup_keys_seen.reserve(ranked_subwords.size());
     std::cout << "[UnigramLM] Learned candidate admission and structural dedup start from mined subwords only; Step-2 character seeds do not alter learned-vocab selection"
@@ -906,10 +912,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     double total_accepted_count = 0.0;
     for (const auto& ap : accepted) total_accepted_count += ap.count;
-    requireUnigramAcceptedCandidateSetIsScorable(
-        accepted.size(),
-        total_accepted_count,
-        "UnigramLM::trainFromCorpus initial candidate score normalization");
+    if (!accepted.empty() || manual_pieces.empty()) {
+        requireUnigramAcceptedCandidateSetIsScorable(
+            accepted.size(),
+            total_accepted_count,
+            "UnigramLM::trainFromCorpus initial candidate score normalization");
+    }
 
     for (const auto& ap : accepted) {
         float score = static_cast<float>(std::log(ap.count / total_accepted_count));

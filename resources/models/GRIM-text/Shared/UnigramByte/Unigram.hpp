@@ -116,7 +116,8 @@ public:
                            bool prune_during_mining = false,
                            bool enable_parallel_subword_mining = true,
                            int subword_mining_workers = 0,
-                           size_t subword_mining_max_bytes = 0);
+                           size_t subword_mining_max_bytes = 0,
+                           const std::vector<UnigramPiece>& manual_pieces = {});
     
     // Transitional learned-vocab storage while UnigramLM is being split apart.
     // Mutate these only through VocabWriteOp.hpp targets; direct vector/map writes

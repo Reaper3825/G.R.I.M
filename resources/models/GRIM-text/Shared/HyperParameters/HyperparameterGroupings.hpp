@@ -63,6 +63,7 @@ struct TokenizerHP {
     std::string data_path;
     std::string output_data_path;
     std::string vocab_path;
+    std::string manual_vocab_path;
     int max_seq_len = 0;
     int target_vocab_size = 0;
     float character_coverage = 0.0f;
@@ -921,6 +922,7 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
         snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_output_grmt"),
         snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_curriculum"));
     view.vocab_path = paths.vocab_path;
+    view.manual_vocab_path = snapshotTrainingConfig(snapshot).value("tokenizer_manual_vocab_path", std::string{});
     view.target_vocab_size = snapshotTokenizerTargetVocabSize(snapshot);
     view.character_coverage = snapshotTrainingConfigField<float>(snapshot, "tokenizer_character_coverage");
     view.min_cleaned_text_length = snapshotTrainingConfigField<int>(snapshot, "tokenizer_min_cleaned_text_length");
