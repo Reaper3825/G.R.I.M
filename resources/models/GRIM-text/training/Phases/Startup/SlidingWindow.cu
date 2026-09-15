@@ -149,6 +149,13 @@ void authorAtomAuxTargetMask(
                 std::to_string(sequence.token_ids.size()));
         }
 
+        // Tool atom content and its closing delimiter remain LM-supervised.
+        // Other atom types retain auxiliary ownership of their span targets.
+        if (GRIM::Tokenizer::tokenIdToAtomType(sequence.token_ids[span.begin]) ==
+            GRIM::Tokenizer::AtomType::ATOM_TOOL) {
+            continue;
+        }
+
         // AtomTokenSpan::end is one past the close delimiter. Causal rows from
         // the opening boundary up to (but excluding) the close-boundary row
         // predict every value token and finally the close delimiter itself.

@@ -3024,7 +3024,8 @@ bool testGrmtFixedNumericTokenRoundTripAndRangeValidation(std::string& message) 
 
 static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     std::size_t prefix_tokens,
-    std::size_t suffix_tokens) {
+    std::size_t suffix_tokens,
+    AtomType atom_type = AtomType::ATOM_INT) {
     TokenizerArtifacts::GrmtSequence sequence;
     sequence.concept_block_id = "cb_test_source";
     for (std::size_t i = 0; i < prefix_tokens; ++i) {
@@ -3032,10 +3033,10 @@ static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
             BYTE_TOKEN_OFFSET + static_cast<int>('a' + (i % 20)));
     }
     const std::size_t open_index = sequence.token_ids.size();
-    sequence.token_ids.push_back(atomTypeToOpenTokenId(AtomType::ATOM_INT));
+    sequence.token_ids.push_back(atomTypeToOpenTokenId(atom_type));
     sequence.token_ids.push_back(BYTE_TOKEN_OFFSET + static_cast<int>('4'));
     sequence.token_ids.push_back(BYTE_TOKEN_OFFSET + static_cast<int>('2'));
-    sequence.token_ids.push_back(atomTypeToCloseTokenId(AtomType::ATOM_INT));
+    sequence.token_ids.push_back(atomTypeToCloseTokenId(atom_type));
     for (std::size_t i = 0; i < suffix_tokens; ++i) {
         sequence.token_ids.push_back(
             BYTE_TOKEN_OFFSET + static_cast<int>('u' + (i % 5)));
@@ -3056,7 +3057,7 @@ static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
 
     const uint32_t entry_id = registerSelfTestAtom(
-        *sequence.atom_table, AtomType::ATOM_INT, "42");
+        *sequence.atom_table, atom_type, "42");
     if (entry_id == UINT32_MAX) {
         throw std::runtime_error("makeWindowingAtomSequence: failed to register integer atom");
     }
@@ -3069,7 +3070,7 @@ static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     sequence.token_atom_flags[open_index] = entry->flags;
     sequence.atom_entry_ids[open_index] = entry_id;
     sequence.token_local_atom_indices[open_index] =
-        sequence.local_atom_table->ticket(AtomType::ATOM_INT, "42").local_index;
+        sequence.local_atom_table->ticket(atom_type, "42").local_index;
     return sequence;
 }
 
@@ -3104,7 +3105,8 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                         !window.local_atom_table->contains(
                             tokenIdToAtomType(token_id),
                             window.token_local_atom_indices[i]) ||
-                        window.token_atom_aux_target_mask[i] != 1) {
+                        window.token_atom_aux_target_mask[i] !=
+                            (tokenIdToAtomType(token_id) == AtomType::ATOM_TOOL ? 0 : 1)) {
                         message = std::string(stage) +
                                   " emitted an invalid typed opening boundary";
                         return false;
@@ -3134,7 +3136,8 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                               " moved atom metadata away from the opening boundary";
                     return false;
                 }
-                const uint8_t expected_aux_owner = inside_atom ? 1 : 0;
+                const uint8_t expected_aux_owner =
+                    inside_atom && open_type != AtomType::ATOM_TOOL ? 1 : 0;
                 if (window.token_atom_aux_target_mask[i] != expected_aux_owner) {
                     message = std::string(stage) +
                               " authored an incorrect causal atom auxiliary target mask";
@@ -3176,6 +3179,37 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
         if (!validateWindows(pt_sequences, 6, "PT")) {
             return false;
         }
+
+        std::vector<TokenizerArtifacts::GrmtSequence> tool_sequences{
+            makeWindowingAtomSequence(4, 4, AtomType::ATOM_TOOL)};
+        GRIMText::Training::applySlidingWindows(
+            tool_sequences, "tool-span-pt-test",
+            GRIM::HyperParameters::TrainingStage::PT,
+            {}, {}, 6, 4, 0, false, false, logger);
+        if (!validateWindows(tool_sequences, 6, "PT TOOL")) {
+            return false;
+        }
+        bool found_supervised_tool_span = false;
+        for (const auto& window : tool_sequences) {
+            for (std::size_t i = 0; i + 1 < window.token_ids.size(); ++i) {
+                if (isAtomOpenTokenId(window.token_ids[i]) &&
+                    tokenIdToAtomType(window.token_ids[i]) == AtomType::ATOM_TOOL) {
+                    found_supervised_tool_span = true;
+                    for (std::size_t t = i; t + 1 < window.token_ids.size(); ++t) {
+                        if (window.token_atom_aux_target_mask[t] != 0 ||
+                            window.targets[t] != window.token_ids[t + 1]) {
+                            found_supervised_tool_span = false;
+                            break;
+                        }
+                        if (isAtomCloseTokenId(window.token_ids[t + 1])) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        ASSERT_TRUE(found_supervised_tool_span,
+                    "TOOL content and closing delimiter must remain LM targets after windowing");
 
         std::vector<TokenizerArtifacts::GrmtSequence> exact_capacity_sequences{
             makeWindowingAtomSequence(0, 2)};

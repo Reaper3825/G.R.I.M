@@ -135,9 +135,9 @@ struct BatchPayload {
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = atom opening metadata anchor)
     // Causal prediction-row span mask authored by sliding-window construction.
-    // For <TYPE> value </TYPE>, 1 spans the opening boundary through the final
-    // value-emission row. Batch construction masks the corresponding LM targets;
-    // the close-boundary row is 0 so LM supervision resumes there. This remains
+    // For non-TOOL atoms, 1 spans the opening boundary through the final
+    // value-emission row. Batch construction masks the corresponding LM targets.
+    // TOOL spans and close-boundary rows stay 0 and retain LM supervision. This remains
     // host-only until a future typed-span objective defines its own device ABI.
     std::vector<uint8_t> atom_aux_target_mask; // [total_tokens] padded with 0
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (opening-only metadata from AtomTable)
@@ -727,7 +727,8 @@ struct BatchPayload {
                     }
 
                     const int token_id = input_ids[static_cast<std::size_t>(flat_position)];
-                    uint8_t expected_aux_owner = inside_atom ? 1 : 0;
+                    uint8_t expected_aux_owner =
+                        inside_atom && open_type != GRIM::Tokenizer::AtomType::ATOM_TOOL ? 1 : 0;
                     if (GRIM::Tokenizer::isAtomOpenTokenId(token_id)) {
                         if (inside_atom) {
                             throw std::runtime_error(
@@ -743,7 +744,8 @@ struct BatchPayload {
                         }
                         inside_atom = true;
                         open_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
-                        expected_aux_owner = 1;
+                        expected_aux_owner =
+                            open_type == GRIM::Tokenizer::AtomType::ATOM_TOOL ? 0 : 1;
 
                         if (compact_atom_index >= atom_positions.size() ||
                             atom_positions[compact_atom_index] != flat_position ||
