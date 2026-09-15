@@ -4,6 +4,7 @@
 #include "../helpers/key.hpp"
 #include "../helpers/mouse.hpp"
 #include "../perception/digital/DigitalContextProjector.hpp"
+#include "../perception/physical/PhysicalCameraCalibrator.hpp"
 #include "../perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "../perception/physical/PhysicalGestureControlLoop.hpp"
 #include "../perception/physical/PhysicalInteractionLoop.hpp"
@@ -51,14 +52,20 @@ void tickApplicationFrame(
     UI::processPanelShortcuts();
 
     Perception::Physical::TickPhysicalEnvironment();
-    Perception::Physical::TickPhysicalInteraction();
-    Perception::Physical::TickPhysicalGestureControl();
-    Perception::Physical::TickPhysicalPerceptionPrimitives();
-    Perception::Physical::TickPhysicalSpatialGrounding();
-    Perception::Physical::TickPhysicalLocalization();
-    Perception::Physical::TickPhysicalWorldState();
-    Perception::Physical::TickPhysicalWorldStateContextProjector();
-    Perception::Physical::TickPhysicalWorldStateMemoryWriter();
+    // Calibration is an exclusive raw-camera workflow. Do not schedule the
+    // competing interaction/inference/world pipeline while it is collecting
+    // samples; this also prevents calibration-board observations from becoming
+    // durable environmental memories.
+    if (!Perception::Physical::IsPhysicalCameraCalibrationCaptureActive()) {
+        Perception::Physical::TickPhysicalInteraction();
+        Perception::Physical::TickPhysicalGestureControl();
+        Perception::Physical::TickPhysicalPerceptionPrimitives();
+        Perception::Physical::TickPhysicalSpatialGrounding();
+        Perception::Physical::TickPhysicalLocalization();
+        Perception::Physical::TickPhysicalWorldState();
+        Perception::Physical::TickPhysicalWorldStateContextProjector();
+        Perception::Physical::TickPhysicalWorldStateMemoryWriter();
+    }
     Perception::Digital::TickDigitalContextProjector();
     geoSpatialRuntime.tick(kDeltaSeconds);
 

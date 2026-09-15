@@ -12,6 +12,11 @@
 
 namespace GRIM {
 
+// Version 31 makes the model-visible Answer label explicit and widens
+// Determine/Execute/Update/Answer spans to include section markers and
+// separators. Rebuild GRMT rows; the compiled model and checkpoint formats
+// are unchanged.
+
 // Version 30 persists token spans for reasoning and the authored
 // Determine/Execute/Update phases so Phase 1 can apply field-list SFT
 // supervision instead of a single selected target.
@@ -67,7 +72,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 30;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 31;
 
 } // namespace GRIM
 

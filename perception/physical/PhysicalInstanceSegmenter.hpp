@@ -130,6 +130,7 @@ public:
     // re-derive them, only consume.
     void RouteFrameAndDetectionsToPhysicalInstanceSegmenter(
         const cv::Mat& model_image,
+        bool preserve_model_channel_order,
         const std::vector<PhysicalObjectDetection>& detections,
         uint64_t source_frame_counter,
         PhysicalInstanceSegmenterOutput& out);

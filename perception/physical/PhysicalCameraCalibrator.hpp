@@ -17,9 +17,10 @@ namespace GRIM { namespace Perception { namespace Physical {
 //  Owns the per-process calibration state machine. Responsibilities:
 //    - When the active FrameBus source changes, load only the intrinsic
 //      profile matching that source URL and capture resolution.
-//    - Every TickPhysicalCameraCalibration() checks PhysicalFrameBus and runs
-//      detection only when a fresh raw frame is available. While capture is
-//      active, a found pattern is accepted when coverage policy permits.
+//    - Every TickPhysicalCameraCalibration() checks PhysicalFrameBus and keeps
+//      one latest-frame asynchronous detection job in flight. OpenCV never
+//      blocks the main/UI thread. While capture is active, a found distinct
+//      pose is accepted when coverage policy permits.
 //    - Exposes Request* mutators for the UI:
 //        Start/Stop capture, Capture-Now, Run intrinsic calibration, Save,
 //        Clear samples, Reconfigure pattern.
@@ -58,7 +59,9 @@ struct PhysicalCalibrationStatus {
     double      last_frame_brightness    = 0.0;          // 0..255 grayscale mean
     int         last_frame_width         = 0;
     int         last_frame_height        = 0;
+    bool        detection_in_progress    = false;
     uint64_t    last_detection_frame_counter = 0;
+    cv::Mat     last_detection_frame;                    // immutable analyzed raw frame
     cv::Point2f last_pattern_centroid_px = {0, 0};
     std::vector<cv::Point2f> last_detected_image_points;
     std::string last_failure_reason;
@@ -88,6 +91,10 @@ PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot();
 
 // Returns true once we have a usable K matrix (loaded from disk or computed).
 bool IsPhysicalCalibrationDataAvailable();
+
+// Cheap main-loop gate used to give calibration exclusive access to the
+// physical vision pipeline while samples are being collected.
+bool IsPhysicalCameraCalibrationCaptureActive();
 
 // Copies the current calibration into `out`. Throws if not available
 // (Rule 20 — caller MUST check IsPhysicalCalibrationDataAvailable first).

@@ -82,6 +82,7 @@ void PhysicalMonocularDepthEstimator::LoadOnnxModelIntoPhysicalMonocularDepthEst
 
 void PhysicalMonocularDepthEstimator::RouteFrameToPhysicalMonocularDepthEstimator(
     const cv::Mat&  model_image,
+    bool            preserve_model_channel_order,
     PhysicalDepthMap& out_depth,
     PhysicalImageOperatorState& out_state,
     std::string&    out_error,
@@ -117,7 +118,7 @@ void PhysicalMonocularDepthEstimator::RouteFrameToPhysicalMonocularDepthEstimato
         cv::Mat scaled;
         // 1) BGR uint8 → RGB float32 in [0,1]
         cv::Mat rgb;
-        if (cfg_.swap_rb) {
+        if (cfg_.swap_rb && !preserve_model_channel_order) {
             cv::cvtColor(model_image, rgb, cv::COLOR_BGR2RGB);
         } else {
             rgb = model_image;

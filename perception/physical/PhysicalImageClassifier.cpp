@@ -250,6 +250,7 @@ void PhysicalImageClassifier::LoadOnnxModelIntoPhysicalImageClassifier(
 
 void PhysicalImageClassifier::RouteFrameToPhysicalImageClassifier(
     const cv::Mat& model_image,
+    bool preserve_model_channel_order,
     uint64_t source_frame_counter,
     PhysicalImageClassifierOutput& out)
 {
@@ -287,7 +288,9 @@ void PhysicalImageClassifier::RouteFrameToPhysicalImageClassifier(
         cv::Mat blob = cv::dnn::blobFromImage(
             model_image, cfg_.input_scale,
             cv::Size(cfg_.input_width, cfg_.input_height),
-            cfg_.input_mean, cfg_.swap_rb, /*crop=*/false);
+            cfg_.input_mean,
+            cfg_.swap_rb && !preserve_model_channel_order,
+            /*crop=*/false);
         ApplyPerChannelStdDiv(blob, cfg_.input_std);
 
         // Wrap blob as Ort::Value (non-owning view of the cv::Mat buffer).

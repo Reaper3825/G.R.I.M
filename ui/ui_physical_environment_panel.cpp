@@ -75,15 +75,26 @@ std::string FormatStage(PE::PhysicalCalibrationStage st) {
     return "Unknown";
 }
 
+const char* FormatSignalColorMode(PE::PhysicalSignalColorMode mode) {
+    switch (mode) {
+        case PE::PhysicalSignalColorMode::Bgr:  return "BGR";
+        case PE::PhysicalSignalColorMode::Gray: return "Gray";
+        case PE::PhysicalSignalColorMode::Rgb:  return "RGB";
+        case PE::PhysicalSignalColorMode::Gbr:  return "GBR";
+    }
+    return "Invalid";
+}
+
 const char* FormatCalibrationPreprocessPath(int path) {
     switch (path) {
         case -1: return "all failed";
         case 0: return "raw SB";
         case 1: return "CLAHE SB";
         case 2: return "gamma+CLAHE SB";
-        case 3: return "upscaled SB";
-        case 4: return "legacy raw";
-        case 5: return "legacy enhanced";
+        case 3: return "robust SB";
+        case 4: return "upscaled SB";
+        case 5: return "legacy raw";
+        case 6: return "legacy enhanced";
     }
     return "unknown";
 }
@@ -182,6 +193,9 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::World); });
     tab_known_entities_btn_ = std::make_shared<UIButton>(" Identities ",
         [this]() { setActiveTab(Tab::KnownEntities); });
+
+    world_view_toggle_btn_ = std::make_shared<UIButton>(" View: Raw Sensor ",
+        [this]() { HandleToggleWorldViewport(); });
 
     // ── Known Entities tab controls ──
     known_entity_list_ = std::make_shared<UIScrollBox>();
@@ -315,7 +329,7 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
                             [this]() { HandleToggleDeblurClicked(); });
     signal_stabilization_btn_ = std::make_shared<UIButton>(" Stabilize: Off ",
                             [this]() { HandleToggleStabilizationClicked(); });
-    signal_color_mode_btn_ = std::make_shared<UIButton>(" Color: BGR ",
+    signal_color_mode_btn_ = std::make_shared<UIButton>(" Color: RGB ",
                             [this]() { HandleToggleColorModeClicked(); });
     signal_resize_mode_btn_ = std::make_shared<UIButton>(" Fit: Letterbox ",
                             [this]() { HandleToggleResizeModeClicked(); });
@@ -619,9 +633,8 @@ void UIPhysicalEnvironmentPanel::SyncSignalSettingsControlsFromSubsystem() {
             : " Stabilize: Off ");
     }
     if (signal_color_mode_btn_) {
-        signal_color_mode_btn_->setText(signal_cfg_.color_mode == PE::PhysicalSignalColorMode::Gray
-            ? " Color: Gray "
-            : " Color: BGR ");
+        signal_color_mode_btn_->setText(
+            std::string(" Color: ") + FormatSignalColorMode(signal_cfg_.color_mode) + " ");
     }
     if (signal_resize_mode_btn_) {
         signal_resize_mode_btn_->setText(
@@ -691,13 +704,35 @@ void UIPhysicalEnvironmentPanel::HandleToggleStabilizationClicked() {
 }
 
 void UIPhysicalEnvironmentPanel::HandleToggleColorModeClicked() {
-    signal_cfg_.color_mode = (signal_cfg_.color_mode == PE::PhysicalSignalColorMode::Bgr)
-        ? PE::PhysicalSignalColorMode::Gray
-        : PE::PhysicalSignalColorMode::Bgr;
+    switch (signal_cfg_.color_mode) {
+        case PE::PhysicalSignalColorMode::Bgr:
+            signal_cfg_.color_mode = PE::PhysicalSignalColorMode::Rgb;
+            break;
+        case PE::PhysicalSignalColorMode::Rgb:
+            signal_cfg_.color_mode = PE::PhysicalSignalColorMode::Gbr;
+            break;
+        case PE::PhysicalSignalColorMode::Gbr:
+            signal_cfg_.color_mode = PE::PhysicalSignalColorMode::Gray;
+            break;
+        case PE::PhysicalSignalColorMode::Gray:
+        default:
+            signal_cfg_.color_mode = PE::PhysicalSignalColorMode::Bgr;
+            break;
+    }
     if (signal_color_mode_btn_) {
-        signal_color_mode_btn_->setText(signal_cfg_.color_mode == PE::PhysicalSignalColorMode::Gray
-            ? " Color: Gray "
-            : " Color: BGR ");
+        signal_color_mode_btn_->setText(
+            std::string(" Color: ") + FormatSignalColorMode(signal_cfg_.color_mode) + " ");
+    }
+    try {
+        // Color order is a live model-input control. Apply it immediately
+        // without committing unrelated text-field edits that are still
+        // staged behind the main Apply button.
+        auto applied_cfg = PE::GetPhysicalSignalConditioningConfigSnapshot();
+        applied_cfg.color_mode = signal_cfg_.color_mode;
+        PE::RequestConfigurePhysicalSignalConditioning(applied_cfg);
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+                  std::string("HandleToggleColorModeClicked: configure threw: ") + e.what());
     }
 }
 
@@ -1010,14 +1045,24 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
     cal_last_status_ = PE::GetPhysicalCalibrationStatusSnapshot();
 
     // ── Production preview pipeline ──
-    // The calibrator owns detection. The UI only draws its result when that
-    // result belongs to the exact raw frame currently being displayed.
-    const bool counter_changed   = (last_seen_counter_ != calib_display_source_id_);
+    // Async results carry their exact analyzed frame. In raw calibration view,
+    // hold that pinned frame until the next result so corner geometry cannot
+    // drift onto the newer live image while detection is in flight.
+    const bool have_analyzed_frame =
+        !cal_last_status_.last_detection_frame.empty()
+        && cal_last_status_.last_detection_frame_counter != 0;
+    const uint64_t desired_source_id =
+        (!cal_show_undistorted_ && have_analyzed_frame)
+            ? cal_last_status_.last_detection_frame_counter
+            : last_seen_counter_;
+    const bool counter_changed =
+        (desired_source_id != calib_display_source_id_);
     const bool detection_changed =
         (cal_last_status_.last_detection_frame_counter
             != calib_display_detection_id_);
     const bool undistort_changed = (cal_show_undistorted_ != calib_display_undistort_);
-    if (have_any_frame_ && !last_view_.raw_image.empty()
+    if ((have_analyzed_frame
+            || (have_any_frame_ && !last_view_.raw_image.empty()))
         && (counter_changed || detection_changed || undistort_changed)) {
         cv::Mat base;
         if (cal_show_undistorted_ && PE::IsPhysicalCalibrationDataAvailable()) {
@@ -1028,14 +1073,18 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
                     std::string("UpdateCalibrationTab: undistort threw: ") + e.what());
                 base = last_view_.raw_image;
             }
+        } else if (!cal_show_undistorted_ && have_analyzed_frame) {
+            base = cal_last_status_.last_detection_frame;
         } else {
             base = last_view_.raw_image;
         }
-        if (base.empty()) base = last_view_.raw_image;
+        if (base.empty() && !last_view_.raw_image.empty()) {
+            base = last_view_.raw_image;
+        }
 
         const bool matching_raw_detection = !cal_show_undistorted_
             && cal_last_status_.last_pattern_found
-            && cal_last_status_.last_detection_frame_counter == last_seen_counter_
+            && have_analyzed_frame
             && !cal_last_status_.last_detected_image_points.empty();
         if (matching_raw_detection) {
             try {
@@ -1063,7 +1112,7 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
         // frame while retaining the same source counter. Invalidate the blit
         // cache so that late corner data becomes visible immediately.
         calib_blit_cache_.source_id = 0;
-        calib_display_source_id_  = last_seen_counter_;
+        calib_display_source_id_  = desired_source_id;
         calib_display_detection_id_ =
             cal_last_status_.last_detection_frame_counter;
         calib_display_undistort_  = cal_show_undistorted_;
@@ -1201,6 +1250,9 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
     preview_label << (camera_show_model_signal_ ? "MODEL INPUT" : "RAW CAMERA");
     if (have_any_frame_ && !shown.empty()) {
         preview_label << "  " << shown.cols << 'x' << shown.rows;
+        if (camera_show_model_signal_ && !last_view_.metadata.color_space_label.empty()) {
+            preview_label << "  " << last_view_.metadata.color_space_label;
+        }
     }
     renderer.drawRect({frame_x - 2, frame_y - 2}, {frame_w + 4, frame_h + 4},
                       UITheme::Colors::DividerLine);
@@ -1210,14 +1262,18 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
     if (have_any_frame_ && !shown.empty()) {
         DrawBgrFrameIntoOverlay(renderer, shown,
                                 last_seen_counter_, camera_show_model_signal_,
-                                frame_x, frame_y, frame_w, frame_h, camera_blit_cache_);
+                                frame_x, frame_y, frame_w, frame_h, camera_blit_cache_,
+                                camera_show_model_signal_
+                                    ? last_view_.metadata.color_space_label
+                                    : std::string("BGR8_SRGB"));
     } else {
         renderer.drawText({frame_x + 12, frame_y + 12},
                           "No frame yet — choose a source and click Connect.",
                           UITheme::Colors::TextSecondary);
     }
+    const float preview_label_width = std::min(300.0f, std::max(80.0f, frame_w - 12.0f));
     renderer.drawRect({frame_x + 6.0f, frame_y + 6.0f},
-                      {196.0f, 20.0f}, 0xCC10151Cu);
+                      {preview_label_width, 20.0f}, 0xCC10151Cu);
     renderer.drawText({frame_x + 10.0f, frame_y + 8.0f}, preview_label.str(),
                       camera_show_model_signal_
                           ? UITheme::Colors::Warning
@@ -1454,7 +1510,9 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
                                           : std::string("(none)"))
                << "  |  path="
                << FormatCalibrationPreprocessPath(
-                      cal_last_status_.last_preprocess_path);
+                      cal_last_status_.last_preprocess_path)
+               << "  |  async="
+               << (cal_last_status_.detection_in_progress ? "working" : "idle");
         }
         renderer.drawText({frame_x, stat_y + 18}, ss.str(), UITheme::Colors::TextSecondary);
     }
@@ -1487,7 +1545,13 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
                           + std::to_string(cal_last_status_.pattern_inner_rows + 1)
                           + " squares; keep all edges visible.",
                       UITheme::Colors::TextSecondary);
-    DrawCalibrationDataReadout(renderer, right_x, right_y + cov_h + 58.0f, cal_last_status_);
+    renderer.drawText({right_x, right_y + cov_h + 48.0f},
+                      "Hold each pose still until accepted.",
+                      UITheme::Colors::TextSecondary);
+    renderer.drawText({right_x, right_y + cov_h + 66.0f},
+                      "Then vary tilt, distance, or position.",
+                      UITheme::Colors::TextSecondary);
+    DrawCalibrationDataReadout(renderer, right_x, right_y + cov_h + 94.0f, cal_last_status_);
 
     if (cal_start_btn_)            cal_start_btn_->drawOverlay(renderer, position);
     if (cal_stop_btn_)             cal_stop_btn_->drawOverlay(renderer, position);
@@ -1512,7 +1576,7 @@ void UIPhysicalEnvironmentPanel::DrawBgrFrameIntoOverlay(
     OverlayRenderer& renderer, const cv::Mat& bgr,
     uint64_t source_id, bool source_undistort,
     float frame_x, float frame_y, float frame_w, float frame_h,
-    PreviewBlitCache& cache)
+    PreviewBlitCache& cache, const std::string& color_space_label)
 {
     auto* pixels = static_cast<uint32_t*>(renderer.getPixels());
     if (!pixels) {
@@ -1546,6 +1610,7 @@ void UIPhysicalEnvironmentPanel::DrawBgrFrameIntoOverlay(
         source_id != 0 &&
         cache.source_id        == source_id &&
         cache.source_undistort == source_undistort &&
+        cache.source_color_space == color_space_label &&
         cache.out_w            == out_w &&
         cache.out_h            == out_h &&
         cache.argb.size() == static_cast<size_t>(out_w) * static_cast<size_t>(out_h);
@@ -1565,31 +1630,33 @@ void UIPhysicalEnvironmentPanel::DrawBgrFrameIntoOverlay(
             const auto* src = resized.ptr<uint8_t>(y);
             uint32_t*   dst = cache.argb.data() + static_cast<size_t>(y) * out_w;
             for (int x = 0; x < out_w; ++x) {
+                // Interpret the three byte positions literally. Raw surfaces
+                // follow the BGR contract; model-signal surfaces deliberately
+                // retain RGB/GBR permutations so the inspector shows what the
+                // model receives. The color-space label remains part of the
+                // cache key so a mode change invalidates the preview.
                 const uint8_t b = src[x * 3 + 0];
                 const uint8_t g = src[x * 3 + 1];
                 const uint8_t r = src[x * 3 + 2];
-                // =========================================================
-                // COLOR-ORDER LANDMINE — READ BEFORE CHANGING
-                // =========================================================
-                // Empirically verified on macOS arm64 + OpenCV 4.12 (vcpkg)
-                // AVFoundation backend (CAP=1200): the cv::Mat bytes arrive
-                // in an order where the channel at offset 1 is BLUE and the
-                // channel at offset 0 pairs with R to form yellow. Using the
-                // "documented" BGR assumption produces a G↔B inversion.
-                //
-                // DO NOT "fix" this to match OverlayRenderer::drawRect's
-                // ARGB = (a<<24)|(r<<16)|(g<<8)|b convention. The UI chrome
-                // convention is right for synthetic UI colors. This loop
-                // consumes real camera pixels that do NOT follow that
-                // convention on this platform/backend.
-                // =========================================================
+                // OverlayRenderer consumes semantic ARGB. OpenCV's public
+                // frame contract is BGR, so Windows/Linux use the canonical
+                // BGR -> ARGB mapping. Keep the empirically required
+                // AVFoundation G/B workaround isolated to Apple builds; it
+                // must never leak into Windows previews or model metadata.
+#if defined(__APPLE__)
                 dst[x] = (0xFFu << 24) | (static_cast<uint32_t>(r) << 16)
                                        | (static_cast<uint32_t>(b) << 8)
                                        |  static_cast<uint32_t>(g);
+#else
+                dst[x] = (0xFFu << 24) | (static_cast<uint32_t>(r) << 16)
+                                       | (static_cast<uint32_t>(g) << 8)
+                                       |  static_cast<uint32_t>(b);
+#endif
             }
         }
         cache.source_id        = source_id;
         cache.source_undistort = source_undistort;
+        cache.source_color_space = color_space_label;
         cache.out_w            = out_w;
         cache.out_h            = out_h;
     }
@@ -1640,9 +1707,13 @@ void UIPhysicalEnvironmentPanel::DrawCoverageGrid(
         for (int c = 0; c < st.coverage_grid_cols; ++c) {
             const int idx = r * st.coverage_grid_cols + c;
             const int cnt = st.coverage_cell_counts[idx];
-            const uint32_t cell_color = (cnt > 0)
-                ? MakeArgb(0xFF, 0x33, 0xAA, 0x55)
-                : MakeArgb(0x60, 0x88, 0x88, 0x88);
+            const uint32_t cell_color = cnt >= 3
+                ? MakeArgb(0xFF, 0x44, 0xDD, 0x66)
+                : cnt == 2
+                    ? MakeArgb(0xFF, 0x38, 0xAA, 0x58)
+                    : cnt == 1
+                        ? MakeArgb(0xFF, 0x2A, 0x76, 0x45)
+                        : MakeArgb(0x60, 0x88, 0x88, 0x88);
             renderer.drawRect({gx + c * cw + 1, gy + r * ch + 1},
                               {cw - 2, ch - 2}, cell_color);
         }
@@ -2470,7 +2541,8 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
         DrawBgrFrameIntoOverlay(renderer, last_view_.model_image,
                                 last_seen_counter_, /*source_undistort=*/true,
                                 frame_x, frame_y, frame_w, frame_h,
-                                perception_blit_cache_);
+                                perception_blit_cache_,
+                                last_view_.metadata.color_space_label);
         // Recover the actual blit rect from the cache so overlays land where
         // the pixels did. DrawBgrFrameIntoOverlay computes letterboxed out_w/h.
         model_w = last_view_.model_image.cols;
@@ -3664,7 +3736,24 @@ std::string WorldEntityDisplayName(const PE::PhysicalWorldEntity& entity) {
 
 } // anonymous
 
-void UIPhysicalEnvironmentPanel::UpdateWorldTab(const InputState& /*input*/, float /*dt*/) {
+void UIPhysicalEnvironmentPanel::HandleToggleWorldViewport() {
+    world_show_model_signal_ = !world_show_model_signal_;
+    if (world_view_toggle_btn_) {
+        world_view_toggle_btn_->setText(world_show_model_signal_
+            ? " View: Model Signal "
+            : " View: Raw Sensor ");
+    }
+}
+
+void UIPhysicalEnvironmentPanel::UpdateWorldTab(const InputState& input, float dt) {
+    const float content_top = position.y + titleBarHeight + kEditorWorkspacePad;
+    const float sidebar_x = position.x + size.x - kEditorInspectorWidth;
+    if (world_view_toggle_btn_) {
+        world_view_toggle_btn_->setPosition(sidebar_x + 8.0f, content_top + 22.0f);
+        world_view_toggle_btn_->setSize(kEditorInspectorWidth - 16.0f, 26.0f);
+        world_view_toggle_btn_->update(input, dt);
+    }
+
     // Pull latest published snapshot. The world-state loop publishes at most
     // once per matched (perception, grounding) pair; a Pull that returns
     // false simply means "nothing new" — keep the previous view.
@@ -3687,30 +3776,31 @@ void UIPhysicalEnvironmentPanel::UpdateWorldTab(const InputState& /*input*/, flo
 void UIPhysicalEnvironmentPanel::DrawWorldEntitiesOverlay(
     OverlayRenderer& renderer,
     const PE::PhysicalWorldStateSnapshot& snap,
-    int blit_x, int blit_y, int blit_w, int blit_h)
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    bool model_space)
 {
-    if (snap.model_image_width <= 0 || snap.model_image_height <= 0) return;
     if (blit_w <= 0 || blit_h <= 0) return;
 
-    // model → blit transform (model coords are the snapshot's authoritative
-    // coordinate system; we rendered the raw frame letterboxed to the blit
-    // rect, so we must transform via raw → letterbox, NOT model → letterbox.
-    // The world-state snapshot also stores raw_box for exactly this reason).
-    if (snap.raw_image_width <= 0 || snap.raw_image_height <= 0) return;
-    const float sx = static_cast<float>(blit_w) / static_cast<float>(snap.raw_image_width);
-    const float sy = static_cast<float>(blit_h) / static_cast<float>(snap.raw_image_height);
+    const int source_w = model_space
+        ? snap.model_image_width : snap.raw_image_width;
+    const int source_h = model_space
+        ? snap.model_image_height : snap.raw_image_height;
+    if (source_w <= 0 || source_h <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(source_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(source_h);
 
-    auto raw_pt = [&](float rx, float ry) {
+    auto source_pt = [&](float px, float py) {
         return std::pair<float,float>(
-            static_cast<float>(blit_x) + rx * sx,
-            static_cast<float>(blit_y) + ry * sy);
+            static_cast<float>(blit_x) + px * sx,
+            static_cast<float>(blit_y) + py * sy);
     };
 
     // Pre-build an id → centre table for relation lines.
     std::unordered_map<uint64_t, std::pair<float,float>> id_to_screen_centre;
     id_to_screen_centre.reserve(snap.entities.size());
     for (const auto& e : snap.entities) {
-        id_to_screen_centre[e.object_id] = raw_pt(e.raw_centre.x, e.raw_centre.y);
+        const cv::Point2f& centre = model_space ? e.model_centre : e.raw_centre;
+        id_to_screen_centre[e.object_id] = source_pt(centre.x, centre.y);
     }
 
     // 1. Relation lines (drawn first so boxes sit on top).
@@ -3740,9 +3830,10 @@ void UIPhysicalEnvironmentPanel::DrawWorldEntitiesOverlay(
     // 2. Entity boxes (colour by visibility) + occluder linkage.
     for (const auto& e : snap.entities) {
         const uint32_t col = WorldVisibilityColor(e.visibility);
-        const auto tl = raw_pt(e.raw_box.x, e.raw_box.y);
-        const float w_px = e.raw_box.width  * sx;
-        const float h_px = e.raw_box.height * sy;
+        const cv::Rect2f& box = model_space ? e.model_box : e.raw_box;
+        const auto tl = source_pt(box.x, box.y);
+        const float w_px = box.width  * sx;
+        const float h_px = box.height * sy;
         // Top + bottom + left + right edges as 1-px rects (drawRect = filled).
         renderer.drawRect({tl.first,            tl.second           }, {w_px, 1.0f}, col);
         renderer.drawRect({tl.first,            tl.second + h_px - 1}, {w_px, 1.0f}, col);
@@ -3881,15 +3972,20 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
     const float sidebar_w = kEditorInspectorWidth;
     const float sidebar_h = frame_h;
 
-    // Draw the latest raw frame as the canvas (Rule 20: if no frame is on
-    // the bus, say so — no stub graphic).
-    if (have_any_frame_ && !last_view_.raw_image.empty()) {
+    const cv::Mat& shown = world_show_model_signal_
+        ? last_view_.model_image : last_view_.raw_image;
+    const std::string color_space = world_show_model_signal_
+        ? last_view_.metadata.color_space_label : std::string("BGR8_SRGB");
+
+    // Draw the selected FrameBus surface. Each overlay uses the matching
+    // authoritative coordinate set stored in the world-state snapshot.
+    if (have_any_frame_ && !shown.empty()) {
         DrawBgrFrameIntoOverlay(renderer,
-                                last_view_.raw_image,
+                                shown,
                                 last_seen_counter_,
-                                /*source_undistort=*/false,
+                                /*source_undistort=*/world_show_model_signal_,
                                 frame_x, frame_y, frame_w, frame_h,
-                                world_blit_cache_);
+                                world_blit_cache_, color_space);
 
         if (have_any_world_results_
             && world_blit_cache_.out_w > 0 && world_blit_cache_.out_h > 0) {
@@ -3899,7 +3995,8 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
             const int out_y = static_cast<int>(frame_y + (frame_h - out_h) * 0.5f);
             DrawWorldEntitiesOverlay(renderer,
                                      world_snapshot_view_.snapshot,
-                                     out_x, out_y, out_w, out_h);
+                                     out_x, out_y, out_w, out_h,
+                                     world_show_model_signal_);
         }
     } else {
         renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
@@ -3909,13 +4006,33 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
                           UITheme::Colors::TextSecondary);
     }
 
+    std::ostringstream viewport_label;
+    viewport_label << (world_show_model_signal_ ? "MODEL SIGNAL" : "RAW SENSOR")
+                   << " + WORLD";
+    if (world_show_model_signal_ && !color_space.empty()) {
+        viewport_label << "  " << color_space;
+    }
+    const float label_w = std::min(310.0f, std::max(80.0f, frame_w - 12.0f));
+    renderer.drawRect({frame_x + 6.0f, frame_y + 6.0f},
+                      {label_w, 20.0f}, 0xCC10151Cu);
+    renderer.drawText({frame_x + 10.0f, frame_y + 8.0f},
+                      viewport_label.str(),
+                      world_show_model_signal_
+                          ? UITheme::Colors::Warning
+                          : UITheme::Colors::TextPrimary);
+
     // Sidebar background + content.
     renderer.drawRect({sidebar_x - 1, sidebar_y - 1},
                       {sidebar_w + 2, sidebar_h + 2}, UITheme::Colors::DividerLine);
     renderer.drawRect({sidebar_x, sidebar_y},
                       {sidebar_w, sidebar_h}, UITheme::Colors::PanelBg);
-    DrawWorldEntitiesSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
-                             sidebar_w - 16, sidebar_h - 16,
+    renderer.drawText({sidebar_x + 8.0f, sidebar_y + 4.0f},
+                      "VIEWPORT", UITheme::Colors::TextSecondary);
+    if (world_view_toggle_btn_) {
+        world_view_toggle_btn_->drawOverlay(renderer, position);
+    }
+    DrawWorldEntitiesSidebar(renderer, sidebar_x + 8, sidebar_y + 58,
+                             sidebar_w - 16, sidebar_h - 66,
                              world_snapshot_view_.snapshot,
                              have_any_world_results_);
 }
@@ -4240,7 +4357,8 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
             const int out_x = static_cast<int>(frame_x + (frame_w - out_w) * 0.5f);
             const int out_y = static_cast<int>(frame_y + (frame_h - out_h) * 0.5f);
             DrawWorldEntitiesOverlay(renderer, known_snapshot_view_.snapshot,
-                                     out_x, out_y, out_w, out_h);
+                                     out_x, out_y, out_w, out_h,
+                                     /*model_space=*/false);
         }
     } else {
         renderer.drawText({frame_x + 12.0f, frame_y + 12.0f},

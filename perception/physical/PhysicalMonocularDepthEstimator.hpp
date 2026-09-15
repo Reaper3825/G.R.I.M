@@ -80,6 +80,7 @@ public:
     // sized to (model_image.cols, model_image.rows).
     void RouteFrameToPhysicalMonocularDepthEstimator(
         const cv::Mat&  model_image,
+        bool            preserve_model_channel_order,
         PhysicalDepthMap& out_depth,
         PhysicalImageOperatorState& out_state,
         std::string&    out_error,

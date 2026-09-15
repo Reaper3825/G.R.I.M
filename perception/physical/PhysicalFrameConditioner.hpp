@@ -11,7 +11,9 @@ namespace GRIM { namespace Perception { namespace Physical {
 
 enum class PhysicalSignalColorMode : uint8_t {
     Bgr = 0,
-    Gray = 1
+    Gray = 1,
+    Rgb = 2,
+    Gbr = 3
 };
 
 enum class PhysicalSignalResizeMode : uint8_t {
@@ -53,7 +55,9 @@ struct PhysicalSignalConditioningConfig {
     double flow_quality_level          = 0.01;
     double flow_min_distance           = 8.0;
 
-    PhysicalSignalColorMode color_mode = PhysicalSignalColorMode::Bgr;
+    // RGB preserves the tensor order produced by the former default
+    // BGR-frame + swap_rb preprocessing path, while making the UI label true.
+    PhysicalSignalColorMode color_mode = PhysicalSignalColorMode::Rgb;
 
     PhysicalSignalQualityGateConfig quality_gate{};
 
@@ -129,7 +133,7 @@ struct PhysicalSignalConditioningStatus {
 struct PhysicalSignalConditioningResult {
     bool                              accepted = false;
     PhysicalSignalRawToModelTransform raw_to_model{};
-    std::string                       color_space_label;     // e.g. "BGR8_SRGB", "GRAY8_SRGB"
+    std::string                       color_space_label;     // BGR8/RGB8/GBR8/GRAY8_SRGB
     std::string                       pipeline_summary;
     std::string                       drop_reason;           // populated iff accepted == false
     int                               raw_width  = 0;
@@ -167,12 +171,12 @@ public:
 
     // Returns a result describing whether the frame was accepted and, if so,
     // the raw->model transform plus color space label. Caller MUST inspect
-    // `accepted`; if false, `out_model_bgr` is left untouched and `drop_reason`
+    // `accepted`; if false, `out_model_image` is left untouched and `drop_reason`
     // is populated. Throws only on programmer error (empty/invalid raw).
     PhysicalSignalConditioningResult ProcessRawFrameToModelSignal(
         const cv::Mat& raw_bgr,
         uint64_t       frame_counter,
-        cv::Mat&       out_model_bgr);
+        cv::Mat&       out_model_image);
 
 private:
     static void ValidatePhysicalSignalConditioningConfig(const PhysicalSignalConditioningConfig& cfg);
@@ -190,6 +194,7 @@ private:
     uint64_t previous_scene_hash_64_ = 0;
     bool     previous_scene_hash_valid_ = false;
     uint32_t scene_stable_streak_      = 0;
+    bool     force_model_refresh_next_frame_ = false;
 };
 
 PhysicalSignalConditioningConfig BuildDefaultPhysicalSignalConditioningConfig();

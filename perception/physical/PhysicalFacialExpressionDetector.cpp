@@ -151,6 +151,7 @@ void PhysicalFacialExpressionDetector::LoadOnnxModelsIntoPhysicalFacialExpressio
 
 void PhysicalFacialExpressionDetector::RouteFrameToPhysicalFacialExpressionDetector(
     const cv::Mat& model_image,
+    bool preserve_model_channel_order,
     const PhysicalSignalRawToModelTransform& raw_to_model,
     int raw_image_width,
     int raw_image_height,
@@ -256,7 +257,7 @@ void PhysicalFacialExpressionDetector::RouteFrameToPhysicalFacialExpressionDetec
                     cfg_.classifier_input_scale,
                     cv::Size(cfg_.classifier_input_width, cfg_.classifier_input_height),
                     cfg_.classifier_input_mean,
-                    cfg_.classifier_swap_rb,
+                    cfg_.classifier_swap_rb && !preserve_model_channel_order,
                     /*crop=*/false);
                 classifier_->setInput(blob);
                 cv::Mat logits = classifier_->forward();   // [1, K] (sometimes [1,K,1,1])

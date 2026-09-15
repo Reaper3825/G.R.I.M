@@ -19,9 +19,10 @@ namespace GRIM { namespace Perception { namespace Physical {
 //    1. Convert to grayscale and measure gray-mean.
 //    2. Try cv::findChessboardCornersSB on the untouched grayscale image.
 //    3. Only after that fails, apply lighting-adaptive gamma/CLAHE and retry.
-//    4. If SB still fails, retry at modest up-scale for small printed boards,
-//       then fall back to legacy adaptive-threshold detection without its
-//       false-negative-prone FAST_CHECK shortcut.
+//    4. If the inexpensive paths fail, use exhaustive/accuracy SB, retry at
+//       modest up-scale for small printed boards, then fall back to legacy
+//       adaptive-threshold detection without its false-negative-prone
+//       FAST_CHECK shortcut.
 //
 //  Every public function fails loud (throws std::runtime_error with a
 //  message that names the function, the input shape/type, and the OpenCV
@@ -35,7 +36,7 @@ struct DetectedCalibrationPattern {
     std::vector<cv::Point2f>   image_points;               // size == cols*rows when found
     cv::Point2f                centroid_px      = {0,0};   // mean of image_points
     double                     gray_mean        = 0.0;     // per-frame brightness used for adapt
-    int                        preprocess_path  = -1;      // -1=none/all failed; 0=raw SB, 1=CLAHE SB, 2=gamma+CLAHE SB, 3=upscaled SB, 4=legacy raw, 5=legacy enhanced
+    int                        preprocess_path  = -1;      // -1=all failed; 0=raw SB, 1=CLAHE SB, 2=gamma+CLAHE SB, 3=robust SB, 4=upscaled SB, 5=legacy raw, 6=legacy enhanced
     std::string                detector_used;              // "SB" or "legacy"
     std::string                failure_reason;             // populated when found==false
 };

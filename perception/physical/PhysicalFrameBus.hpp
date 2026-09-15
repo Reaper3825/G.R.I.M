@@ -13,6 +13,13 @@
 
 namespace GRIM { namespace Perception { namespace Physical {
 
+inline bool IsAuthoritativePhysicalModelColorSpace(const std::string& label) {
+    return label == "BGR8_SRGB" ||
+           label == "RGB8_SRGB" ||
+           label == "GBR8_SRGB" ||
+           label == "GRAY8_SRGB";
+}
+
 // Per-frame provenance carried alongside the pixel data on the bus.
 // Vision-side consumers MUST treat these as authoritative — never re-derive
 // scale/offset from raw_image vs model_image dimensions because letterbox
@@ -26,7 +33,7 @@ struct PhysicalFrameMetadata {
     int                               model_width  = 0;
     int                               model_height = 0;
     PhysicalSignalRawToModelTransform raw_to_model{};
-    std::string                       color_space_label;       // "BGR8_SRGB" / "GRAY8_SRGB"
+    std::string                       color_space_label;       // authoritative model-image channel layout
     std::string                       pipeline_summary;
     double                            applied_exposure_gain = 1.0;
 
@@ -58,7 +65,8 @@ struct PhysicalFrameMetadata {
 // The cv::Mat headers in FrameView are shallow views into this packet; keeping
 // `packet` alive inside FrameView pins the underlying pixel buffers until the
 // consumer moves to a newer frame. Consumers MUST treat raw_image/model_image
-// as read-only; clone locally before mutation.
+// as read-only; clone locally before mutation. `model_image` always remains
+// CV_8UC3, while metadata.color_space_label defines its channel byte order.
 struct PhysicalFramePacket {
     cv::Mat                              raw_image;
     cv::Mat                              model_image;
@@ -80,7 +88,7 @@ public:
     struct FrameView {
         std::shared_ptr<const PhysicalFramePacket> packet;           // pins shared pixel buffers
         cv::Mat                              raw_image;        // BGR8 shared view from camera
-        cv::Mat                              model_image;      // BGR8 shared view after conditioning
+        cv::Mat                              model_image;      // configured 3-channel shared view after conditioning
         cv::Mat                              image;            // alias of model_image for existing consumers
         uint64_t                             frame_counter = 0;
         std::chrono::steady_clock::time_point published_at{};

@@ -77,6 +77,7 @@ void PhysicalPoseKeypointEstimator::LoadOnnxModelIntoPhysicalPoseKeypointEstimat
 
 void PhysicalPoseKeypointEstimator::RouteFrameToPhysicalPoseKeypointEstimator(
     const cv::Mat& model_image,
+    bool preserve_model_channel_order,
     const PhysicalSignalRawToModelTransform& raw_to_model,
     int raw_image_width,
     int raw_image_height,
@@ -108,7 +109,9 @@ void PhysicalPoseKeypointEstimator::RouteFrameToPhysicalPoseKeypointEstimator(
         cv::Mat blob = cv::dnn::blobFromImage(
             model_image, cfg_.input_scale,
             cv::Size(cfg_.input_width, cfg_.input_height),
-            cfg_.input_mean, cfg_.swap_rb, /*crop=*/false);
+            cfg_.input_mean,
+            cfg_.swap_rb && !preserve_model_channel_order,
+            /*crop=*/false);
         net_->setInput(blob);
         cv::Mat raw_out = net_->forward();
 

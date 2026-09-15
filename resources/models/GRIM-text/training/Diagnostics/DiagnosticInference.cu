@@ -153,20 +153,22 @@ void logDiagnosticSample(TrainingContext& ctx,
     try {
         auto tokenizer = LoadInferenceTokenizer(ctx.config, *ctx.logging.logger);
         const auto inference_state = reasoning_state.withPrompt(prompt);
-        const std::string rendered_prompt =
+        // The SFT target now includes the section labels, so let the model
+        // generate <determine> itself from the supplied structured state.
+        const std::string diagnostic_prefix =
             GRIM::ConceptCanonical::renderReasoningPrompt(inference_state);
         const auto start = std::chrono::steady_clock::now();
         auto sample = executePhase2TextInference(
-            ctx, *tokenizer, inference_state, cfg);
+            ctx, *tokenizer, diagnostic_prefix, cfg);
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 
         std::string generated_text;
         const bool has_rendered_prompt_prefix =
-            sample.text.size() >= rendered_prompt.size() &&
-            sample.text.compare(0, rendered_prompt.size(), rendered_prompt) == 0;
+            sample.text.size() >= diagnostic_prefix.size() &&
+            sample.text.compare(0, diagnostic_prefix.size(), diagnostic_prefix) == 0;
         if (has_rendered_prompt_prefix) {
-            generated_text = sample.text.substr(rendered_prompt.size());
+            generated_text = sample.text.substr(diagnostic_prefix.size());
         } else {
             ctx.logging.logger->log(
                 "[Sample] WARNING: decoded sequence did not preserve the rendered prompt prefix; "

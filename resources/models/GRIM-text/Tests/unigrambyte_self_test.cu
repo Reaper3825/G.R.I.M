@@ -3302,9 +3302,11 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
         multi_field_sequence.prompt_end_pos = 1;
         auto field_spans = std::make_shared<GRIM::ConceptBlockSpans>();
         field_spans->determine = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[2], multi_tokens[3]}, GRIM::GoalTokenSpan{2, 4}};
+            {multi_tokens[2], multi_tokens[3], multi_tokens[4]},
+            GRIM::GoalTokenSpan{2, 5}};
         field_spans->execute = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[6], multi_tokens[7]}, GRIM::GoalTokenSpan{6, 8}};
+            {multi_tokens[5], multi_tokens[6], multi_tokens[7]},
+            GRIM::GoalTokenSpan{5, 8}};
         field_spans->update = GRIM::ConceptBlockSpanEntry{
             {multi_tokens[8], multi_tokens[9]}, GRIM::GoalTokenSpan{8, 10}};
         multi_field_sequence.concept_block_spans = std::move(field_spans);
@@ -3330,8 +3332,8 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                   "Multi-field projection should cut after the last listed field");
         for (std::size_t position = 1; position < multi.token_ids.size(); ++position) {
             const bool supervised =
-                (position >= 2 && position < 4) ||
-                (position >= 6 && position < 8) ||
+                (position >= 2 && position < 5) ||
+                (position >= 5 && position < 8) ||
                 (position >= 10 && position < 12);
             ASSERT_TRUE(
                 multi.targets[position - 1] ==

@@ -148,6 +148,7 @@ void PhysicalSceneTextReader::LoadOnnxModelsIntoPhysicalSceneTextReader(
 
 void PhysicalSceneTextReader::RouteFrameToPhysicalSceneTextReader(
     const cv::Mat& model_image,
+    bool preserve_model_channel_order,
     const PhysicalSignalRawToModelTransform& raw_to_model,
     int /*raw_image_width*/,
     int /*raw_image_height*/,
@@ -177,6 +178,11 @@ void PhysicalSceneTextReader::RouteFrameToPhysicalSceneTextReader(
 
     const auto t0 = std::chrono::steady_clock::now();
     try {
+        detector_->setInputParams(
+            cfg_.detector_input_scale,
+            cv::Size(cfg_.detector_input_width, cfg_.detector_input_height),
+            cfg_.detector_input_mean,
+            /*swapRB=*/!preserve_model_channel_order);
         std::vector<std::vector<cv::Point>> quads;
         std::vector<float>                  confidences;
         detector_->detect(model_image, quads, confidences);

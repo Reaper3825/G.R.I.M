@@ -8,7 +8,9 @@
 #include "logger.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -33,6 +35,11 @@ struct ProjectorState {
     std::mutex mutex;
     bool       shutting_down = false;
     uint64_t   last_seen_frame_counter = 0;
+    size_t     last_logged_entities = std::numeric_limits<size_t>::max();
+    size_t     last_logged_focus = std::numeric_limits<size_t>::max();
+    size_t     last_logged_relations = std::numeric_limits<size_t>::max();
+    size_t     last_logged_alerts = std::numeric_limits<size_t>::max();
+    std::chrono::steady_clock::time_point last_log_time {};
 };
 
 ProjectorState& State() {
@@ -233,13 +240,28 @@ void TickPhysicalWorldStateContextProjector() {
     ::GRIM::MMO::SessionContextManager::instance().updatePhysicalVisual(
         kDefaultSession, projection);
 
-    LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
-              std::string("ContextProjector: published projection frame=")
-              + std::to_string(view.snapshot.source_frame_counter)
-              + " entities=" + std::to_string(view.snapshot.entities.size())
-              + " focus=" + std::to_string(projection.entities_in_focus.size())
-              + " relations=" + std::to_string(projection.spatial_relations_top_k.size())
-              + " alerts=" + std::to_string(projection.active_alerts.size()));
+    const auto now = std::chrono::steady_clock::now();
+    const bool shape_changed =
+        s.last_logged_entities != view.snapshot.entities.size()
+        || s.last_logged_focus != projection.entities_in_focus.size()
+        || s.last_logged_relations != projection.spatial_relations_top_k.size()
+        || s.last_logged_alerts != projection.active_alerts.size();
+    const bool heartbeat_due = s.last_log_time.time_since_epoch().count() == 0
+        || now - s.last_log_time >= std::chrono::seconds(30);
+    if (shape_changed || heartbeat_due) {
+        LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
+                  std::string("ContextProjector: published projection frame=")
+                  + std::to_string(view.snapshot.source_frame_counter)
+                  + " entities=" + std::to_string(view.snapshot.entities.size())
+                  + " focus=" + std::to_string(projection.entities_in_focus.size())
+                  + " relations=" + std::to_string(projection.spatial_relations_top_k.size())
+                  + " alerts=" + std::to_string(projection.active_alerts.size()));
+        s.last_logged_entities = view.snapshot.entities.size();
+        s.last_logged_focus = projection.entities_in_focus.size();
+        s.last_logged_relations = projection.spatial_relations_top_k.size();
+        s.last_logged_alerts = projection.active_alerts.size();
+        s.last_log_time = now;
+    }
 }
 
 void ShutdownPhysicalWorldStateContextProjector() {
@@ -247,6 +269,7 @@ void ShutdownPhysicalWorldStateContextProjector() {
     std::lock_guard<std::mutex> lk(s.mutex);
     s.shutting_down = true;
     s.last_seen_frame_counter = 0;
+    s.last_log_time = {};
 }
 
 }}} // namespace GRIM::Perception::Physical

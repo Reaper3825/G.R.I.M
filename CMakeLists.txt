@@ -319,6 +319,25 @@ if(WIN32)
 endif()
 
 include(${CMAKE_SOURCE_DIR}/cmake/Dependencies.cmake)
+
+option(GRIM_BUILD_UNIFIED_MEMORY_ASYNC_TESTS
+       "Build the focused asynchronous unified-memory persistence test" OFF)
+if(GRIM_BUILD_UNIFIED_MEMORY_ASYNC_TESTS)
+  find_package(Threads REQUIRED)
+  add_executable(unified_memory_async_tests
+      tests/unified_memory_async_tests.cpp
+      memory/unified_memory_storage.cpp)
+  target_include_directories(unified_memory_async_tests PRIVATE
+      ${CMAKE_SOURCE_DIR}
+      ${CMAKE_SOURCE_DIR}/memory)
+  target_compile_features(unified_memory_async_tests PRIVATE cxx_std_20)
+  target_compile_definitions(unified_memory_async_tests PRIVATE GRIM_BUILD_HOST)
+  target_link_libraries(unified_memory_async_tests PRIVATE
+      flatbuffers::flatbuffers
+      nlohmann_json::nlohmann_json
+      Threads::Threads)
+endif()
+
 include(${CMAKE_SOURCE_DIR}/cmake/Resources.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/Shaders.cmake)
 

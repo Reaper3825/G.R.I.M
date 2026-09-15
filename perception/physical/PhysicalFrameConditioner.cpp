@@ -25,6 +25,50 @@ namespace {
         + " [" + std::string(__FILE__) + ":" + std::to_string(__LINE__) + "]");
 }
 
+const char* PhysicalSignalColorModeName(PhysicalSignalColorMode mode) {
+    switch (mode) {
+        case PhysicalSignalColorMode::Bgr:  return "BGR";
+        case PhysicalSignalColorMode::Gray: return "Gray";
+        case PhysicalSignalColorMode::Rgb:  return "RGB";
+        case PhysicalSignalColorMode::Gbr:  return "GBR";
+    }
+    return "Invalid";
+}
+
+const char* PhysicalSignalColorSpaceLabel(PhysicalSignalColorMode mode) {
+    switch (mode) {
+        case PhysicalSignalColorMode::Bgr:  return "BGR8_SRGB";
+        case PhysicalSignalColorMode::Gray: return "GRAY8_SRGB";
+        case PhysicalSignalColorMode::Rgb:  return "RGB8_SRGB";
+        case PhysicalSignalColorMode::Gbr:  return "GBR8_SRGB";
+    }
+    return "INVALID";
+}
+
+void ConvertConfiguredSignalToGray(const cv::Mat& signal,
+                                   PhysicalSignalColorMode mode,
+                                   cv::Mat& gray) {
+    switch (mode) {
+        case PhysicalSignalColorMode::Bgr:
+            cv::cvtColor(signal, gray, cv::COLOR_BGR2GRAY);
+            return;
+        case PhysicalSignalColorMode::Gray:
+            cv::extractChannel(signal, gray, 0);
+            return;
+        case PhysicalSignalColorMode::Rgb:
+            cv::cvtColor(signal, gray, cv::COLOR_RGB2GRAY);
+            return;
+        case PhysicalSignalColorMode::Gbr: {
+            cv::Mat bgr(signal.size(), signal.type());
+            const int from_to[] = {1, 0, 0, 1, 2, 2}; // [G,B,R] -> [B,G,R]
+            cv::mixChannels(&signal, 1, &bgr, 1, from_to, 3);
+            cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+            return;
+        }
+    }
+    throw std::runtime_error("ConvertConfiguredSignalToGray: invalid color mode");
+}
+
 }
 
 PhysicalSignalConditioningConfig BuildDefaultPhysicalSignalConditioningConfig() {
@@ -36,6 +80,16 @@ PhysicalFrameConditioner::PhysicalFrameConditioner()
 
 void PhysicalFrameConditioner::ValidatePhysicalSignalConditioningConfig(
     const PhysicalSignalConditioningConfig& cfg) {
+    switch (cfg.color_mode) {
+        case PhysicalSignalColorMode::Bgr:
+        case PhysicalSignalColorMode::Gray:
+        case PhysicalSignalColorMode::Rgb:
+        case PhysicalSignalColorMode::Gbr:
+            break;
+        default:
+            ThrowInvalidPhysicalSignalConditioningConfig(
+                "color_mode is not a recognized PhysicalSignalColorMode");
+    }
     if (cfg.output_width <= 0 || cfg.output_height <= 0) {
         ThrowInvalidPhysicalSignalConditioningConfig(
             "output size must be > 0, got "
@@ -105,9 +159,22 @@ void PhysicalFrameConditioner::ConfigurePhysicalSignalConditioning(
     ValidatePhysicalSignalConditioningConfig(cfg);
     const bool geometry_changed = (cfg.output_width != config_.output_width)
                                || (cfg.output_height != config_.output_height);
+    const bool color_mode_changed = cfg.color_mode != config_.color_mode;
     config_ = cfg;
+    // Every explicit conditioning update changes the model-input contract or
+    // its pixel values. Ensure cadence-aware consumers sample it at least once.
+    force_model_refresh_next_frame_ = true;
     if (geometry_changed || !cfg.enable_stabilization) {
         previous_gray_for_flow_.release();
+    }
+    if (geometry_changed || color_mode_changed) {
+        // A color-layout change is model-significant even when its grayscale
+        // scene hash is identical. Force the next published frame to be a
+        // cadence miss so every model consumes the newly ordered channels.
+        previous_scene_thumbnail_gray_.release();
+        previous_scene_hash_64_ = 0;
+        previous_scene_hash_valid_ = false;
+        scene_stable_streak_ = 0;
     }
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "ConfigurePhysicalSignalConditioning: resize="
@@ -118,7 +185,8 @@ void PhysicalFrameConditioner::ConfigurePhysicalSignalConditioning(
                   + " exposure=" + std::to_string(static_cast<int>(cfg.enable_exposure_correction))
                   + " autoExp=" + std::to_string(static_cast<int>(cfg.exposure_auto))
                   + " deblur=" + std::to_string(static_cast<int>(cfg.enable_deblur))
-                  + " stabilize=" + std::to_string(static_cast<int>(cfg.enable_stabilization)));
+                  + " stabilize=" + std::to_string(static_cast<int>(cfg.enable_stabilization))
+                  + " color=" + PhysicalSignalColorModeName(cfg.color_mode));
 }
 
 void PhysicalFrameConditioner::ResetPhysicalSignalConditioningToDefaults() {
@@ -128,6 +196,7 @@ void PhysicalFrameConditioner::ResetPhysicalSignalConditioningToDefaults() {
     previous_scene_hash_64_    = 0;
     previous_scene_hash_valid_ = false;
     scene_stable_streak_       = 0;
+    force_model_refresh_next_frame_ = true;
     status_ = {};
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "ResetPhysicalSignalConditioningToDefaults: restored default pipeline settings");
@@ -299,7 +368,7 @@ int Popcount64(uint64_t x) {
 PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToModelSignal(
     const cv::Mat& raw_bgr,
     uint64_t       frame_counter,
-    cv::Mat&       out_model_bgr) {
+    cv::Mat&       out_model_image) {
     const auto pass_start = std::chrono::steady_clock::now();
     auto elapsed_ms_since = [](const auto& start) -> double {
         return std::chrono::duration<double, std::milli>(
@@ -550,29 +619,48 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
         raw_to_model.offset_y = 0.0;
     }
 
-    if (config_.color_mode == PhysicalSignalColorMode::Gray) {
-        stage_start = std::chrono::steady_clock::now();
-        cv::Mat gray;
-        cv::cvtColor(working, gray, cv::COLOR_BGR2GRAY);
-        cv::Mat gray_bgr;
-        cv::cvtColor(gray, gray_bgr, cv::COLOR_GRAY2BGR);
-        working = gray_bgr;
-        pipeline << "gray ";
-        result.color_convert_ms = elapsed_ms_since(stage_start);
-        status_.last_color_convert_ms = result.color_convert_ms;
-    } else {
-        pipeline << "bgr ";
+    stage_start = std::chrono::steady_clock::now();
+    switch (config_.color_mode) {
+        case PhysicalSignalColorMode::Bgr:
+            pipeline << "bgr ";
+            break;
+        case PhysicalSignalColorMode::Gray: {
+            cv::Mat gray;
+            cv::cvtColor(working, gray, cv::COLOR_BGR2GRAY);
+            cv::cvtColor(gray, working, cv::COLOR_GRAY2BGR);
+            pipeline << "gray-replicated ";
+            break;
+        }
+        case PhysicalSignalColorMode::Rgb: {
+            cv::Mat rgb;
+            cv::cvtColor(working, rgb, cv::COLOR_BGR2RGB);
+            working = rgb;
+            pipeline << "rgb ";
+            break;
+        }
+        case PhysicalSignalColorMode::Gbr: {
+            cv::Mat gbr(working.size(), working.type());
+            const int from_to[] = {1, 0, 0, 1, 2, 2}; // [B,G,R] -> [G,B,R]
+            cv::mixChannels(&working, 1, &gbr, 1, from_to, 3);
+            working = gbr;
+            pipeline << "gbr ";
+            break;
+        }
     }
+    result.color_convert_ms = elapsed_ms_since(stage_start);
+    status_.last_color_convert_ms = result.color_convert_ms;
 
     if (working.empty() || working.type() != CV_8UC3) {
         throw std::runtime_error(
             "ProcessRawFrameToModelSignal: pipeline produced invalid output frame");
     }
 
-    working.copyTo(out_model_bgr);
-    status_.last_output_width   = out_model_bgr.cols;
-    status_.last_output_height  = out_model_bgr.rows;
-    status_.last_output_luma    = ComputeMeanLumaFromBgr(out_model_bgr);
+    working.copyTo(out_model_image);
+    status_.last_output_width   = out_model_image.cols;
+    status_.last_output_height  = out_model_image.rows;
+    cv::Mat output_gray;
+    ConvertConfiguredSignalToGray(out_model_image, config_.color_mode, output_gray);
+    status_.last_output_luma    = cv::mean(output_gray)[0];
     status_.last_pipeline_summary = pipeline.str();
     status_.last_raw_to_model     = raw_to_model;
 
@@ -593,12 +681,12 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
                 + std::to_string(sc.thumbnail_height));
         }
         cv::Mat thumb_bgr;
-        cv::resize(out_model_bgr,
+        cv::resize(out_model_image,
                    thumb_bgr,
                    cv::Size(sc.thumbnail_width, sc.thumbnail_height),
                    0.0, 0.0, cv::INTER_AREA);
         cv::Mat thumb_gray;
-        cv::cvtColor(thumb_bgr, thumb_gray, cv::COLOR_BGR2GRAY);
+        ConvertConfiguredSignalToGray(thumb_bgr, config_.color_mode, thumb_gray);
 
         const uint64_t curr_hash = ComputeAverageHash64FromGray(thumb_gray);
         const bool have_prev = !previous_scene_thumbnail_gray_.empty()
@@ -674,16 +762,24 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
         status_.last_scene_stability_ms = result.scene_stability_ms;
     }
 
+    if (force_model_refresh_next_frame_) {
+        // `valid=false` is the established signal for every cadence-aware
+        // consumer to bypass both stable-scene reuse and its minimum-period
+        // gate. This guarantees one fresh inference using the new layout.
+        stability.valid = false;
+        stability.is_stable = false;
+        stability.change_reason = "conditioning_config_changed";
+        force_model_refresh_next_frame_ = false;
+    }
+
     status_.last_scene_stability = stability;
 
     result.accepted          = true;
     result.raw_to_model      = raw_to_model;
-    result.color_space_label = (config_.color_mode == PhysicalSignalColorMode::Gray)
-                                   ? std::string("GRAY8_SRGB")
-                                   : std::string("BGR8_SRGB");
+    result.color_space_label = PhysicalSignalColorSpaceLabel(config_.color_mode);
     result.pipeline_summary  = status_.last_pipeline_summary;
-    result.model_width       = out_model_bgr.cols;
-    result.model_height      = out_model_bgr.rows;
+    result.model_width       = out_model_image.cols;
+    result.model_height      = out_model_image.rows;
     result.scene_stability   = stability;
     result.total_ms          = elapsed_ms_since(pass_start);
     status_.last_total_ms    = result.total_ms;

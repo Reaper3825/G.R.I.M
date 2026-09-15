@@ -55,6 +55,10 @@ Consumers MUST treat `FrameView::raw_image`, `FrameView::model_image`, and
 `FrameView::image` as read-only. If a consumer needs in-place OpenCV mutation,
 it must `clone()` into a local scratch image first.
 
+`raw_image` is BGR8. `model_image` remains three-channel but may be configured
+as BGR, RGB, GBR, or replicated grayscale; consumers that interpret channel
+semantics must use `FrameView::metadata.color_space_label`.
+
 ### Stereo capture milestone
 
 `PhysicalCameraStream` retains a bounded queue of timestamped decoded frames in

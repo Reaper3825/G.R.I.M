@@ -8,10 +8,89 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <chrono>
+#include <set>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
 
 namespace GRIM {
+
+namespace {
+
+constexpr auto kPersistenceBatchWindow = std::chrono::milliseconds(250);
+
+bool WriteJsonSnapshot(
+    const std::vector<UnifiedMemoryObject>& records,
+    const std::string& path,
+    std::string& out_error)
+{
+    if (path.empty()) return true;
+    try {
+        nlohmann::json j;
+        j["memories"] = nlohmann::json::array();
+        for (const auto& obj : records) {
+            j["memories"].push_back(nlohmann::json::parse(obj.toJSON()));
+        }
+        AtomicWriter::writeString(path, j.dump(2));
+        return true;
+    } catch (const std::exception& e) {
+        out_error = std::string("atomic JSON save failed: ") + e.what();
+        return false;
+    }
+}
+
+bool WriteFlatBufferSnapshot(
+    const std::vector<UnifiedMemoryObject>& records,
+    const std::string& path,
+    std::string& out_error)
+{
+    if (path.empty()) return true;
+    try {
+        flatbuffers::FlatBufferBuilder builder(64 * 1024);
+        auto metadata = GRIM::Memory::CreateMemoryMetadata(
+            builder, 1, std::time(nullptr), records.size(), 0);
+
+        std::vector<flatbuffers::Offset<GRIM::Memory::MemoryRecord>> offsets;
+        offsets.reserve(records.size());
+        for (const auto& obj : records) {
+            auto raw_fb = builder.CreateString(obj.raw);
+            auto normalized_fb = builder.CreateString(obj.normalized);
+            std::vector<flatbuffers::Offset<flatbuffers::String>> tag_offsets;
+            tag_offsets.reserve(obj.tags.size());
+            for (const auto& tag : obj.tags) {
+                tag_offsets.push_back(builder.CreateString(tag));
+            }
+            auto tags_fb = builder.CreateVector(tag_offsets);
+            auto embedding_fb = builder.CreateVector(
+                obj.embedding.data(), obj.embedding.size());
+            auto related_ids_fb = builder.CreateVector(obj.related_ids);
+            offsets.push_back(GRIM::Memory::CreateMemoryRecord(
+                builder,
+                obj.id, obj.timestamp,
+                static_cast<GRIM::Memory::MemoryDomain>(obj.domain),
+                static_cast<GRIM::Memory::TypeTag>(obj.type),
+                static_cast<GRIM::Memory::ContextType>(obj.context),
+                static_cast<GRIM::Memory::CommType>(obj.comm_type),
+                static_cast<GRIM::Memory::Modality>(obj.modality),
+                raw_fb, normalized_fb, tags_fb,
+                obj.confidence, obj.importance, obj.recency_weight,
+                embedding_fb, obj.parent_id, related_ids_fb));
+        }
+
+        auto records_fb = builder.CreateVector(offsets);
+        auto store = GRIM::Memory::CreateMemoryStore(
+            builder, metadata, records_fb);
+        builder.Finish(store);
+        AtomicWriter::write(
+            path, builder.GetBufferPointer(), builder.GetSize());
+        return true;
+    } catch (const std::exception& e) {
+        out_error = std::string("atomic FlatBuffer save failed: ") + e.what();
+        return false;
+    }
+}
+
+} // anonymous namespace
 
 // ============================================================================
 // ID Generation
@@ -203,6 +282,7 @@ UnifiedMemoryStorage::~UnifiedMemoryStorage() {
 
 void UnifiedMemoryStorage::initialize(const std::string& storagePath) {
     std::lock_guard<std::mutex> lock(mtx);
+    if (initialized_ && !shutdown_complete_) return;
     
     this->storagePath = storagePath;
     
@@ -230,22 +310,45 @@ void UnifiedMemoryStorage::initialize(const std::string& storagePath) {
 
     initialized_ = true;
     shutdown_complete_ = false;
+    persistence_stop_requested_ = false;
+    persistence_write_in_progress_ = false;
+    dirty_generation_ = 0;
+    completed_generation_ = 0;
+    flush_requested_generation_ = 0;
+    last_persistence_error_.clear();
+    persistence_worker_ = std::thread(
+        &UnifiedMemoryStorage::persistenceWorkerLoop, this);
 }
 
 void UnifiedMemoryStorage::shutdown() {
-    std::lock_guard<std::mutex> lock(mtx);
-    if (!initialized_ || shutdown_complete_) return;
-
-    saveToDisk();
-    saveToFlatBuffer();
-    shutdown_complete_ = true;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!initialized_ || shutdown_complete_) return;
+        shutdown_complete_ = true;
+        persistence_stop_requested_ = true;
+        flush_requested_generation_ = dirty_generation_;
+    }
+    persistence_cv_.notify_all();
+    if (persistence_worker_.joinable()) persistence_worker_.join();
 }
 
 void UnifiedMemoryStorage::flush() {
-    std::lock_guard<std::mutex> lock(mtx);
+    std::unique_lock<std::mutex> lock(mtx);
     if (!initialized_ || shutdown_complete_) return;
-    saveToDisk();
-    saveToFlatBuffer();
+    // A previous failed batch is retried by an explicit flush.
+    if (!last_persistence_error_.empty()
+        && dirty_generation_ == completed_generation_) {
+        ++dirty_generation_;
+        last_persistence_error_.clear();
+    }
+    const uint64_t target = dirty_generation_;
+    flush_requested_generation_ = std::max(
+        flush_requested_generation_, target);
+    persistence_cv_.notify_all();
+    persistence_cv_.wait(lock, [&]() {
+        return completed_generation_ >= target
+            && !persistence_write_in_progress_;
+    });
 }
 
 void UnifiedMemoryStorage::loadFromDisk() {
@@ -268,84 +371,68 @@ void UnifiedMemoryStorage::loadFromDisk() {
     LOG_DEBUG("UnifiedMemory", "Loaded " + std::to_string(longTerm.size()) + " memories from JSON");
 }
 
-void UnifiedMemoryStorage::saveToDisk() {
- // Save to JSON (backward compatibility) — atomic write
-    if (jsonPath.empty()) return;
-    
-    nlohmann::json j;
-    j["memories"] = nlohmann::json::array();
-    
-    for (const auto& [id, obj] : longTerm) {
-        j["memories"].push_back(nlohmann::json::parse(obj.toJSON()));
-  }
-    
-    try {
-        AtomicWriter::writeString(jsonPath, j.dump(2));
-        LOG_DEBUG("UnifiedMemory", "Saved " + std::to_string(longTerm.size()) + " memories to JSON (atomic)");
-    } catch (const std::exception& e) {
-        LOG_ERROR("UnifiedMemory", std::string("Atomic JSON save failed: ") + e.what());
-    }
+void UnifiedMemoryStorage::markPersistenceDirtyLocked() {
+    ++dirty_generation_;
+    persistence_cv_.notify_one();
 }
 
-void UnifiedMemoryStorage::saveToFlatBuffer() {
- if (fbPath.empty()) return;
-    
-    flatbuffers::FlatBufferBuilder builder(64 * 1024);
-    
-    // Build metadata
-    auto metadata = GRIM::Memory::CreateMemoryMetadata(builder,
-        1,  // schema_version
-  std::time(nullptr),  // build_time
-        longTerm.size(),  // record_count
-   0  // total_size_bytes (calculated later)
- );
-  
-    // Build records
-    std::vector<flatbuffers::Offset<GRIM::Memory::MemoryRecord>> record_offsets;
-    for (const auto& [id, obj] : longTerm) {
-     auto raw_fb = builder.CreateString(obj.raw);
-   auto normalized_fb = builder.CreateString(obj.normalized);
-      
-      std::vector<flatbuffers::Offset<flatbuffers::String>> tag_offsets;
- for (const auto& tag : obj.tags) {
-  tag_offsets.push_back(builder.CreateString(tag));
+void UnifiedMemoryStorage::persistenceWorkerLoop() {
+    std::unique_lock<std::mutex> lock(mtx);
+    for (;;) {
+        persistence_cv_.wait(lock, [&]() {
+            return persistence_stop_requested_
+                || dirty_generation_ > completed_generation_;
+        });
+        if (persistence_stop_requested_
+            && dirty_generation_ <= completed_generation_) {
+            break;
         }
-        auto tags_fb = builder.CreateVector(tag_offsets);
-      
-        auto embedding_fb = builder.CreateVector(obj.embedding.data(), obj.embedding.size());
-    auto related_ids_fb = builder.CreateVector(obj.related_ids);
-        
- auto record = GRIM::Memory::CreateMemoryRecord(builder,
-       obj.id, obj.timestamp,
-            static_cast<GRIM::Memory::MemoryDomain>(obj.domain),
-        static_cast<GRIM::Memory::TypeTag>(obj.type),
-   static_cast<GRIM::Memory::ContextType>(obj.context),
- static_cast<GRIM::Memory::CommType>(obj.comm_type),
-      static_cast<GRIM::Memory::Modality>(obj.modality),
-          raw_fb, normalized_fb,
-   tags_fb, obj.confidence, obj.importance, obj.recency_weight,
-            embedding_fb, obj.parent_id, related_ids_fb
-        );
-        
-        record_offsets.push_back(record);
-    }
-    
-    auto records_fb = builder.CreateVector(record_offsets);
-    
-    // Build store
-    auto store = GRIM::Memory::CreateMemoryStore(builder,
-        metadata,
-    records_fb
-    );
-    
-    builder.Finish(store);
-    
-    // Write to file — atomic write
-    try {
-        AtomicWriter::write(fbPath, builder.GetBufferPointer(), builder.GetSize());
-        LOG_DEBUG("UnifiedMemory", "Saved " + std::to_string(longTerm.size()) + " memories to FlatBuffer (atomic)");
-    } catch (const std::exception& e) {
-        LOG_ERROR("UnifiedMemory", std::string("Atomic FlatBuffer save failed: ") + e.what());
+
+        uint64_t target_generation = dirty_generation_;
+        if (!persistence_stop_requested_
+            && flush_requested_generation_ < target_generation) {
+            persistence_cv_.wait_for(
+                lock, kPersistenceBatchWindow, [&]() {
+                    return persistence_stop_requested_
+                        || flush_requested_generation_ >= target_generation;
+                });
+            target_generation = dirty_generation_;
+        }
+
+        std::vector<UnifiedMemoryObject> snapshot;
+        snapshot.reserve(longTerm.size());
+        for (const auto& entry : longTerm) snapshot.push_back(entry.second);
+        const std::string snapshot_fb_path = fbPath;
+        const std::string snapshot_json_path = jsonPath;
+        persistence_write_in_progress_ = true;
+
+        lock.unlock();
+        std::string error;
+        // FlatBuffer is the authoritative startup format. Do not publish a
+        // newer JSON fallback if its corresponding FlatBuffer failed.
+        const bool flatbuffer_ok = WriteFlatBufferSnapshot(
+            snapshot, snapshot_fb_path, error);
+        const bool json_ok = flatbuffer_ok && WriteJsonSnapshot(
+            snapshot, snapshot_json_path, error);
+        lock.lock();
+
+        completed_generation_ = std::max(
+            completed_generation_, target_generation);
+        persistence_write_in_progress_ = false;
+        if (flatbuffer_ok && json_ok) {
+            last_persistence_error_.clear();
+            LOG_DEBUG("UnifiedMemory",
+                "Persisted async batch generation="
+                + std::to_string(target_generation)
+                + " records=" + std::to_string(snapshot.size())
+                + " to FlatBuffer+JSON (atomic)");
+        } else {
+            last_persistence_error_ = error;
+            LOG_ERROR("UnifiedMemory",
+                "Async persistence batch generation="
+                + std::to_string(target_generation) + " failed: " + error);
+        }
+        persistence_cv_.notify_all();
     }
 }
 
@@ -433,14 +520,15 @@ void UnifiedMemoryStorage::storeShortTerm(const UnifiedMemoryObject& obj) {
 
 void UnifiedMemoryStorage::storeLongTerm(const UnifiedMemoryObject& obj) {
     std::lock_guard<std::mutex> lock(mtx);
+    if (!initialized_ || shutdown_complete_) {
+        throw std::runtime_error(
+            "UnifiedMemoryStorage::storeLongTerm called while storage is not active");
+    }
     
     longTerm[obj.id] = obj;
     updateIndex(obj);
     updateTagIndex(obj);
-    
-    // Auto-save (can be optimized to batch)
-    saveToDisk();
-    saveToFlatBuffer();
+    markPersistenceDirtyLocked();
 }
 
 void UnifiedMemoryStorage::updateIndex(const UnifiedMemoryObject& obj) {
@@ -663,6 +751,7 @@ void UnifiedMemoryStorage::decay(float rate) {
        obj.confidence = 0.2f;
         }
     }
+    if (!longTerm.empty() && rate != 0.0f) markPersistenceDirtyLocked();
 }
 
 void UnifiedMemoryStorage::rebuildIndex() {
@@ -743,7 +832,17 @@ if (obj.confidence < 0.1f) {
     }
     
     if (!toRemove.empty()) {
-        rebuildIndex();
+        // Rebuild directly while the storage mutex is already held. Calling
+        // the public rebuildIndex() here would recursively lock a non-recursive
+        // mutex and deadlock.
+        tagIndex.clear();
+        typeIndex.clear();
+        domainIndex.clear();
+        for (const auto& entry : longTerm) {
+            updateIndex(entry.second);
+            updateTagIndex(entry.second);
+        }
+        markPersistenceDirtyLocked();
         LOG_DEBUG("UnifiedMemory", "Compacted storage, removed " + std::to_string(toRemove.size()) + " low-confidence memories");
     }
 }

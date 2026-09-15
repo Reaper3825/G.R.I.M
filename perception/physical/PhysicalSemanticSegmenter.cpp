@@ -68,6 +68,7 @@ void PhysicalSemanticSegmenter::LoadOnnxModelIntoPhysicalSemanticSegmenter(
 
 void PhysicalSemanticSegmenter::RouteFrameToPhysicalSemanticSegmenter(
     const cv::Mat& model_image,
+    bool preserve_model_channel_order,
     uint64_t source_frame_counter,
     PhysicalSemanticSegmenterOutput& out)
 {
@@ -96,7 +97,9 @@ void PhysicalSemanticSegmenter::RouteFrameToPhysicalSemanticSegmenter(
         cv::Mat blob = cv::dnn::blobFromImage(
             model_image, cfg_.input_scale,
             cv::Size(cfg_.input_width, cfg_.input_height),
-            cfg_.input_mean, cfg_.swap_rb, /*crop=*/false);
+            cfg_.input_mean,
+            cfg_.swap_rb && !preserve_model_channel_order,
+            /*crop=*/false);
         net_->setInput(blob);
         cv::Mat raw_out = net_->forward();
 

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <future>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
@@ -42,13 +43,24 @@ std::string FormatTimestampUtcIso() {
 }
 
 // Auto-capture cadence: we accept at most one sample per N milliseconds, and
-// only if the centroid lands in a coverage cell that hasn't been filled yet.
+// only when the pose is distinct. The centroid grid remains a coverage guide,
+// but tilt and distance can provide useful diversity within the same cell.
 constexpr int kAutoCaptureMinIntervalMs = 700;
 constexpr int kCoverageGridCols          = 8;
 constexpr int kCoverageGridRows          = 6;
 constexpr int kMinSamplesRequired        = 10;
-constexpr int kMaxSamplesPerCell         = 1;
+constexpr int kMaxSamplesPerCell         = 3;
 constexpr double kMinimumDistinctPoseRmsFraction = 0.015;
+
+struct CalibrationDetectionJobResult {
+    DetectedCalibrationPattern detection;
+    cv::Mat analyzed_frame;
+    uint64_t frame_counter = 0;
+    cv::Size image_size {0, 0};
+    int pattern_inner_cols = 0;
+    int pattern_inner_rows = 0;
+    std::string source_url;
+};
 
 struct PhysicalCalibrationModuleState {
     std::mutex                                          mutex;
@@ -72,6 +84,10 @@ struct PhysicalCalibrationModuleState {
     int                                                 last_frame_width   = 0;
     int                                                 last_frame_height  = 0;
     uint64_t                                            last_detection_frame_counter = 0;
+    cv::Mat                                             last_detection_frame;
+    std::future<CalibrationDetectionJobResult>           detection_future;
+    bool                                                manual_capture_requested = false;
+    uint64_t                                            manual_capture_min_frame_counter = 0;
 
     // Latest pulled FrameBus content
     PhysicalFrameBus::FrameView                         pull_view;
@@ -198,7 +214,10 @@ void ActivateFrameProfileLocked(PhysicalCalibrationModuleState& s) {
     s.active_image_size = frame_size;
     s.active_profile_path.clear();
     s.last_detection = {};
+    s.last_detection_frame.release();
     s.last_detection_frame_counter = 0;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
     LoadActiveProfileLocked(s);
 }
 
@@ -216,22 +235,6 @@ bool PullLatestFrameLocked(PhysicalCalibrationModuleState& s) {
         return true;
     }
     return false;
-}
-
-void RunDetectionOnPulledFrameLocked(PhysicalCalibrationModuleState& s) {
-    if (!s.last_frame_present || s.pull_view.raw_image.empty()) return;
-    try {
-        DetectChessboardCornersInBgrFrame(
-            s.pull_view.raw_image,
-            s.pattern_inner_cols, s.pattern_inner_rows,
-            s.last_detection);
-    } catch (const std::exception& e) {
-        s.last_detection.found          = false;
-        s.last_detection.failure_reason = std::string("detection threw: ") + e.what();
-        LOG_ERROR(PHYSICAL_ENV_LOG_TAG,
-                  std::string("RunDetectionOnPulledFrame: ") + e.what());
-    }
-    s.last_detection_frame_counter = s.pull_view.frame_counter;
 }
 
 bool TryAddSampleLocked(PhysicalCalibrationModuleState& s,
@@ -296,7 +299,8 @@ bool TryAddSampleLocked(PhysicalCalibrationModuleState& s,
         return false;
     }
     if (!allow_duplicate_cell && s.coverage_cell_counts[cell] >= kMaxSamplesPerCell) {
-        out_reason = "coverage cell already filled (move the board to another image region)";
+        out_reason = "coverage cell has enough samples "
+                     "(move the board to another image region)";
         return false;
     }
 
@@ -323,6 +327,87 @@ void AutoCaptureIfDueLocked(PhysicalCalibrationModuleState& s) {
     }
 }
 
+void ScheduleDetectionForPulledFrameLocked(PhysicalCalibrationModuleState& s) {
+    if (s.detection_future.valid() || !s.last_frame_present
+        || s.pull_view.raw_image.empty()) {
+        return;
+    }
+
+    cv::Mat frame = s.pull_view.raw_image.clone();
+    const uint64_t frame_counter = s.pull_view.frame_counter;
+    const cv::Size image_size = frame.size();
+    const int cols = s.pattern_inner_cols;
+    const int rows = s.pattern_inner_rows;
+    const std::string source_url = s.pull_view.source_url;
+    s.detection_future = std::async(
+        std::launch::async,
+        [frame = std::move(frame), frame_counter, image_size,
+         cols, rows, source_url]() mutable {
+            CalibrationDetectionJobResult result;
+            result.frame_counter = frame_counter;
+            result.image_size = image_size;
+            result.pattern_inner_cols = cols;
+            result.pattern_inner_rows = rows;
+            result.source_url = source_url;
+            try {
+                DetectChessboardCornersInBgrFrame(
+                    frame, cols, rows, result.detection);
+            } catch (const std::exception& e) {
+                result.detection = {};
+                result.detection.failure_reason =
+                    std::string("detection threw: ") + e.what();
+            }
+            result.analyzed_frame = std::move(frame);
+            return result;
+        });
+}
+
+void CollectCompletedDetectionLocked(PhysicalCalibrationModuleState& s) {
+    if (!s.detection_future.valid()
+        || s.detection_future.wait_for(std::chrono::milliseconds(0))
+            != std::future_status::ready) {
+        return;
+    }
+
+    CalibrationDetectionJobResult result;
+    try {
+        result = s.detection_future.get();
+    } catch (const std::exception& e) {
+        s.last_detection = {};
+        s.last_detection.failure_reason =
+            std::string("asynchronous detection failed: ") + e.what();
+        LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.last_detection.failure_reason);
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+        return;
+    }
+
+    // Results are meaningful only for the camera, resolution, and pattern
+    // geometry under which the job was launched.
+    if (result.source_url != s.active_source_url
+        || result.image_size != s.active_image_size
+        || result.pattern_inner_cols != s.pattern_inner_cols
+        || result.pattern_inner_rows != s.pattern_inner_rows) {
+        return;
+    }
+
+    s.last_detection = std::move(result.detection);
+    s.last_detection_frame = std::move(result.analyzed_frame);
+    s.last_detection_frame_counter = result.frame_counter;
+    if (s.manual_capture_requested
+        && result.frame_counter >= s.manual_capture_min_frame_counter) {
+        std::string reason;
+        const bool accepted = TryAddSampleLocked(
+            s, /*allow_duplicate_cell=*/true, reason);
+        s.status_reason = (accepted
+            ? "manual capture: " : "manual capture rejected: ") + reason;
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+    } else if (!s.manual_capture_requested) {
+        AutoCaptureIfDueLocked(s);
+    }
+}
+
 } // anonymous
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -331,13 +416,11 @@ void TickPhysicalCameraCalibration() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     LazyInitLocked(s);
-    // Detection and auto-capture belong to a concrete FrameBus frame. Running
-    // them again while the bus counter is unchanged wastes substantial CPU
-    // and can auto-accept the same physical image more than once.
-    if (PullLatestFrameLocked(s)) {
-        RunDetectionOnPulledFrameLocked(s);
-        AutoCaptureIfDueLocked(s);
-    }
+    // Polling a future is bounded and never waits for OpenCV. The detector
+    // works on a cloned latest frame outside the main/UI thread.
+    CollectCompletedDetectionLocked(s);
+    PullLatestFrameLocked(s);
+    ScheduleDetectionForPulledFrameLocked(s);
 }
 
 PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
@@ -362,7 +445,9 @@ PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
     out.last_frame_brightness  = s.last_detection.gray_mean;
     out.last_frame_width       = s.last_frame_width;
     out.last_frame_height      = s.last_frame_height;
+    out.detection_in_progress  = s.detection_future.valid();
     out.last_detection_frame_counter = s.last_detection_frame_counter;
+    out.last_detection_frame  = s.last_detection_frame;
     out.last_pattern_centroid_px = s.last_detection.centroid_px;
     out.last_detected_image_points = s.last_detection.image_points;
     out.last_failure_reason    = s.last_detection.failure_reason;
@@ -385,6 +470,12 @@ bool IsPhysicalCalibrationDataAvailable() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     return s.calib_valid;
+}
+
+bool IsPhysicalCameraCalibrationCaptureActive() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    return s.capturing;
 }
 
 void GetPhysicalCalibrationData(PhysicalCalibrationData& out) {
@@ -439,6 +530,8 @@ void RequestStopPhysicalCameraCalibrationCapture() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     s.capturing = false;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
     if (s.calib_valid) {
         s.stage = PhysicalCalibrationStage::Calibrated;
     } else {
@@ -452,27 +545,26 @@ void RequestCapturePhysicalCalibrationSampleNow() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     LazyInitLocked(s);
-    const bool pulled_fresh_frame = PullLatestFrameLocked(s);
-    if (pulled_fresh_frame
-        || s.last_detection_frame_counter != s.pull_view.frame_counter) {
-        RunDetectionOnPulledFrameLocked(s);
+    CollectCompletedDetectionLocked(s);
+    PullLatestFrameLocked(s);
+    if (!s.last_frame_present || s.pull_view.raw_image.empty()) {
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+        s.status_reason = "manual capture rejected: no frame available";
+        return;
     }
-    std::string reason;
-    const bool ok = TryAddSampleLocked(s, /*allow_duplicate_cell=*/true, reason);
-    s.status_reason = (ok ? "manual capture: " : "manual capture rejected: ") + reason;
-    if (ok) {
-        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
-                  "RequestCapturePhysicalCalibrationSampleNow: " + s.status_reason);
-    } else {
-        LOG_ERROR(PHYSICAL_ENV_LOG_TAG,
-                  "RequestCapturePhysicalCalibrationSampleNow: " + s.status_reason);
-    }
+    s.manual_capture_requested = true;
+    s.manual_capture_min_frame_counter = s.pull_view.frame_counter;
+    ScheduleDetectionForPulledFrameLocked(s);
+    s.status_reason = "manual capture queued for the active detection job";
 }
 
 void RequestClearPhysicalCalibrationSamples() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     ClearSamplePoolLocked(s);
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
     s.status_reason    = "samples cleared";
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "RequestClearPhysicalCalibrationSamples");
 }
@@ -502,6 +594,8 @@ void RequestRunIntrinsicCalibrationFromSamples() {
     // this transition, auto-capture would silently continue after the stage
     // changed to Calibrated or Failed.
     s.capturing = false;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
 
     const auto object_points_one = BuildObjectPointsForChessboard(
         s.pattern_inner_cols, s.pattern_inner_rows, s.pattern_square_meters);
@@ -636,7 +730,10 @@ void RequestReconfigurePhysicalCalibrationPattern(int   inner_cols,
     // the new row/column count. Wait for a fresh detection before drawing or
     // accepting another sample.
     s.last_detection = {};
+    s.last_detection_frame.release();
     s.last_detection_frame_counter = 0;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
     s.status_reason = "pattern reconfigured (samples cleared)";
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "RequestReconfigurePhysicalCalibrationPattern: cols=" + std::to_string(inner_cols)
@@ -646,24 +743,36 @@ void RequestReconfigurePhysicalCalibrationPattern(int   inner_cols,
 
 void ResetPhysicalCalibrationState() {
     auto& s = GetModule();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    s.accepted_image_points.clear();
-    s.samples_image_size = cv::Size(0, 0);
-    s.coverage_cell_counts.clear();
-    s.calib       = {};
-    s.calib_valid = false;
-    s.active_source_url.clear();
-    s.active_source_label.clear();
-    s.active_image_size = cv::Size(0, 0);
-    s.active_profile_path.clear();
-    s.capturing   = false;
-    s.stage       = PhysicalCalibrationStage::Uncalibrated;
-    s.status_reason.clear();
-    s.last_detection = {};
-    s.last_detection_frame_counter = 0;
-    s.last_frame_present = false;
-    s.last_seen_counter  = 0;
-    s.initialized        = false; // next tick will lazy-init again
+    std::future<CalibrationDetectionJobResult> pending;
+    {
+        std::lock_guard<std::mutex> lk(s.mutex);
+        if (s.detection_future.valid()) {
+            pending = std::move(s.detection_future);
+        }
+        s.accepted_image_points.clear();
+        s.samples_image_size = cv::Size(0, 0);
+        s.coverage_cell_counts.clear();
+        s.calib       = {};
+        s.calib_valid = false;
+        s.active_source_url.clear();
+        s.active_source_label.clear();
+        s.active_image_size = cv::Size(0, 0);
+        s.active_profile_path.clear();
+        s.capturing   = false;
+        s.stage       = PhysicalCalibrationStage::Uncalibrated;
+        s.status_reason.clear();
+        s.last_detection = {};
+        s.last_detection_frame.release();
+        s.last_detection_frame_counter = 0;
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+        s.last_frame_present = false;
+        s.last_seen_counter  = 0;
+        s.initialized        = false; // next tick will lazy-init again
+    }
+    // The detector owns only its cloned Mat and configuration. Waiting here
+    // is teardown-only and cannot deadlock the calibrator mutex.
+    if (pending.valid()) pending.wait();
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "ResetPhysicalCalibrationState");
 }
 

@@ -49,6 +49,7 @@ public:
     void LoadOnnxModelIntoPhysicalSemanticSegmenter(const PhysicalSemanticSegmenterConfig& cfg);
 
     void RouteFrameToPhysicalSemanticSegmenter(const cv::Mat& model_image,
+                                               bool preserve_model_channel_order,
                                                uint64_t source_frame_counter,
                                                PhysicalSemanticSegmenterOutput& out);
 

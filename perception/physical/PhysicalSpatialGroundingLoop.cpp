@@ -211,8 +211,13 @@ void RunPhysicalSpatialGroundingOnce() {
         }
 
         if (run_now) {
+            const std::string& model_color_space =
+                s.frame_view.metadata.color_space_label;
+            const bool preserve_model_channel_order =
+                IsAuthoritativePhysicalModelColorSpace(model_color_space);
             s.depth_estimator->RouteFrameToPhysicalMonocularDepthEstimator(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 results.depth_map,
                 results.depth_estimator_state,
                 results.depth_estimator_last_error,

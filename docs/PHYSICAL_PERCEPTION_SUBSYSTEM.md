@@ -151,8 +151,14 @@ mutation.
 
 **Files:** [PhysicalEnvironmentLoop.hpp](../perception/physical/PhysicalEnvironmentLoop.hpp), [PhysicalCameraDirectory.hpp](../perception/physical/PhysicalCameraDirectory.hpp), [PhysicalCameraSource.hpp](../perception/physical/PhysicalCameraSource.hpp), [PhysicalCameraStream.hpp](../perception/physical/PhysicalCameraStream.hpp), [PhysicalFrameConditioner.hpp](../perception/physical/PhysicalFrameConditioner.hpp), [PhysicalFrameBus.hpp](../perception/physical/PhysicalFrameBus.hpp), [PhysicalSceneStability.hpp](../perception/physical/PhysicalSceneStability.hpp), [PhysicalNicScan.hpp](../perception/physical/PhysicalNicScan.hpp).
 
-**Responsibility:** turn a chosen camera URL into a stream of conditioned
-BGR frames on `PhysicalFrameBus`.
+**Responsibility:** turn a chosen camera URL into a stream of conditioned,
+three-channel model frames on `PhysicalFrameBus`. The selectable byte layouts
+are BGR, RGB, GBR, and replicated grayscale; `color_space_label` is the
+authoritative per-frame layout.
+Every recognized layout is an explicit tensor order: model operators suppress
+their legacy `swap_rb` convenience conversion, and a mode change invalidates
+both scene-stability and minimum-period cadence gates so the next frame is
+freshly inferred. Models trained for RGB should therefore select RGB explicitly.
 
 ### Components
 
@@ -222,12 +228,17 @@ default `9 x 6` configuration expects a printed board with `10 x 7` squares.
 Detection operates on the unconditioned raw camera frame. It tries the raw SB
 detector first, then lighting-enhanced and small-board upscaled paths, and a
 legacy adaptive-threshold fallback. The calibration UI displays only the
-authoritative result for the exact raw frame being previewed; raw corner
+authoritative result pinned to the exact asynchronously analyzed raw frame;
+raw corner
 coordinates are intentionally hidden on the undistorted view. Intrinsic solves
 use the standard five-coefficient distortion model and reject non-finite,
 implausible, or greater-than-5-pixel RMS results rather than persisting them.
 Samples that are effectively the same board pose are rejected even for manual
-capture; useful sets vary image position, distance, and tilt.
+capture; useful sets vary image position, distance, and tilt. The coverage grid
+allows up to three distinct poses per centroid cell, so changing tilt or
+distance can contribute without forcing the board center into a different cell.
+While capture is active, downstream physical inference/world-memory scheduling
+is paused so calibration has exclusive use of the vision workload.
 
 ---
 
@@ -447,6 +458,11 @@ unrelated tab layout. Viewport badges state whether the displayed pixels are
 the raw camera image or the conditioned model input; camera signal controls in
 the inspector change the latter. Preview enlargement uses linear interpolation,
 while reductions retain area filtering.
+
+The World viewport provides a Raw Sensor / Model Signal selector. Its overlays
+use the snapshot's stored `raw_box`/`raw_centre` coordinates in Raw mode and
+`model_box`/`model_centre` in Model mode, avoiding per-frame reprojection while
+keeping boxes and relation lines aligned with either image surface.
 
 ### Known entities and user-authored names
 

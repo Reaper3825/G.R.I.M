@@ -6,6 +6,8 @@
 #include <memory>
 #include <optional>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
 #include <cstdint>
 #include <ctime>
 
@@ -207,11 +209,14 @@ public:
     // Lifecycle
     void initialize(const std::string& storagePath);
  void shutdown();
+    // Long-term mutations are persisted by a debounced background worker.
+    // flush() is the explicit durability boundary and waits for the latest
+    // requested generation; shutdown() drains and joins the worker.
     void flush();
     
     // Storage operations
     void storeShortTerm(const UnifiedMemoryObject& obj);
-    void storeLongTerm(const UnifiedMemoryObject& obj);
+    void storeLongTerm(const UnifiedMemoryObject& obj); // non-blocking disk path
     
     // Retrieval
     std::optional<UnifiedMemoryObject> getById(uint64_t id);
@@ -253,11 +258,11 @@ uint64_t short_term_count = 0;
     
 private:
     void loadFromDisk();
-    void saveToDisk();
-    void saveToFlatBuffer();
     void loadFromFlatBuffer();
     void updateIndex(const UnifiedMemoryObject& obj);
     void updateTagIndex(const UnifiedMemoryObject& obj);
+    void markPersistenceDirtyLocked();
+    void persistenceWorkerLoop();
     
     static constexpr size_t SHORT_TERM_MAX = 100;  // Increased from 50
     
@@ -281,6 +286,14 @@ private:
     
     // Thread safety
     mutable std::mutex mtx;
+    std::condition_variable persistence_cv_;
+    std::thread persistence_worker_;
+    uint64_t dirty_generation_ = 0;
+    uint64_t completed_generation_ = 0;
+    uint64_t flush_requested_generation_ = 0;
+    bool persistence_write_in_progress_ = false;
+    bool persistence_stop_requested_ = false;
+    std::string last_persistence_error_;
     bool initialized_ = false;
     bool shutdown_complete_ = false;
 };

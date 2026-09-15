@@ -3,7 +3,7 @@
 //
 //  GRIM-text corpus compilation uses the model-visible renderer below.
 //  State tags are shared by training and structured inference. DataHub
-//  additionally displays inspection-only prompt/answer wrappers.
+//  additionally displays an inspection-only prompt wrapper.
 //======================================================//
 
 #pragma once
@@ -34,8 +34,9 @@ struct SuccessCriterionByteSpans {
 
 struct RenderResult {
     std::string text;
-    // State labels are model-visible. Field ranges are half-open byte spans
-    // over values, excluding their opening/closing labels.
+    // State labels are model-visible. Goal/collection ranges cover values;
+    // Determine/Execute/Update/Answer ranges cover their complete labeled
+    // sections so SFT can teach section transitions as well as content.
     LogicalByteSpan target_state;
     LogicalByteSpan criteria;
     std::vector<SuccessCriterionByteSpans> success_criteria;
@@ -55,8 +56,7 @@ struct RenderResult {
     LogicalByteSpan determine;
     LogicalByteSpan execute;
     LogicalByteSpan update;
-    // Authored final answer span. Phase 1 supervises it only when the selected
-    // model role is Answer; earlier state roles use the structured spans above.
+    // Authored final answer section, including its visible label.
     LogicalByteSpan answer;
     // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
     // and are never emitted into model-visible text.
@@ -248,9 +248,14 @@ inline RenderResult render(const nlohmann::json& j) {
     }
 
     auto append_phase = [&j, &out](const char* name, LogicalByteSpan& span) {
-        if (!j.contains(name) || !j[name].is_string()) return;
-        appendStateField(out, name, j[name].get<std::string>(), span);
-        if (span.present) out << "\n\n";
+        if (!j.contains(name) || !j[name].is_string() ||
+            j[name].get_ref<const std::string&>().empty()) return;
+        span.begin = static_cast<size_t>(out.tellp());
+        LogicalByteSpan value_span;
+        appendStateField(out, name, j[name].get_ref<const std::string&>(), value_span);
+        out << "\n\n";
+        span.end = static_cast<size_t>(out.tellp());
+        span.present = true;
     };
     append_phase("determine", result.determine);
     append_phase("execute", result.execute);
@@ -260,8 +265,11 @@ inline RenderResult render(const nlohmann::json& j) {
     // result exists. This is required for NOOP-supervised Q/A blocks.
     if (j.contains("answer") && j["answer"].is_string()
         && !j["answer"].get<std::string>().empty()) {
-        appendLogicalSpan(
-            out, j["answer"].get<std::string>(), result.answer);
+        result.answer.begin = static_cast<size_t>(out.tellp());
+        out << "<answer>\n" << j["answer"].get_ref<const std::string&>()
+            << "\n</answer>";
+        result.answer.end = static_cast<size_t>(out.tellp());
+        result.answer.present = true;
     }
 
     result.text = out.str();
@@ -370,8 +378,8 @@ inline std::string renderReasoningPrompt(const ConceptBlock& supplied_state) {
     return renderReasoningPrompt(toCanonicalJson(supplied_state));
 }
 
-// Human-facing inspection form. State tags also appear in model input;
-// prompt/answer wrappers remain inspection-only.
+// Human-facing inspection form. State and answer tags also appear in model input;
+// the prompt wrapper remains inspection-only.
 inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
     if (cb.format_type == "raw" || !cb.raw.empty()) {
         return cb.raw;

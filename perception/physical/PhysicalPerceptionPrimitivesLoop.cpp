@@ -450,6 +450,15 @@ void RunPhysicalPerceptionPrimitivesOnce() {
     if (results.raw_image_width    <= 0) results.raw_image_width    = s.frame_view.raw_image.cols;
     if (results.raw_image_height   <= 0) results.raw_image_height   = s.frame_view.raw_image.rows;
 
+    // A recognized Camera-panel layout is authoritative at the tensor
+    // boundary. Suppress each operator's legacy BGR->RGB convenience swap;
+    // otherwise BGR+swap and RGB+no-swap collapse to the same tensor and the
+    // UI options do not actually select what the model sees. An empty/unknown
+    // label retains legacy behavior for old external FrameBus producers.
+    const std::string& model_color_space = s.frame_view.metadata.color_space_label;
+    const bool preserve_model_channel_order =
+        IsAuthoritativePhysicalModelColorSpace(model_color_space);
+
     // Per-frame scene-stability signal (computed once by the conditioner).
     // Loop-local cadence gates consult this; operators stay pure.
     const PhysicalSceneStability& scene = s.frame_view.metadata.scene_stability;
@@ -474,6 +483,7 @@ void RunPhysicalPerceptionPrimitivesOnce() {
             decision == PhysicalCadenceDecision::NoSignal) {
             s.object_detector->RouteFrameToPhysicalObjectDetector(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 results.raw_to_model,
                 results.raw_image_width,
                 results.raw_image_height,
@@ -510,6 +520,7 @@ void RunPhysicalPerceptionPrimitivesOnce() {
             decision == PhysicalCadenceDecision::NoSignal) {
             s.semantic_segmenter->RouteFrameToPhysicalSemanticSegmenter(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 frame_ctr,
                 results.semantic_segmenter);
             StampPhysicalCacheStatus(results.semantic_segmenter.cache_status,
@@ -548,6 +559,7 @@ void RunPhysicalPerceptionPrimitivesOnce() {
             // confidence floor downstream to filter the long tail.
             s.image_classifier->RouteFrameToPhysicalImageClassifier(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 frame_ctr,
                 results.image_classifier);
             StampPhysicalCacheStatus(results.image_classifier.cache_status,
@@ -581,6 +593,7 @@ void RunPhysicalPerceptionPrimitivesOnce() {
             decision == PhysicalCadenceDecision::NoSignal) {
             s.pose_estimator->RouteFrameToPhysicalPoseKeypointEstimator(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 results.raw_to_model,
                 results.raw_image_width,
                 results.raw_image_height,
@@ -617,6 +630,7 @@ void RunPhysicalPerceptionPrimitivesOnce() {
             decision == PhysicalCadenceDecision::NoSignal) {
             s.scene_text_reader->RouteFrameToPhysicalSceneTextReader(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 results.raw_to_model,
                 results.raw_image_width,
                 results.raw_image_height,
@@ -653,6 +667,7 @@ void RunPhysicalPerceptionPrimitivesOnce() {
             decision == PhysicalCadenceDecision::NoSignal) {
             s.facial_expression_detector->RouteFrameToPhysicalFacialExpressionDetector(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 results.raw_to_model,
                 results.raw_image_width,
                 results.raw_image_height,
@@ -764,6 +779,7 @@ void RunPhysicalPerceptionPrimitivesOnce() {
                    decision == PhysicalCadenceDecision::NoSignal) {
             s.instance_segmenter->RouteFrameAndDetectionsToPhysicalInstanceSegmenter(
                 s.frame_view.model_image,
+                preserve_model_channel_order,
                 results.object_detector.detections,
                 frame_ctr,
                 results.instance_segmenter);

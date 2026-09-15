@@ -154,19 +154,20 @@ void DetectChessboardCornersInBgrFrame(const cv::Mat&               bgr,
     const cv::Size pattern(cols, rows);
     std::vector<cv::Point2f> corners;
 
-    const int sb_flags = cv::CALIB_CB_NORMALIZE_IMAGE
-                       | cv::CALIB_CB_EXHAUSTIVE
-                       | cv::CALIB_CB_ACCURACY;
-    auto try_sb = [&](const cv::Mat& gray, int path,
+    const int fast_sb_flags = cv::CALIB_CB_NORMALIZE_IMAGE;
+    const int robust_sb_flags = fast_sb_flags
+                              | cv::CALIB_CB_EXHAUSTIVE
+                              | cv::CALIB_CB_ACCURACY;
+    auto try_sb = [&](const cv::Mat& gray, int path, int flags,
                       float coordinate_scale = 1.0f) {
         corners.clear();
         bool detected = cv::findChessboardCornersSB(
-            gray, pattern, corners, sb_flags);
+            gray, pattern, corners, flags);
         if (detected && coordinate_scale != 1.0f) {
             for (auto& corner : corners) corner *= coordinate_scale;
         }
         if (detected) {
-            out.detector_used = path == 3 ? "SB-upscaled" : "SB";
+            out.detector_used = path == 4 ? "SB-upscaled" : "SB";
             out.preprocess_path = path;
         }
         return detected;
@@ -176,7 +177,7 @@ void DetectChessboardCornersInBgrFrame(const cv::Mat&               bgr,
     // its own normalization, so unconditional CLAHE is counterproductive.
     bool found = false;
     try {
-        found = try_sb(raw_gray, 0);
+        found = try_sb(raw_gray, 0, fast_sb_flags);
     } catch (const cv::Exception& e) {
         // Treat as a non-detection but log it once — SB shouldn't throw on
         // valid input, so this is interesting.
@@ -192,10 +193,24 @@ void DetectChessboardCornersInBgrFrame(const cv::Mat&               bgr,
         PreprocessFrameForLightingRobustDetection(
             bgr, enhanced_gray, measured_brightness, enhanced_path);
         try {
-            found = try_sb(enhanced_gray, enhanced_path);
+            found = try_sb(enhanced_gray, enhanced_path, fast_sb_flags);
         } catch (const cv::Exception& e) {
             LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
                 std::string("DetectChessboardCornersInBgrFrame: enhanced SB threw: ")
+                + e.what());
+            found = false;
+        }
+    }
+
+    // Spend the exhaustive/accuracy cost only after both inexpensive paths
+    // fail. This prevents easy, stationary boards from paying the worst-case
+    // detector cost on every analysis job.
+    if (!found) {
+        try {
+            found = try_sb(raw_gray, 3, robust_sb_flags);
+        } catch (const cv::Exception& e) {
+            LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                std::string("DetectChessboardCornersInBgrFrame: robust SB threw: ")
                 + e.what());
             found = false;
         }
@@ -209,7 +224,7 @@ void DetectChessboardCornersInBgrFrame(const cv::Mat&               bgr,
             cv::Mat enlarged;
             cv::resize(raw_gray, enlarged, cv::Size(), 1.5, 1.5,
                        cv::INTER_CUBIC);
-            found = try_sb(enlarged, 3, 1.0f / 1.5f);
+            found = try_sb(enlarged, 4, fast_sb_flags, 1.0f / 1.5f);
         } catch (const cv::Exception& e) {
             LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
                 std::string("DetectChessboardCornersInBgrFrame: upscaled SB threw: ")
@@ -233,9 +248,9 @@ void DetectChessboardCornersInBgrFrame(const cv::Mat&               bgr,
         }
         return detected;
     };
-    if (!found) found = try_legacy(raw_gray, 4);
+    if (!found) found = try_legacy(raw_gray, 5);
     if (!found && !enhanced_gray.empty()) {
-        found = try_legacy(enhanced_gray, 5);
+        found = try_legacy(enhanced_gray, 6);
     }
 
     if (!found) {

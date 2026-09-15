@@ -443,11 +443,15 @@ void TickPhysicalWorldStateMemoryWriter() {
         }
     }
 
-    LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
-              std::string("MemoryWriter: frame=")
-              + std::to_string(view.snapshot.source_frame_counter)
-              + " tracked=" + std::to_string(s.tracked.size())
-              + " emitted=" + std::to_string(records_emitted));
+    // No-op frames are the normal case and should not synchronously flush a
+    // debug line from the main thread. Preserve diagnostics for actual writes.
+    if (records_emitted > 0) {
+        LOG_DEBUG(PHYSICAL_WORLD_STATE_LOG_TAG,
+                  std::string("MemoryWriter: frame=")
+                  + std::to_string(view.snapshot.source_frame_counter)
+                  + " tracked=" + std::to_string(s.tracked.size())
+                  + " emitted=" + std::to_string(records_emitted));
+    }
 }
 
 void ShutdownPhysicalWorldStateMemoryWriter() {

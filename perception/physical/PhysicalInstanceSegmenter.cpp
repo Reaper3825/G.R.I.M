@@ -58,7 +58,8 @@ std::string DescribeMatShape(const cv::Mat& m) {
 // REQUIRED because cv::dnn::blobFromImage has no std parameter — silently
 // using only mean would be a numerical-precision violation.
 cv::Mat BuildSamEncoderBlob(const cv::Mat& letterboxed_bgr,
-                            const PhysicalInstanceSegmenterConfig& cfg)
+                            const PhysicalInstanceSegmenterConfig& cfg,
+                            bool preserve_model_channel_order)
 {
     if (letterboxed_bgr.empty()) {
         throw std::runtime_error("BuildSamEncoderBlob: input image is empty");
@@ -78,7 +79,9 @@ cv::Mat BuildSamEncoderBlob(const cv::Mat& letterboxed_bgr,
     cv::Mat blob = cv::dnn::blobFromImage(
         letterboxed_bgr, cfg.encoder_input_scale,
         cv::Size(cfg.encoder_input_width, cfg.encoder_input_height),
-        cfg.encoder_input_mean, cfg.swap_rb, /*crop=*/false);
+        cfg.encoder_input_mean,
+        cfg.swap_rb && !preserve_model_channel_order,
+        /*crop=*/false);
     if (blob.dims != 4 || blob.size[0] != 1 || blob.size[1] != 3) {
         throw std::runtime_error("BuildSamEncoderBlob: blobFromImage produced unexpected shape "
                                  + DescribeMatShape(blob));
@@ -447,6 +450,7 @@ void PhysicalInstanceSegmenter::LoadOnnxModelsIntoPhysicalInstanceSegmenter(
 
 void PhysicalInstanceSegmenter::RouteFrameAndDetectionsToPhysicalInstanceSegmenter(
     const cv::Mat& model_image,
+    bool preserve_model_channel_order,
     const std::vector<PhysicalObjectDetection>& detections,
     uint64_t source_frame_counter,
     PhysicalInstanceSegmenterOutput& out)
@@ -512,7 +516,8 @@ void PhysicalInstanceSegmenter::RouteFrameAndDetectionsToPhysicalInstanceSegment
 
         // ── 2. Encoder forward (ONNX Runtime) ───────────────────────────────
         const auto t_enc_start = std::chrono::steady_clock::now();
-        cv::Mat blob = BuildSamEncoderBlob(enc_in_bgr, cfg_);
+        cv::Mat blob = BuildSamEncoderBlob(
+            enc_in_bgr, cfg_, preserve_model_channel_order);
         // blob is contiguous CV_32F NCHW [1,3,H,W]; wrap as Ort::Value.
         const int64_t enc_in_shape[4] = {
             1, 3,

@@ -62,6 +62,7 @@ public:
     void LoadOnnxModelsIntoPhysicalSceneTextReader(const PhysicalSceneTextReaderConfig& cfg);
 
     void RouteFrameToPhysicalSceneTextReader(const cv::Mat& model_image,
+                                             bool preserve_model_channel_order,
                                              const PhysicalSignalRawToModelTransform& raw_to_model,
                                              int raw_image_width,
                                              int raw_image_height,

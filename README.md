@@ -360,7 +360,8 @@ This format is non-negotiable for training debugging — you cannot argue with h
 - Three-tier rotation pipeline (hot → working → long-term)
 - Memory types: Facts, Events, Commands, Status, Summaries, Learned Commands
 - Source classification (user voice/text, system hardware/software, network, internal)
-- Atomic writes for corruption-safe persistence
+- Debounced asynchronous memory snapshots with atomic replacement; explicit
+  flush and shutdown drain the latest persistence generation
 
 ### UI
 - Custom GPU-rendered component framework (BGFX backend)

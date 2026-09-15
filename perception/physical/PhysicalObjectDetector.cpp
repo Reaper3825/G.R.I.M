@@ -113,6 +113,7 @@ void PhysicalObjectDetector::LoadOnnxModelIntoPhysicalObjectDetector(
 
 void PhysicalObjectDetector::RouteFrameToPhysicalObjectDetector(
     const cv::Mat& model_image,
+    bool preserve_model_channel_order,
     const PhysicalSignalRawToModelTransform& raw_to_model,
     int raw_image_width,
     int raw_image_height,
@@ -148,7 +149,7 @@ void PhysicalObjectDetector::RouteFrameToPhysicalObjectDetector(
             cfg_.input_scale,
             cv::Size(cfg_.input_width, cfg_.input_height),
             cfg_.input_mean,
-            cfg_.swap_rb,
+            cfg_.swap_rb && !preserve_model_channel_order,
             /*crop=*/false);
 
         net_->setInput(blob);

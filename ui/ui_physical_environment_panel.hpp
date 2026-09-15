@@ -75,6 +75,7 @@ private:
     struct PreviewBlitCache {
         uint64_t              source_id        = 0;     // 0 = empty (counters start at 1)
         bool                  source_undistort = false;
+        std::string           source_color_space;
         int                   out_w            = 0;
         int                   out_h            = 0;
         std::vector<uint32_t> argb;                     // size = out_w * out_h
@@ -86,7 +87,8 @@ private:
                                  bool source_undistort,
                                  float frame_x, float frame_y,
                                  float frame_w, float frame_h,
-                                 PreviewBlitCache& cache);
+                                 PreviewBlitCache& cache,
+                                 const std::string& color_space_label = "BGR8_SRGB");
 
     // ── Camera tab ──
     void RebuildSourceDropdownFromDirectory();
@@ -224,9 +226,9 @@ private:
     // Camera tab: raw frame → blit cache.
     PreviewBlitCache camera_blit_cache_;
 
-    // Calibration tab: raw → [optional undistort] → authoritative
-    // calibrator corners → blit cache. Detection is owned by the calibrator;
-    // the UI never runs a competing detector or reuses corners across frames.
+    // Calibration tab: pinned analyzed raw frame → authoritative calibrator
+    // corners → blit cache. Detection is asynchronous and owned by the
+    // calibrator; the UI never reuses corners across different frames.
     cv::Mat            calib_display_frame_;                // BGR, ready to blit
     uint64_t           calib_display_source_id_      = 0;   // 0 = not yet built
     uint64_t           calib_display_detection_id_   = 0;
@@ -427,10 +429,12 @@ private:
     // did that exactly once per matched frame.
     void UpdateWorldTab(const InputState& input, float dt);
     void DrawWorldTab(OverlayRenderer& renderer);
+    void HandleToggleWorldViewport();
     void DrawWorldEntitiesOverlay(
         OverlayRenderer& renderer,
         const GRIM::Perception::Physical::PhysicalWorldStateSnapshot& snap,
-        int blit_x, int blit_y, int blit_w, int blit_h);
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        bool model_space);
     void DrawWorldEntitiesSidebar(
         OverlayRenderer& renderer, float x, float y, float w, float h,
         const GRIM::Perception::Physical::PhysicalWorldStateSnapshot& snap,
@@ -440,6 +444,8 @@ private:
         world_snapshot_view_;
     uint64_t world_last_seen_counter_ = 0;
     bool     have_any_world_results_  = false;
+    bool     world_show_model_signal_ = false;
+    std::shared_ptr<UIButton> world_view_toggle_btn_;
     PreviewBlitCache world_blit_cache_;
 
     // ── Known Entities tab ──
