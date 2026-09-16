@@ -43,8 +43,8 @@ struct PhysicalHandObservation {
     uint64_t source_frame_counter     = 0;
     uint64_t source_capture_steady_ns = 0;
     uint64_t result_steady_ns         = 0;
-    int      raw_image_width          = 0;
-    int      raw_image_height         = 0;
+    int      model_image_width        = 0;
+    int      model_image_height       = 0;
 
     PhysicalHandedness handedness            = PhysicalHandedness::Unknown;
     float              handedness_confidence = 0.0f;

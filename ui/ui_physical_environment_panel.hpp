@@ -42,7 +42,7 @@
 //
 // One panel — two views — same FrameBus. Mirrors the DataHub / Training tab
 // pattern. Frame rendering is shared by both tabs (raw on Camera; raw or
-// undistorted on Calibration with detected-corner overlay).
+// calibrated on Calibration with detected-corner overlay).
 //
 // Rule 20: when no frame is on the bus, the panel SAYS so. No stub graphic.
 class UIPhysicalEnvironmentPanel : public UIPanel {
@@ -71,10 +71,10 @@ private:
     // ── Shared frame blit cache ──
     // Holds a pre-resized + pre-packed ARGB buffer so the per-redraw cost is a
     // row-by-row memcpy. Recomputed only on cache miss (source frame changed,
-    // undistort flag flipped, or output geometry changed).
+    // source variant flipped, or output geometry changed).
     struct PreviewBlitCache {
         uint64_t              source_id        = 0;     // 0 = empty (counters start at 1)
-        bool                  source_undistort = false;
+        bool                  source_is_processed = false;
         std::string           source_color_space;
         int                   out_w            = 0;
         int                   out_h            = 0;
@@ -84,7 +84,7 @@ private:
     void DrawBgrFrameIntoOverlay(OverlayRenderer& renderer,
                                  const cv::Mat& bgr,
                                  uint64_t source_id,
-                                 bool source_undistort,
+                                 bool source_is_processed,
                                  float frame_x, float frame_y,
                                  float frame_w, float frame_h,
                                  PreviewBlitCache& cache,
@@ -97,6 +97,8 @@ private:
     void HandleRefreshClicked();
     void HandleToggleCameraViewClicked();
     void HandleToggleAutoExposureClicked();
+    void HandleToggleAntiFlickerClicked();
+    void HandleToggleMotionExposureClicked();
     void HandleToggleDenoiseClicked();
     void HandleToggleResizeClicked();
     void HandleToggleDeblurClicked();
@@ -117,6 +119,8 @@ private:
     std::shared_ptr<UIButton>    disconnect_button_;
     std::shared_ptr<UIButton>    signal_view_toggle_btn_;
     std::shared_ptr<UIButton>    signal_auto_exposure_btn_;
+    std::shared_ptr<UIButton>    signal_anti_flicker_btn_;
+    std::shared_ptr<UIButton>    signal_motion_exposure_btn_;
     std::shared_ptr<UIButton>    signal_denoise_btn_;
     std::shared_ptr<UIButton>    signal_resize_btn_;
     std::shared_ptr<UIButton>    signal_deblur_btn_;
@@ -166,14 +170,10 @@ private:
     PreviewBlitCache            stereo_right_blit_cache_;
 
     // ── Calibration tab ──
-    void HandleStartCaptureClicked();
+    void HandleAutomaticCalibrationClicked();
     void HandleStopCaptureClicked();
-    void HandleCaptureNowClicked();
     void HandleClearSamplesClicked();
-    void HandleRunCalibrationClicked();
-    void HandleSaveCalibrationClicked();
-    void HandleReloadCalibrationClicked();
-    void HandleToggleUndistortClicked();
+    void HandleToggleCalibratedViewClicked();
     void HandleApplyPatternClicked();
     void UpdateCalibrationTab(const InputState& input, float dt);
     void DrawCalibrationTab(OverlayRenderer& renderer);
@@ -187,14 +187,10 @@ private:
                                     float x, float y,
                                     const GRIM::Perception::Physical::PhysicalCalibrationStatus& st);
 
-    std::shared_ptr<UIButton>   cal_start_btn_;
+    std::shared_ptr<UIButton>   cal_auto_btn_;
     std::shared_ptr<UIButton>   cal_stop_btn_;
-    std::shared_ptr<UIButton>   cal_capture_now_btn_;
     std::shared_ptr<UIButton>   cal_clear_btn_;
-    std::shared_ptr<UIButton>   cal_run_btn_;
-    std::shared_ptr<UIButton>   cal_save_btn_;
-    std::shared_ptr<UIButton>   cal_reload_btn_;
-    std::shared_ptr<UIButton>   cal_undistort_toggle_btn_;
+    std::shared_ptr<UIButton>   cal_calibrated_toggle_btn_;
     std::shared_ptr<UIButton>   cal_apply_pattern_btn_;
     std::shared_ptr<UIInputBox> cal_pattern_cols_box_;
     std::shared_ptr<UIInputBox> cal_pattern_rows_box_;
@@ -202,7 +198,8 @@ private:
     std::string                 cal_pattern_cols_buf_   = "9";
     std::string                 cal_pattern_rows_buf_   = "6";
     std::string                 cal_square_meters_buf_  = "0.025";
-    bool                        cal_show_undistorted_   = false;
+    bool                        cal_show_calibrated_    = false;
+    bool                        cal_was_automatic_      = false;
     GRIM::Perception::Physical::PhysicalCalibrationStatus cal_last_status_;
 
     // ── Tab bar ──
@@ -232,7 +229,7 @@ private:
     cv::Mat            calib_display_frame_;                // BGR, ready to blit
     uint64_t           calib_display_source_id_      = 0;   // 0 = not yet built
     uint64_t           calib_display_detection_id_   = 0;
-    bool               calib_display_undistort_      = false;
+    bool               calib_display_calibrated_     = false;
     PreviewBlitCache   calib_blit_cache_;
 
     // ── Perception tab ──

@@ -149,6 +149,13 @@ void logDiagnosticSample(TrainingContext& ctx,
     cfg.num_return_sequences = 1;
     // Seed from optimizer step for reproducible but varied samples per step
     cfg.seed = static_cast<unsigned int>(optimizer_step);
+    // Structured SFT output is copy-heavy (section tags, ${variable} names).
+    // SamplingPipeline scans the FULL history (rendered scaffold prompt +
+    // generated tokens), so n-gram blocking bans tag trigrams such as
+    // ">" "\n\n" "<" and repetition penalty suppresses copied variable
+    // pieces. Disable both so the diagnostic reflects the model's argmax.
+    cfg.no_repeat_ngram_size = 0;
+    cfg.repetition_penalty = 1.0f;
 
     try {
         auto tokenizer = LoadInferenceTokenizer(ctx.config, *ctx.logging.logger);

@@ -11,6 +11,9 @@
 
 #include <opencv2/core.hpp>
 
+#include "PhysicalCameraFocusController.hpp"
+#include "PhysicalCameraExposureController.hpp"
+
 namespace GRIM { namespace Perception { namespace Physical {
 
 enum class PhysicalCameraStreamState : uint8_t {
@@ -26,6 +29,17 @@ struct PhysicalCapturedCameraFrame {
     uint64_t  frame_counter    = 0;
     uint64_t  capture_steady_ns = 0;
     uint64_t  capture_wall_ns   = 0;
+};
+
+struct PhysicalCameraMotionExposureStatus {
+    bool configured = false;
+    bool last_set_accepted = false;
+    double requested_exposure = 0.0;
+    double requested_gain = 0.0;
+    double negotiated_exposure = 0.0;
+    double negotiated_gain = 0.0;
+    double motion_priority = 0.0;
+    std::string summary;
 };
 
 // One live IP camera connection, driven by a worker thread.
@@ -59,6 +73,12 @@ public:
     std::string               GetLastErrorReason() const;
     uint64_t                  GetFrameCounter() const;
     double                    GetMeasuredFps() const;
+    PhysicalCameraFocusStatus GetPhysicalCameraFocusStatusSnapshot() const;
+    PhysicalCameraMotionExposureStatus
+        GetPhysicalCameraMotionExposureStatusSnapshot() const;
+    void RequestPhysicalCameraCalibrationFocusLock(bool locked);
+    void RequestPhysicalCameraMotionExposure(
+        const PhysicalCameraMotionExposureRequest& request);
 
     // Copies the most recent decoded frame into `out`. Returns true if the
     // frame is newer than what the caller saw last (tracked via
@@ -80,6 +100,13 @@ private:
     std::atomic<bool>                             stop_requested_{false};
     std::atomic<uint64_t>                         frame_counter_{0};
     std::atomic<double>                           measured_fps_{0.0};
+    std::atomic<bool>                             calibration_focus_lock_requested_{false};
+    PhysicalCameraFocusController                 focus_controller_;
+    std::atomic<double>                           motion_exposure_priority_{0.0};
+    std::atomic<double>                           motion_gain_demand_{0.0};
+    std::atomic<uint64_t>                         motion_exposure_request_counter_{0};
+    mutable std::mutex                            motion_exposure_mutex_;
+    PhysicalCameraMotionExposureStatus            motion_exposure_status_{};
 
     mutable std::mutex                            frame_mutex_;
     cv::Mat                                       latest_frame_; // BGR8

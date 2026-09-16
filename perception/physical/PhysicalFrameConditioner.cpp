@@ -9,6 +9,7 @@
 #include <opencv2/video/tracking.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <sstream>
@@ -99,16 +100,7 @@ void PhysicalFrameConditioner::ValidatePhysicalSignalConditioningConfig(
         ThrowInvalidPhysicalSignalConditioningConfig(
             "denoise_strength must be in [0,30], got " + std::to_string(cfg.denoise_strength));
     }
-    if (!(cfg.manual_exposure_gain > 0.0) || !std::isfinite(cfg.manual_exposure_gain)) {
-        ThrowInvalidPhysicalSignalConditioningConfig(
-            "manual_exposure_gain must be finite and > 0, got "
-            + std::to_string(cfg.manual_exposure_gain));
-    }
-    if (!(cfg.target_luma > 0.0) || cfg.target_luma > 255.0 || !std::isfinite(cfg.target_luma)) {
-        ThrowInvalidPhysicalSignalConditioningConfig(
-            "target_luma must be finite and in (0,255], got "
-            + std::to_string(cfg.target_luma));
-    }
+    ValidatePhysicalCameraExposureConfig(cfg.exposure);
     if (!(cfg.deblur_amount >= 0.0) || cfg.deblur_amount > 3.0 || !std::isfinite(cfg.deblur_amount)) {
         ThrowInvalidPhysicalSignalConditioningConfig(
             "deblur_amount must be finite and in [0,3], got "
@@ -161,6 +153,7 @@ void PhysicalFrameConditioner::ConfigurePhysicalSignalConditioning(
                                || (cfg.output_height != config_.output_height);
     const bool color_mode_changed = cfg.color_mode != config_.color_mode;
     config_ = cfg;
+    exposure_controller_.Configure(config_.exposure);
     // Every explicit conditioning update changes the model-input contract or
     // its pixel values. Ensure cadence-aware consumers sample it at least once.
     force_model_refresh_next_frame_ = true;
@@ -182,8 +175,10 @@ void PhysicalFrameConditioner::ConfigurePhysicalSignalConditioning(
                   + " out=" + std::to_string(cfg.output_width) + "x"
                   + std::to_string(cfg.output_height)
                   + " denoise=" + std::to_string(static_cast<int>(cfg.enable_denoise))
-                  + " exposure=" + std::to_string(static_cast<int>(cfg.enable_exposure_correction))
-                  + " autoExp=" + std::to_string(static_cast<int>(cfg.exposure_auto))
+                  + " exposure=" + std::to_string(static_cast<int>(cfg.exposure.enable))
+                  + " autoExp=" + std::to_string(static_cast<int>(cfg.exposure.automatic))
+                  + " antiFlicker="
+                  + std::to_string(static_cast<int>(cfg.exposure.anti_flicker_enable))
                   + " deblur=" + std::to_string(static_cast<int>(cfg.enable_deblur))
                   + " stabilize=" + std::to_string(static_cast<int>(cfg.enable_stabilization))
                   + " color=" + PhysicalSignalColorModeName(cfg.color_mode));
@@ -191,6 +186,8 @@ void PhysicalFrameConditioner::ConfigurePhysicalSignalConditioning(
 
 void PhysicalFrameConditioner::ResetPhysicalSignalConditioningToDefaults() {
     config_ = BuildDefaultPhysicalSignalConditioningConfig();
+    exposure_controller_.Configure(config_.exposure);
+    exposure_controller_.ResetTemporalState();
     previous_gray_for_flow_.release();
     previous_scene_thumbnail_gray_.release();
     previous_scene_hash_64_    = 0;
@@ -203,6 +200,7 @@ void PhysicalFrameConditioner::ResetPhysicalSignalConditioningToDefaults() {
 }
 
 void PhysicalFrameConditioner::ResetPhysicalSignalConditioningTemporalState() {
+    exposure_controller_.ResetTemporalState();
     previous_gray_for_flow_.release();
     previous_scene_thumbnail_gray_.release();
     previous_scene_hash_64_    = 0;
@@ -268,6 +266,60 @@ double ComputeLaplacianVarianceFromBgr(const cv::Mat& bgr) {
     cv::meanStdDev(lap, mu, sigma);
     const double s = sigma[0];
     return s * s;
+}
+
+// Robustly estimate high-frequency sensor noise on a small luminance image.
+// The median absolute residual is deliberately used instead of a standard
+// deviation so that real edges and textured objects do not make the denoiser
+// attack useful detail. Keeping the estimator at <=320 px wide also makes its
+// cost effectively independent of the selected camera resolution.
+double EstimateSensorNoiseSigmaFromBgr(const cv::Mat& bgr) {
+    if (bgr.empty() || bgr.type() != CV_8UC3) {
+        throw std::runtime_error(
+            "EstimateSensorNoiseSigmaFromBgr: expected non-empty CV_8UC3 frame");
+    }
+
+    constexpr int kEstimateWidth = 320;
+    constexpr int kEstimateHeight = 240;
+    const int sample_width = std::min(bgr.cols, kEstimateWidth);
+    const int sample_height = std::min(bgr.rows, kEstimateHeight);
+    const int sample_x = (bgr.cols - sample_width) / 2;
+    const int sample_y = (bgr.rows - sample_height) / 2;
+    const cv::Mat sample = bgr(cv::Rect(
+        sample_x, sample_y, sample_width, sample_height));
+
+    cv::Mat gray;
+    cv::cvtColor(sample, gray, cv::COLOR_BGR2GRAY);
+    cv::Mat low_pass;
+    cv::GaussianBlur(gray, low_pass, cv::Size(3, 3), 0.8, 0.8,
+                     cv::BORDER_REPLICATE);
+    cv::Mat residual;
+    cv::absdiff(gray, low_pass, residual);
+
+    std::array<uint32_t, 256> histogram{};
+    for (int y = 0; y < residual.rows; ++y) {
+        const uint8_t* row = residual.ptr<uint8_t>(y);
+        for (int x = 0; x < residual.cols; ++x) {
+            ++histogram[row[x]];
+        }
+    }
+
+    const uint64_t sample_count = residual.total();
+    const uint64_t median_rank = sample_count / 2u;
+    uint64_t cumulative = 0;
+    int median_residual = 0;
+    for (int value = 0; value < 256; ++value) {
+        cumulative += histogram[static_cast<size_t>(value)];
+        if (cumulative > median_rank) {
+            median_residual = value;
+            break;
+        }
+    }
+
+    // For zero-mean Gaussian noise, median(abs(x)) = 0.67449 * sigma.
+    constexpr double kGaussianMedianAbsoluteDeviation = 0.6744897501960817;
+    return static_cast<double>(median_residual)
+         / kGaussianMedianAbsoluteDeviation;
 }
 
 // Letterbox raw -> (out_w, out_h) preserving aspect ratio.
@@ -365,8 +417,8 @@ int Popcount64(uint64_t x) {
 
 } // namespace
 
-PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToModelSignal(
-    const cv::Mat& raw_bgr,
+PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessCalibratedFrameToModelSignal(
+    const cv::Mat& calibrated_bgr,
     uint64_t       frame_counter,
     cv::Mat&       out_model_image) {
     const auto pass_start = std::chrono::steady_clock::now();
@@ -375,29 +427,41 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
             std::chrono::steady_clock::now() - start).count();
     };
 
-    if (raw_bgr.empty()) {
+    if (calibrated_bgr.empty()) {
         throw std::runtime_error(
-            "ProcessRawFrameToModelSignal: raw_bgr is empty");
+            "ProcessCalibratedFrameToModelSignal: calibrated_bgr is empty");
     }
-    if (raw_bgr.type() != CV_8UC3) {
+    if (calibrated_bgr.type() != CV_8UC3) {
         throw std::runtime_error(
-            "ProcessRawFrameToModelSignal: expected raw_bgr type CV_8UC3, got "
-            + std::to_string(raw_bgr.type()));
+            "ProcessCalibratedFrameToModelSignal: expected calibrated_bgr type CV_8UC3, got "
+            + std::to_string(calibrated_bgr.type()));
     }
 
     ValidatePhysicalSignalConditioningConfig(config_);
 
     PhysicalSignalConditioningResult result;
-    result.raw_width  = raw_bgr.cols;
-    result.raw_height = raw_bgr.rows;
+    result.raw_width  = calibrated_bgr.cols;
+    result.raw_height = calibrated_bgr.rows;
 
     status_.processed_frame_counter = frame_counter;
-    status_.last_input_width        = raw_bgr.cols;
-    status_.last_input_height       = raw_bgr.rows;
-    status_.last_input_luma         = ComputeMeanLumaFromBgr(raw_bgr);
+    status_.last_input_width        = calibrated_bgr.cols;
+    status_.last_input_height       = calibrated_bgr.rows;
+    status_.last_input_luma         = ComputeMeanLumaFromBgr(calibrated_bgr);
     status_.last_failure_reason.clear();
     status_.last_applied_exposure_gain = 1.0;
-    status_.using_auto_exposure        = config_.exposure_auto;
+    status_.last_exposure_low_luma = 0.0;
+    status_.last_exposure_meter_luma = 0.0;
+    status_.last_exposure_highlight_luma = 0.0;
+    status_.last_desired_exposure_gain = 1.0;
+    status_.last_flicker_detected = false;
+    status_.last_flicker_amplitude = 0.0;
+    status_.last_anti_flicker_gain = 1.0;
+    status_.last_motion_magnitude = 0.0;
+    status_.last_motion_priority = 0.0;
+    status_.last_hardware_gain_demand = 0.0;
+    status_.last_estimated_noise_sigma = 0.0;
+    status_.last_applied_denoise_sigma = 0.0;
+    status_.using_auto_exposure        = config_.exposure.automatic;
     status_.stabilization_active       = config_.enable_stabilization;
     status_.last_quality_gate_passed   = true;
     status_.last_quality_gate_reason.clear();
@@ -411,10 +475,10 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     status_.last_color_convert_ms     = 0.0;
     status_.last_scene_stability_ms   = 0.0;
 
-    // ---- Quality gate (computed on RAW input — drop before wasting work) ----
+    // ---- Quality gate (computed on calibrated input — drop before wasting work) ----
     auto stage_start = std::chrono::steady_clock::now();
-    const double clipped_ratio = ComputeClippedPixelRatio(raw_bgr);
-    const double lap_var       = ComputeLaplacianVarianceFromBgr(raw_bgr);
+    const double clipped_ratio = ComputeClippedPixelRatio(calibrated_bgr);
+    const double lap_var       = ComputeLaplacianVarianceFromBgr(calibrated_bgr);
     result.quality_gate_ms = elapsed_ms_since(stage_start);
     status_.last_quality_gate_ms = result.quality_gate_ms;
     status_.last_clipped_pixel_ratio = clipped_ratio;
@@ -451,7 +515,7 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
         }
     }
 
-    cv::Mat working = raw_bgr;
+    cv::Mat working = calibrated_bgr;
     std::ostringstream pipeline;
 
     if (config_.enable_stabilization) {
@@ -530,32 +594,54 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
 
     if (config_.enable_denoise && config_.denoise_strength > 0) {
         stage_start = std::chrono::steady_clock::now();
-        int kernel_size = std::max(1, config_.denoise_strength);
-        if ((kernel_size & 1) == 0) ++kernel_size;
-        if (kernel_size > 1) {
+        const double noise_sigma = EstimateSensorNoiseSigmaFromBgr(working);
+        status_.last_estimated_noise_sigma = noise_sigma;
+
+        // `denoise_strength` is an operator-set ceiling, not a fixed kernel.
+        // Clean frames receive little or no filtering; noisier frames approach
+        // the configured ceiling. Bilateral filtering smooths similar pixels
+        // while refusing to cross strong intensity/color edges.
+        constexpr double kNoiseFloorSigma = 0.75;
+        if (noise_sigma > kNoiseFloorSigma) {
+            const double aggressiveness =
+                static_cast<double>(config_.denoise_strength) / 30.0;
+            const double noise_demand = std::clamp(
+                (noise_sigma - kNoiseFloorSigma) / 8.0, 0.0, 1.0);
+            const double applied_fraction = aggressiveness
+                                          * (0.25 + 0.75 * noise_demand);
+            const double sigma_color = 4.0 + 22.0 * applied_fraction;
+            const double sigma_space = 1.25 + 2.25 * aggressiveness;
             cv::Mat denoised;
-            cv::medianBlur(working, denoised, kernel_size);
+            cv::bilateralFilter(working, denoised, 0, sigma_color, sigma_space,
+                                cv::BORDER_REPLICATE);
             working = denoised;
+            status_.last_applied_denoise_sigma = sigma_color;
         }
-        pipeline << "median_denoise(k=" << kernel_size << ") ";
+        pipeline << "adaptive_edge_denoise(noise=" << noise_sigma
+                 << ",sigma=" << status_.last_applied_denoise_sigma << ") ";
         result.denoise_ms = elapsed_ms_since(stage_start);
         status_.last_denoise_ms = result.denoise_ms;
     }
 
-    if (config_.enable_exposure_correction) {
+    if (config_.exposure.enable) {
         stage_start = std::chrono::steady_clock::now();
-        const double observed_luma = ComputeMeanLumaFromBgr(working);
-        double gain = config_.manual_exposure_gain;
-        if (config_.exposure_auto) {
-            const double denom = std::max(1.0, observed_luma);
-            gain = config_.target_luma / denom;
-            gain = std::clamp(gain, 0.50, 2.50);
-        }
         cv::Mat corrected;
-        working.convertTo(corrected, -1, gain, 0.0);
+        const PhysicalCameraExposureStatus exposure_status =
+            exposure_controller_.ProcessFrame(working, corrected);
         working = corrected;
-        status_.last_applied_exposure_gain = gain;
-        pipeline << "exposure(g=" << gain << ") ";
+        status_.last_applied_exposure_gain = exposure_status.applied_gain;
+        status_.last_exposure_low_luma = exposure_status.low_luma;
+        status_.last_exposure_meter_luma = exposure_status.metered_luma;
+        status_.last_exposure_highlight_luma = exposure_status.highlight_luma;
+        status_.last_desired_exposure_gain = exposure_status.desired_gain;
+        status_.last_flicker_detected = exposure_status.flicker_detected;
+        status_.last_flicker_amplitude = exposure_status.flicker_amplitude;
+        status_.last_anti_flicker_gain = exposure_status.anti_flicker_gain;
+        status_.last_motion_magnitude = exposure_status.motion_magnitude;
+        status_.last_motion_priority = exposure_status.motion_priority;
+        status_.last_hardware_gain_demand = exposure_status.hardware_gain_demand;
+        result.motion_exposure_request = exposure_status.motion_request;
+        pipeline << "adaptive_exposure(" << exposure_status.summary << ") ";
         result.exposure_ms = elapsed_ms_since(stage_start);
         status_.last_exposure_ms = result.exposure_ms;
     }
@@ -601,9 +687,9 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
                        0.0,
                        cv::INTER_AREA);
             raw_to_model.scale_x  = static_cast<double>(config_.output_width)
-                                  / static_cast<double>(raw_bgr.cols);
+                                  / static_cast<double>(calibrated_bgr.cols);
             raw_to_model.scale_y  = static_cast<double>(config_.output_height)
-                                  / static_cast<double>(raw_bgr.rows);
+                                  / static_cast<double>(calibrated_bgr.rows);
             raw_to_model.offset_x = 0.0;
             raw_to_model.offset_y = 0.0;
             working = resized;
@@ -652,7 +738,7 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
 
     if (working.empty() || working.type() != CV_8UC3) {
         throw std::runtime_error(
-            "ProcessRawFrameToModelSignal: pipeline produced invalid output frame");
+            "ProcessCalibratedFrameToModelSignal: pipeline produced invalid output frame");
     }
 
     working.copyTo(out_model_image);
@@ -675,7 +761,7 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
         stage_start = std::chrono::steady_clock::now();
         if (sc.thumbnail_width < 8 || sc.thumbnail_height < 8) {
             throw std::runtime_error(
-                "ProcessRawFrameToModelSignal: scene_stability thumbnail must be"
+                "ProcessCalibratedFrameToModelSignal: scene_stability thumbnail must be"
                 " at least 8x8, got "
                 + std::to_string(sc.thumbnail_width) + "x"
                 + std::to_string(sc.thumbnail_height));

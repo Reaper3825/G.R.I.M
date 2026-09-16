@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include "PhysicalCameraExposureController.hpp"
 #include "PhysicalSceneStability.hpp"
 
 namespace GRIM { namespace Perception { namespace Physical {
@@ -40,12 +41,9 @@ struct PhysicalSignalConditioningConfig {
     PhysicalSignalResizeMode resize_mode = PhysicalSignalResizeMode::Letterbox;
     int    letterbox_pad_value         = 114;     // 0..255; 114 matches YOLO/Ultralytics convention
 
-    bool   enable_denoise              = true; // median blur is cheap and helps stabilize the scene-stability signal (and downstream cache reuse) when sensor noise is high — e.g. in low light or with aggressive digital zoom.
-    int    denoise_strength            = 5; // median kernel size; even values are rounded up to the next odd value.
-    bool   enable_exposure_correction  = true; // master switch for the exposure-correction subsystem (auto and manual paths both gated on this).
-    bool   exposure_auto               = true; // when true, overrides manual_exposure_gain and automatically computes a gain to push the mean luma towards target_luma.
-    double manual_exposure_gain        = 1.00; // applied when exposure_auto is false. Multiplier on the input pixel values; 1.0 means no change, <1.0 darkens, >1.0 brightens.
-    double target_luma                 = 112.0; // target mean luma for auto exposure. 112 is ~midpoint between pure black and pure white, giving the model the best chance to see texture in either case.
+    bool   enable_denoise              = true; // adaptive edge-preserving denoise; estimated sensor noise controls how much filtering is applied.
+    int    denoise_strength            = 5; // maximum denoise aggressiveness in [0,30]; 0 disables the stage without changing enable_denoise.
+    PhysicalCameraExposureConfig exposure{};
 
     bool   enable_deblur               = false;
     double deblur_amount               = 0.60;
@@ -67,10 +65,11 @@ struct PhysicalSignalConditioningConfig {
     PhysicalSceneStabilityConfig    scene_stability{};
 };
 
-// Affine transform from RAW sensor pixel space to MODEL pixel space:
-//   model_x = raw_x * scale_x + offset_x
-//   model_y = raw_y * scale_y + offset_y
-// To back-project a model-space point to raw coords: invert.
+// Affine transform from CALIBRATED camera pixel space to MODEL pixel space:
+//   model_x = calibrated_x * scale_x + offset_x
+//   model_y = calibrated_y * scale_y + offset_y
+// The historical type name is retained for source compatibility; new code
+// must interpret it as calibrated-to-model geometry.
 struct PhysicalSignalRawToModelTransform {
     double scale_x  = 1.0;
     double scale_y  = 1.0;
@@ -89,6 +88,18 @@ struct PhysicalSignalConditioningStatus {
     double   last_input_luma           = 0.0;
     double   last_output_luma          = 0.0;
     double   last_applied_exposure_gain = 1.0;
+    double   last_exposure_low_luma     = 0.0;
+    double   last_exposure_meter_luma   = 0.0;
+    double   last_exposure_highlight_luma = 0.0;
+    double   last_desired_exposure_gain = 1.0;
+    bool     last_flicker_detected      = false;
+    double   last_flicker_amplitude     = 0.0;
+    double   last_anti_flicker_gain     = 1.0;
+    double   last_motion_magnitude      = 0.0;
+    double   last_motion_priority       = 0.0;
+    double   last_hardware_gain_demand  = 0.0;
+    double   last_estimated_noise_sigma = 0.0;
+    double   last_applied_denoise_sigma = 0.0;
 
     int      last_flow_tracked_points  = 0;
     double   last_flow_dx              = 0.0;
@@ -97,14 +108,14 @@ struct PhysicalSignalConditioningStatus {
     bool     using_auto_exposure       = true;
     bool     stabilization_active      = false;
 
-    // Quality gate diagnostics (computed on raw input every frame)
+    // Quality gate diagnostics (computed on calibrated input every frame)
     double   last_clipped_pixel_ratio  = 0.0;
     double   last_laplacian_variance   = 0.0;
     bool     last_quality_gate_passed  = true;
     std::string last_quality_gate_reason;
     uint64_t total_frames_dropped_by_quality_gate = 0;
 
-    // Geometric provenance: how raw maps into model
+    // Geometric provenance: how calibrated image coordinates map into model
     PhysicalSignalRawToModelTransform last_raw_to_model{};
 
     // Last computed scene-stability signal. Snapshotted into the FrameView
@@ -145,6 +156,7 @@ struct PhysicalSignalConditioningResult {
     // is true. Producer (PhysicalEnvironmentLoop) attaches this to the
     // FrameMetadata published on PhysicalFrameBus.
     PhysicalSceneStability            scene_stability{};
+    PhysicalCameraMotionExposureRequest motion_exposure_request{};
 
     // Timing telemetry for THIS conditioning pass, in milliseconds.
     double                            total_ms             = 0.0;
@@ -170,11 +182,11 @@ public:
     PhysicalSignalConditioningStatus GetPhysicalSignalConditioningStatusSnapshot() const;
 
     // Returns a result describing whether the frame was accepted and, if so,
-    // the raw->model transform plus color space label. Caller MUST inspect
+    // the calibrated->model transform plus color space label. Caller MUST inspect
     // `accepted`; if false, `out_model_image` is left untouched and `drop_reason`
-    // is populated. Throws only on programmer error (empty/invalid raw).
-    PhysicalSignalConditioningResult ProcessRawFrameToModelSignal(
-        const cv::Mat& raw_bgr,
+    // is populated. Throws only on programmer error (empty/invalid calibrated input).
+    PhysicalSignalConditioningResult ProcessCalibratedFrameToModelSignal(
+        const cv::Mat& calibrated_bgr,
         uint64_t       frame_counter,
         cv::Mat&       out_model_image);
 
@@ -184,6 +196,7 @@ private:
 
     PhysicalSignalConditioningConfig config_;
     PhysicalSignalConditioningStatus status_;
+    PhysicalCameraExposureController exposure_controller_;
 
     cv::Mat previous_gray_for_flow_;
 

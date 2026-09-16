@@ -146,6 +146,12 @@ struct PhysicalLocalizationState {
 
     // Whether intrinsics have been pushed into the odometer this lifetime.
     bool                                                intrinsics_synced = false;
+    std::string                                         synced_calibration_source_url;
+    std::string                                         synced_calibration_created_at;
+    cv::Mat                                             synced_calibration_camera_matrix;
+    int                                                 synced_model_width = 0;
+    int                                                 synced_model_height = 0;
+    PhysicalSignalRawToModelTransform                   synced_calibrated_to_model{};
 
     std::string                                         last_error_reason;
     std::atomic<uint64_t>                               tick_count      {0};
@@ -209,7 +215,6 @@ void LazyInitLocked(PhysicalLocalizationState& s) {
 }
 
 void TrySyncIntrinsicsLocked(PhysicalLocalizationState& s) {
-    if (s.intrinsics_synced) return;
     if (!IsPhysicalCalibrationDataAvailable()) return;
     PhysicalCalibrationData calib;
     try {
@@ -220,11 +225,56 @@ void TrySyncIntrinsicsLocked(PhysicalLocalizationState& s) {
         LOG_ERROR(PHYSICAL_LOCALIZATION_LOG_TAG, s.last_error_reason);
         return;
     }
+    const auto& xform = s.frame_view.metadata.raw_to_model;
+    const int model_width = s.frame_view.model_image.cols;
+    const int model_height = s.frame_view.model_image.rows;
+    const bool calibration_matrix_unchanged =
+        !s.synced_calibration_camera_matrix.empty()
+        && s.synced_calibration_camera_matrix.size() == calib.camera_matrix.size()
+        && cv::norm(s.synced_calibration_camera_matrix - calib.camera_matrix,
+                    cv::NORM_INF) <= 1e-12;
+    const bool geometry_unchanged = s.intrinsics_synced
+        && s.synced_calibration_source_url == calib.source_url_at_capture
+        && s.synced_calibration_created_at == calib.created_at_iso
+        && calibration_matrix_unchanged
+        && s.synced_model_width == model_width
+        && s.synced_model_height == model_height
+        && s.synced_calibrated_to_model.scale_x == xform.scale_x
+        && s.synced_calibrated_to_model.scale_y == xform.scale_y
+        && s.synced_calibrated_to_model.offset_x == xform.offset_x
+        && s.synced_calibrated_to_model.offset_y == xform.offset_y;
+    if (geometry_unchanged) return;
+
     try {
-        s.odometer->SetCameraIntrinsics(calib.camera_matrix, calib.dist_coeffs);
+        cv::Mat model_K = calib.camera_matrix.clone();
+        model_K.at<double>(0, 0) *= xform.scale_x;
+        model_K.at<double>(0, 1) *= xform.scale_x;
+        model_K.at<double>(0, 2) =
+            model_K.at<double>(0, 2) * xform.scale_x + xform.offset_x;
+        model_K.at<double>(1, 0) *= xform.scale_y;
+        model_K.at<double>(1, 1) *= xform.scale_y;
+        model_K.at<double>(1, 2) =
+            model_K.at<double>(1, 2) * xform.scale_y + xform.offset_y;
+
+        if (s.intrinsics_synced) {
+            s.odometer->ResetPhysicalVisualOdometer();
+            s.grid_mapper->ResetPhysicalOccupancyGridMapper();
+            s.prev_published_T.release();
+            s.prev_published_steady_ns = 0;
+            s.trajectory_ring.clear();
+        }
+        // model_image descends from an already calibrated frame, therefore
+        // the residual distortion passed to VO is intentionally empty.
+        s.odometer->SetCameraIntrinsics(model_K, cv::Mat{});
         s.intrinsics_synced = true;
+        s.synced_calibration_source_url = calib.source_url_at_capture;
+        s.synced_calibration_created_at = calib.created_at_iso;
+        s.synced_calibration_camera_matrix = calib.camera_matrix.clone();
+        s.synced_model_width = model_width;
+        s.synced_model_height = model_height;
+        s.synced_calibrated_to_model = xform;
         LOG_DEBUG(PHYSICAL_LOCALIZATION_LOG_TAG,
-                  "TrySyncIntrinsics: pushed K into PhysicalVisualOdometer");
+                   "TrySyncIntrinsics: pushed calibrated model-space K into PhysicalVisualOdometer");
     } catch (const std::exception& e) {
         s.last_error_reason =
             std::string("TrySyncIntrinsics: SetCameraIntrinsics threw: ") + e.what();
@@ -298,24 +348,6 @@ void RunPhysicalLocalizationOnce() {
         LOG_DEBUG(PHYSICAL_LOCALIZATION_LOG_TAG, "TickPhysicalLocalization: reset applied");
     }
 
-    // Try to pick up intrinsics every tick until we have them.
-    TrySyncIntrinsicsLocked(s);
-
-    if (!s.odometer->HasCameraIntrinsics()) {
-        // Publish a Failed snapshot so the UI has something to show. Once
-        // calibration is loaded TrySyncIntrinsicsLocked will succeed and
-        // we'll start publishing real snapshots.
-        const std::string reason =
-            "TickPhysicalLocalization: no camera intrinsics — calibrate the camera "
-            "(UI: Physical Environment → Calibration tab → Run intrinsic calibration)";
-        if (s.last_error_reason != reason) {
-            s.last_error_reason = reason;
-            LOG_ERROR(PHYSICAL_LOCALIZATION_LOG_TAG, reason);
-        }
-        PublishFailedSnapshotLocked(reason, /*source_frame_counter=*/0);
-        return;
-    }
-
     const bool frame_advanced = PhysicalFrameBus::Instance().PullLatestFrameView(
         s.frame_view, s.last_seen_frame_ctr);
     if (!frame_advanced) return;
@@ -325,6 +357,17 @@ void RunPhysicalLocalizationOnce() {
             "TickPhysicalLocalization: pulled frame has empty model_image";
         s.last_error_reason = reason;
         LOG_ERROR(PHYSICAL_LOCALIZATION_LOG_TAG, reason);
+        PublishFailedSnapshotLocked(reason, s.frame_view.frame_counter);
+        return;
+    }
+
+    // Sync after pulling the frame so calibration K can be transformed into
+    // the exact model-image geometry used by visual odometry.
+    TrySyncIntrinsicsLocked(s);
+    if (!s.odometer->HasCameraIntrinsics()) {
+        const std::string reason =
+            "TickPhysicalLocalization: no matching camera calibration";
+        s.last_error_reason = reason;
         PublishFailedSnapshotLocked(reason, s.frame_view.frame_counter);
         return;
     }
@@ -586,6 +629,11 @@ void ShutdownPhysicalLocalization() {
     s.processed_count      = 0;
     s.last_seen_frame_ctr  = 0;
     s.intrinsics_synced    = false;
+    s.synced_calibration_source_url.clear();
+    s.synced_calibration_created_at.clear();
+    s.synced_calibration_camera_matrix.release();
+    s.synced_model_width = 0;
+    s.synced_model_height = 0;
     LOG_DEBUG(PHYSICAL_LOCALIZATION_LOG_TAG, "ShutdownPhysicalLocalization: complete");
 }
 

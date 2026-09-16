@@ -22,14 +22,14 @@ namespace GRIM { namespace Perception { namespace Physical {
 //      blocks the main/UI thread. While capture is active, a found distinct
 //      pose is accepted when coverage policy permits.
 //    - Exposes Request* mutators for the UI:
-//        Start/Stop capture, Capture-Now, Run intrinsic calibration, Save,
-//        Clear samples, Reconfigure pattern.
+//        One-shot automatic calibration, plus lower-level capture/manual
+//        controls retained for non-UI callers and diagnostics.
 //    - All public functions are thread-safe.
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class PhysicalCalibrationStage : uint8_t {
     Uncalibrated     = 0,  // nothing loaded, no samples
-    LoadedFromDisk   = 1,  // calibration loaded at startup; ready to undistort
+    LoadedFromDisk   = 1,  // calibration loaded at startup; ready to calibrate frames
     Capturing        = 2,  // collecting samples from the FrameBus
     Calibrated       = 3,  // ran calibrateCamera() at least once this session
     Failed           = 4   // last operation failed; see status_reason
@@ -46,6 +46,9 @@ struct PhysicalCalibrationStatus {
 
     // Sample pool
     int     accepted_sample_count = 0;
+    int     minimum_sample_count  = 10;
+    int     minimum_coverage_cells_required = 10;
+    bool    automatic_calibration_active = false;
     int     coverage_grid_cols    = 8;
     int     coverage_grid_rows    = 6;
     std::vector<int>           coverage_cell_counts;     // size = grid_cols*grid_rows
@@ -92,6 +95,12 @@ PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot();
 // Returns true once we have a usable K matrix (loaded from disk or computed).
 bool IsPhysicalCalibrationDataAvailable();
 
+// Returns true only when the active calibration belongs to this exact camera
+// source and sensor resolution. Producers MUST use this before constructing a
+// calibrated/model frame so a profile from another camera is never applied.
+bool IsPhysicalCalibrationDataAvailableForFrame(const std::string& source_url,
+                                                const cv::Size&    image_size);
+
 // Cheap main-loop gate used to give calibration exclusive access to the
 // physical vision pipeline while samples are being collected.
 bool IsPhysicalCameraCalibrationCaptureActive();
@@ -102,9 +111,15 @@ void GetPhysicalCalibrationData(PhysicalCalibrationData& out);
 
 // Service for downstream consumers (later: model context matrix). Throws if
 // no calibration is loaded, or if `bgr_in` is empty/wrong type.
-void UndistortBgrFrameUsingPhysicalCalibration(const cv::Mat& bgr_in, cv::Mat& bgr_out);
+void CalibrateBgrFrameUsingPhysicalCalibration(const cv::Mat& bgr_in, cv::Mat& bgr_out);
 
 // ── UI-facing requests ──────────────────────────────────────────────────────
+
+// Clear stale samples and start the one-click workflow. Distinct poses are
+// auto-collected; at the minimum count the calibrator stops capture, computes
+// and activates the camera intrinsics, then persists the camera/resolution
+// profile. Completion is driven by TickPhysicalCameraCalibration().
+void RequestStartAutomaticPhysicalCameraCalibration();
 
 // Switch to the Capturing stage. Idempotent.
 void RequestStartPhysicalCameraCalibrationCapture();

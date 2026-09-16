@@ -1,6 +1,8 @@
 #pragma once
 
 #include "PhysicalCameraSource.hpp"
+#include "PhysicalCameraFocusController.hpp"
+#include "PhysicalCameraStream.hpp"
 #include "PhysicalFrameConditioner.hpp"
 #include "PhysicalStereoCapture.hpp"
 
@@ -51,6 +53,8 @@ bool                              IsPhysicalCameraStreamActive();
 bool                              IsPhysicalCameraStreamFailed();
 double                            GetActiveStreamFps();
 uint64_t                          GetActiveStreamFrameCounter();
+PhysicalCameraFocusStatus         GetActiveCameraFocusStatusSnapshot();
+PhysicalCameraMotionExposureStatus GetActiveCameraMotionExposureStatusSnapshot();
 PhysicalStereoCaptureStatus       GetPhysicalStereoCaptureStatusSnapshot();
 bool                              IsPhysicalStereoCaptureActive();
 

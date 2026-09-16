@@ -6,6 +6,7 @@
 #include "../perception/digital/DigitalContextProjector.hpp"
 #include "../perception/physical/PhysicalCameraCalibrator.hpp"
 #include "../perception/physical/PhysicalEnvironmentLoop.hpp"
+#include "../perception/physical/PhysicalFrameBus.hpp"
 #include "../perception/physical/PhysicalGestureControlLoop.hpp"
 #include "../perception/physical/PhysicalInteractionLoop.hpp"
 #include "../perception/physical/PhysicalLocalizationLoop.hpp"
@@ -56,7 +57,8 @@ void tickApplicationFrame(
     // competing interaction/inference/world pipeline while it is collecting
     // samples; this also prevents calibration-board observations from becoming
     // durable environmental memories.
-    if (!Perception::Physical::IsPhysicalCameraCalibrationCaptureActive()) {
+    if (!Perception::Physical::IsPhysicalCameraCalibrationCaptureActive()
+        && Perception::Physical::PhysicalFrameBus::Instance().HasCalibratedModelFrame()) {
         Perception::Physical::TickPhysicalInteraction();
         Perception::Physical::TickPhysicalGestureControl();
         Perception::Physical::TickPhysicalPerceptionPrimitives();

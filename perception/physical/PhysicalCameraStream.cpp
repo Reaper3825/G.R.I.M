@@ -1,9 +1,11 @@
 #include "PhysicalCameraStream.hpp"
+#include "PhysicalCameraControlDiscovery.hpp"
 #include "PhysicalEnvironmentLogTag.hpp"
 #include "logger.hpp"
 
 #include <opencv2/videoio.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cctype>
@@ -49,6 +51,16 @@ struct LocalDeviceOpenRequest {
     std::string fourcc = "MJPG";
     double auto_exposure = std::numeric_limits<double>::quiet_NaN();
     double exposure      = std::numeric_limits<double>::quiet_NaN();
+    bool   motion_exposure = true;
+    double motion_manual_auto_exposure = std::numeric_limits<double>::quiet_NaN();
+    double motion_exposure_slow = std::numeric_limits<double>::quiet_NaN();
+    double motion_exposure_fast = std::numeric_limits<double>::quiet_NaN();
+    double motion_gain_min = std::numeric_limits<double>::quiet_NaN();
+    double motion_gain_max = std::numeric_limits<double>::quiet_NaN();
+    int    motion_update_frames = 4;
+    // Local cameras request autofocus by default without changing the source
+    // URL, which is part of the persisted calibration-profile identity.
+    PhysicalCameraFocusConfig focus{true, true, false, 0.0};
 };
 
 int ParseStrictNonNegativeInt(const std::string& text, const std::string& field_name) {
@@ -131,10 +143,45 @@ void ApplyLocalDeviceQueryParam(LocalDeviceOpenRequest& req,
         req.auto_exposure = ParseStrictFiniteDouble(value, "capture auto_exposure");
     } else if (k == "exposure") {
         req.exposure = ParseStrictFiniteDouble(value, "capture exposure");
+    } else if (k == "motion_exposure") {
+        const int enabled = ParseStrictNonNegativeInt(value, "motion_exposure");
+        if (enabled > 1) {
+            throw std::runtime_error("motion_exposure must be 0 or 1");
+        }
+        req.motion_exposure = enabled == 1;
+    } else if (k == "motion_manual_auto_exposure") {
+        req.motion_manual_auto_exposure = ParseStrictFiniteDouble(
+            value, "motion_manual_auto_exposure");
+    } else if (k == "motion_exposure_slow") {
+        req.motion_exposure_slow = ParseStrictFiniteDouble(
+            value, "motion_exposure_slow");
+    } else if (k == "motion_exposure_fast") {
+        req.motion_exposure_fast = ParseStrictFiniteDouble(
+            value, "motion_exposure_fast");
+    } else if (k == "motion_gain_min") {
+        req.motion_gain_min = ParseStrictFiniteDouble(value, "motion_gain_min");
+    } else if (k == "motion_gain_max") {
+        req.motion_gain_max = ParseStrictFiniteDouble(value, "motion_gain_max");
+    } else if (k == "motion_update_frames") {
+        req.motion_update_frames = ParseStrictPositiveInt(
+            value, "motion_update_frames");
+    } else if (k == "autofocus") {
+        const int enabled = ParseStrictNonNegativeInt(value, "capture autofocus");
+        if (enabled > 1) {
+            throw std::runtime_error(
+                "capture autofocus must be 0 or 1, got " + value);
+        }
+        req.focus.configure_autofocus = true;
+        req.focus.autofocus = enabled == 1;
+    } else if (k == "focus") {
+        req.focus.configure_focus = true;
+        req.focus.manual_focus = ParseStrictFiniteDouble(value, "capture focus");
     } else {
         throw std::runtime_error(
             "device URL query key '" + key + "' is unsupported; supported keys are "
-            "backend,width,height,fps,fourcc,auto_exposure,exposure");
+            "backend,width,height,fps,fourcc,auto_exposure,exposure,autofocus,focus,"
+            "motion_exposure,motion_manual_auto_exposure,motion_exposure_slow,"
+            "motion_exposure_fast,motion_gain_min,motion_gain_max,motion_update_frames");
     }
 }
 
@@ -149,9 +196,7 @@ LocalDeviceOpenRequest ParseLocalDeviceOpenRequest(const std::string& source_url
     req.device_index = ParseStrictNonNegativeInt(
         query_pos == std::string::npos ? body : body.substr(0, query_pos),
         "device index");
-    if (query_pos == std::string::npos) {
-        return req;
-    }
+    if (query_pos == std::string::npos) return req;
     const std::string query = body.substr(query_pos + 1);
     size_t start = 0;
     while (start < query.size()) {
@@ -167,6 +212,30 @@ LocalDeviceOpenRequest ParseLocalDeviceOpenRequest(const std::string& source_url
         ApplyLocalDeviceQueryParam(req, item.substr(0, eq), item.substr(eq + 1));
         if (amp == std::string::npos) break;
         start = amp + 1;
+    }
+    if (req.motion_exposure) {
+        const bool any_override =
+            std::isfinite(req.motion_manual_auto_exposure)
+            || std::isfinite(req.motion_exposure_slow)
+            || std::isfinite(req.motion_exposure_fast)
+            || std::isfinite(req.motion_gain_min)
+            || std::isfinite(req.motion_gain_max);
+        const bool complete_override =
+            std::isfinite(req.motion_manual_auto_exposure)
+            && std::isfinite(req.motion_exposure_slow)
+            && std::isfinite(req.motion_exposure_fast)
+            && std::isfinite(req.motion_gain_min)
+            && std::isfinite(req.motion_gain_max);
+        if (any_override && !complete_override) {
+            throw std::runtime_error(
+                "motion exposure overrides must provide all five raw values: "
+                "motion_manual_auto_exposure, motion_exposure_slow, "
+                "motion_exposure_fast, motion_gain_min, and motion_gain_max");
+        }
+        if (complete_override && req.motion_gain_min > req.motion_gain_max) {
+            throw std::runtime_error(
+                "motion_gain_min must be <= motion_gain_max");
+        }
     }
     return req;
 }
@@ -306,6 +375,15 @@ void PhysicalCameraStream::OpenPhysicalCameraStream(const std::string& url) {
     stop_requested_ = false;
     frame_counter_  = 0;
     measured_fps_   = 0.0;
+    calibration_focus_lock_requested_ = false;
+    motion_exposure_priority_ = 0.0;
+    motion_gain_demand_ = 0.0;
+    motion_exposure_request_counter_ = 0;
+    focus_controller_.Reset();
+    {
+        std::lock_guard<std::mutex> lk(motion_exposure_mutex_);
+        motion_exposure_status_ = {};
+    }
     {
         std::lock_guard<std::mutex> lk(frame_mutex_);
         latest_frame_.release();
@@ -352,6 +430,31 @@ double PhysicalCameraStream::GetMeasuredFps() const {
     return measured_fps_.load();
 }
 
+PhysicalCameraFocusStatus
+PhysicalCameraStream::GetPhysicalCameraFocusStatusSnapshot() const {
+    return focus_controller_.GetPhysicalCameraFocusStatusSnapshot();
+}
+
+PhysicalCameraMotionExposureStatus
+PhysicalCameraStream::GetPhysicalCameraMotionExposureStatusSnapshot() const {
+    std::lock_guard<std::mutex> lk(motion_exposure_mutex_);
+    return motion_exposure_status_;
+}
+
+void PhysicalCameraStream::RequestPhysicalCameraCalibrationFocusLock(bool locked) {
+    calibration_focus_lock_requested_.store(locked);
+}
+
+void PhysicalCameraStream::RequestPhysicalCameraMotionExposure(
+    const PhysicalCameraMotionExposureRequest& request) {
+    if (!request.valid) return;
+    motion_exposure_priority_.store(
+        std::clamp(request.motion_priority, 0.0, 1.0));
+    motion_gain_demand_.store(
+        std::clamp(request.gain_demand, 0.0, 1.0));
+    motion_exposure_request_counter_.fetch_add(1);
+}
+
 bool PhysicalCameraStream::PullLatestFrameInto(cv::Mat& out,
                                                 uint64_t& last_seen_counter) const {
     std::lock_guard<std::mutex> lk(frame_mutex_);
@@ -389,6 +492,9 @@ void PhysicalCameraStream::RunCaptureWorker() {
 
     cv::VideoCapture cap;
     const bool is_local_device = IsLocalDeviceUrl(source_url_);
+    LocalDeviceOpenRequest local_req;
+    PhysicalCameraControlProfile discovered_controls;
+    bool motion_controls_from_discovery = false;
 
     // Prefer FFMPEG backend for RTSP/HTTP URLs. If OpenCV was built without
     // FFMPEG, fall back to the default backend — but we surface that fact
@@ -402,12 +508,32 @@ void PhysicalCameraStream::RunCaptureWorker() {
     bool opened = false;
     try {
         if (is_local_device) {
-            const LocalDeviceOpenRequest req = ParseLocalDeviceOpenRequest(source_url_);
-            if (req.backend >= 0) {
-                opened = OpenLocalDeviceWithRequestedMode(cap, req, req.backend);
+            local_req = ParseLocalDeviceOpenRequest(source_url_);
+            discovered_controls = DiscoverPhysicalCameraControlProfile(
+                local_req.device_index, local_req.backend);
+            const bool raw_override =
+                std::isfinite(local_req.motion_manual_auto_exposure);
+            if (local_req.motion_exposure && !raw_override
+                && discovered_controls.SupportsMotionExposure()) {
+                motion_controls_from_discovery = true;
+                local_req.motion_manual_auto_exposure =
+                    discovered_controls.manual_auto_exposure_value;
+                // Native camera APIs expose exposure time monotonically:
+                // minimum is the fastest endpoint; maximum is the slowest.
+                local_req.motion_exposure_fast =
+                    discovered_controls.exposure.minimum;
+                local_req.motion_exposure_slow =
+                    discovered_controls.exposure.maximum;
+                local_req.motion_gain_min = discovered_controls.gain.minimum;
+                local_req.motion_gain_max = discovered_controls.gain.maximum;
+            }
+            if (local_req.backend >= 0) {
+                opened = OpenLocalDeviceWithRequestedMode(
+                    cap, local_req, local_req.backend);
             } else {
                 for (int backend : LocalDeviceBackendsToTry()) {
-                    opened = OpenLocalDeviceWithRequestedMode(cap, req, backend);
+                    opened = OpenLocalDeviceWithRequestedMode(
+                        cap, local_req, backend);
                     if (opened) break;
                     cap.release();
                 }
@@ -464,25 +590,68 @@ void PhysicalCameraStream::RunCaptureWorker() {
     // Backend refusal is logged along with negotiated values; hardware/driver
     // capabilities still decide the final FPS.
     if (is_local_device) {
-        const LocalDeviceOpenRequest req = ParseLocalDeviceOpenRequest(source_url_);
         SetLocalCaptureProperty(cap,
                                 cv::CAP_PROP_FOURCC,
-                                static_cast<double>(MakeFourcc(req.fourcc)),
-                                "fourcc(" + req.fourcc + ")");
+                                static_cast<double>(MakeFourcc(local_req.fourcc)),
+                                "fourcc(" + local_req.fourcc + ")");
         SetLocalCaptureProperty(cap, cv::CAP_PROP_FRAME_WIDTH,
-                                static_cast<double>(req.width), "width");
+                                static_cast<double>(local_req.width), "width");
         SetLocalCaptureProperty(cap, cv::CAP_PROP_FRAME_HEIGHT,
-                                static_cast<double>(req.height), "height");
+                                static_cast<double>(local_req.height), "height");
         SetLocalCaptureProperty(cap, cv::CAP_PROP_FPS,
-                                static_cast<double>(req.fps), "fps");
-        if (std::isfinite(req.auto_exposure)) {
+                                static_cast<double>(local_req.fps), "fps");
+        if (std::isfinite(local_req.auto_exposure)) {
             SetLocalCaptureProperty(cap, cv::CAP_PROP_AUTO_EXPOSURE,
-                                    req.auto_exposure, "auto_exposure");
+                                    local_req.auto_exposure, "auto_exposure");
         }
-        if (std::isfinite(req.exposure)) {
+        if (std::isfinite(local_req.exposure)) {
             SetLocalCaptureProperty(cap, cv::CAP_PROP_EXPOSURE,
-                                    req.exposure, "exposure");
+                                    local_req.exposure, "exposure");
         }
+        const bool motion_hardware_ready = local_req.motion_exposure
+            && std::isfinite(local_req.motion_manual_auto_exposure)
+            && std::isfinite(local_req.motion_exposure_slow)
+            && std::isfinite(local_req.motion_exposure_fast)
+            && std::isfinite(local_req.motion_gain_min)
+            && std::isfinite(local_req.motion_gain_max);
+        if (motion_hardware_ready) {
+            const bool manual_accepted = cap.set(
+                cv::CAP_PROP_AUTO_EXPOSURE,
+                local_req.motion_manual_auto_exposure);
+            const bool exposure_accepted = cap.set(
+                cv::CAP_PROP_EXPOSURE, local_req.motion_exposure_slow);
+            const bool gain_accepted = cap.set(
+                cv::CAP_PROP_GAIN, local_req.motion_gain_min);
+            std::lock_guard<std::mutex> lk(motion_exposure_mutex_);
+            motion_exposure_status_.configured = true;
+            motion_exposure_status_.last_set_accepted =
+                manual_accepted && exposure_accepted && gain_accepted;
+            motion_exposure_status_.requested_exposure =
+                local_req.motion_exposure_slow;
+            motion_exposure_status_.requested_gain = local_req.motion_gain_min;
+            motion_exposure_status_.negotiated_exposure =
+                cap.get(cv::CAP_PROP_EXPOSURE);
+            motion_exposure_status_.negotiated_gain = cap.get(cv::CAP_PROP_GAIN);
+            motion_exposure_status_.summary =
+                std::string(motion_exposure_status_.last_set_accepted
+                    ? "initialized" : "driver rejected initialization")
+                + " via "
+                + (motion_controls_from_discovery
+                    ? discovered_controls.provider
+                    : std::string("URL override"))
+                + " exp=" + std::to_string(
+                    motion_exposure_status_.negotiated_exposure)
+                + " gain=" + std::to_string(
+                    motion_exposure_status_.negotiated_gain);
+        } else {
+            std::lock_guard<std::mutex> lk(motion_exposure_mutex_);
+            motion_exposure_status_.configured = false;
+            motion_exposure_status_.summary = local_req.motion_exposure
+                ? discovered_controls.reason
+                : "disabled by motion_exposure=0";
+        }
+        const PhysicalCameraFocusStatus focus_status =
+            focus_controller_.ApplyPhysicalCameraFocus(cap, local_req.focus);
         const double negotiated_fps = cap.get(cv::CAP_PROP_FPS);
         const double negotiated_w   = cap.get(cv::CAP_PROP_FRAME_WIDTH);
         const double negotiated_h   = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
@@ -492,8 +661,8 @@ void PhysicalCameraStream::RunCaptureWorker() {
         const double negotiated_exposure      = cap.get(cv::CAP_PROP_EXPOSURE);
         LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
                   "PhysicalCameraStream worker: device requested "
-                  + std::to_string(req.width) + "x" + std::to_string(req.height)
-                  + " @ " + std::to_string(req.fps) + " fps fourcc=" + req.fourcc
+                  + std::to_string(local_req.width) + "x" + std::to_string(local_req.height)
+                  + " @ " + std::to_string(local_req.fps) + " fps fourcc=" + local_req.fourcc
                   + "; negotiated "
                   + std::to_string(static_cast<int>(negotiated_w)) + "x"
                   + std::to_string(static_cast<int>(negotiated_h))
@@ -501,11 +670,12 @@ void PhysicalCameraStream::RunCaptureWorker() {
                   + negotiated_fourcc_text
                   + " auto_exposure=" + std::to_string(negotiated_auto_exposure)
                   + " exposure=" + std::to_string(negotiated_exposure)
+                  + " focus={" + focus_status.summary + "}"
                   + " (if measured FPS remains near 30, the selected camera/backend "
                   + "may be throttling via actual pixel format, exposure, or driver timing)");
-        if (negotiated_fourcc_text != req.fourcc) {
+        if (negotiated_fourcc_text != local_req.fourcc) {
             LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
-                      "PhysicalCameraStream worker: requested fourcc=" + req.fourcc
+                      "PhysicalCameraStream worker: requested fourcc=" + local_req.fourcc
                       + " but backend is delivering fourcc=" + negotiated_fourcc_text
                       + " — try another backend or explicit device URL; YUY2 often reports "
                       + "high FPS while the driver still clocks frames near 30");
@@ -548,7 +718,71 @@ void PhysicalCameraStream::RunCaptureWorker() {
     constexpr int  kMaxDrainPerIter        = 64;
     constexpr auto kFastGrabThresholdMicros = std::chrono::microseconds(8000); // 8ms
     cv::Mat scratch;
+    bool calibration_focus_locked = false;
+    uint64_t last_motion_request_counter = 0;
+    uint64_t last_motion_apply_frame = 0;
     while (!stop_requested_.load()) {
+        if (is_local_device) {
+            const bool lock_requested =
+                calibration_focus_lock_requested_.load();
+            if (lock_requested != calibration_focus_locked) {
+                const auto focus_status =
+                    focus_controller_.SetPhysicalCameraCalibrationFocusLock(
+                        cap, lock_requested);
+                calibration_focus_locked = lock_requested;
+                LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                          "PhysicalCameraStream worker: focus mode changed: "
+                          + focus_status.summary);
+            }
+
+            const bool motion_hardware_ready =
+                std::isfinite(local_req.motion_exposure_slow)
+                && std::isfinite(local_req.motion_exposure_fast)
+                && std::isfinite(local_req.motion_gain_min)
+                && std::isfinite(local_req.motion_gain_max);
+            if (local_req.motion_exposure && motion_hardware_ready) {
+                const uint64_t request_counter =
+                    motion_exposure_request_counter_.load();
+                const uint64_t current_frame = frame_counter_.load();
+                if (request_counter != 0
+                    && request_counter != last_motion_request_counter
+                    && current_frame - last_motion_apply_frame
+                        >= static_cast<uint64_t>(local_req.motion_update_frames)) {
+                    const double motion = motion_exposure_priority_.load();
+                    const double gain_demand = motion_gain_demand_.load();
+                    const double requested_exposure =
+                        local_req.motion_exposure_slow
+                        + motion * (local_req.motion_exposure_fast
+                                    - local_req.motion_exposure_slow);
+                    const double requested_gain = local_req.motion_gain_min
+                        + gain_demand * (local_req.motion_gain_max
+                                         - local_req.motion_gain_min);
+                    const bool exposure_accepted = cap.set(
+                        cv::CAP_PROP_EXPOSURE, requested_exposure);
+                    const bool gain_accepted = cap.set(
+                        cv::CAP_PROP_GAIN, requested_gain);
+
+                    PhysicalCameraMotionExposureStatus next;
+                    next.configured = true;
+                    next.last_set_accepted = exposure_accepted && gain_accepted;
+                    next.requested_exposure = requested_exposure;
+                    next.requested_gain = requested_gain;
+                    next.negotiated_exposure = cap.get(cv::CAP_PROP_EXPOSURE);
+                    next.negotiated_gain = cap.get(cv::CAP_PROP_GAIN);
+                    next.motion_priority = motion;
+                    next.summary = std::string(next.last_set_accepted
+                        ? "applied" : "driver rejected update")
+                        + " exp=" + std::to_string(next.negotiated_exposure)
+                        + " gain=" + std::to_string(next.negotiated_gain);
+                    {
+                        std::lock_guard<std::mutex> lk(motion_exposure_mutex_);
+                        motion_exposure_status_ = next;
+                    }
+                    last_motion_request_counter = request_counter;
+                    last_motion_apply_frame = current_frame;
+                }
+            }
+        }
         // First grab: must succeed; this blocks for the next available frame.
         const auto grab_start = std::chrono::steady_clock::now();
         if (!cap.grab()) {
@@ -610,12 +844,14 @@ void PhysicalCameraStream::RunCaptureWorker() {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 capture_wall.time_since_epoch()).count());
         const auto store_start = capture_steady;
+        const uint64_t next_frame_counter = frame_counter_.load() + 1;
+        focus_controller_.ObserveRawFrameForFocus(scratch, next_frame_counter);
         {
             std::lock_guard<std::mutex> lk(frame_mutex_);
             PhysicalCapturedCameraFrame captured;
             scratch.copyTo(captured.image);
             latest_frame_              = captured.image;
-            captured.frame_counter     = frame_counter_.load() + 1;
+            captured.frame_counter     = next_frame_counter;
             captured.capture_steady_ns = capture_steady_ns;
             captured.capture_wall_ns   = capture_wall_ns;
             captured_frames_.push_back(std::move(captured));

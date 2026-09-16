@@ -58,11 +58,30 @@ Local-device query parameters:
 | `fourcc` | Requested pixel transport, e.g. `MJPG` or `YUY2`. Defaults to `MJPG`. |
 | `auto_exposure` | Raw OpenCV `CAP_PROP_AUTO_EXPOSURE` value. Backend-specific. |
 | `exposure` | Raw OpenCV `CAP_PROP_EXPOSURE` value. Backend-specific. |
+| `motion_exposure` | Enables motion-aware hardware shutter/gain updates (`0` or `1`, default `1`). Native discovery supplies ranges when supported. |
+| `motion_manual_auto_exposure` | Backend-specific `CAP_PROP_AUTO_EXPOSURE` value that selects manual exposure. |
+| `motion_exposure_slow`, `motion_exposure_fast` | Backend-specific raw exposure endpoints. Motion priority interpolates from slow to fast. |
+| `motion_gain_min`, `motion_gain_max` | Backend-specific raw `CAP_PROP_GAIN` endpoints. |
+| `motion_update_frames` | Minimum frames between hardware property updates; defaults to `4`. |
 
 The worker tries to pass `fourcc,width,height,fps,buffersize` directly into
 `VideoCapture::open(...)` first, because some backends only commit high-FPS
 modes during open-time negotiation. It then explicitly sets the same properties
 again after open and logs the final backend-reported values.
+
+Motion-aware hardware control uses native range discovery because OpenCV does
+not standardize exposure or gain units. Windows queries DirectShow
+`IAMCameraControl`/`IAMVideoProcAmp`; Linux queries V4L2 controls. The policy
+remains normalized to `0..1`, and the capture worker maps that value through
+the discovered endpoints. Rejected property writes and negotiated values are
+reported by the Camera panel rather than silently treated as successful.
+
+Raw URL values remain an optional complete override for unsupported backends:
+
+`device:N?...&motion_exposure=1&motion_manual_auto_exposure=<manual-mode-value>&motion_exposure_slow=<slow-endpoint>&motion_exposure_fast=<fast-endpoint>&motion_gain_min=<minimum>&motion_gain_max=<maximum>&motion_update_frames=4`
+
+The slow and fast endpoints are semantic, so decreasing raw exposure values
+(as used by some DirectShow cameras) are supported without special handling.
 
 **Candidates with no `url_template`** are flagged `Disabled` and MUST carry a
 populated `status_reason` explaining why (Rule 20 — fail loud, no silent
@@ -114,6 +133,10 @@ cv::VideoCapture (backend)
 PhysicalCameraStream::latest_frame_
     ↓  PullLatestFrameInto()         [main thread, inside Tick]
 PhysicalEnvironmentLoop::pull_scratch
+    ↓  camera calibration (matching source + resolution)
+PhysicalEnvironmentLoop::calibrated_scratch
+    ↓  signal conditioning
+PhysicalEnvironmentLoop::model_scratch
     ↓  PublishPhysicalFrameToBus()
 PhysicalFrameBus::latest_packet_
   ↓  PullLatestFrameView()         [UI panel, shallow cv::Mat headers]

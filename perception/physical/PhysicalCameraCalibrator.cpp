@@ -49,6 +49,7 @@ constexpr int kAutoCaptureMinIntervalMs = 700;
 constexpr int kCoverageGridCols          = 8;
 constexpr int kCoverageGridRows          = 6;
 constexpr int kMinSamplesRequired        = 10;
+constexpr int kMinCoverageCellsRequired  = 10;
 constexpr int kMaxSamplesPerCell         = 3;
 constexpr double kMinimumDistinctPoseRmsFraction = 0.015;
 
@@ -77,6 +78,7 @@ struct PhysicalCalibrationModuleState {
     std::vector<int>                                    coverage_cell_counts;  // resized lazily
     std::chrono::steady_clock::time_point               last_accept_time {};
     bool                                                capturing = false;
+    bool                                                automatic_completion_enabled = false;
 
     // Last frame analysis (kept for UI live readout even when not capturing)
     DetectedCalibrationPattern                          last_detection;
@@ -414,13 +416,56 @@ void CollectCompletedDetectionLocked(PhysicalCalibrationModuleState& s) {
 
 void TickPhysicalCameraCalibration() {
     auto& s = GetModule();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    LazyInitLocked(s);
-    // Polling a future is bounded and never waits for OpenCV. The detector
-    // works on a cloned latest frame outside the main/UI thread.
-    CollectCompletedDetectionLocked(s);
-    PullLatestFrameLocked(s);
-    ScheduleDetectionForPulledFrameLocked(s);
+    bool finish_automatic_calibration = false;
+    {
+        std::lock_guard<std::mutex> lk(s.mutex);
+        LazyInitLocked(s);
+        // Polling a future is bounded and never waits for OpenCV. The detector
+        // works on a cloned latest frame outside the main/UI thread.
+        CollectCompletedDetectionLocked(s);
+
+        const int filled_coverage_cells = static_cast<int>(std::count_if(
+            s.coverage_cell_counts.begin(), s.coverage_cell_counts.end(),
+            [](int sample_count) { return sample_count > 0; }));
+        if (s.automatic_completion_enabled
+            && filled_coverage_cells >= kMinCoverageCellsRequired
+            && static_cast<int>(s.accepted_image_points.size()) >= kMinSamplesRequired) {
+            // Freeze the exact sample pool. The run/save requests acquire the
+            // lock themselves, so completion happens after this scope.
+            s.capturing = false;
+            s.automatic_completion_enabled = false;
+            s.manual_capture_requested = false;
+            s.manual_capture_min_frame_counter = 0;
+            s.status_reason = "coverage target reached; calibrating and saving";
+            finish_automatic_calibration = true;
+        }
+
+        if (!finish_automatic_calibration) {
+            PullLatestFrameLocked(s);
+            ScheduleDetectionForPulledFrameLocked(s);
+        }
+    }
+
+    if (finish_automatic_calibration) {
+        try {
+            RequestRunIntrinsicCalibrationFromSamples();
+            RequestSavePhysicalCalibrationToDisk();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.status_reason = "automatic calibration complete; camera updated and profile saved to '"
+                + s.active_profile_path + "'";
+        } catch (const std::exception& e) {
+            std::lock_guard<std::mutex> lk(s.mutex);
+            const bool camera_was_updated =
+                s.stage == PhysicalCalibrationStage::Calibrated && s.calib_valid;
+            if (!camera_was_updated) {
+                s.stage = PhysicalCalibrationStage::Failed;
+            }
+            s.status_reason = std::string(camera_was_updated
+                ? "camera updated, but automatic profile save failed: "
+                : "automatic calibration failed: ") + e.what();
+            LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.status_reason);
+        }
+    }
 }
 
 PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
@@ -432,6 +477,9 @@ PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
     out.pattern_inner_rows     = s.pattern_inner_rows;
     out.pattern_square_meters  = s.pattern_square_meters;
     out.accepted_sample_count  = static_cast<int>(s.accepted_image_points.size());
+    out.minimum_sample_count   = kMinSamplesRequired;
+    out.minimum_coverage_cells_required = kMinCoverageCellsRequired;
+    out.automatic_calibration_active = s.automatic_completion_enabled;
     out.coverage_grid_cols     = kCoverageGridCols;
     out.coverage_grid_rows     = kCoverageGridRows;
     out.coverage_cell_counts   = s.coverage_cell_counts;
@@ -472,6 +520,16 @@ bool IsPhysicalCalibrationDataAvailable() {
     return s.calib_valid;
 }
 
+bool IsPhysicalCalibrationDataAvailableForFrame(const std::string& source_url,
+                                                const cv::Size&    image_size) {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    return s.calib_valid
+        && !source_url.empty()
+        && s.calib.source_url_at_capture == source_url
+        && s.calib.image_size == image_size;
+}
+
 bool IsPhysicalCameraCalibrationCaptureActive() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
@@ -491,7 +549,7 @@ void GetPhysicalCalibrationData(PhysicalCalibrationData& out) {
     out.dist_coeffs   = s.calib.dist_coeffs.clone();
 }
 
-void UndistortBgrFrameUsingPhysicalCalibration(const cv::Mat& bgr_in, cv::Mat& bgr_out) {
+void CalibrateBgrFrameUsingPhysicalCalibration(const cv::Mat& bgr_in, cv::Mat& bgr_out) {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     if (!s.calib_valid) {
@@ -516,11 +574,29 @@ void UndistortBgrFrameUsingPhysicalCalibration(const cv::Mat& bgr_in, cv::Mat& b
 
 // ── Requests ────────────────────────────────────────────────────────────────
 
+void RequestStartAutomaticPhysicalCameraCalibration() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    LazyInitLocked(s);
+    ClearSamplePoolLocked(s);
+    s.capturing = true;
+    s.automatic_completion_enabled = true;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
+    s.stage = PhysicalCalibrationStage::Capturing;
+    s.status_reason = "automatic calibration started - fill "
+        + std::to_string(kMinCoverageCellsRequired)
+        + " different coverage squares; calibration and save will follow automatically";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+              "RequestStartAutomaticPhysicalCameraCalibration");
+}
+
 void RequestStartPhysicalCameraCalibrationCapture() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     LazyInitLocked(s);
     s.capturing     = true;
+    s.automatic_completion_enabled = false;
     s.stage         = PhysicalCalibrationStage::Capturing;
     s.status_reason = "capture started — point the chessboard at the camera";
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "RequestStartPhysicalCameraCalibrationCapture");
@@ -530,6 +606,7 @@ void RequestStopPhysicalCameraCalibrationCapture() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
     s.capturing = false;
+    s.automatic_completion_enabled = false;
     s.manual_capture_requested = false;
     s.manual_capture_min_frame_counter = 0;
     if (s.calib_valid) {
@@ -759,6 +836,7 @@ void ResetPhysicalCalibrationState() {
         s.active_image_size = cv::Size(0, 0);
         s.active_profile_path.clear();
         s.capturing   = false;
+        s.automatic_completion_enabled = false;
         s.stage       = PhysicalCalibrationStage::Uncalibrated;
         s.status_reason.clear();
         s.last_detection = {};

@@ -35,7 +35,8 @@ struct PhysicalEnvironmentState {
     std::string                             active_label;
     std::string                             last_error_reason;
     cv::Mat                                 pull_scratch;   // worker → bus copy buffer
-    cv::Mat                                 model_scratch;  // conditioned signal for model path
+    cv::Mat                                 calibrated_scratch; // lens-corrected BGR sensor frame
+    cv::Mat                                 model_scratch;  // conditioned calibrated signal for models
     PhysicalFrameConditioner                conditioner;
     uint64_t                                last_pulled_counter = 0;
 };
@@ -84,15 +85,39 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
         return; // nothing to drain yet
     }
 
+    s.active_stream->RequestPhysicalCameraCalibrationFocusLock(
+        IsPhysicalCameraCalibrationCaptureActive());
+
     if (s.active_stream->PullLatestFrameInto(s.pull_scratch, s.last_pulled_counter)) {
         try {
             const auto t_capture_steady = std::chrono::steady_clock::now();
             const auto t_capture_wall   = std::chrono::system_clock::now();
 
-            const auto cond_result = s.conditioner.ProcessRawFrameToModelSignal(
-                s.pull_scratch,
-                s.last_pulled_counter,
-                s.model_scratch);
+            const std::string source_url = s.active_stream->GetSourceUrl();
+            const bool calibration_ready =
+                !IsPhysicalCameraCalibrationCaptureActive()
+                && IsPhysicalCalibrationDataAvailableForFrame(
+                    source_url, s.pull_scratch.size());
+
+            PhysicalSignalConditioningResult cond_result;
+            if (calibration_ready) {
+                CalibrateBgrFrameUsingPhysicalCalibration(
+                    s.pull_scratch, s.calibrated_scratch);
+                cond_result = s.conditioner.ProcessCalibratedFrameToModelSignal(
+                    s.calibrated_scratch,
+                    s.last_pulled_counter,
+                    s.model_scratch);
+            } else {
+                // Publish a raw-only packet so calibration can identify the
+                // camera and collect its board observations. No model surface
+                // exists until a matching profile is active.
+                s.calibrated_scratch.release();
+                s.model_scratch.release();
+                cond_result.accepted = true;
+                cond_result.raw_width = s.pull_scratch.cols;
+                cond_result.raw_height = s.pull_scratch.rows;
+                cond_result.pipeline_summary = "raw-only: awaiting matching camera calibration";
+            }
 
             if (!cond_result.accepted) {
                 // Quality gate dropped this frame. Do NOT publish — that's the
@@ -102,6 +127,9 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
                 // Debug-only: the conditioner already logged the reason.
                 return;
             }
+
+            s.active_stream->RequestPhysicalCameraMotionExposure(
+                cond_result.motion_exposure_request);
 
             PhysicalFrameMetadata md;
             md.capture_steady_ns = static_cast<uint64_t>(
@@ -115,6 +143,8 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
                     t_capture_wall.time_since_epoch()).count());
             md.raw_width             = cond_result.raw_width;
             md.raw_height            = cond_result.raw_height;
+            md.calibrated_width      = s.calibrated_scratch.cols;
+            md.calibrated_height     = s.calibrated_scratch.rows;
             md.model_width           = cond_result.model_width;
             md.model_height          = cond_result.model_height;
             md.raw_to_model          = cond_result.raw_to_model;
@@ -136,9 +166,10 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
 
             PhysicalFrameBus::Instance().PublishPhysicalFrameToBus(
                 s.pull_scratch,
+                s.calibrated_scratch,
                 s.model_scratch,
                 s.last_pulled_counter,
-                s.active_stream->GetSourceUrl(),
+                source_url,
                 s.active_label,
                 md);
         } catch (const std::exception& e) {
@@ -177,6 +208,7 @@ void RegisterPhysicalEnvironmentDeviceServer(const ::GRIM::DeviceCommServer* ser
 }
 
 void TickPhysicalEnvironment() {
+    bool focus_ready_for_calibration = true;
     {
         auto& s = GetState();
         std::lock_guard<std::mutex> lk(s.mutex);
@@ -184,12 +216,27 @@ void TickPhysicalEnvironment() {
         LazyInitLocked(s);
         DrainActiveStreamLocked(s);
         DrainStereoCaptureLocked(s);
+
+        // A local camera can publish one final frame between the UI starting
+        // calibration and the capture worker applying the focus lock. Do not
+        // let the calibrator collect that transitional frame. A rejected lock
+        // still reports itself as applied/requested so unsupported cameras do
+        // not deadlock calibration; the Camera tab exposes the rejection.
+        if (s.active_stream
+            && IsPhysicalCameraCalibrationCaptureActive()
+            && s.active_stream->GetSourceUrl().rfind("device:", 0) == 0) {
+            focus_ready_for_calibration = s.active_stream
+                ->GetPhysicalCameraFocusStatusSnapshot()
+                .calibration_focus_locked;
+        }
     }
     // Calibrator runs OUTSIDE the env-loop mutex: it has its own mutex and
     // it consumes from the FrameBus (which is independently locked). This
     // keeps the single mainloop integration point (TickPhysicalEnvironment)
     // intact while the calibrator owns its lifecycle.
-    TickPhysicalCameraCalibration();
+    if (focus_ready_for_calibration) {
+        TickPhysicalCameraCalibration();
+    }
 }
 
 void ShutdownPhysicalEnvironment() {
@@ -280,6 +327,23 @@ uint64_t GetActiveStreamFrameCounter() {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     return s.active_stream ? s.active_stream->GetFrameCounter() : 0;
+}
+
+PhysicalCameraFocusStatus GetActiveCameraFocusStatusSnapshot() {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    return s.active_stream
+        ? s.active_stream->GetPhysicalCameraFocusStatusSnapshot()
+        : PhysicalCameraFocusStatus{};
+}
+
+PhysicalCameraMotionExposureStatus
+GetActiveCameraMotionExposureStatusSnapshot() {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    return s.active_stream
+        ? s.active_stream->GetPhysicalCameraMotionExposureStatusSnapshot()
+        : PhysicalCameraMotionExposureStatus{};
 }
 
 PhysicalStereoCaptureStatus GetPhysicalStereoCaptureStatusSnapshot() {

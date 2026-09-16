@@ -22,7 +22,7 @@ inline bool IsAuthoritativePhysicalModelColorSpace(const std::string& label) {
 
 // Per-frame provenance carried alongside the pixel data on the bus.
 // Vision-side consumers MUST treat these as authoritative — never re-derive
-// scale/offset from raw_image vs model_image dimensions because letterbox
+// scale/offset from calibrated_image vs model_image dimensions because letterbox
 // padding makes the relationship non-trivial.
 struct PhysicalFrameMetadata {
     uint64_t                          capture_steady_ns = 0;  // monotonic clock
@@ -30,8 +30,11 @@ struct PhysicalFrameMetadata {
     uint64_t                          capture_wall_ns   = 0;  // wall clock
     int                               raw_width    = 0;
     int                               raw_height   = 0;
+    int                               calibrated_width  = 0;
+    int                               calibrated_height = 0;
     int                               model_width  = 0;
     int                               model_height = 0;
+    // Historical field name; geometry now maps calibrated_image -> model_image.
     PhysicalSignalRawToModelTransform raw_to_model{};
     std::string                       color_space_label;       // authoritative model-image channel layout
     std::string                       pipeline_summary;
@@ -64,11 +67,13 @@ struct PhysicalFrameMetadata {
 // Immutable latest-frame packet owned by the bus and shared by consumers.
 // The cv::Mat headers in FrameView are shallow views into this packet; keeping
 // `packet` alive inside FrameView pins the underlying pixel buffers until the
-// consumer moves to a newer frame. Consumers MUST treat raw_image/model_image
-// as read-only; clone locally before mutation. `model_image` always remains
+// consumer moves to a newer frame. Consumers MUST treat all images as
+// read-only; clone locally before mutation. Before calibration is available,
+// only raw_image is populated. Once calibrated, `model_image` always remains
 // CV_8UC3, while metadata.color_space_label defines its channel byte order.
 struct PhysicalFramePacket {
     cv::Mat                              raw_image;
+    cv::Mat                              calibrated_image;
     cv::Mat                              model_image;
     uint64_t                             frame_counter = 0;
     std::chrono::steady_clock::time_point published_at{};
@@ -88,7 +93,8 @@ public:
     struct FrameView {
         std::shared_ptr<const PhysicalFramePacket> packet;           // pins shared pixel buffers
         cv::Mat                              raw_image;        // BGR8 shared view from camera
-        cv::Mat                              model_image;      // configured 3-channel shared view after conditioning
+        cv::Mat                              calibrated_image; // BGR8 lens-corrected camera view
+        cv::Mat                              model_image;      // calibrated image after conditioning
         cv::Mat                              image;            // alias of model_image for existing consumers
         uint64_t                             frame_counter = 0;
         std::chrono::steady_clock::time_point published_at{};
@@ -99,8 +105,11 @@ public:
 
     static PhysicalFrameBus& Instance();
 
-    // Producer side. Throws if either image is empty (Rule 20).
+    // Producer side. raw_image is always required. calibrated_image and
+    // model_image must either both be populated or both be empty while the
+    // camera is waiting for a matching calibration profile.
     void PublishPhysicalFrameToBus(const cv::Mat& raw_image,
+                                   const cv::Mat& calibrated_image,
                                    const cv::Mat& model_image,
                                    uint64_t frame_counter,
                                    const std::string& source_url,
@@ -113,6 +122,9 @@ public:
 
     // True if any frame has ever been published.
     bool HasEverPublishedFrame() const;
+
+    // True only when the latest packet contains the calibrated model surface.
+    bool HasCalibratedModelFrame() const;
 
     // Clear the bus (e.g. when the active source changes).
     void ResetPhysicalFrameBus();

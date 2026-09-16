@@ -280,10 +280,10 @@ void WorkerMain() {
         bool ok = false;
 
         try {
-            if (frame.raw_image.empty()) {
-                error = "PhysicalFrameBus provided an empty raw image";
+            if (frame.model_image.empty()) {
+                error = "PhysicalFrameBus provided an empty calibrated model image";
             } else {
-                cv::cvtColor(frame.raw_image, rgb, cv::COLOR_BGR2RGB);
+                cv::cvtColor(frame.model_image, rgb, cv::COLOR_BGR2RGB);
                 if (!rgb.isContinuous()) rgb = rgb.clone();
                 PhysicalHandGestureFrame input;
                 input.rgb_data = rgb.ptr<uint8_t>(0);

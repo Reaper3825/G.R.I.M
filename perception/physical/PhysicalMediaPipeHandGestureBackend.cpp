@@ -375,8 +375,8 @@ public:
             hand.source_frame_counter = frame.source_frame_counter;
             hand.source_capture_steady_ns = frame.source_capture_steady_ns;
             hand.result_steady_ns = SteadyNowNs();
-            hand.raw_image_width = frame.width;
-            hand.raw_image_height = frame.height;
+            hand.model_image_width = frame.width;
+            hand.model_image_height = frame.height;
 
             if (result.handedness && hand_index < result.handedness_count) {
                 const Categories& handedness = result.handedness[hand_index];

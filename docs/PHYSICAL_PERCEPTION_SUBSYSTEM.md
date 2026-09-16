@@ -170,8 +170,21 @@ freshly inferred. Models trained for RGB should therefore select RGB explicitly.
 | `PhysicalCameraStream`                    | OpenCV `VideoCapture` worker; reports state Idle / Connecting / Streaming / Failed and retains a bounded timestamped frame queue. |
 | `PhysicalStereoCapture`                   | Owns an explicit left/right stream pair and synchronizes retained frames within a configured skew limit. |
 | `PhysicalStereoFrameBus`                  | Publishes immutable synchronized left/right packets for stereo processing and UI diagnostics. |
-| `PhysicalFrameConditioner`                | Resize (Stretch or Letterbox), denoise (median blur), exposure correction, optional deblur/stabilization, color-space, **quality gate**, and per-frame `PhysicalSceneStability` thumbnail diff. |
+| `PhysicalFrameConditioner`                | Resize (Stretch or Letterbox), adaptive edge-preserving denoise, delegated adaptive exposure, optional deblur/stabilization, color-space, **quality gate**, and per-frame `PhysicalSceneStability` thumbnail diff. |
+| `PhysicalCameraExposureController`        | Percentile exposure metering, highlight protection, asymmetric temporal smoothing/hysteresis, and automatic frame-wide flicker compensation. |
 | `PhysicalFrameBus`                        | Singleton single-producer/multi-consumer latest-frame slot (raw + model + metadata).                |
+
+The exposure controller is invoked by `PhysicalFrameConditioner` at the same
+stage as the former mean-luma gain. Its anti-flicker path detects oscillating
+global luminance over a bounded frame window and applies a limited inverse
+correction. It cannot remove rolling horizontal bands already integrated by a
+sensor; those require backend-specific camera power-line-frequency controls.
+It also derives a luminance-normalized inter-frame motion score and emits a
+normalized shutter-priority/gain-demand request. Native camera-control
+discovery supplies the raw endpoints where supported, after which
+`PhysicalCameraStream` maps that request onto `CAP_PROP_EXPOSURE` and
+`CAP_PROP_GAIN` inside the capture worker. Complete URL endpoints remain an
+override for backends without native discovery.
 
 ### Per-frame metadata (`PhysicalFrameMetadata`)
 
@@ -216,7 +229,7 @@ and disparity are subsequent milestones.
 
 Calibration is its own subsystem layered on top of Stage 1:
 
-* [PhysicalCameraCalibrator.hpp](../perception/physical/PhysicalCameraCalibrator.hpp) — state machine (Uncalibrated → LoadedFromDisk → Capturing → Calibrated → Failed), pulls frames from `PhysicalFrameBus`, runs lighting-adaptive checkerboard detection, manages a coverage-aware sample pool, runs `cv::calibrateCamera`, and exposes `UndistortBgrFrameUsingPhysicalCalibration()`.
+* [PhysicalCameraCalibrator.hpp](../perception/physical/PhysicalCameraCalibrator.hpp) — state machine (Uncalibrated → LoadedFromDisk → Capturing → Calibrated → Failed), pulls frames from `PhysicalFrameBus`, runs lighting-adaptive checkerboard detection, manages a coverage-aware sample pool, runs `cv::calibrateCamera`, and exposes `CalibrateBgrFrameUsingPhysicalCalibration()`.
 * [PhysicalCalibrationPattern.hpp](../perception/physical/PhysicalCalibrationPattern.hpp) — physical pattern descriptor (cols × rows × square size in metres).
 * [PhysicalCalibrationStore.hpp](../perception/physical/PhysicalCalibrationStore.hpp) — per-camera, per-resolution disk persistence for `K` and distortion coefficients. Profiles are keyed by capture source URL plus raw resolution and validated against their stored provenance when loaded.
 

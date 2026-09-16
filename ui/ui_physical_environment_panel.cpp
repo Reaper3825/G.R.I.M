@@ -194,7 +194,7 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
     tab_known_entities_btn_ = std::make_shared<UIButton>(" Identities ",
         [this]() { setActiveTab(Tab::KnownEntities); });
 
-    world_view_toggle_btn_ = std::make_shared<UIButton>(" View: Raw Sensor ",
+    world_view_toggle_btn_ = std::make_shared<UIButton>(" View: Calibrated ",
         [this]() { HandleToggleWorldViewport(); });
 
     // ── Known Entities tab controls ──
@@ -321,6 +321,10 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
                             [this]() { HandleToggleCameraViewClicked(); });
     signal_auto_exposure_btn_ = std::make_shared<UIButton>(" Exposure: Auto ",
                             [this]() { HandleToggleAutoExposureClicked(); });
+    signal_anti_flicker_btn_ = std::make_shared<UIButton>(" Anti-flicker: Auto ",
+                            [this]() { HandleToggleAntiFlickerClicked(); });
+    signal_motion_exposure_btn_ = std::make_shared<UIButton>(" Motion AE: On ",
+                            [this]() { HandleToggleMotionExposureClicked(); });
     signal_denoise_btn_ = std::make_shared<UIButton>(" Denoise: On ",
                             [this]() { HandleToggleDenoiseClicked(); });
     signal_resize_btn_ = std::make_shared<UIButton>(" Resize: On ",
@@ -351,7 +355,7 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
     signal_height_box_->setPlaceholder("out_h");
     signal_target_luma_box_->setPlaceholder("target_luma");
     signal_manual_gain_box_->setPlaceholder("manual_gain");
-    signal_denoise_strength_box_->setPlaceholder("denoise_h");
+    signal_denoise_strength_box_->setPlaceholder("denoise_max");
     signal_deblur_amount_box_->setPlaceholder("deblur");
 
     source_dropdown_ = std::make_shared<UIDropdown>(
@@ -403,23 +407,15 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
     }
 
     // ── Calibration tab widgets ──
-    cal_start_btn_            = std::make_shared<UIButton>(" Start Capture ",
-                                    [this]() { HandleStartCaptureClicked(); });
+    cal_auto_btn_             = std::make_shared<UIButton>(" Calibrate Camera ",
+                                    [this]() { HandleAutomaticCalibrationClicked(); });
     cal_stop_btn_             = std::make_shared<UIButton>(" Stop Capture ",
                                     [this]() { HandleStopCaptureClicked(); });
-    cal_capture_now_btn_      = std::make_shared<UIButton>(" Capture Now ",
-                                    [this]() { HandleCaptureNowClicked(); });
-    cal_clear_btn_            = std::make_shared<UIButton>(" Clear Samples ",
+    cal_clear_btn_            = std::make_shared<UIButton>(" Reset Samples ",
                                     [this]() { HandleClearSamplesClicked(); });
-    cal_run_btn_              = std::make_shared<UIButton>(" Calibrate ",
-                                    [this]() { HandleRunCalibrationClicked(); });
-    cal_save_btn_             = std::make_shared<UIButton>(" Save ",
-                                    [this]() { HandleSaveCalibrationClicked(); });
-    cal_reload_btn_           = std::make_shared<UIButton>(" Reload ",
-                                    [this]() { HandleReloadCalibrationClicked(); });
-    cal_undistort_toggle_btn_ = std::make_shared<UIButton>(" View: Raw ",
-                                    [this]() { HandleToggleUndistortClicked(); });
-    cal_apply_pattern_btn_    = std::make_shared<UIButton>(" Apply Pattern ",
+    cal_calibrated_toggle_btn_ = std::make_shared<UIButton>(" View: Raw ",
+                                    [this]() { HandleToggleCalibratedViewClicked(); });
+    cal_apply_pattern_btn_    = std::make_shared<UIButton>(" Apply Pattern Only ",
                                     [this]() { HandleApplyPatternClicked(); });
 
     cal_pattern_cols_box_  = std::make_shared<UIInputBox>(&cal_pattern_cols_buf_);
@@ -590,8 +586,8 @@ void UIPhysicalEnvironmentPanel::SyncSignalSettingsControlsFromSubsystem() {
 
     signal_width_buf_ = std::to_string(signal_cfg_.output_width);
     signal_height_buf_ = std::to_string(signal_cfg_.output_height);
-    signal_target_luma_buf_ = FormatDouble(signal_cfg_.target_luma, 1);
-    signal_manual_gain_buf_ = FormatDouble(signal_cfg_.manual_exposure_gain, 2);
+    signal_target_luma_buf_ = FormatDouble(signal_cfg_.exposure.target_luma, 1);
+    signal_manual_gain_buf_ = FormatDouble(signal_cfg_.exposure.manual_gain, 2);
     signal_denoise_strength_buf_ = std::to_string(signal_cfg_.denoise_strength);
     signal_deblur_amount_buf_ = FormatDouble(signal_cfg_.deblur_amount, 2);
 
@@ -608,9 +604,20 @@ void UIPhysicalEnvironmentPanel::SyncSignalSettingsControlsFromSubsystem() {
             : " View: Raw Sensor ");
     }
     if (signal_auto_exposure_btn_) {
-        signal_auto_exposure_btn_->setText(signal_cfg_.exposure_auto
+        signal_auto_exposure_btn_->setText(signal_cfg_.exposure.automatic
             ? " Exposure: Auto "
             : " Exposure: Manual ");
+    }
+    if (signal_anti_flicker_btn_) {
+        signal_anti_flicker_btn_->setText(
+            signal_cfg_.exposure.anti_flicker_enable
+                ? " Anti-flicker: Auto "
+                : " Anti-flicker: Off ");
+    }
+    if (signal_motion_exposure_btn_) {
+        signal_motion_exposure_btn_->setText(
+            signal_cfg_.exposure.motion_aware_enable
+                ? " Motion AE: On " : " Motion AE: Off ");
     }
     if (signal_denoise_btn_) {
         signal_denoise_btn_->setText(signal_cfg_.enable_denoise
@@ -659,11 +666,32 @@ void UIPhysicalEnvironmentPanel::HandleToggleCameraViewClicked() {
 }
 
 void UIPhysicalEnvironmentPanel::HandleToggleAutoExposureClicked() {
-    signal_cfg_.exposure_auto = !signal_cfg_.exposure_auto;
+    signal_cfg_.exposure.automatic = !signal_cfg_.exposure.automatic;
     if (signal_auto_exposure_btn_) {
-        signal_auto_exposure_btn_->setText(signal_cfg_.exposure_auto
+        signal_auto_exposure_btn_->setText(signal_cfg_.exposure.automatic
             ? " Exposure: Auto "
             : " Exposure: Manual ");
+    }
+}
+
+void UIPhysicalEnvironmentPanel::HandleToggleAntiFlickerClicked() {
+    signal_cfg_.exposure.anti_flicker_enable =
+        !signal_cfg_.exposure.anti_flicker_enable;
+    if (signal_anti_flicker_btn_) {
+        signal_anti_flicker_btn_->setText(
+            signal_cfg_.exposure.anti_flicker_enable
+                ? " Anti-flicker: Auto "
+                : " Anti-flicker: Off ");
+    }
+}
+
+void UIPhysicalEnvironmentPanel::HandleToggleMotionExposureClicked() {
+    signal_cfg_.exposure.motion_aware_enable =
+        !signal_cfg_.exposure.motion_aware_enable;
+    if (signal_motion_exposure_btn_) {
+        signal_motion_exposure_btn_->setText(
+            signal_cfg_.exposure.motion_aware_enable
+                ? " Motion AE: On " : " Motion AE: Off ");
     }
 }
 
@@ -780,8 +808,8 @@ void UIPhysicalEnvironmentPanel::HandleApplySignalSettingsClicked() {
     signal_cfg_.output_width = out_w;
     signal_cfg_.output_height = out_h;
     signal_cfg_.denoise_strength = denoise_strength;
-    signal_cfg_.target_luma = static_cast<double>(target_luma);
-    signal_cfg_.manual_exposure_gain = static_cast<double>(manual_gain);
+    signal_cfg_.exposure.target_luma = static_cast<double>(target_luma);
+    signal_cfg_.exposure.manual_gain = static_cast<double>(manual_gain);
     signal_cfg_.deblur_amount = static_cast<double>(deblur_amount);
 
     try {
@@ -807,10 +835,27 @@ void UIPhysicalEnvironmentPanel::HandleResetSignalSettingsClicked() {
 //  Calibration-tab handlers
 // ============================================================================
 
-void UIPhysicalEnvironmentPanel::HandleStartCaptureClicked() {
-    try { PE::RequestStartPhysicalCameraCalibrationCapture(); }
+void UIPhysicalEnvironmentPanel::HandleAutomaticCalibrationClicked() {
+    if (cal_last_status_.automatic_calibration_active) return;
+
+    // The visible pattern fields are part of the one-click operation; users
+    // do not need to press Apply Pattern before starting calibration.
+    int cols = 0, rows = 0;
+    float square_m = 0.0f;
+    if (!TryParseInt(cal_pattern_cols_buf_, cols)
+        || !TryParseInt(cal_pattern_rows_buf_, rows)
+        || !TryParseFloat(cal_square_meters_buf_, square_m)) {
+        LOG_ERROR(kPanelLogTag,
+            "HandleAutomaticCalibrationClicked: invalid calibration pattern fields");
+        return;
+    }
+    try {
+        PE::RequestReconfigurePhysicalCalibrationPattern(cols, rows, square_m);
+        PE::RequestStartAutomaticPhysicalCameraCalibration();
+    }
     catch (const std::exception& e) {
-        LOG_ERROR(kPanelLogTag, std::string("HandleStartCaptureClicked threw: ") + e.what());
+        LOG_ERROR(kPanelLogTag,
+            std::string("HandleAutomaticCalibrationClicked threw: ") + e.what());
     }
 }
 void UIPhysicalEnvironmentPanel::HandleStopCaptureClicked() {
@@ -819,40 +864,16 @@ void UIPhysicalEnvironmentPanel::HandleStopCaptureClicked() {
         LOG_ERROR(kPanelLogTag, std::string("HandleStopCaptureClicked threw: ") + e.what());
     }
 }
-void UIPhysicalEnvironmentPanel::HandleCaptureNowClicked() {
-    try { PE::RequestCapturePhysicalCalibrationSampleNow(); }
-    catch (const std::exception& e) {
-        LOG_ERROR(kPanelLogTag, std::string("HandleCaptureNowClicked threw: ") + e.what());
-    }
-}
 void UIPhysicalEnvironmentPanel::HandleClearSamplesClicked() {
     try { PE::RequestClearPhysicalCalibrationSamples(); }
     catch (const std::exception& e) {
         LOG_ERROR(kPanelLogTag, std::string("HandleClearSamplesClicked threw: ") + e.what());
     }
 }
-void UIPhysicalEnvironmentPanel::HandleRunCalibrationClicked() {
-    try { PE::RequestRunIntrinsicCalibrationFromSamples(); }
-    catch (const std::exception& e) {
-        LOG_ERROR(kPanelLogTag, std::string("HandleRunCalibrationClicked threw: ") + e.what());
-    }
-}
-void UIPhysicalEnvironmentPanel::HandleSaveCalibrationClicked() {
-    try { PE::RequestSavePhysicalCalibrationToDisk(); }
-    catch (const std::exception& e) {
-        LOG_ERROR(kPanelLogTag, std::string("HandleSaveCalibrationClicked threw: ") + e.what());
-    }
-}
-void UIPhysicalEnvironmentPanel::HandleReloadCalibrationClicked() {
-    try { (void)PE::RequestLoadPhysicalCalibrationFromDisk(); }
-    catch (const std::exception& e) {
-        LOG_ERROR(kPanelLogTag, std::string("HandleReloadCalibrationClicked threw: ") + e.what());
-    }
-}
-void UIPhysicalEnvironmentPanel::HandleToggleUndistortClicked() {
-    cal_show_undistorted_ = !cal_show_undistorted_;
-    if (cal_undistort_toggle_btn_) {
-        cal_undistort_toggle_btn_->setText(cal_show_undistorted_ ? " View: Undistorted "
+void UIPhysicalEnvironmentPanel::HandleToggleCalibratedViewClicked() {
+    cal_show_calibrated_ = !cal_show_calibrated_;
+    if (cal_calibrated_toggle_btn_) {
+        cal_calibrated_toggle_btn_->setText(cal_show_calibrated_ ? " View: Calibrated "
                                                                  : " View: Raw ");
     }
 }
@@ -977,17 +998,24 @@ void UIPhysicalEnvironmentPanel::UpdateCameraTab(const InputState& input, float 
         box->update(input, dt);
     };
     const float half = (w - 6.0f) * 0.5f;
-    place_btn(signal_view_toggle_btn_, x, content_top + 138.0f, w);
+    const float third = (w - 12.0f) / 3.0f;
+    place_btn(signal_view_toggle_btn_, x, content_top + 138.0f, half);
+    place_btn(signal_motion_exposure_btn_, x + half + 6.0f,
+              content_top + 138.0f, half);
     place_btn(signal_resize_btn_, x, content_top + 170.0f, half);
     place_btn(signal_resize_mode_btn_, x + half + 6.0f, content_top + 170.0f, half);
     place_btn(signal_denoise_btn_, x, content_top + 202.0f, half);
     place_btn(signal_deblur_btn_, x + half + 6.0f, content_top + 202.0f, half);
     place_btn(signal_auto_exposure_btn_, x, content_top + 234.0f, half);
-    place_btn(signal_stabilization_btn_, x + half + 6.0f, content_top + 234.0f, half);
-    place_btn(signal_color_mode_btn_, x, content_top + 266.0f, half);
-    place_btn(signal_quality_gate_btn_, x + half + 6.0f, content_top + 266.0f, half);
+    place_btn(signal_anti_flicker_btn_, x + half + 6.0f,
+              content_top + 234.0f, half);
+    place_btn(signal_stabilization_btn_, x, content_top + 266.0f, third);
+    place_btn(signal_color_mode_btn_, x + third + 6.0f,
+              content_top + 266.0f, third);
+    place_btn(signal_quality_gate_btn_, x + (third + 6.0f) * 2.0f,
+              content_top + 266.0f, third);
 
-    const float field_w = (w - 12.0f) / 3.0f;
+    const float field_w = third;
     place_box(signal_width_box_, x, content_top + 316.0f, field_w);
     place_box(signal_height_box_, x + field_w + 6.0f, content_top + 316.0f, field_w);
     place_box(signal_target_luma_box_, x + (field_w + 6.0f) * 2.0f,
@@ -1044,6 +1072,20 @@ void UIPhysicalEnvironmentPanel::UpdateStereoTab(const InputState& input, float 
 void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, float dt) {
     cal_last_status_ = PE::GetPhysicalCalibrationStatusSnapshot();
 
+    if (cal_was_automatic_
+        && !cal_last_status_.automatic_calibration_active
+        && cal_last_status_.stage == PE::PhysicalCalibrationStage::Calibrated) {
+        cal_show_calibrated_ = true;
+        if (cal_calibrated_toggle_btn_) {
+            cal_calibrated_toggle_btn_->setText(" View: Calibrated ");
+        }
+    }
+    cal_was_automatic_ = cal_last_status_.automatic_calibration_active;
+    if (cal_auto_btn_) {
+        cal_auto_btn_->setText(cal_last_status_.automatic_calibration_active
+            ? " Calibrating... " : " Calibrate Camera ");
+    }
+
     // ── Production preview pipeline ──
     // Async results carry their exact analyzed frame. In raw calibration view,
     // hold that pinned frame until the next result so corner geometry cannot
@@ -1052,7 +1094,7 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
         !cal_last_status_.last_detection_frame.empty()
         && cal_last_status_.last_detection_frame_counter != 0;
     const uint64_t desired_source_id =
-        (!cal_show_undistorted_ && have_analyzed_frame)
+        (!cal_show_calibrated_ && have_analyzed_frame)
             ? cal_last_status_.last_detection_frame_counter
             : last_seen_counter_;
     const bool counter_changed =
@@ -1060,20 +1102,25 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
     const bool detection_changed =
         (cal_last_status_.last_detection_frame_counter
             != calib_display_detection_id_);
-    const bool undistort_changed = (cal_show_undistorted_ != calib_display_undistort_);
+    const bool calibrated_view_changed =
+        (cal_show_calibrated_ != calib_display_calibrated_);
     if ((have_analyzed_frame
             || (have_any_frame_ && !last_view_.raw_image.empty()))
-        && (counter_changed || detection_changed || undistort_changed)) {
+        && (counter_changed || detection_changed || calibrated_view_changed)) {
         cv::Mat base;
-        if (cal_show_undistorted_ && PE::IsPhysicalCalibrationDataAvailable()) {
-            try {
-                PE::UndistortBgrFrameUsingPhysicalCalibration(last_view_.raw_image, base);
-            } catch (const std::exception& e) {
-                LOG_ERROR(kPanelLogTag,
-                    std::string("UpdateCalibrationTab: undistort threw: ") + e.what());
-                base = last_view_.raw_image;
+        if (cal_show_calibrated_ && PE::IsPhysicalCalibrationDataAvailable()) {
+            if (!last_view_.calibrated_image.empty()) {
+                base = last_view_.calibrated_image;
+            } else {
+                try {
+                    PE::CalibrateBgrFrameUsingPhysicalCalibration(last_view_.raw_image, base);
+                } catch (const std::exception& e) {
+                    LOG_ERROR(kPanelLogTag,
+                        std::string("UpdateCalibrationTab: calibration transform threw: ") + e.what());
+                    base = last_view_.raw_image;
+                }
             }
-        } else if (!cal_show_undistorted_ && have_analyzed_frame) {
+        } else if (!cal_show_calibrated_ && have_analyzed_frame) {
             base = cal_last_status_.last_detection_frame;
         } else {
             base = last_view_.raw_image;
@@ -1082,7 +1129,7 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
             base = last_view_.raw_image;
         }
 
-        const bool matching_raw_detection = !cal_show_undistorted_
+        const bool matching_raw_detection = !cal_show_calibrated_
             && cal_last_status_.last_pattern_found
             && have_analyzed_frame
             && !cal_last_status_.last_detected_image_points.empty();
@@ -1115,7 +1162,7 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
         calib_display_source_id_  = desired_source_id;
         calib_display_detection_id_ =
             cal_last_status_.last_detection_frame_counter;
-        calib_display_undistort_  = cal_show_undistorted_;
+        calib_display_calibrated_ = cal_show_calibrated_;
     }
 
     const float pad = 12.0f;
@@ -1133,15 +1180,11 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
                        by + static_cast<float>(row) * (bh + 6.0f));
         b->update(input, dt);
     };
-    place(cal_start_btn_,       0);
-    place(cal_stop_btn_,        1);
-    place(cal_capture_now_btn_, 2);
+    place(cal_auto_btn_,        0, 160.0f);
+    place(cal_stop_btn_,        2);
     place(cal_clear_btn_,       3);
-    place(cal_run_btn_,         4);
-    place(cal_save_btn_,        5);
-    place(cal_reload_btn_,      6);
 
-    const float by2 = by + (bh + 6.0f) * 2.0f + 8.0f;
+    const float by2 = by + bh + 14.0f;
     if (cal_pattern_cols_box_) {
         cal_pattern_cols_box_->setPosition(bx, by2);
         cal_pattern_cols_box_->setSize(80, bh);
@@ -1158,14 +1201,14 @@ void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, f
         cal_square_meters_box_->update(input, dt);
     }
     if (cal_apply_pattern_btn_) {
-        cal_apply_pattern_btn_->setSize(120, bh);
+        cal_apply_pattern_btn_->setSize(150, bh);
         cal_apply_pattern_btn_->setPosition(bx + 290, by2);
         cal_apply_pattern_btn_->update(input, dt);
     }
-    if (cal_undistort_toggle_btn_) {
-        cal_undistort_toggle_btn_->setSize(160, bh);
-        cal_undistort_toggle_btn_->setPosition(position.x + size.x - pad - 160, by2);
-        cal_undistort_toggle_btn_->update(input, dt);
+    if (cal_calibrated_toggle_btn_) {
+        cal_calibrated_toggle_btn_->setSize(160, bh);
+        cal_calibrated_toggle_btn_->setPosition(position.x + size.x - pad - 160, by2);
+        cal_calibrated_toggle_btn_->update(input, dt);
     }
 }
 
@@ -1268,7 +1311,9 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
                                     : std::string("BGR8_SRGB"));
     } else {
         renderer.drawText({frame_x + 12, frame_y + 12},
-                          "No frame yet — choose a source and click Connect.",
+                          have_any_frame_ && camera_show_model_signal_
+                              ? "Model input unavailable - calibrate this camera first."
+                              : "No frame yet - choose a source and click Connect.",
                           UITheme::Colors::TextSecondary);
     }
     const float preview_label_width = std::min(300.0f, std::max(80.0f, frame_w - 12.0f));
@@ -1307,6 +1352,23 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
         UITheme::Colors::TextPrimary);
     status_line("Frames: " + std::to_string(PE::GetActiveStreamFrameCounter()),
                 UITheme::Colors::TextSecondary);
+    const auto focus_status = PE::GetActiveCameraFocusStatusSnapshot();
+    status_line("Focus: " + FormatDouble(focus_status.focus_score, 1)
+        + "  lens=" + FormatDouble(focus_status.negotiated_focus, 1)
+        + "  auto=" + FormatDouble(focus_status.negotiated_autofocus, 0),
+        UITheme::Colors::TextSecondary);
+    if (!focus_status.summary.empty()) {
+        const bool focus_driver_warning =
+            (focus_status.calibration_focus_locked
+                && !focus_status.calibration_lock_accepted)
+            || (focus_status.configuration_attempted
+                && !focus_status.autofocus_set_accepted
+                && !focus_status.manual_focus_set_accepted);
+        status_line("Focus driver: " + CompactPath(focus_status.summary),
+            focus_driver_warning
+                ? UITheme::Colors::Warning
+                : UITheme::Colors::TextSecondary);
+    }
     status_line("Raw: " + std::to_string(signal_status_.last_input_width) + "x"
         + std::to_string(signal_status_.last_input_height) + "  Model: "
         + std::to_string(signal_status_.last_output_width) + "x"
@@ -1318,13 +1380,53 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
         + " -> " + FormatDouble(signal_status_.last_output_luma, 1)
         + "  gain=" + FormatDouble(signal_status_.last_applied_exposure_gain, 2),
         UITheme::Colors::TextSecondary);
+    status_line("Exposure: p10="
+        + FormatDouble(signal_status_.last_exposure_low_luma, 0)
+        + " p50=" + FormatDouble(signal_status_.last_exposure_meter_luma, 0)
+        + " p98=" + FormatDouble(signal_status_.last_exposure_highlight_luma, 0)
+        + " target-gain="
+        + FormatDouble(signal_status_.last_desired_exposure_gain, 2),
+        UITheme::Colors::TextSecondary);
+    const char* anti_flicker_state =
+        !signal_cfg_.exposure.anti_flicker_enable ? "OFF"
+        : (signal_status_.last_flicker_detected ? "ACTIVE" : "monitoring");
+    status_line(std::string("Anti-flicker: ") + anti_flicker_state
+        + " amplitude=" + FormatDouble(signal_status_.last_flicker_amplitude, 1)
+        + " correction=" + FormatDouble(signal_status_.last_anti_flicker_gain, 3),
+        signal_cfg_.exposure.anti_flicker_enable
+            && signal_status_.last_flicker_detected
+            ? UITheme::Colors::Warning : UITheme::Colors::TextSecondary);
+    status_line("Motion exposure: magnitude="
+        + FormatDouble(signal_status_.last_motion_magnitude, 1)
+        + " priority=" + FormatDouble(signal_status_.last_motion_priority, 2)
+        + " gain-demand="
+        + FormatDouble(signal_status_.last_hardware_gain_demand, 2),
+        UITheme::Colors::TextSecondary);
+    const auto motion_exposure_status =
+        PE::GetActiveCameraMotionExposureStatusSnapshot();
+    status_line(std::string("Hardware shutter/gain: ")
+        + (motion_exposure_status.configured
+            ? motion_exposure_status.summary
+            : (motion_exposure_status.summary.empty()
+                ? std::string("capability discovery pending")
+                : motion_exposure_status.summary)),
+        (!motion_exposure_status.configured
+            && !motion_exposure_status.summary.empty())
+            || (motion_exposure_status.configured
+                && !motion_exposure_status.last_set_accepted)
+                ? UITheme::Colors::Warning : UITheme::Colors::TextSecondary);
+    status_line("Denoise: noise="
+        + FormatDouble(signal_status_.last_estimated_noise_sigma, 1)
+        + "  applied="
+        + FormatDouble(signal_status_.last_applied_denoise_sigma, 1),
+        UITheme::Colors::TextSecondary);
     status_line(std::string("Quality: ")
         + (signal_status_.last_quality_gate_passed ? "PASS" : "DROP")
         + "  sharpness=" + FormatDouble(signal_status_.last_laplacian_variance, 1),
         signal_status_.last_quality_gate_passed
             ? UITheme::Colors::TextSecondary : UITheme::Colors::Danger);
     const auto& transform = signal_status_.last_raw_to_model;
-    status_line("Raw -> model: scale " + FormatDouble(transform.scale_x, 3)
+    status_line("Calibrated -> model: scale " + FormatDouble(transform.scale_x, 3)
         + "," + FormatDouble(transform.scale_y, 3) + " offset "
         + FormatDouble(transform.offset_x, 1) + ","
         + FormatDouble(transform.offset_y, 1), UITheme::Colors::TextSecondary);
@@ -1339,6 +1441,8 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
     if (disconnect_button_) disconnect_button_->drawOverlay(renderer, position);
     if (signal_view_toggle_btn_) signal_view_toggle_btn_->drawOverlay(renderer, position);
     if (signal_auto_exposure_btn_) signal_auto_exposure_btn_->drawOverlay(renderer, position);
+    if (signal_anti_flicker_btn_) signal_anti_flicker_btn_->drawOverlay(renderer, position);
+    if (signal_motion_exposure_btn_) signal_motion_exposure_btn_->drawOverlay(renderer, position);
     if (signal_denoise_btn_) signal_denoise_btn_->drawOverlay(renderer, position);
     if (signal_resize_btn_) signal_resize_btn_->drawOverlay(renderer, position);
     if (signal_deblur_btn_) signal_deblur_btn_->drawOverlay(renderer, position);
@@ -1455,7 +1559,7 @@ void UIPhysicalEnvironmentPanel::DrawStereoTab(OverlayRenderer& renderer) {
 
 void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
     const float pad        = 12.0f;
-    const float top_block  = 104.0f;  // wrapped action rows + pattern row
+    const float top_block  = 74.0f;  // one action row + pattern row
     const float right_pane = 280.0f;
     const float bottom_h   = 78.0f;
     const float content_top = position.y + titleBarHeight + kTabBarHeight;
@@ -1478,7 +1582,7 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
     } else {
         DrawBgrFrameIntoOverlay(renderer, calib_display_frame_,
                                 calib_display_source_id_,
-                                calib_display_undistort_,
+                                calib_display_calibrated_,
                                 frame_x, frame_y, frame_w, frame_h,
                                 calib_blit_cache_);
     }
@@ -1489,9 +1593,10 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
         std::ostringstream ss;
         ss << "Stage: " << FormatStage(cal_last_status_.stage)
            << "  |  samples: " << cal_last_status_.accepted_sample_count
-           << "  |  coverage: "  << cal_last_status_.coverage_cells_filled
-                                 << "/" << (cal_last_status_.coverage_grid_cols
-                                            * cal_last_status_.coverage_grid_rows)
+           << "  |  coverage target: "  << cal_last_status_.coverage_cells_filled
+                                        << "/" << cal_last_status_.minimum_coverage_cells_required
+           << " (grid " << (cal_last_status_.coverage_grid_cols
+                              * cal_last_status_.coverage_grid_rows) << ")"
            << "  |  pattern: " << cal_last_status_.pattern_inner_cols << "x"
                                << cal_last_status_.pattern_inner_rows
            << " @ " << FormatDouble(cal_last_status_.pattern_square_meters * 1000.0, 1) << "mm";
@@ -1546,21 +1651,17 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
                           + " squares; keep all edges visible.",
                       UITheme::Colors::TextSecondary);
     renderer.drawText({right_x, right_y + cov_h + 48.0f},
-                      "Hold each pose still until accepted.",
+                      "Press Calibrate Camera once; hold still.",
                       UITheme::Colors::TextSecondary);
     renderer.drawText({right_x, right_y + cov_h + 66.0f},
-                      "Then vary tilt, distance, or position.",
+                      "Move or tilt board; finish is automatic.",
                       UITheme::Colors::TextSecondary);
     DrawCalibrationDataReadout(renderer, right_x, right_y + cov_h + 94.0f, cal_last_status_);
 
-    if (cal_start_btn_)            cal_start_btn_->drawOverlay(renderer, position);
+    if (cal_auto_btn_)             cal_auto_btn_->drawOverlay(renderer, position);
     if (cal_stop_btn_)             cal_stop_btn_->drawOverlay(renderer, position);
-    if (cal_capture_now_btn_)      cal_capture_now_btn_->drawOverlay(renderer, position);
     if (cal_clear_btn_)            cal_clear_btn_->drawOverlay(renderer, position);
-    if (cal_run_btn_)              cal_run_btn_->drawOverlay(renderer, position);
-    if (cal_save_btn_)             cal_save_btn_->drawOverlay(renderer, position);
-    if (cal_reload_btn_)           cal_reload_btn_->drawOverlay(renderer, position);
-    if (cal_undistort_toggle_btn_) cal_undistort_toggle_btn_->drawOverlay(renderer, position);
+    if (cal_calibrated_toggle_btn_) cal_calibrated_toggle_btn_->drawOverlay(renderer, position);
     if (cal_apply_pattern_btn_)    cal_apply_pattern_btn_->drawOverlay(renderer, position);
 
     if (cal_pattern_cols_box_)  cal_pattern_cols_box_->drawOverlay(renderer, position);
@@ -1574,7 +1675,7 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
 
 void UIPhysicalEnvironmentPanel::DrawBgrFrameIntoOverlay(
     OverlayRenderer& renderer, const cv::Mat& bgr,
-    uint64_t source_id, bool source_undistort,
+    uint64_t source_id, bool source_is_processed,
     float frame_x, float frame_y, float frame_w, float frame_h,
     PreviewBlitCache& cache, const std::string& color_space_label)
 {
@@ -1602,14 +1703,14 @@ void UIPhysicalEnvironmentPanel::DrawBgrFrameIntoOverlay(
     const int    out_y   = static_cast<int>(frame_y + (frame_h - out_h) * 0.5f);
 
     // ── Cache hit fast path ──
-    // When source frame, undistort flag, AND output geometry all match the
+    // When source frame, processed-source flag, AND output geometry all match the
     // last build, skip both cv::resize and the pixel-pack loop. Production
     // UI redraws (typically 60 Hz against a 30 Hz source) take this path on
     // ~half of all frames, and EVERY frame when the panel is idle.
     const bool cache_hit =
         source_id != 0 &&
         cache.source_id        == source_id &&
-        cache.source_undistort == source_undistort &&
+        cache.source_is_processed == source_is_processed &&
         cache.source_color_space == color_space_label &&
         cache.out_w            == out_w &&
         cache.out_h            == out_h &&
@@ -1655,7 +1756,7 @@ void UIPhysicalEnvironmentPanel::DrawBgrFrameIntoOverlay(
             }
         }
         cache.source_id        = source_id;
-        cache.source_undistort = source_undistort;
+        cache.source_is_processed = source_is_processed;
         cache.source_color_space = color_space_label;
         cache.out_w            = out_w;
         cache.out_h            = out_h;
@@ -2532,14 +2633,16 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
 
     if (!have_any_frame_ || last_view_.model_image.empty()) {
         renderer.drawText({frame_x + 12, frame_y + 12},
-                          "No frame on PhysicalFrameBus yet \u2014 connect a camera in the Camera tab.",
+                          have_any_frame_
+                              ? "Model input unavailable - calibrate this camera first."
+                              : "No frame on PhysicalFrameBus yet - connect a camera in the Camera tab.",
                           UITheme::Colors::TextSecondary);
     } else {
         // Reuse the shared blit helper. Tag the cache by frame_counter +
         // a constant 'true' for the model-image view (Perception always
         // shows the model-space image, NOT the raw image).
         DrawBgrFrameIntoOverlay(renderer, last_view_.model_image,
-                                last_seen_counter_, /*source_undistort=*/true,
+                                last_seen_counter_, /*source_is_processed=*/true,
                                 frame_x, frame_y, frame_w, frame_h,
                                 perception_blit_cache_,
                                 last_view_.metadata.color_space_label);
@@ -3064,20 +3167,22 @@ void UIPhysicalEnvironmentPanel::DrawInteractionPreview(
             snapshot.source_frame_counter != 0 &&
             source_frame.packet &&
             source_frame.frame_counter == snapshot.source_frame_counter &&
-            !source_frame.raw_image.empty();
+            !source_frame.model_image.empty();
         if (have_coherent_overlay) preview_frame = &source_frame;
     }
 
     if ((!have_any_frame_ && !have_coherent_overlay) ||
-        preview_frame->raw_image.empty()) {
+        preview_frame->model_image.empty()) {
         renderer.drawText({frame_x + 12, frame_y + 12},
-            "No camera frame yet - connect a source in Camera.",
+            have_any_frame_
+                ? "Model input unavailable - calibrate this camera first."
+                : "No camera frame yet - connect a source in Camera.",
             UITheme::Colors::TextSecondary);
         return;
     }
 
-    DrawBgrFrameIntoOverlay(renderer, preview_frame->raw_image,
-                            preview_frame->frame_counter, false,
+    DrawBgrFrameIntoOverlay(renderer, preview_frame->model_image,
+                            preview_frame->frame_counter, true,
                             frame_x, frame_y, frame_w, frame_h,
                             interaction_blit_cache_);
     const int blit_w = interaction_blit_cache_.out_w;
@@ -3741,7 +3846,7 @@ void UIPhysicalEnvironmentPanel::HandleToggleWorldViewport() {
     if (world_view_toggle_btn_) {
         world_view_toggle_btn_->setText(world_show_model_signal_
             ? " View: Model Signal "
-            : " View: Raw Sensor ");
+            : " View: Calibrated ");
     }
 }
 
@@ -3973,7 +4078,7 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
     const float sidebar_h = frame_h;
 
     const cv::Mat& shown = world_show_model_signal_
-        ? last_view_.model_image : last_view_.raw_image;
+        ? last_view_.model_image : last_view_.calibrated_image;
     const std::string color_space = world_show_model_signal_
         ? last_view_.metadata.color_space_label : std::string("BGR8_SRGB");
 
@@ -3983,7 +4088,7 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
         DrawBgrFrameIntoOverlay(renderer,
                                 shown,
                                 last_seen_counter_,
-                                /*source_undistort=*/world_show_model_signal_,
+                                /*source_is_processed=*/world_show_model_signal_,
                                 frame_x, frame_y, frame_w, frame_h,
                                 world_blit_cache_, color_space);
 
@@ -4002,12 +4107,14 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
         renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
                           UITheme::Colors::PanelBg);
         renderer.drawText({frame_x + 12.0f, frame_y + 12.0f},
-                          "PhysicalFrameBus: no frame published yet.",
+                          have_any_frame_ && world_show_model_signal_
+                              ? "Model signal unavailable - calibrate this camera first."
+                              : "PhysicalFrameBus: no frame published yet.",
                           UITheme::Colors::TextSecondary);
     }
 
     std::ostringstream viewport_label;
-    viewport_label << (world_show_model_signal_ ? "MODEL SIGNAL" : "RAW SENSOR")
+    viewport_label << (world_show_model_signal_ ? "MODEL SIGNAL" : "CALIBRATED CAMERA")
                    << " + WORLD";
     if (world_show_model_signal_ && !color_space.empty()) {
         viewport_label << "  " << color_space;
@@ -4345,9 +4452,9 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
                       UITheme::Colors::DividerLine);
     renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
                       UITheme::Colors::Background);
-    if (have_any_frame_ && !last_view_.raw_image.empty()) {
-        DrawBgrFrameIntoOverlay(renderer, last_view_.raw_image,
-                                last_seen_counter_, false,
+    if (have_any_frame_ && !last_view_.calibrated_image.empty()) {
+        DrawBgrFrameIntoOverlay(renderer, last_view_.calibrated_image,
+                                last_seen_counter_, true,
                                 frame_x, frame_y, frame_w, frame_h,
                                 world_blit_cache_);
         if (have_known_world_results_ && world_blit_cache_.out_w > 0 &&
@@ -4362,13 +4469,13 @@ void UIPhysicalEnvironmentPanel::DrawKnownEntitiesTab(
         }
     } else {
         renderer.drawText({frame_x + 12.0f, frame_y + 12.0f},
-                          "No raw camera frame is available.",
+                          "No calibrated camera frame is available.",
                           UITheme::Colors::TextSecondary);
     }
     renderer.drawRect({frame_x + 6.0f, frame_y + 6.0f},
                       {174.0f, 20.0f}, 0xCC10151Cu);
     renderer.drawText({frame_x + 10.0f, frame_y + 8.0f},
-                      "RAW CAMERA + IDENTITIES",
+                      "CALIBRATED CAMERA + IDENTITIES",
                       UITheme::Colors::TextPrimary);
 
     renderer.drawRect({inspector_x - 1.0f, position.y + titleBarHeight},

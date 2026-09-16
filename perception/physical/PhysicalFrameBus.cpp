@@ -11,6 +11,7 @@ PhysicalFrameBus& PhysicalFrameBus::Instance() {
 }
 
 void PhysicalFrameBus::PublishPhysicalFrameToBus(const cv::Mat& raw_image,
+                                                 const cv::Mat& calibrated_image,
                                                  const cv::Mat& model_image,
                                                  uint64_t frame_counter,
                                                  const std::string& source_url,
@@ -21,17 +22,18 @@ void PhysicalFrameBus::PublishPhysicalFrameToBus(const cv::Mat& raw_image,
             "PhysicalFrameBus::PublishPhysicalFrameToBus: raw_image is empty — "
             "producer MUST NOT publish empty raw frames");
     }
-    if (model_image.empty()) {
+    if (calibrated_image.empty() != model_image.empty()) {
         throw std::runtime_error(
-            "PhysicalFrameBus::PublishPhysicalFrameToBus: model_image is empty — "
-            "producer MUST NOT publish empty model frames");
+            "PhysicalFrameBus::PublishPhysicalFrameToBus: calibrated_image and "
+            "model_image must be populated together");
     }
     const auto t0 = std::chrono::steady_clock::now();
     PhysicalFrameMetadata stamped_metadata = metadata;
 
     auto packet = std::make_shared<PhysicalFramePacket>();
     raw_image.copyTo(packet->raw_image);
-    model_image.copyTo(packet->model_image);
+    if (!calibrated_image.empty()) calibrated_image.copyTo(packet->calibrated_image);
+    if (!model_image.empty()) model_image.copyTo(packet->model_image);
     std::lock_guard<std::mutex> lk(mutex_);
     stamped_metadata.frame_bus_publish_copy_ms =
         std::chrono::duration<double, std::milli>(
@@ -58,6 +60,7 @@ bool PhysicalFrameBus::PullLatestFrameView(FrameView& out,
 
     out.packet        = latest_packet_;
     out.raw_image     = latest_packet_->raw_image;
+    out.calibrated_image = latest_packet_->calibrated_image;
     out.model_image   = latest_packet_->model_image;
     out.image         = out.model_image;
     out.frame_counter = latest_packet_->frame_counter;
@@ -75,6 +78,12 @@ bool PhysicalFrameBus::PullLatestFrameView(FrameView& out,
 bool PhysicalFrameBus::HasEverPublishedFrame() const {
     std::lock_guard<std::mutex> lk(mutex_);
     return ever_published_;
+}
+
+bool PhysicalFrameBus::HasCalibratedModelFrame() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return latest_packet_ && !latest_packet_->calibrated_image.empty()
+        && !latest_packet_->model_image.empty();
 }
 
 void PhysicalFrameBus::ResetPhysicalFrameBus() {

@@ -37,9 +37,12 @@ publishes exactly one bus snapshot, and downstream stages only read buses.
 | `PhysicalCameraDirectory.*` | Enumerates selectable camera/NIC/hub sources. |
 | `PhysicalCameraSource.*` | Describes one selectable source row. |
 | `PhysicalCameraStream.*` | Worker-threaded `cv::VideoCapture` wrapper. |
+| `PhysicalCameraControlDiscovery.*` | Native read-only exposure/gain range discovery used to map normalized motion policy onto camera controls. |
+| `PhysicalCameraFocusController.*` | Local-camera autofocus/manual-focus negotiation and lightweight raw-frame focus telemetry. |
 | `PhysicalStereoCapture.*` | Owns two camera streams, drains bounded timestamped frame queues, and accepts pairs within an explicit skew limit. |
 | `PhysicalStereoFrameBus.*` | Immutable latest synchronized left/right frame packet bus for stereo consumers and UI diagnostics. |
 | `PhysicalFrameConditioner.*` | Quality gate, stabilization/denoise/exposure/deblur/resize/color conversion, scene-stability timing. |
+| `PhysicalCameraExposureController.*` | Adaptive percentile exposure, temporal gain smoothing, highlight protection, frame-wide anti-flicker compensation, and normalized motion shutter/gain policy. |
 | `PhysicalFrameBus.*` | Single-producer/multi-consumer latest-frame packet bus. |
 | `PhysicalNicScan.hpp`, `PhysicalNicScan_win32.cpp`, `PhysicalNicScan_macos.mm`, `PhysicalNicScan_linux.cpp` | Platform NIC enumeration. Only the host implementation is compiled. |
 | `PhysicalEnvironmentLogTag.hpp` | Stage-1 log tag. |
@@ -48,16 +51,19 @@ publishes exactly one bus snapshot, and downstream stages only read buses.
 
 `PhysicalFrameBus` publishes an immutable `PhysicalFramePacket`. Each
 `FrameView` pins that packet with `std::shared_ptr<const PhysicalFramePacket>`
-and exposes shallow `cv::Mat` headers into the packet's `raw_image` and
-`model_image` buffers.
+and exposes shallow `cv::Mat` headers into the packet's `raw_image`,
+`calibrated_image`, and `model_image` buffers.
 
-Consumers MUST treat `FrameView::raw_image`, `FrameView::model_image`, and
-`FrameView::image` as read-only. If a consumer needs in-place OpenCV mutation,
-it must `clone()` into a local scratch image first.
+Consumers MUST treat every image as read-only. `raw_image` is reserved for
+calibration and diagnostic UI. Inference consumers use `model_image`, which is
+created only from `calibrated_image`. If a consumer needs in-place OpenCV
+mutation, it must `clone()` into a local scratch image first.
 
-`raw_image` is BGR8. `model_image` remains three-channel but may be configured
-as BGR, RGB, GBR, or replicated grayscale; consumers that interpret channel
-semantics must use `FrameView::metadata.color_space_label`.
+`raw_image` and `calibrated_image` are BGR8. Before a matching camera profile
+is available, calibrated/model images are empty and model execution is gated.
+`model_image` remains three-channel but may be configured as BGR, RGB, GBR, or
+replicated grayscale; consumers that interpret channel semantics must use
+`FrameView::metadata.color_space_label`.
 
 ### Stereo capture milestone
 
@@ -125,6 +131,15 @@ On Windows, local camera enumeration and automatic local-device opens use
 `CAP_ANY` only. `CAP_DSHOW` / `CAP_MSMF` by-index probes are deliberately skipped
 because this OpenCV 4.11 build can warn that those backends cannot capture by
 index and has crashed during repeated startup probing.
+
+Local-device URLs accept driver-level focus controls through the existing
+camera-open path, with autofocus requested by default. Use
+`device:0?autofocus=0` to disable it, or
+`device:0?focus=120` to disable autofocus and request a manual lens position.
+Focus values and support are camera/driver specific; rejected settings remain
+nonfatal and the requested/negotiated state is reported in the Camera tab.
+The existing calibration path asks the same controller to freeze the current
+lens position during sample capture and restore the configured mode afterward.
 
 Stage-2 operators receive `const cv::Mat&` model-space frames. They must not
 store frame-bus `cv::Mat` headers beyond the route call.

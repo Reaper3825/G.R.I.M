@@ -125,9 +125,9 @@ public:
 
     // Inject the camera intrinsics (3x3 K and distortion coefficients).
     // Throws if K is not 3x3 CV_64F. Distortion is currently informational
-    // — the loop is expected to undistort BEFORE handing the frame in
-    // (UndistortBgrFrameUsingPhysicalCalibration), so K here describes the
-    // UNDISTORTED frame.
+    // — the producer is expected to calibrate the frame BEFORE handing it in
+    // (CalibrateBgrFrameUsingPhysicalCalibration), so K here describes the
+    // calibrated image geometry.
     void SetCameraIntrinsics(const cv::Mat& camera_matrix_3x3_cv64f,
                              const cv::Mat& dist_coeffs_optional);
 
