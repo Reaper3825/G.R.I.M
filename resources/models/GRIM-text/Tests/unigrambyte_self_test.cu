@@ -3420,6 +3420,40 @@ bool testVocabTextExportBinaryLoad(std::string& message) {
     return true;
 }
 
+bool testExactPieceMatcherLongestBoundaryMatch(std::string& message) {
+    ExactPieceMatcher matcher;
+    matcher.rebuild({
+        ExactPieceDefinition{"▁meter", 1001},
+        ExactPieceDefinition{"▁meters", 1002},
+        ExactPieceDefinition{"▁are", 1003},
+        ExactPieceDefinition{"<answer>", 1004},
+    });
+
+    const auto matches = matcher.findMatches("▁meters▁area<answer>");
+    ASSERT_EQ(matches.size(), static_cast<std::size_t>(2),
+              "Exact matcher should select the longest unit and the exact tag");
+    ASSERT_EQ(matches[0].token_id, 1002,
+              "Exact matcher should prefer ▁meters over ▁meter");
+    ASSERT_EQ(matches[1].token_id, 1004,
+              "Exact matcher should emit the authored tag token");
+
+    const auto singular = matcher.findMatches("▁meter.");
+    ASSERT_EQ(singular.size(), static_cast<std::size_t>(1),
+              "Punctuation should terminate an exact lexical piece");
+    ASSERT_EQ(singular[0].token_id, 1001,
+              "Exact matcher should retain the singular unit before punctuation");
+
+    UnigramLM exact_only;
+    appendSelfTestUnigramPiece(exact_only, "▁manual", -100.0f, true);
+    exact_only.buildTrie();
+    const auto encoded = exact_only.encode("manual", true);
+    ASSERT_EQ(encoded.size(), static_cast<std::size_t>(1),
+              "Exact manual piece should bypass Viterbi even with an unusable score");
+    ASSERT_EQ(encoded[0], exact_only.getPieceId("▁manual"),
+              "Exact manual encoding should emit the authored token ID");
+    return true;
+}
+
 bool testVocabSaveLoadBinary(std::string& message) {
     // Create output directory if it doesn't exist
     std::filesystem::create_directories("output");
@@ -3429,6 +3463,7 @@ bool testVocabSaveLoadBinary(std::string& message) {
     appendSelfTestUnigramPiece(original.unigramLM(), "binary", -1.0f, false);
     appendSelfTestUnigramPiece(original.unigramLM(), "format", -1.5f, false);
     appendSelfTestUnigramPiece(original.unigramLM(), "fast", -2.0f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "▁manual", -6.0f, true);
     original.unigramLM().buildTrie();
     
     std::string grmt_path = "output/test_vocab_binary.grmt";
@@ -3450,6 +3485,16 @@ bool testVocabSaveLoadBinary(std::string& message) {
     // Verify learned vocab entries survive special-metadata records in the file.
     ASSERT_TRUE(loaded.unigramLM().hasPiece("binary"), "Should have 'binary' piece");
     ASSERT_TRUE(loaded.unigramLM().hasPiece("format"), "Should have 'format' piece");
+    const int manual_id = loaded.unigramLM().getPieceId("▁manual");
+    const auto* manual_piece = loaded.unigramLM().getPiece(manual_id);
+    ASSERT_TRUE(manual_piece != nullptr && manual_piece->is_user_defined,
+                "Binary vocab must preserve exact manual-piece identity");
+    const auto manual_matches =
+        loaded.unigramLM().findExactPieceMatches("▁manual▁text");
+    ASSERT_EQ(manual_matches.size(), static_cast<std::size_t>(1),
+              "Loaded exact manual piece should bypass unigram competition");
+    ASSERT_EQ(manual_matches[0].token_id, manual_id,
+              "Loaded exact matcher should emit the persisted manual token ID");
     
     // Cleanup
     std::filesystem::remove(grmt_path);
@@ -3977,6 +4022,7 @@ int main(int argc, char** argv) {
     suite.addTest("GRMT.FixedNumericTokenRoundTrip", testGrmtFixedNumericTokenRoundTripAndRangeValidation);
     suite.addTest("SlidingWindow.TypedAtomSpanIntegrity", testSlidingWindowsPreserveTypedAtomSpans);
     suite.addTest("Vocab.TextExportBinaryLoad", testVocabTextExportBinaryLoad);
+    suite.addTest("Vocab.ExactPieceLongestBoundaryMatch", testExactPieceMatcherLongestBoundaryMatch);
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);
     suite.addTest("Vocab.SharedAcrossMultipleGrmts", testSharedVocabWritesMultipleGrmtsWithoutMutation);
     

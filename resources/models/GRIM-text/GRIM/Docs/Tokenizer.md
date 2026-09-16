@@ -11,13 +11,16 @@ for protected ordinary unigram pieces. The tracked empty example is
 ```
 
 Each key is the exact normalized piece text (word-initial spaces use `▁`),
-and each value is its negative log score. Entries enter the initial learned
-vocabulary before EM and pruning; exact duplicates from mined subwords are
-skipped. They count toward `tokenizer_target_vocab_size` and remain ordinary
-Viterbi candidates. Their scores determine whether encoding selects them,
-so training concepts must contain examples that actually encode to these IDs
-if the model is to learn to predict them. This source is read only when a new
-shared vocabulary is trained.
+and each value is a retained negative diagnostic score. Entries enter the
+learned token-ID range before ordinary mined pieces and count toward
+`tokenizer_target_vocab_size`, but they do not enter the Viterbi trie or EM
+posterior. A deterministic pre-Viterbi trie emits the longest valid exact match
+directly. Entries beginning with `▁` require a lexical boundary after the match,
+so `▁are` does not capture the prefix of `▁area`; punctuation, another `▁`, or
+end-of-input closes the match. Exact matched spans are excluded from subword
+mining and EM. KTMG v9 persists the exact-piece flag so freshly trained and
+loaded tokenizers use identical selection rules. This source is read only when
+a new shared vocabulary is trained.
 - `GrimTokenizer.hpp` — alias to UniByte
 - `Detectors/` — raw-text detector parent class, registry, authored atom-delimiter placement, and whitespace/uppercase feature detectors
 - `Unigram.cu` — learned vocab, trie build, encode/decode wrappers
@@ -33,8 +36,9 @@ The tokenizer architecture is deliberately staged in this order:
 
 1. **Authored atoms first.** Typed delimiters identify explicit atom spans on the original source bytes. Plain numeric text is not detected as an atom.
 2. **Fixed numeric vocabulary second.** `NumericTokens.*` recognizes decimal literals only in residual non-atom spans. It emits IDs `[NUMERIC_TOKEN_OFFSET, NUMERIC_TOKEN_END)` directly and excludes those spans from learned-vocabulary training.
-3. **Pure unigram third.** `UnigramTrainer` / `Training/UnigramForwardBackward.*` train the learned-piece model only on residual text outside authored atoms and fixed numeric spans.
-4. **Byte overflow last.** Byte fallback is the runtime overflow path for any remaining byte sequence that the finalized learned unigram model would otherwise leave as `UNK`.
+3. **Exact manual vocabulary third.** Authored manual pieces are selected by deterministic longest exact match and emitted directly.
+4. **Pure unigram fourth.** `UnigramTrainer` / `Training/UnigramForwardBackward.*` train the learned-piece model only on residual text outside authored atoms, fixed numeric spans, and exact manual spans.
+5. **Byte overflow last.** Byte fallback is the runtime overflow path for any remaining byte sequence that the finalized learned unigram model would otherwise leave as `UNK`.
 
 This means byte fallback is **not** part of the intended unigram EM objective, **not** a competing path inside the learned-piece distribution, and **not** allowed to steer pruning decisions. If current code threads byte fallback through training telemetry or the forward-backward lattice, treat that as architectural drift to remove, not the desired design.
 

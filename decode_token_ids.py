@@ -10,7 +10,7 @@ Token ID Layout (current UniByte tokenizer):
     [318]       = Canonical newline (LF/CR/CRLF)
     [319+]      = Unigram vocabulary pieces (from vocab.bin)
 
-Current vocab.bin format is KTMG v8. The saved record count is the number of
+Current vocab.bin format is KTMG v9. The saved record count is the number of
 serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + numeric + atoms + newline + learned pieces.
@@ -76,7 +76,7 @@ ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + 2 * NUM_ATOM_TYPES  # 318
 NEWLINE_TOKEN_ID = ATOM_TOKEN_END
 NEWLINE_VOCAB_SIZE = 1
 UNIGRAM_TOKEN_START = NEWLINE_TOKEN_ID + NEWLINE_VOCAB_SIZE  # 319
-KTMG_VOCAB_VERSION = 8
+KTMG_VOCAB_VERSION = 9
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
 GRMT_FORMAT_VERSION = 29
@@ -370,7 +370,7 @@ def load_vocab_bin(path: Path) -> dict[int, str]:
         max_length = read_u32(f, source)
         flags = read_exact(f, 3, source)
         if (flags[0] & 0x01) == 0:
-            raise ValueError(f"KTMG v8 vocab lacks canonical-newline layout flag: {source}")
+            raise ValueError(f"KTMG v9 vocab lacks canonical-newline layout flag: {source}")
         token_space_size = read_u32(f, source)
 
         if max_length != KTMG_MAX_PIECE_LENGTH:
@@ -392,8 +392,17 @@ def load_vocab_bin(path: Path) -> dict[int, str]:
             text = read_exact(f, piece_len, source).decode("utf-8", errors="strict")
             _score = read_f32(f, source)
             token_id = read_i32(f, source)
+            piece_flags = read_u8(f, source)
+            if piece_flags & ~0x01:
+                raise ValueError(
+                    f"KTMG record {record_idx} has unsupported piece_flags={piece_flags}"
+                )
 
             if token_id in SPECIAL_NAMES:
+                if piece_flags != 0:
+                    raise ValueError(
+                        f"KTMG special record {record_idx} carries piece_flags={piece_flags}"
+                    )
                 expected_text = SPECIAL_NAMES[token_id]
                 if text != expected_text:
                     raise ValueError(

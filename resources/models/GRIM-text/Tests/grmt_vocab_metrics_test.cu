@@ -86,7 +86,7 @@ std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string&
 
     uint16_t version;
     f.read(reinterpret_cast<char*>(&version), 2);
-    if (version != 8) {
+    if (version != 9) {
         throw std::runtime_error("loadVocabMap: unsupported vocab version " + std::to_string(version));
     }
 
@@ -116,6 +116,9 @@ std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string&
         f.read(reinterpret_cast<char*>(&score), 4);
         int token_id;
         f.read(reinterpret_cast<char*>(&token_id), 4);
+        uint8_t piece_flags;
+        f.read(reinterpret_cast<char*>(&piece_flags), 1);
+        (void)piece_flags;
 
         // Skip specials that were duplicated in the binary
         if (text == "<unk>" || text == "<pad>" || text == "<s>" || text == "</s>")

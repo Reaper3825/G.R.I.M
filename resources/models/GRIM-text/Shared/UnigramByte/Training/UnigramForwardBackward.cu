@@ -88,6 +88,9 @@ UnigramForwardBackwardLattice::UnigramForwardBackwardLattice(
     trie_.reserve(pieces.size() + 1);
     trie_.emplace_back();
     for (size_t i = 0; i < pieces.size(); ++i) {
+        // Authored exact pieces are emitted before Viterbi and therefore stay
+        // outside the learned-piece posterior distribution.
+        if (pieces[i].is_user_defined) continue;
         if (i > static_cast<size_t>(std::numeric_limits<int>::max())) {
             throw std::runtime_error(std::string(caller) +
                                      ": learned piece index exceeds int range during forward-backward lattice build: index=" +

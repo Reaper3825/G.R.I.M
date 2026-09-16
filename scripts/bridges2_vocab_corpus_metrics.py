@@ -204,6 +204,8 @@ def load_vocab_bin(path: Path) -> Dict[int, str]:
                 struct.unpack("<f", f.read(4))[0]  # score
                 if version >= 3:
                     struct.unpack("<I", f.read(4))[0]  # stored_id (ignored)
+                if version >= 9:
+                    struct.unpack("<B", f.read(1))[0]  # exact-piece flags
                 id_to_text[UNIGRAM_TOKEN_START + i] = text
         else:
             struct.unpack("<I", f.read(4))[0]  # version

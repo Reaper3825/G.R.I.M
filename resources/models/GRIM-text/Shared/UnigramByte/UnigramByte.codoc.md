@@ -246,10 +246,10 @@ flowchart LR
    Do not normalize the compression gain by expected byte span, because that gives rare long
    pieces an almost free ratio bonus. Do not use `count * abs(score)` as a marginal-value
    proxy; it can overprotect rare low-probability pieces that soft segmentation barely uses.
-- User-defined learned pieces are protected explicitly: insert all user-defined indices
-   into the shrink keep set first, then fill remaining slots by posterior mass. Never rely
-   on a max-value sort sentinel, because more protected pieces than `keep_count` must still
-   all survive.
+- User-defined pieces are authored exact tokens. They are emitted by the longest-match
+   pre-Viterbi trie, excluded from mining/EM and alternative-segmentation pruning tries,
+   and protected explicitly during compaction. Their exact-piece flag must survive KTMG
+   persistence so artifact reload cannot turn them back into competing unigram pieces.
 - Final dead-token cleanup must fail before compaction if the dead set would delete every
    learned piece. Do not rewrite `pieces_` to empty and let Phase-D fail later during
    forward-backward lattice construction; that indicates the pure-unigram objective/candidate

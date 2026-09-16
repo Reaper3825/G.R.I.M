@@ -51,6 +51,12 @@ bool UnigramLM::hasPiece(const std::string& text) const {
     return piece_to_id_.count(text) > 0;
 }
 
+std::vector<ExactPieceSpan> UnigramLM::findExactPieceMatches(
+    std::string_view normalized_text,
+    const std::vector<ExactPieceSpan>& excluded_spans) const {
+    return exact_piece_matcher_.findMatches(normalized_text, excluded_spans);
+}
+
 //--------------------------------------------------//
 // Trie Building
 //--------------------------------------------------//
@@ -58,6 +64,7 @@ bool UnigramLM::hasPiece(const std::string& text) const {
 void UnigramLM::buildTrie() {
     trie_.clear();
     trie_.push_back(TrieNode());  // Root node
+    std::vector<ExactPieceDefinition> exact_definitions;
     
     for (size_t i = 0; i < pieces_.size(); ++i) {
         const auto& piece = pieces_[i];
@@ -71,6 +78,12 @@ void UnigramLM::buildTrie() {
                                      " exceeds MAX_PIECE_LENGTH=" + std::to_string(MAX_PIECE_LENGTH) +
                                      "; the Viterbi kernel caps walks at MAX_PIECE_LENGTH so this piece could never be matched (silent dead vocab)");
         }
+        if (piece.is_user_defined) {
+            exact_definitions.push_back(ExactPieceDefinition{
+                piece.text, tokenIdForIndex(static_cast<int>(i))});
+            continue;
+        }
+
         int node = 0;
         
         for (unsigned char c : piece.text) {
@@ -92,6 +105,7 @@ void UnigramLM::buildTrie() {
         trie_[node].score = piece.score;
     }
 
+    exact_piece_matcher_.rebuild(exact_definitions);
     ++trie_generation_;
 }
 
@@ -107,10 +121,22 @@ std::vector<int> UnigramLM::encode(const std::string& text, bool prepend_space) 
         const size_t newline = normalized.find('\n', pos);
         const size_t end = newline == std::string::npos ? normalized.size() : newline;
         if (end > pos) {
-            UnigramViterbiSession session(
-                *this, normalized.substr(pos, end - pos), "UnigramLM::encode");
-            std::vector<int> segment_tokens = session.takeTokens();
-            tokens.insert(tokens.end(), segment_tokens.begin(), segment_tokens.end());
+            const std::string_view line(normalized.data() + pos, end - pos);
+            const auto exact_matches = findExactPieceMatches(line);
+            std::size_t line_pos = 0;
+            auto append_viterbi = [&](std::string_view segment) {
+                if (segment.empty()) return;
+                UnigramViterbiSession session(
+                    *this, std::string(segment), "UnigramLM::encode");
+                std::vector<int> segment_tokens = session.takeTokens();
+                tokens.insert(tokens.end(), segment_tokens.begin(), segment_tokens.end());
+            };
+            for (const ExactPieceSpan& match : exact_matches) {
+                append_viterbi(line.substr(line_pos, match.start - line_pos));
+                tokens.push_back(match.token_id);
+                line_pos = match.end;
+            }
+            append_viterbi(line.substr(line_pos));
         }
         if (newline == std::string::npos) break;
         tokens.push_back(NEWLINE_TOKEN_ID);

@@ -104,9 +104,9 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
     }
 
     const std::uint16_t version = readScalar<std::uint16_t>(bin_file, source);
-    if (version != 8) {
+    if (version != 9) {
         throw std::runtime_error("[TokenizerVocabFile] vocab file version " + std::to_string(version) +
-                                 " is unsupported; required version 8 with canonical newline tokens. Retrain tokenizer: " + source);
+                                 " is unsupported; required version 9 with exact-piece flags. Retrain tokenizer: " + source);
     }
 
     (void)readScalar<std::uint32_t>(bin_file, source); // checksum placeholder
@@ -129,8 +129,19 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
         const std::string text = readTokenText(bin_file, len, source);
         const float score = readScalar<float>(bin_file, source);
         const int token_id = readScalar<int>(bin_file, source);
+        const std::uint8_t piece_flags = readScalar<std::uint8_t>(bin_file, source);
+        if ((piece_flags & ~std::uint8_t{0x01}) != 0) {
+            throw std::runtime_error(
+                "[TokenizerVocabFile] unsupported piece flags at record " +
+                std::to_string(i) + " in " + source);
+        }
 
         if (GRIM::Tokenizer::isSpecialTokenId(token_id)) {
+            if (piece_flags != 0) {
+                throw std::runtime_error(
+                    "[TokenizerVocabFile] special record carries learned-piece flags at record " +
+                    std::to_string(i));
+            }
             if (text != GRIM::Tokenizer::specialTokenText(token_id)) {
                 throw std::runtime_error(
                     "[TokenizerVocabFile] special vocab record mismatch at record " + std::to_string(i) +
@@ -153,7 +164,7 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
         GRIM::Tokenizer::UnigramPiece piece;
         piece.text = text;
         piece.score = score;
-        piece.is_user_defined = false;
+        piece.is_user_defined = (piece_flags & 0x01) != 0;
         GRIM::Tokenizer::applyUnigramVocabWriteOp(GRIM::Tokenizer::UnigramVocabWriteRequest{
             GRIM::Tokenizer::UnigramVocabWriteTarget{loaded.pieces_, loaded.piece_to_id_},
             std::move(piece),
@@ -211,7 +222,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
     const char magic[4] = {'K', 'T', 'M', 'G'};
     writeExact(bin_file, magic, sizeof(magic), sink);
 
-    const std::uint16_t version = 8;
+    const std::uint16_t version = 9;
     writeScalar(bin_file, version, sink);
 
     const std::uint32_t checksum = 0;
@@ -237,7 +248,10 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
                   << tokenizer_hp.vocab_score_multiplier << " while writing " << sink << std::endl;
     }
 
-    auto write_record = [&](const std::string& text, float score, int token_id) {
+    auto write_record = [&](const std::string& text,
+                            float score,
+                            int token_id,
+                            std::uint8_t piece_flags) {
         if (text.size() > GRIM::Tokenizer::MAX_PIECE_LENGTH) {
             throw std::runtime_error("[TokenizerVocabFile] token text too long while writing " + sink +
                                      " (bytes=" + std::to_string(text.size()) + ")");
@@ -249,10 +263,11 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
         }
         writeScalar(bin_file, score, sink);
         writeScalar(bin_file, token_id, sink);
+        writeScalar(bin_file, piece_flags, sink);
     };
 
     for (const auto& def : GRIM::Tokenizer::SPECIAL_TOKEN_DEFINITIONS) {
-        write_record(def.text, 0.0f, def.id);
+        write_record(def.text, 0.0f, def.id, 0);
     }
 
     for (std::uint32_t i = 0; i < piece_count; ++i) {
@@ -262,7 +277,11 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
             throw std::runtime_error("[TokenizerVocabFile] missing piece for token_id=" +
                                      std::to_string(token_id) + " while writing " + sink);
         }
-        write_record(piece->text, piece->score * tokenizer_hp.vocab_score_multiplier, token_id);
+        const std::uint8_t piece_flags = piece->is_user_defined ? 0x01 : 0x00;
+        write_record(piece->text,
+                     piece->score * tokenizer_hp.vocab_score_multiplier,
+                     token_id,
+                     piece_flags);
     }
 
     bin_file.flush();

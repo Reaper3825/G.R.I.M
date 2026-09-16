@@ -274,7 +274,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
         const bool prepend_word_boundary =
             (start == 0) && result.token_ids.empty();
         const std::string normalized_segment = normalizeSpaces(segment, prepend_word_boundary);
-        auto appendViterbiText = [&](std::string_view viterbi_text) {
+        auto appendViterbiOnly = [&](std::string_view viterbi_text) {
             if (viterbi_text.empty()) {
                 return;
             }
@@ -315,6 +315,26 @@ UniByteResult UniByte::tokenizeWithMetadata(
                     result.unigram_tokens++;
                 }
             }
+        };
+
+        auto appendViterbiText = [&](std::string_view normalized_text) {
+            const auto exact_matches = unigram_.findExactPieceMatches(normalized_text);
+            size_t exact_pos = 0;
+            for (const ExactPieceSpan& match : exact_matches) {
+                appendViterbiOnly(normalized_text.substr(
+                    exact_pos, match.start - exact_pos));
+
+                result.token_ids.push_back(match.token_id);
+                result.is_byte_fallback.push_back(false);
+                result.token_numeric_values.push_back(0.0f);
+                result.token_atom_flags.push_back(0);
+                result.atom_entry_ids.push_back(kAtomEntryNone);
+                result.token_local_atom_indices.push_back(kLocalAtomIndexNone);
+                appendNonAtomSideChannels();
+                ++result.unigram_tokens;
+                exact_pos = match.end;
+            }
+            appendViterbiOnly(normalized_text.substr(exact_pos));
         };
 
         auto appendNormalizedLine = [&](std::string_view line) {

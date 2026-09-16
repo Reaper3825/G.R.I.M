@@ -73,7 +73,7 @@ void appendManualVocabPieces(UnigramLM& unigram,
             "appendManualVocabPieces"});
     }
     std::cout << "[UnigramLM] Manual source supplied " << pieces.size()
-              << " protected ordinary pieces" << std::endl;
+              << " protected exact pieces" << std::endl;
 }
 
 } // namespace GRIM::Tokenizer

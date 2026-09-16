@@ -798,6 +798,7 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/Training/UnigramForwardBackward.cu
     ../../Shared/UnigramByte/UnigramTrainer.cu
     ../../Shared/UnigramByte/ManualVocabSource.cpp
+    ../../Shared/UnigramByte/ExactPieceMatcher.cpp
     ../../Shared/TokenizerArtifacts/GrmtCorpusIO.cu
     ../../Shared/TokenizerArtifacts/VocabArtifactIO.cu
     ../../Shared/TokenizerArtifacts/TokenizerArtifactBundle.cu

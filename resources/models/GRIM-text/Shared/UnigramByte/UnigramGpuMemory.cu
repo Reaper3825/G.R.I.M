@@ -250,6 +250,7 @@ UnigramLM::UnigramLM(UnigramLM&& other) noexcept
     , piece_to_id_(std::move(other.piece_to_id_))
     , enable_byte_fallback_(other.enable_byte_fallback_)
     , trie_(std::move(other.trie_))
+    , exact_piece_matcher_(std::move(other.exact_piece_matcher_))
     , gpu_(std::move(other.gpu_))
     , trie_generation_(other.trie_generation_)
     , last_training_runtime_report_(other.last_training_runtime_report_)
@@ -264,6 +265,7 @@ UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
         piece_to_id_ = std::move(other.piece_to_id_);
         enable_byte_fallback_ = other.enable_byte_fallback_;
         trie_ = std::move(other.trie_);
+        exact_piece_matcher_ = std::move(other.exact_piece_matcher_);
         gpu_ = std::move(other.gpu_);
         trie_generation_ = other.trie_generation_;
         last_training_runtime_report_ = other.last_training_runtime_report_;

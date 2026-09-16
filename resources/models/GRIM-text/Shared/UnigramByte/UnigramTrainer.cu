@@ -317,6 +317,7 @@ static UnigramLikelihoodLossPruneResult selectUnigramSurvivorsByLikelihoodLoss(
     trie.reserve(n + 1);
     trie.emplace_back();
     for (size_t i = 0; i < n; ++i) {
+        if (pieces[i].is_user_defined) continue;
         int node = 0;
         for (unsigned char byte : pieces[i].text) {
             int child = trie[static_cast<size_t>(node)].children[byte];
@@ -678,9 +679,53 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Applied whitespace normalization (space/tab -> ▁, LF/CR/CRLF -> fixed newline boundary)"
               << std::endl;
 
+    // Manual pieces are exact pre-Viterbi tokens. Detect their occurrences on
+    // normalized text and add them to the same training-exclusion geometry used
+    // by atoms and fixed numeric tokens. This keeps mining and EM aligned with
+    // runtime tokenization.
+    std::vector<ExactPieceDefinition> manual_definitions;
+    manual_definitions.reserve(manual_pieces.size());
+    for (size_t i = 0; i < manual_pieces.size(); ++i) {
+        manual_definitions.push_back(ExactPieceDefinition{
+            manual_pieces[i].text,
+            tokenIdForIndex(static_cast<int>(i))});
+    }
+    ExactPieceMatcher manual_matcher;
+    manual_matcher.rebuild(manual_definitions);
+
+    std::vector<std::vector<AtomSpan>> norm_training_exclusion_spans =
+        norm_atom_spans;
+    size_t manual_exact_span_count = 0;
+    for (size_t text_idx = 0; text_idx < norm_texts.size(); ++text_idx) {
+        std::vector<ExactPieceSpan> blocked;
+        blocked.reserve(norm_atom_spans[text_idx].size());
+        for (const AtomSpan& span : norm_atom_spans[text_idx]) {
+            blocked.push_back(ExactPieceSpan{span.start, span.end, -1});
+        }
+        const auto matches = manual_matcher.findMatches(
+            norm_texts[text_idx], blocked);
+        auto& exclusions = norm_training_exclusion_spans[text_idx];
+        exclusions.reserve(exclusions.size() + matches.size());
+        for (const ExactPieceSpan& match : matches) {
+            exclusions.push_back(AtomSpan{match.start, match.end});
+        }
+        std::sort(exclusions.begin(), exclusions.end(),
+                  [](const AtomSpan& lhs, const AtomSpan& rhs) {
+                      return lhs.start < rhs.start;
+                  });
+        manual_exact_span_count += matches.size();
+    }
+    if (manual_exact_span_count > 0) {
+        std::cout << "[UnigramLM] Exact manual vocabulary: excluded "
+                  << manual_exact_span_count
+                  << " matched spans from learned-piece mining and EM"
+                  << std::endl;
+    }
+
     const std::vector<std::string>& training_units = norm_texts;
     const size_t training_segment_max_length =
-        maxTrainingSegmentLengthForTrainingUnits(training_units, norm_atom_spans);
+        maxTrainingSegmentLengthForTrainingUnits(
+            training_units, norm_training_exclusion_spans);
     std::cout << "[UnigramLM] Longest normalized training segment: "
               << training_segment_max_length << " bytes" << std::endl;
     const UnigramSubwordCount MIN_SUBWORD_FREQ = static_cast<UnigramSubwordCount>(min_subword_freq);
@@ -694,7 +739,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     const UnigramSubwordMiningResult mining_result = mineUnigramSubwordsFromTrainingUnits(
         UnigramSubwordMiningRequest{
             training_units,
-            norm_atom_spans,
+            norm_training_exclusion_spans,
             enable_parallel_subword_mining,
             subword_mining_workers,
             subword_mining_max_bytes,
@@ -703,11 +748,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // Step 1: Count character frequencies (use ALL normalized texts)
     std::unordered_map<std::string, int> char_counts;
     size_t total_chars = 0;
-    size_t atom_chars_skipped = 0;
+    size_t excluded_chars_skipped = 0;
     
     for (size_t text_idx = 0; text_idx < norm_texts.size(); ++text_idx) {
         const auto& text = norm_texts[text_idx];
-        const auto& spans = norm_atom_spans[text_idx];
+        const auto& spans = norm_training_exclusion_spans[text_idx];
         size_t span_i = 0;
         
         for (size_t i = 0; i < text.size(); ) {
@@ -717,7 +762,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 ++span_i;
             }
             if (span_i < spans.size() && i >= spans[span_i].start && i < spans[span_i].end) {
-                atom_chars_skipped++;
+                excluded_chars_skipped++;
                 i += seq_len;
                 continue;
             }
@@ -733,12 +778,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         }
     }
     
-    if (atom_chars_skipped > 0) {
-        std::cout << "[UnigramLM] Char counting: skipped " << atom_chars_skipped
-                  << " characters inside atom spans" << std::endl;
+    if (excluded_chars_skipped > 0) {
+        std::cout << "[UnigramLM] Char counting: skipped " << excluded_chars_skipped
+                  << " characters inside atom, numeric, and exact-manual spans" << std::endl;
     }
     if (total_chars == 0) {
-        throw std::runtime_error("UnigramLM::trainFromCorpus: corpus has zero trainable non-atom characters after normalization");
+        throw std::runtime_error("UnigramLM::trainFromCorpus: corpus has zero trainable characters outside atom, numeric, and exact-manual spans after normalization");
     }
     
     // Step 2: Build the Step-2 character seed set.
@@ -988,7 +1033,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
         for (size_t text_idx = 0; text_idx < norm_texts.size(); ++text_idx) {
             const auto& text = norm_texts[text_idx];
-            const auto& spans = norm_atom_spans[text_idx];
+            const auto& spans = norm_training_exclusion_spans[text_idx];
             if (text.empty()) continue;
 
             auto processSegment = [&](const std::string& segment) {
@@ -1038,7 +1083,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         // Byte fallback remains outside the normalized learned-piece distribution.
         // Its UNKNOWN_SCORE path is a fixed unnormalized per-byte coverage penalty, so the
         // M-step normalizer is learned-piece posterior mass + learned-piece smoothing only.
-        double smoothed_total = learned_total_tokens + SMOOTHING * static_cast<double>(pieces_.size());
+        const size_t ordinary_piece_count = static_cast<size_t>(std::count_if(
+            pieces_.begin(), pieces_.end(),
+            [](const UnigramPiece& piece) { return !piece.is_user_defined; }));
+        double smoothed_total = learned_total_tokens +
+            SMOOTHING * static_cast<double>(ordinary_piece_count);
         int zero_count = 0;
         for (size_t i = 0; i < pieces_.size(); ++i) {
             auto& piece = pieces_[i];

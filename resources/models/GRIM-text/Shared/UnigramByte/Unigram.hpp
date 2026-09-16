@@ -20,8 +20,10 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <string_view>
 
 #include "TokenLayout.hpp"  // AtomType, token ID constants, layout helpers
+#include "ExactPieceMatcher.hpp"
 
 namespace GRIM {
 namespace HyperParameters {
@@ -49,7 +51,7 @@ struct UnigramPiece {
     float score;           // Log probability
     // token_id is NOT stored — it's ALWAYS (UNIGRAM_VOCAB_OFFSET + index_in_pieces_).
     // Storing it caused 1078 collisions during EM prune/backfill (Issue #148).
-    bool is_user_defined;  // High priority, never pruned
+    bool is_user_defined;  // Authored exact piece: pre-Viterbi and never pruned
 };
 
 // Durable runtime finalization metadata produced by tokenizer training.
@@ -137,6 +139,12 @@ public:
     // Check if piece exists
     bool hasPiece(const std::string& text) const;
 
+    // Return deterministic, non-overlapping authored exact-piece matches over
+    // already-normalized tokenizer text.
+    std::vector<ExactPieceSpan> findExactPieceMatches(
+        std::string_view normalized_text,
+        const std::vector<ExactPieceSpan>& excluded_spans = {}) const;
+
     //--------------------------------------------------//
     // CPU Encoding
     //--------------------------------------------------//
@@ -182,6 +190,7 @@ private:
         }
     };
     std::vector<TrieNode> trie_;
+    ExactPieceMatcher exact_piece_matcher_;
     
     // GPU resources are owned by UnigramGpuMemory in UnigramGpuMemory.*.
     // UnigramLM only requests initialization/upload; it does not own raw CUDA lifetime details here.
