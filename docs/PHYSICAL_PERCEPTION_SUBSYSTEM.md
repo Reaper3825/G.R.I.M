@@ -183,8 +183,25 @@ It also derives a luminance-normalized inter-frame motion score and emits a
 normalized shutter-priority/gain-demand request. Native camera-control
 discovery supplies the raw endpoints where supported, after which
 `PhysicalCameraStream` maps that request onto `CAP_PROP_EXPOSURE` and
-`CAP_PROP_GAIN` inside the capture worker. Complete URL endpoints remain an
-override for backends without native discovery.
+`CAP_PROP_GAIN` inside the capture worker. Discovered ranges are accepted only
+when their native provider matches the backend OpenCV actually opened.
+Complete URL endpoints remain an override for backends without native
+discovery.
+
+If compatible manual shutter/gain ranges are unavailable, local capture falls
+back to the opened backend's automatic sensor exposure instead of leaving the
+camera at a stale fixed exposure. Explicit `auto_exposure` or complete manual
+motion-control URL values remain authoritative.
+
+When hardware control is active it owns the slow brightness loop. Software
+exposure is limited to a `0.90..1.10` residual trim, rather than sending the
+same luma correction to both digital and sensor gain. Materially identical
+hardware requests are deduplicated. After an accepted sensor-property change,
+meter adaptation and anti-flicker observation pause for eight frames so
+transitional frames cannot drive a reverse correction or be misclassified as
+lighting flicker. Rate-limited exposure telemetry records raw/temporal luma,
+digital gain, motion priority, hardware gain demand, settling state, and
+flicker state.
 
 ### Per-frame metadata (`PhysicalFrameMetadata`)
 

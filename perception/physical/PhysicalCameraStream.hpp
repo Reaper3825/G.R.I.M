@@ -39,6 +39,7 @@ struct PhysicalCameraMotionExposureStatus {
     double negotiated_exposure = 0.0;
     double negotiated_gain = 0.0;
     double motion_priority = 0.0;
+    uint64_t apply_counter = 0;
     std::string summary;
 };
 

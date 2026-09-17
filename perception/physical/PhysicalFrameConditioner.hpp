@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -98,6 +99,10 @@ struct PhysicalSignalConditioningStatus {
     double   last_motion_magnitude      = 0.0;
     double   last_motion_priority       = 0.0;
     double   last_hardware_gain_demand  = 0.0;
+    bool     last_hardware_exposure_active = false;
+    bool     last_hardware_request_pending = false;
+    bool     last_hardware_settling = false;
+    std::size_t last_hardware_settle_frames_remaining = 0;
     double   last_estimated_noise_sigma = 0.0;
     double   last_applied_denoise_sigma = 0.0;
 
@@ -177,6 +182,8 @@ public:
     void ConfigurePhysicalSignalConditioning(const PhysicalSignalConditioningConfig& cfg);
     void ResetPhysicalSignalConditioningToDefaults();
     void ResetPhysicalSignalConditioningTemporalState();
+    void UpdatePhysicalCameraExposureFeedback(bool configured,
+                                              uint64_t apply_counter);
 
     PhysicalSignalConditioningConfig GetPhysicalSignalConditioningConfigSnapshot() const;
     PhysicalSignalConditioningStatus GetPhysicalSignalConditioningStatusSnapshot() const;

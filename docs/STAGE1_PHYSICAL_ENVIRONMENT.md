@@ -73,8 +73,18 @@ Motion-aware hardware control uses native range discovery because OpenCV does
 not standardize exposure or gain units. Windows queries DirectShow
 `IAMCameraControl`/`IAMVideoProcAmp`; Linux queries V4L2 controls. The policy
 remains normalized to `0..1`, and the capture worker maps that value through
-the discovered endpoints. Rejected property writes and negotiated values are
-reported by the Camera panel rather than silently treated as successful.
+the discovered endpoints. Discovery is backend-matched after capture opens;
+for example, DirectShow ranges are not applied to a Media Foundation stream.
+Rejected property writes and negotiated values are reported by the Camera
+panel rather than silently treated as successful. Requests inside a 2% deadband
+are deduplicated, and accepted changes feed a settling acknowledgement back to
+the exposure controller.
+
+When discovery cannot safely match the opened local-camera backend, the worker
+enables that backend's native automatic exposure as a fallback. This keeps raw
+frames correctly illuminated while the signal controller supplies only the
+remaining digital correction. Explicit URL exposure controls override this
+fallback.
 
 Raw URL values remain an optional complete override for unsupported backends:
 

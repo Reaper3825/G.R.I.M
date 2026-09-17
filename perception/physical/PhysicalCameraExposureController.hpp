@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <string>
 
@@ -48,11 +49,20 @@ struct PhysicalCameraExposureConfig {
     double motion_response              = 0.35;
     double motion_hysteresis            = 0.05;
     double motion_gain_compensation     = 0.50;
+
+    // When native shutter/gain control is available it owns the slow
+    // brightness loop. Digital exposure is then only a bounded residual trim
+    // so the same luma error is not corrected twice.
+    double hardware_brighten_response   = 0.06;
+    double hardware_darken_response     = 0.12;
+    double residual_gain_minimum        = 0.90;
+    double residual_gain_maximum        = 1.10;
+    std::size_t hardware_settle_frames  = 8;
 };
 
 // Normalized policy output. The capture worker maps these values onto raw
-// backend-specific CAP_PROP_EXPOSURE/CAP_PROP_GAIN ranges only when the local
-// device URL explicitly supplies those ranges.
+// backend-specific CAP_PROP_EXPOSURE/CAP_PROP_GAIN ranges when compatible
+// native discovery succeeds or the local-device URL supplies an override.
 struct PhysicalCameraMotionExposureRequest {
     bool   valid            = false;
     double motion_priority  = 0.0; // 0=long/clean, 1=short/freeze motion
@@ -75,6 +85,10 @@ struct PhysicalCameraExposureStatus {
     double motion_magnitude        = 0.0;
     double motion_priority         = 0.0;
     double hardware_gain_demand    = 0.0;
+    bool   hardware_exposure_active = false;
+    bool   hardware_request_pending = false;
+    bool   hardware_settling        = false;
+    std::size_t hardware_settle_frames_remaining = 0;
     PhysicalCameraMotionExposureRequest motion_request{};
     std::string summary;
 };
@@ -88,6 +102,8 @@ public:
 
     void Configure(const PhysicalCameraExposureConfig& config);
     void ResetTemporalState();
+    void UpdateHardwareExposureFeedback(bool configured,
+                                        uint64_t apply_counter);
 
     PhysicalCameraExposureStatus ProcessFrame(
         const cv::Mat& input_bgr,
@@ -103,7 +119,15 @@ private:
     bool   temporal_initialized_ = false;
     double temporal_meter_ = 0.0;
     double base_gain_ = 1.0;
+    double hardware_brightness_demand_ = 0.0;
     double motion_priority_ = 0.0;
+    bool hardware_exposure_available_ = false;
+    uint64_t last_hardware_apply_counter_ = 0;
+    std::size_t hardware_settle_frames_remaining_ = 0;
+    bool hardware_request_pending_ = false;
+    double last_requested_motion_priority_ = 0.0;
+    double last_requested_gain_demand_ = 0.0;
+    uint64_t telemetry_frame_counter_ = 0;
     cv::Mat previous_motion_gray_;
 };
 

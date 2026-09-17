@@ -100,6 +100,12 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
                     source_url, s.pull_scratch.size());
 
             PhysicalSignalConditioningResult cond_result;
+            const PhysicalCameraMotionExposureStatus motion_exposure =
+                s.active_stream->GetPhysicalCameraMotionExposureStatusSnapshot();
+            s.conditioner.UpdatePhysicalCameraExposureFeedback(
+                motion_exposure.configured
+                    && motion_exposure.last_set_accepted,
+                motion_exposure.apply_counter);
             if (calibration_ready) {
                 CalibrateBgrFrameUsingPhysicalCalibration(
                     s.pull_scratch, s.calibrated_scratch);

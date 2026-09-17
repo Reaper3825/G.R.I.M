@@ -256,7 +256,7 @@ std::string FourccToString(int fourcc) {
     return text;
 }
 
-void SetLocalCaptureProperty(cv::VideoCapture& cap,
+bool SetLocalCaptureProperty(cv::VideoCapture& cap,
                              int prop_id,
                              double value,
                              const std::string& label)
@@ -265,6 +265,23 @@ void SetLocalCaptureProperty(cv::VideoCapture& cap,
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "PhysicalCameraStream worker: request " + label + "="
               + std::to_string(value) + (accepted ? " accepted" : " rejected"));
+    return accepted;
+}
+
+double AutomaticExposureValueForBackend(const std::string& backend_name) {
+#if defined(_WIN32)
+    // OpenCV 4.11's MSMF and DirectShow implementations both interpret a
+    // nonzero CAP_PROP_AUTO_EXPOSURE value as CameraControl_Flags_Auto.
+    if (backend_name.find("MSMF") != std::string::npos
+        || backend_name.find("DSHOW") != std::string::npos
+        || backend_name.find("DirectShow") != std::string::npos) {
+        return 1.0;
+    }
+#elif defined(__linux__)
+    // V4L2_CID_EXPOSURE_AUTO: 3 is aperture-priority automatic exposure.
+    if (backend_name.find("V4L") != std::string::npos) return 3.0;
+#endif
+    return std::numeric_limits<double>::quiet_NaN();
 }
 
 std::vector<int> BuildLocalOpenParams(const LocalDeviceOpenRequest& req) {
@@ -448,10 +465,18 @@ void PhysicalCameraStream::RequestPhysicalCameraCalibrationFocusLock(bool locked
 void PhysicalCameraStream::RequestPhysicalCameraMotionExposure(
     const PhysicalCameraMotionExposureRequest& request) {
     if (!request.valid) return;
-    motion_exposure_priority_.store(
-        std::clamp(request.motion_priority, 0.0, 1.0));
-    motion_gain_demand_.store(
-        std::clamp(request.gain_demand, 0.0, 1.0));
+    const double motion = std::clamp(request.motion_priority, 0.0, 1.0);
+    const double gain = std::clamp(request.gain_demand, 0.0, 1.0);
+    constexpr double kRequestDeadband = 0.02;
+    if (motion_exposure_request_counter_.load() != 0
+        && std::abs(motion - motion_exposure_priority_.load())
+            < kRequestDeadband
+        && std::abs(gain - motion_gain_demand_.load())
+            < kRequestDeadband) {
+        return;
+    }
+    motion_exposure_priority_.store(motion);
+    motion_gain_demand_.store(gain);
     motion_exposure_request_counter_.fetch_add(1);
 }
 
@@ -495,6 +520,9 @@ void PhysicalCameraStream::RunCaptureWorker() {
     LocalDeviceOpenRequest local_req;
     PhysicalCameraControlProfile discovered_controls;
     bool motion_controls_from_discovery = false;
+    bool raw_motion_control_override = false;
+    bool backend_auto_exposure_fallback = false;
+    bool backend_auto_exposure_accepted = false;
 
     // Prefer FFMPEG backend for RTSP/HTTP URLs. If OpenCV was built without
     // FFMPEG, fall back to the default backend — but we surface that fact
@@ -511,22 +539,8 @@ void PhysicalCameraStream::RunCaptureWorker() {
             local_req = ParseLocalDeviceOpenRequest(source_url_);
             discovered_controls = DiscoverPhysicalCameraControlProfile(
                 local_req.device_index, local_req.backend);
-            const bool raw_override =
+            raw_motion_control_override =
                 std::isfinite(local_req.motion_manual_auto_exposure);
-            if (local_req.motion_exposure && !raw_override
-                && discovered_controls.SupportsMotionExposure()) {
-                motion_controls_from_discovery = true;
-                local_req.motion_manual_auto_exposure =
-                    discovered_controls.manual_auto_exposure_value;
-                // Native camera APIs expose exposure time monotonically:
-                // minimum is the fastest endpoint; maximum is the slowest.
-                local_req.motion_exposure_fast =
-                    discovered_controls.exposure.minimum;
-                local_req.motion_exposure_slow =
-                    discovered_controls.exposure.maximum;
-                local_req.motion_gain_min = discovered_controls.gain.minimum;
-                local_req.motion_gain_max = discovered_controls.gain.maximum;
-            }
             if (local_req.backend >= 0) {
                 opened = OpenLocalDeviceWithRequestedMode(
                     cap, local_req, local_req.backend);
@@ -567,6 +581,57 @@ void PhysicalCameraStream::RunCaptureWorker() {
         return;
     }
 
+    std::string opened_backend = "unknown";
+    try {
+        opened_backend = cap.getBackendName();
+    } catch (const std::exception&) {
+        // Some OpenCV backends do not implement getBackendName(). Unknown is
+        // deliberately not treated as DirectShow-compatible.
+    }
+    if (is_local_device && local_req.motion_exposure
+        && !raw_motion_control_override) {
+        bool discovery_matches_capture = false;
+#if defined(_WIN32)
+        discovery_matches_capture =
+            opened_backend.find("DSHOW") != std::string::npos
+            || opened_backend.find("DirectShow") != std::string::npos;
+#elif defined(__linux__)
+        discovery_matches_capture =
+            opened_backend.find("V4L") != std::string::npos;
+#endif
+        if (discovered_controls.SupportsMotionExposure()
+            && discovery_matches_capture) {
+            motion_controls_from_discovery = true;
+            local_req.motion_manual_auto_exposure =
+                discovered_controls.manual_auto_exposure_value;
+            // Native APIs expose exposure time monotonically: minimum is the
+            // fastest endpoint and maximum is the slowest.
+            local_req.motion_exposure_fast =
+                discovered_controls.exposure.minimum;
+            local_req.motion_exposure_slow =
+                discovered_controls.exposure.maximum;
+            local_req.motion_gain_min = discovered_controls.gain.minimum;
+            local_req.motion_gain_max = discovered_controls.gain.maximum;
+        } else if (discovered_controls.SupportsMotionExposure()) {
+            discovered_controls.reason =
+                "DirectShow controls rejected because capture opened via "
+                + opened_backend;
+        }
+        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                  "PhysicalCameraStream worker: control discovery provider='"
+                  + discovered_controls.provider + "' capture_backend='"
+                  + opened_backend + "' result='"
+                  + discovered_controls.reason + "'");
+    }
+    if (is_local_device && !motion_controls_from_discovery
+        && !raw_motion_control_override
+        && !std::isfinite(local_req.auto_exposure)) {
+        local_req.auto_exposure =
+            AutomaticExposureValueForBackend(opened_backend);
+        backend_auto_exposure_fallback =
+            std::isfinite(local_req.auto_exposure);
+    }
+
     // Best-effort: ask the backend to keep its internal queue at a single
     // frame. AVFoundation honours this; FFMPEG/V4L2 may silently ignore it
     // (which is why the drain pattern below exists as the actual safety net).
@@ -601,8 +666,14 @@ void PhysicalCameraStream::RunCaptureWorker() {
         SetLocalCaptureProperty(cap, cv::CAP_PROP_FPS,
                                 static_cast<double>(local_req.fps), "fps");
         if (std::isfinite(local_req.auto_exposure)) {
-            SetLocalCaptureProperty(cap, cv::CAP_PROP_AUTO_EXPOSURE,
-                                    local_req.auto_exposure, "auto_exposure");
+            const bool accepted = SetLocalCaptureProperty(
+                cap, cv::CAP_PROP_AUTO_EXPOSURE,
+                local_req.auto_exposure,
+                backend_auto_exposure_fallback
+                    ? "auto_exposure(fallback)" : "auto_exposure");
+            if (backend_auto_exposure_fallback) {
+                backend_auto_exposure_accepted = accepted;
+            }
         }
         if (std::isfinite(local_req.exposure)) {
             SetLocalCaptureProperty(cap, cv::CAP_PROP_EXPOSURE,
@@ -632,6 +703,8 @@ void PhysicalCameraStream::RunCaptureWorker() {
             motion_exposure_status_.negotiated_exposure =
                 cap.get(cv::CAP_PROP_EXPOSURE);
             motion_exposure_status_.negotiated_gain = cap.get(cv::CAP_PROP_GAIN);
+            motion_exposure_status_.apply_counter = 1;
+            motion_exposure_request_counter_ = 1;
             motion_exposure_status_.summary =
                 std::string(motion_exposure_status_.last_set_accepted
                     ? "initialized" : "driver rejected initialization")
@@ -646,9 +719,14 @@ void PhysicalCameraStream::RunCaptureWorker() {
         } else {
             std::lock_guard<std::mutex> lk(motion_exposure_mutex_);
             motion_exposure_status_.configured = false;
-            motion_exposure_status_.summary = local_req.motion_exposure
+            motion_exposure_status_.summary = (local_req.motion_exposure
                 ? discovered_controls.reason
-                : "disabled by motion_exposure=0";
+                : "disabled by motion_exposure=0")
+                + (backend_auto_exposure_fallback
+                    ? std::string(backend_auto_exposure_accepted
+                        ? "; backend auto exposure active"
+                        : "; backend auto exposure rejected")
+                    : std::string{});
         }
         const PhysicalCameraFocusStatus focus_status =
             focus_controller_.ApplyPhysicalCameraFocus(cap, local_req.focus);
@@ -719,7 +797,8 @@ void PhysicalCameraStream::RunCaptureWorker() {
     constexpr auto kFastGrabThresholdMicros = std::chrono::microseconds(8000); // 8ms
     cv::Mat scratch;
     bool calibration_focus_locked = false;
-    uint64_t last_motion_request_counter = 0;
+    uint64_t last_motion_request_counter =
+        motion_exposure_request_counter_.load();
     uint64_t last_motion_apply_frame = 0;
     while (!stop_requested_.load()) {
         if (is_local_device) {
@@ -776,7 +855,18 @@ void PhysicalCameraStream::RunCaptureWorker() {
                         + " gain=" + std::to_string(next.negotiated_gain);
                     {
                         std::lock_guard<std::mutex> lk(motion_exposure_mutex_);
+                        next.apply_counter =
+                            motion_exposure_status_.apply_counter + 1u;
                         motion_exposure_status_ = next;
+                    }
+                    if (next.apply_counter == 2u
+                        || next.apply_counter % 10u == 0u) {
+                        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                                  "Motion exposure telemetry: "
+                                  + next.summary
+                                  + " motion=" + std::to_string(motion)
+                                  + " apply="
+                                  + std::to_string(next.apply_counter));
                     }
                     last_motion_request_counter = request_counter;
                     last_motion_apply_frame = current_frame;

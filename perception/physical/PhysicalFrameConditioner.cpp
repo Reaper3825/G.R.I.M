@@ -212,6 +212,13 @@ void PhysicalFrameConditioner::ResetPhysicalSignalConditioningTemporalState() {
     status_.last_scene_stability = {};
 }
 
+void PhysicalFrameConditioner::UpdatePhysicalCameraExposureFeedback(
+    bool configured,
+    uint64_t apply_counter) {
+    exposure_controller_.UpdateHardwareExposureFeedback(
+        configured, apply_counter);
+}
+
 PhysicalSignalConditioningConfig PhysicalFrameConditioner::GetPhysicalSignalConditioningConfigSnapshot() const {
     return config_;
 }
@@ -640,6 +647,13 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessCalibratedFram
         status_.last_motion_magnitude = exposure_status.motion_magnitude;
         status_.last_motion_priority = exposure_status.motion_priority;
         status_.last_hardware_gain_demand = exposure_status.hardware_gain_demand;
+        status_.last_hardware_exposure_active =
+            exposure_status.hardware_exposure_active;
+        status_.last_hardware_request_pending =
+            exposure_status.hardware_request_pending;
+        status_.last_hardware_settling = exposure_status.hardware_settling;
+        status_.last_hardware_settle_frames_remaining =
+            exposure_status.hardware_settle_frames_remaining;
         result.motion_exposure_request = exposure_status.motion_request;
         pipeline << "adaptive_exposure(" << exposure_status.summary << ") ";
         result.exposure_ms = elapsed_ms_since(stage_start);

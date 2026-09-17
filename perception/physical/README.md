@@ -42,7 +42,7 @@ publishes exactly one bus snapshot, and downstream stages only read buses.
 | `PhysicalStereoCapture.*` | Owns two camera streams, drains bounded timestamped frame queues, and accepts pairs within an explicit skew limit. |
 | `PhysicalStereoFrameBus.*` | Immutable latest synchronized left/right frame packet bus for stereo consumers and UI diagnostics. |
 | `PhysicalFrameConditioner.*` | Quality gate, stabilization/denoise/exposure/deblur/resize/color conversion, scene-stability timing. |
-| `PhysicalCameraExposureController.*` | Adaptive percentile exposure, temporal gain smoothing, highlight protection, frame-wide anti-flicker compensation, and normalized motion shutter/gain policy. |
+| `PhysicalCameraExposureController.*` | Adaptive percentile exposure, hardware-primary brightness control with bounded digital trim, post-change settling, highlight protection, frame-wide anti-flicker compensation, and normalized motion shutter/gain policy. |
 | `PhysicalFrameBus.*` | Single-producer/multi-consumer latest-frame packet bus. |
 | `PhysicalNicScan.hpp`, `PhysicalNicScan_win32.cpp`, `PhysicalNicScan_macos.mm`, `PhysicalNicScan_linux.cpp` | Platform NIC enumeration. Only the host implementation is compiled. |
 | `PhysicalEnvironmentLogTag.hpp` | Stage-1 log tag. |

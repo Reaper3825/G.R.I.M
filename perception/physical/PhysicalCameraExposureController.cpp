@@ -1,4 +1,6 @@
 #include "PhysicalCameraExposureController.hpp"
+#include "PhysicalEnvironmentLogTag.hpp"
+#include "logger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -244,6 +246,22 @@ void ValidatePhysicalCameraExposureConfig(
         ThrowInvalidExposureConfig(
             "motion_hysteresis must be finite and in [0,0.50]");
     }
+    validate_response(config.hardware_brighten_response,
+                      "hardware_brighten_response");
+    validate_response(config.hardware_darken_response,
+                      "hardware_darken_response");
+    if (!finite(config.residual_gain_minimum)
+        || !finite(config.residual_gain_maximum)
+        || config.residual_gain_minimum <= 0.0
+        || config.residual_gain_minimum > 1.0
+        || config.residual_gain_maximum < 1.0
+        || config.residual_gain_minimum > config.residual_gain_maximum) {
+        ThrowInvalidExposureConfig(
+            "residual gain bounds must satisfy 0 < minimum <= 1 <= maximum");
+    }
+    if (config.hardware_settle_frames > 120u) {
+        ThrowInvalidExposureConfig("hardware_settle_frames must be <= 120");
+    }
 }
 
 PhysicalCameraExposureController::PhysicalCameraExposureController() {
@@ -269,9 +287,39 @@ void PhysicalCameraExposureController::ResetTemporalState() {
     temporal_initialized_ = false;
     temporal_meter_ = 0.0;
     base_gain_ = 1.0;
+    hardware_brightness_demand_ = 0.0;
     motion_priority_ = 0.0;
+    last_hardware_apply_counter_ = 0;
+    hardware_settle_frames_remaining_ = 0;
+    hardware_request_pending_ = false;
+    last_requested_motion_priority_ = 0.0;
+    last_requested_gain_demand_ = 0.0;
+    telemetry_frame_counter_ = 0;
     previous_motion_gray_.release();
     status_ = {};
+}
+
+void PhysicalCameraExposureController::UpdateHardwareExposureFeedback(
+    bool configured,
+    uint64_t apply_counter) {
+    hardware_exposure_available_ = configured;
+    if (!configured) {
+        last_hardware_apply_counter_ = 0;
+        hardware_settle_frames_remaining_ = 0;
+        hardware_brightness_demand_ = 0.0;
+        hardware_request_pending_ = false;
+        last_requested_motion_priority_ = 0.0;
+        last_requested_gain_demand_ = 0.0;
+        return;
+    }
+    if (apply_counter != 0 && apply_counter != last_hardware_apply_counter_) {
+        last_hardware_apply_counter_ = apply_counter;
+        hardware_request_pending_ = false;
+        hardware_settle_frames_remaining_ = config_.hardware_settle_frames;
+        // Samples spanning a sensor-property transition are not evidence of
+        // mains flicker. Start a fresh window after the camera has settled.
+        meter_history_.clear();
+    }
 }
 
 PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
@@ -285,6 +333,14 @@ PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
     PhysicalCameraExposureStatus next;
     next.enabled = config_.enable;
     next.automatic = config_.automatic;
+    next.hardware_exposure_active = hardware_exposure_available_
+        && config_.motion_aware_enable;
+    next.hardware_request_pending = next.hardware_exposure_active
+        && hardware_request_pending_;
+    next.hardware_settling = next.hardware_exposure_active
+        && hardware_settle_frames_remaining_ > 0;
+    next.hardware_settle_frames_remaining =
+        hardware_settle_frames_remaining_;
     if (!config_.enable) {
         input_bgr.copyTo(output_bgr);
         next.summary = "disabled";
@@ -298,27 +354,34 @@ PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
     next.highlight_luma = luma.highlight;
     next.motion_magnitude = ComputeMotionMagnitude(
         input_bgr, previous_motion_gray_);
+    const bool hardware_control_held = next.hardware_exposure_active
+        && (next.hardware_settling || next.hardware_request_pending);
     if (config_.motion_aware_enable) {
-        const double observed_motion_priority = std::clamp(
-            (next.motion_magnitude - config_.motion_low_threshold)
-                / (config_.motion_high_threshold
-                   - config_.motion_low_threshold),
-            0.0, 1.0);
-        if (std::abs(observed_motion_priority - motion_priority_)
-            > config_.motion_hysteresis) {
-            motion_priority_ += config_.motion_response
-                              * (observed_motion_priority - motion_priority_);
+        if (!hardware_control_held) {
+            const double observed_motion_priority = std::clamp(
+                (next.motion_magnitude - config_.motion_low_threshold)
+                    / (config_.motion_high_threshold
+                       - config_.motion_low_threshold),
+                0.0, 1.0);
+            if (std::abs(observed_motion_priority - motion_priority_)
+                > config_.motion_hysteresis) {
+                motion_priority_ += config_.motion_response
+                                  * (observed_motion_priority - motion_priority_);
+            }
         }
         next.motion_priority = motion_priority_;
     } else {
         motion_priority_ = 0.0;
     }
 
-    meter_history_.push_back(luma.meter);
-    while (meter_history_.size() > config_.anti_flicker_window_frames) {
-        meter_history_.pop_front();
+    if (!hardware_control_held) {
+        meter_history_.push_back(luma.meter);
+        while (meter_history_.size() > config_.anti_flicker_window_frames) {
+            meter_history_.pop_front();
+        }
     }
     const FlickerObservation flicker = config_.anti_flicker_enable
+        && !hardware_control_held
         ? ObserveFlicker(meter_history_, config_)
         : FlickerObservation{};
     next.flicker_detected = flicker.detected;
@@ -328,7 +391,7 @@ PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
         temporal_meter_ = std::max(1.0, luma.meter);
         base_gain_ = 1.0;
         temporal_initialized_ = true;
-    } else {
+    } else if (!hardware_control_held) {
         const double relative_change = std::abs(luma.meter - temporal_meter_)
                                      / std::max(1.0, temporal_meter_);
         const double meter_alpha = relative_change > 0.25
@@ -348,12 +411,18 @@ PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
         desired_gain = std::clamp(
             desired_gain, config_.minimum_gain, config_.maximum_gain);
 
-        const double relative_gain_error = std::abs(desired_gain - base_gain_)
+        const double software_target = next.hardware_exposure_active
+            ? std::clamp(desired_gain,
+                         config_.residual_gain_minimum,
+                         config_.residual_gain_maximum)
+            : desired_gain;
+        const double relative_gain_error = std::abs(software_target - base_gain_)
                                          / std::max(0.01, base_gain_);
-        if (relative_gain_error > config_.gain_hysteresis_ratio) {
-            const double alpha = desired_gain < base_gain_
+        if (!hardware_control_held
+            && relative_gain_error > config_.gain_hysteresis_ratio) {
+            const double alpha = software_target < base_gain_
                 ? config_.darken_response : config_.brighten_response;
-            base_gain_ += alpha * (desired_gain - base_gain_);
+            base_gain_ += alpha * (software_target - base_gain_);
         }
     } else {
         base_gain_ = std::clamp(
@@ -373,19 +442,36 @@ PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
                                   * (limited_correction - 1.0);
     }
     next.anti_flicker_gain = anti_flicker_gain;
+    const double applied_gain_minimum =
+        next.hardware_exposure_active && config_.automatic
+            ? config_.residual_gain_minimum
+            : config_.minimum_gain;
+    const double applied_gain_maximum =
+        next.hardware_exposure_active && config_.automatic
+            ? config_.residual_gain_maximum
+            : config_.maximum_gain;
     next.applied_gain = std::clamp(
         base_gain_ * anti_flicker_gain,
-        config_.minimum_gain,
-        config_.maximum_gain);
+        applied_gain_minimum,
+        applied_gain_maximum);
 
-    const double brightness_gain_demand = config_.maximum_gain > 1.0
-        ? std::clamp((next.desired_gain - 1.0)
-                         / (config_.maximum_gain - 1.0),
-                     0.0, 1.0)
-        : 0.0;
-    next.hardware_gain_demand = config_.motion_aware_enable
-        ? std::clamp(
-            brightness_gain_demand
+    if (next.hardware_exposure_active && config_.automatic
+        && !hardware_control_held) {
+        const double normalized_error = std::clamp(
+            (config_.target_luma - temporal_meter_)
+                / std::max(1.0, config_.target_luma),
+            -1.0, 1.0);
+        if (std::abs(normalized_error) > config_.gain_hysteresis_ratio) {
+            const double response = normalized_error > 0.0
+                ? config_.hardware_brighten_response
+                : config_.hardware_darken_response;
+            hardware_brightness_demand_ = std::clamp(
+                hardware_brightness_demand_ + response * normalized_error,
+                0.0, 1.0);
+        }
+    }
+    next.hardware_gain_demand = next.hardware_exposure_active
+        ? std::clamp(hardware_brightness_demand_
                 + next.motion_priority * config_.motion_gain_compensation,
             0.0, 1.0)
         : 0.0;
@@ -394,6 +480,24 @@ PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
     next.motion_request.valid = true;
     next.motion_request.motion_priority = next.motion_priority;
     next.motion_request.gain_demand = next.hardware_gain_demand;
+    constexpr double kHardwareRequestDeadband = 0.02;
+    if (next.hardware_exposure_active && !hardware_control_held
+        && (std::abs(next.motion_request.motion_priority
+                     - last_requested_motion_priority_)
+                >= kHardwareRequestDeadband
+            || std::abs(next.motion_request.gain_demand
+                        - last_requested_gain_demand_)
+                >= kHardwareRequestDeadband)) {
+        last_requested_motion_priority_ =
+            next.motion_request.motion_priority;
+        last_requested_gain_demand_ = next.motion_request.gain_demand;
+        hardware_request_pending_ = true;
+        next.hardware_request_pending = true;
+    }
+
+    if (hardware_settle_frames_remaining_ > 0) {
+        --hardware_settle_frames_remaining_;
+    }
 
     input_bgr.convertTo(output_bgr, -1, next.applied_gain, 0.0);
     std::ostringstream summary;
@@ -402,11 +506,37 @@ PhysicalCameraExposureStatus PhysicalCameraExposureController::ProcessFrame(
             << " hi=" << next.highlight_luma
             << " desired=" << next.desired_gain
             << " applied=" << next.applied_gain
-            << " motion=" << next.motion_priority;
+            << " motion=" << next.motion_priority
+            << " hwGain=" << next.hardware_gain_demand;
+    if (next.hardware_settling) {
+        summary << " settling=" << next.hardware_settle_frames_remaining;
+    }
+    if (next.hardware_request_pending) {
+        summary << " pending";
+    }
     if (next.flicker_detected) {
         summary << " anti-flicker=" << next.anti_flicker_gain;
     }
     next.summary = summary.str();
+    ++telemetry_frame_counter_;
+    if (telemetry_frame_counter_ == 1u
+        || telemetry_frame_counter_ % 30u == 0u) {
+        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                  "Exposure telemetry: raw_p50="
+                  + std::to_string(next.metered_luma)
+                  + " temporal="
+                  + std::to_string(next.temporally_metered_luma)
+                  + " digital_gain=" + std::to_string(next.applied_gain)
+                  + " motion=" + std::to_string(next.motion_priority)
+                  + " hardware_gain_demand="
+                  + std::to_string(next.hardware_gain_demand)
+                  + " settling="
+                  + std::to_string(next.hardware_settle_frames_remaining)
+                  + " pending="
+                  + std::to_string(next.hardware_request_pending ? 1 : 0)
+                  + " flicker="
+                  + std::to_string(next.flicker_detected ? 1 : 0));
+    }
     status_ = next;
     return status_;
 }

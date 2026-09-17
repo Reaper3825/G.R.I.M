@@ -1400,7 +1400,14 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
         + FormatDouble(signal_status_.last_motion_magnitude, 1)
         + " priority=" + FormatDouble(signal_status_.last_motion_priority, 2)
         + " gain-demand="
-        + FormatDouble(signal_status_.last_hardware_gain_demand, 2),
+        + FormatDouble(signal_status_.last_hardware_gain_demand, 2)
+        + " state="
+        + (!signal_status_.last_hardware_exposure_active ? "software"
+            : signal_status_.last_hardware_request_pending ? "pending"
+            : signal_status_.last_hardware_settling
+                ? "settling(" + std::to_string(
+                    signal_status_.last_hardware_settle_frames_remaining) + ")"
+                : "tracking"),
         UITheme::Colors::TextSecondary);
     const auto motion_exposure_status =
         PE::GetActiveCameraMotionExposureStatusSnapshot();
