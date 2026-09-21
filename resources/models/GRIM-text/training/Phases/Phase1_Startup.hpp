@@ -321,12 +321,19 @@ struct TrainingContext {
 
     // Resource high-water marks
     /** Peak device-wide GPU memory used (= total - free via cudaMemGetInfo),
-     *  tracked as a high-water mark across the whole run. Sampled cheaply each
-        *  batch in Phase2, logged at epoch end, and reported in the Phase3 summary.
-        *  0 until the first sample. */
+     *  tracked at owner-labelled Phase2 boundaries and logged on every sample.
+     *  Also reported in the Phase3 summary. 0 until the first sample. */
     std::uint64_t peak_gpu_used_bytes = 0;
     /** Device total bytes captured alongside the peak sample (for % reporting). */
     std::uint64_t gpu_total_bytes = 0;
+    /** Owner-labelled Phase2 checkpoint at which the run-wide peak was observed. */
+    std::string peak_gpu_used_owner;
+    int peak_gpu_used_batch = -1;
+    int peak_gpu_used_accumulation_slot = -1;
+    /** Previous checkpoint state used to log per-owner memory deltas. */
+    std::uint64_t last_gpu_used_bytes = 0;
+    std::string last_gpu_memory_owner;
+    std::uint64_t gpu_memory_measurement_count = 0;
 
     // Move-only semantics (std::unique_ptr cannot be copied)
     // Use compiler-generated move to avoid breaking GPU resource pointers

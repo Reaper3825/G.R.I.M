@@ -72,7 +72,7 @@ failure. Freeze policy is applied when base tensors are allocated: LoRA startup
 must skip both `requires_grad_()` and `alloc_grad()` for every base owner. Tied
 LM-head weights alias embedding data but do not call `share_grad()` while frozen,
 because no base gradient buffer exists to share. Post-allocation registry
-validation proves this contract rather than attempting to freeze tensors after
+ proves this contract rather than attempting to freeze tensors after
 gradient buffers have already been created.
 
 ## V1 merge policy
@@ -254,7 +254,7 @@ float learning_rate_lora;
 `learning_rate_lora` is not duplicated into the five class-settings values.
 
 The grouping is a read view over `TrainingHyperparameters`, not a config owner.
-Startup allocation, registration, artifact validation, and forward-view
+Startup allocation, registration, artifact , and forward-view
 construction consume this grouped payload rather than receiving raw config or
 separate enable/rank/alpha/precision arguments.
 
@@ -292,7 +292,7 @@ LoRA rank is configured per matrix class:
 Every transformer layer uses the configured rank for its corresponding matrix
 class. Ranks may differ between matrix classes, but there are no per-layer rank
 overrides and no single global rank that silently controls all five classes.
-Startup validation must reject missing, zero, negative, or dimensionally
+Startup  must reject missing, zero, negative, or dimensionally
 invalid rank values for every enabled class.
 
 ## Alpha and scaling policy
@@ -410,7 +410,7 @@ dropout operation to the adapter path.
 A LoRA-enabled model instance has exactly one active adapter set. That set owns
 the `A` and `B` factors for all enabled matrix classes and transformer layers in
 the instance. V1 does not stack, blend, compose, or concurrently load multiple
-named adapter sets. Startup/load validation must reject a second active set
+named adapter sets. Startup/load  must reject a second active set
 instead of defining an implicit ordering or combination rule.
 
 ## Manifest and user-selection policy
@@ -498,7 +498,7 @@ Every adapted projection record must contain:
 Architecture metadata for diagnostics must include enough facts to explain and
 validate target geometry, including at least `d_model`, `num_layers`,
 `num_heads`, `num_kv_heads`, fused `qkv_dim`, and `d_ff`. It is diagnostic and
-validation metadata, not an alternate model-config owner.
+ metadata, not an alternate model-config owner.
 
 Artifact loading is all-or-nothing. Before any adapter tensor becomes active,
 the loader must validate schema support, adapter ID/revision, exact base digest,
@@ -907,7 +907,7 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
       LoRA precision from the corresponding authored matrix-class field.
 - [ ] Before adapter registration, mark every pre-existing model parameter
       non-trainable and fail if any owns an allocated gradient buffer.
-- [x] Add fail-loud startup validation for target existence, dimensions, rank,
+- [x] Add fail-loud startup  for target existence, dimensions, rank,
       duplicate identities, missing enabled adapters, and missing initialization
       seed state.
 - [x] Require exact base-checkpoint SHA-256 compatibility and hard-fail every
@@ -952,7 +952,7 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
 - [x] Add LoRA training-checkpoint save/resume for working `A`/`B`, FP32 moments,
       optimizer/scheduler steps, accumulation cursor and partial gradients, data
       cursor, RNG state, and exact base identity.
-- [x] Add strict host-side `.grimlorackpt` load I/O and schema validation rooted
+- [x] Add strict host-side `.grimlorackpt` load I/O and schema  rooted
       in the currently selected model-store directory, with startup restore and
       GPU-state mutation wired through the durable lifecycle bridge.
 - [x] Restrict training-checkpoint writes to post-backward graph boundaries and
@@ -981,7 +981,7 @@ parameter gradient. When `lora != nullptr`, backward computes `dX_base`,
 - [ ] Compute base and scaled adapter contributions dynamically during inference
       without materializing a durable merged weight.
 
-### Phase 5: Validation
+### Phase 5: 
 
 - [ ] Unit-test target selection so every excluded class remains excluded.
 - [ ] Compare LoRA projection forward and backward against a CPU/reference
@@ -1057,7 +1057,7 @@ as the implementation plan is refined.
       greater revision without overwriting the source.
 - 2026-09-04: Defined the actual `lora_linear` API, explicit direct/transposed
       orientation, nullable authored-disabled dispatch, factored forward equations,
-      and fail-loud validation. Corrected `LoRAProjectionView` to borrow `Tensor`
+      and fail-loud . Corrected `LoRAProjectionView` to borrow `Tensor`
       identities so training autograd can accumulate `A`/`B` gradients.
 - 2026-09-04: Finalized v1 optimizer policy: reuse the configured optimizer
       family, use one adapter-set-wide `learning_rate_lora`, apply zero weight decay

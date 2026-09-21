@@ -2809,6 +2809,8 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
         {sequence.token_ids[0]}, GRIM::GoalTokenSpan{0, 1}};
     concept_spans->determine = GRIM::ConceptBlockSpanEntry{
         {sequence.token_ids[1]}, GRIM::GoalTokenSpan{1, 2}};
+    concept_spans->define = GRIM::ConceptBlockSpanEntry{
+        {sequence.token_ids[1]}, GRIM::GoalTokenSpan{1, 2}};
     concept_spans->execute = GRIM::ConceptBlockSpanEntry{
         {sequence.token_ids[2]}, GRIM::GoalTokenSpan{2, 3}};
     concept_spans->update = GRIM::ConceptBlockSpanEntry{
@@ -2893,9 +2895,10 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
               "Unknown entry count must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].concept_block_spans->reasoning.has_value() &&
                     round_trip.sequences[0].concept_block_spans->determine.has_value() &&
+                    round_trip.sequences[0].concept_block_spans->define.has_value() &&
                     round_trip.sequences[0].concept_block_spans->execute.has_value() &&
                     round_trip.sequences[0].concept_block_spans->update.has_value(),
-                "Reasoning and Determine/Execute/Update spans must survive GRMT round-trip");
+                "Reasoning and Determine/Define/Execute/Update spans must survive GRMT round-trip");
     ASSERT_TRUE(
         round_trip.sequences[0].concept_block_spans->knowns[0].token_ids ==
             valid.concept_block_spans->knowns[0].token_ids,
@@ -3336,11 +3339,11 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
         multi_field_sequence.prompt_end_pos = 1;
         auto field_spans = std::make_shared<GRIM::ConceptBlockSpans>();
         field_spans->determine = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[2], multi_tokens[3], multi_tokens[4]},
-            GRIM::GoalTokenSpan{2, 5}};
+            {multi_tokens[2], multi_tokens[3]}, GRIM::GoalTokenSpan{2, 4}};
+        field_spans->define = GRIM::ConceptBlockSpanEntry{
+            {multi_tokens[4], multi_tokens[5]}, GRIM::GoalTokenSpan{4, 6}};
         field_spans->execute = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[5], multi_tokens[6], multi_tokens[7]},
-            GRIM::GoalTokenSpan{5, 8}};
+            {multi_tokens[6], multi_tokens[7]}, GRIM::GoalTokenSpan{6, 8}};
         field_spans->update = GRIM::ConceptBlockSpanEntry{
             {multi_tokens[8], multi_tokens[9]}, GRIM::GoalTokenSpan{8, 10}};
         multi_field_sequence.concept_block_spans = std::move(field_spans);
@@ -3351,7 +3354,7 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
             multi_field_sequences,
             "multi-field-sft-test",
             GRIM::HyperParameters::TrainingStage::SFT,
-            {"determine", "execute", "answer"},
+            {"determine", "define", "execute", "answer"},
             {"prompt", "update"},
             32,
             24,
@@ -3366,8 +3369,9 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                   "Multi-field projection should cut after the last listed field");
         for (std::size_t position = 1; position < multi.token_ids.size(); ++position) {
             const bool supervised =
-                (position >= 2 && position < 5) ||
-                (position >= 5 && position < 8) ||
+                (position >= 2 && position < 4) ||
+                (position >= 4 && position < 6) ||
+                (position >= 6 && position < 8) ||
                 (position >= 10 && position < 12);
             ASSERT_TRUE(
                 multi.targets[position - 1] ==

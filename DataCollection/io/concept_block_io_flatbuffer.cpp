@@ -45,6 +45,7 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.unknowns = stringVectorValue(source.unknowns());
     block.intermediates = stringVectorValue(source.intermediates());
     block.determine = stringValue(source.determine());
+    block.define = stringValue(source.define());
     block.execute = stringValue(source.execute());
     block.update = stringValue(source.update());
     block.answer = stringValue(source.answer());
@@ -109,6 +110,7 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     const auto unknowns = createStringVector(builder, block.unknowns);
     const auto intermediates = createStringVector(builder, block.intermediates);
     const auto determine = builder.CreateString(block.determine);
+    const auto define = builder.CreateString(block.define);
     const auto execute = builder.CreateString(block.execute);
     const auto update = builder.CreateString(block.update);
     const auto answer = builder.CreateString(block.answer);
@@ -167,7 +169,8 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
         unknowns,
         determine,
         execute,
-        update);
+        update,
+        define);
 }
 
 size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
@@ -184,7 +187,8 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
     };
     for (const auto& block : blocks) {
         add(256 + block.id.size() + block.name.size() + block.prompt.size()
-            + block.determine.size() + block.execute.size() + block.update.size()
+            + block.determine.size() + block.define.size()
+            + block.execute.size() + block.update.size()
             + block.answer.size() + block.raw.size() + block.format_type.size()
             + block.source_sequence_id.size());
         for (const auto& text : block.knowns) add(8 + text.size());

@@ -186,6 +186,7 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	j["name"] = fbString(source.name());
 	j["prompt"] = fbString(source.prompt());
 	j["determine"] = fbString(source.determine());
+	j["define"] = fbString(source.define());
 	j["execute"] = fbString(source.execute());
 	j["update"] = fbString(source.update());
 	j["answer"] = fbString(source.answer());
@@ -582,6 +583,7 @@ bool PrepareTrainingDataFromCache(
 		}
 		add_span(rendered.reasoning);
 		add_span(rendered.determine);
+		add_span(rendered.define);
 		add_span(rendered.execute);
 		add_span(rendered.update);
 		add_span(rendered.answer);
@@ -860,6 +862,7 @@ bool PrepareTrainingDataFromCache(
 		};
 		materialize_optional("reasoning", rendered.reasoning, spans->reasoning);
 		materialize_optional("determine", rendered.determine, spans->determine);
+		materialize_optional("define", rendered.define, spans->define);
 		materialize_optional("execute", rendered.execute, spans->execute);
 		materialize_optional("update", rendered.update, spans->update);
 		if (spans->empty()) {

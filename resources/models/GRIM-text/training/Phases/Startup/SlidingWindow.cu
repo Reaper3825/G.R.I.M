@@ -46,6 +46,7 @@ enum class ConceptField : std::uint8_t {
     KnownsAndUnknowns,
     Reasoning,
     Determine,
+    Define,
     Execute,
     Update,
     Answer,
@@ -62,6 +63,7 @@ const char* conceptFieldName(ConceptField field) {
             return "knowns_and_unknowns";
         case ConceptField::Reasoning: return "reasoning";
         case ConceptField::Determine: return "determine";
+        case ConceptField::Define: return "define";
         case ConceptField::Execute: return "execute";
         case ConceptField::Update: return "update";
         case ConceptField::Answer: return "answer";
@@ -78,6 +80,7 @@ ConceptField parseConceptField(const std::string& name, const std::string& sourc
     if (name == "knowns_and_unknowns") return ConceptField::KnownsAndUnknowns;
     if (name == "reasoning") return ConceptField::Reasoning;
     if (name == "determine") return ConceptField::Determine;
+    if (name == "define") return ConceptField::Define;
     if (name == "execute") return ConceptField::Execute;
     if (name == "update") return ConceptField::Update;
     if (name == "answer") return ConceptField::Answer;
@@ -328,6 +331,7 @@ std::shared_ptr<const GRIM::ConceptBlockSpans> offsetConceptBlockSpans(
     };
     shift_optional(shifted->reasoning);
     shift_optional(shifted->determine);
+    shift_optional(shifted->define);
     shift_optional(shifted->execute);
     shift_optional(shifted->update);
     std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
@@ -356,6 +360,7 @@ bool conceptBlockSpansFitPrefix(
     return entries_fit(spans->knowns) && entries_fit(spans->unknowns) &&
            optional_fits(spans->reasoning) &&
            optional_fits(spans->determine) &&
+           optional_fits(spans->define) &&
            optional_fits(spans->execute) && optional_fits(spans->update);
 }
 
@@ -411,6 +416,7 @@ std::shared_ptr<const GRIM::ConceptBlockSpans> sliceConceptBlockSpansForSftWindo
     };
     slice_optional(source->reasoning, sliced->reasoning);
     slice_optional(source->determine, sliced->determine);
+    slice_optional(source->define, sliced->define);
     slice_optional(source->execute, sliced->execute);
     slice_optional(source->update, sliced->update);
     if (sliced->empty()) {
@@ -479,6 +485,10 @@ std::optional<GRIM::GoalTokenSpan> conceptFieldSpan(
             if (sequence.concept_block_spans && sequence.concept_block_spans->determine)
                 return sequence.concept_block_spans->determine->span;
             return std::nullopt;
+        case ConceptField::Define:
+            if (sequence.concept_block_spans && sequence.concept_block_spans->define)
+                return sequence.concept_block_spans->define->span;
+            return std::nullopt;
         case ConceptField::Execute:
             if (sequence.concept_block_spans && sequence.concept_block_spans->execute)
                 return sequence.concept_block_spans->execute->span;
@@ -535,6 +545,7 @@ void retainMetadataThrough(GrmtSequence& sequence, std::int32_t cut) {
         };
         copy_optional(sequence.concept_block_spans->reasoning, retained->reasoning);
         copy_optional(sequence.concept_block_spans->determine, retained->determine);
+        copy_optional(sequence.concept_block_spans->define, retained->define);
         copy_optional(sequence.concept_block_spans->execute, retained->execute);
         copy_optional(sequence.concept_block_spans->update, retained->update);
         if (retained->empty()) sequence.concept_block_spans.reset();
@@ -963,7 +974,7 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             parsed_unsupervised_fields.push_back(
                 parseConceptField(field, policy_source + " unsupervised_fields"));
         }
-        std::array<bool, 10> listed_fields{};
+        std::array<bool, 11> listed_fields{};
         const auto validate_field_list = [&](const auto& fields, const char* name) {
             for (const auto field : fields) {
                 const auto index = static_cast<std::size_t>(field);

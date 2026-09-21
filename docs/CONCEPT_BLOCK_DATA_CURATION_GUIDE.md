@@ -1,5 +1,13 @@
 # Concept Block Data Curation Guide
 
+> **Current reasoning-field contract:** Before authoring new structured
+> reasoning examples, read
+> [`GRIM_REASONING_DATA_CONTRACT.md`](GRIM_REASONING_DATA_CONTRACT.md). It is the
+> maintained inference-first reference for the canonical model-visible order,
+> supplied-state boundary, reasoning-span semantics, and supervision policy.
+> This older guide remains useful for execution-block and legacy JSON import
+> details.
+
 > **Audience:** Dataset authors preparing `concept_blocks.jsonl` for GRIM-text training.
 > This is a **data guide**, not a code guide. It tells you what to write, what the
 > system expects, and what will crash if you get it wrong.

@@ -197,7 +197,7 @@ const std::array<std::string, 16> kActions{
 };
 
 const std::array<std::string, 16> kStages{
-    "intake", "validation", "scheduling", "handoff",
+    "intake", "", "scheduling", "handoff",
     "rollout", "archival", "verification", "publication",
     "calibration", "import", "rendering", "backup",
     "analysis", "review", "cache refresh", "completion",
@@ -1882,6 +1882,7 @@ json blockJson(const GRIM::ConceptBlock& block) {
         {"intermediates", block.intermediates},
         {"explanation", block.explanation},
         {"determine", block.determine},
+        {"define", block.define},
         {"execute", block.execute},
         {"update", block.update},
         {"answer", block.answer},

@@ -599,6 +599,7 @@ UIDataHubPanel::UIDataHubPanel()
                 cb.raw = GRIM::ConceptCanonical::renderPlainText(cb);
                 cb.prompt.clear();
                 cb.determine.clear();
+                cb.define.clear();
                 cb.execute.clear();
                 cb.update.clear();
                 cb.answer.clear();
@@ -670,6 +671,8 @@ UIDataHubPanel::UIDataHubPanel()
     cbTargetStateArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
     cbDetermineArea_ = std::make_shared<UITextArea>("", "",
+        [](const std::string&) {});
+    cbDefineArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
     cbExecuteArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
@@ -992,7 +995,7 @@ UIDataHubPanel::UIDataHubPanel()
         cbRandomizeCourseOrderToggle_, cbRandomizeConceptBlockOrderToggle_,
         cbModelDropdown_, cbCurriculumDropdown_, cbTrainingStageDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
-        cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbDetermineArea_, cbExecuteArea_,
+        cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbDetermineArea_, cbDefineArea_, cbExecuteArea_,
         cbUpdateArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, successCriteriaActionMenu_, constraintsActionMenu_, knownsActionMenu_, unknownsActionMenu_,
         stepActionMenu_, execStepActionMenu_, blockActionMenu_,

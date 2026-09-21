@@ -7,6 +7,7 @@
 #include "Phase2_TrainingLoop.hpp"
 #include "Phase3_Cleanup.hpp"
 #include "../Diagnostics/Diagnostics.hpp"
+#include "../Diagnostics/MemoryMeasurer.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"       // GradClip::clipGradientNorms (registry-level clipping)
@@ -159,134 +160,30 @@ struct TapeSkipScope {
 struct ProcessBatchStepStateClearScope {
     GRIM::Forward::ModelForwardOutputs& forward_outputs;
     GRIM::Autograd::AutogradLossState& loss_state;
+    TrainingContext* memory_context = nullptr;
+    int batch_idx = -1;
+    int accumulation_slot = -1;
+    const char* post_clear_owner = "step_state.graph_cleared";
 
     ~ProcessBatchStepStateClearScope() {
         // Release the scalar consumer root before clearing the retained forward
         // tensors that feed its GradFn graph.
         loss_state.clear();
         forward_outputs.clear();
+        if constexpr (Memory::EnablePeakMemoryMeasurer) {
+            if (memory_context) {
+                Memory::measurePeakMemory(
+                    *memory_context,
+                    post_clear_owner,
+                    batch_idx,
+                    accumulation_slot);
+            }
+        }
     }
 
     ProcessBatchStepStateClearScope(const ProcessBatchStepStateClearScope&) = delete;
     ProcessBatchStepStateClearScope& operator=(const ProcessBatchStepStateClearScope&) = delete;
 };
-
-// Device-wide usage plus stream-ordered (cudaMallocAsync/cudaFreeAsync) default
-// memory-pool accounting. All queries here are non-synchronizing driver calls.
-struct GpuMemoryBreakdown {
-    std::uint64_t device_used = 0;
-    std::uint64_t device_total = 0;
-    std::uint64_t pool_reserved_current = 0;  // bytes the async pool holds from the OS
-    std::uint64_t pool_reserved_high = 0;
-    std::uint64_t pool_used_current = 0;       // bytes currently handed out by the pool
-    std::uint64_t pool_used_high = 0;
-    bool pool_ok = false;
-};
-
-bool queryGpuMemoryBreakdown(GpuMemoryBreakdown& out) {
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
-        (void)cudaGetLastError();  // don't let it masquerade as a later kernel fault
-        return false;
-    }
-    out.device_total = static_cast<std::uint64_t>(total_bytes);
-    out.device_used = static_cast<std::uint64_t>(total_bytes - free_bytes);
-
-    int device = 0;
-    cudaMemPool_t pool = nullptr;
-    if (cudaGetDevice(&device) == cudaSuccess &&
-        cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess && pool != nullptr) {
-        unsigned long long value = 0;
-        auto readAttr = [&](cudaMemPoolAttr attr, std::uint64_t& dst) {
-            value = 0;
-            if (cudaMemPoolGetAttribute(pool, attr, &value) == cudaSuccess) {
-                dst = static_cast<std::uint64_t>(value);
-            }
-        };
-        readAttr(cudaMemPoolAttrReservedMemCurrent, out.pool_reserved_current);
-        readAttr(cudaMemPoolAttrReservedMemHigh, out.pool_reserved_high);
-        readAttr(cudaMemPoolAttrUsedMemCurrent, out.pool_used_current);
-        readAttr(cudaMemPoolAttrUsedMemHigh, out.pool_used_high);
-        out.pool_ok = true;
-    } else {
-        (void)cudaGetLastError();
-    }
-    return true;
-}
-
-int gpuMemoryLogInterval() {
-    if (const char* raw = std::getenv("GRIM_GPU_MEM_INTERVAL")) {
-        const int parsed = std::atoi(raw);
-        if (parsed > 0) {
-            return parsed;
-        }
-    }
-    return 50;  // default: emit a breakdown line every 50 batches (plus the first)
-}
-
-bool shouldEmitGpuMemoryDiagnostics(const TrainingContext& ctx, int batch_idx) {
-    if constexpr (!GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS) {
-        return false;
-    } else {
-        if (!ctx.logging.logger) {
-            return false;
-        }
-        const int interval = gpuMemoryLogInterval();
-        return (batch_idx == 0) || (((batch_idx + 1) % interval) == 0);
-    }
-}
-
-// Update the run-level peak GPU-memory high-water mark AND, at a modest interval,
-// emit an informative [GPU_MEM] breakdown that splits device-used into async-pool
-// reserved vs. non-pool bytes. This is the measurement that turns the previously
-// "unaccounted" VRAM gap (VRAM_BREAKDOWN.md) into a tracked number: pool retention
-// / fragmentation (async_pool_retained) vs. real working set (non_pool_used).
-//
-// cudaMemGetInfo and the pool-attribute queries are non-synchronizing driver calls
-// (~microseconds), so sampling twice per batch is negligible next to forward+backward.
-// Observability only — a failed query must never take down a training step.
-void updatePeakGpuMemory(TrainingContext& ctx, int batch_idx, const char* phase) {
-    GpuMemoryBreakdown mem;
-    if (!queryGpuMemoryBreakdown(mem)) {
-        return;
-    }
-    if (mem.device_used > ctx.peak_gpu_used_bytes) {
-        ctx.peak_gpu_used_bytes = mem.device_used;
-    }
-    ctx.gpu_total_bytes = mem.device_total;
-
-    if (!shouldEmitGpuMemoryDiagnostics(ctx, batch_idx)) {
-        return;
-    }
-
-    constexpr double kMiB = 1024.0 * 1024.0;
-    const double total_for_pct = static_cast<double>(mem.device_total > 0 ? mem.device_total : 1);
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(1)
-        << "[GPU_MEM] batch=" << (batch_idx + 1)
-        << " phase=" << (phase ? phase : "unknown")
-        << " device_used=" << (mem.device_used / kMiB) << "MiB"
-        << " device_total=" << (mem.device_total / kMiB) << "MiB"
-        << " device_used_pct=" << (100.0 * static_cast<double>(mem.device_used) / total_for_pct)
-        << " peak_used=" << (ctx.peak_gpu_used_bytes / kMiB) << "MiB";
-    if (mem.pool_ok) {
-        const std::uint64_t non_pool = (mem.device_used > mem.pool_reserved_current)
-            ? (mem.device_used - mem.pool_reserved_current)
-            : 0;
-        const std::uint64_t pool_retained = (mem.pool_reserved_current > mem.pool_used_current)
-            ? (mem.pool_reserved_current - mem.pool_used_current)
-            : 0;
-        oss << " async_pool_reserved=" << (mem.pool_reserved_current / kMiB) << "MiB"
-            << " async_pool_reserved_high=" << (mem.pool_reserved_high / kMiB) << "MiB"
-            << " async_pool_in_use=" << (mem.pool_used_current / kMiB) << "MiB"
-            << " async_pool_retained=" << (pool_retained / kMiB) << "MiB"
-            << " non_pool_used=" << (non_pool / kMiB) << "MiB";
-    } else {
-        oss << " async_pool=unavailable";
-    }
-    ctx.logging.logger->log(oss.str());
-}
 
 int validatedAccumulationSteps(const TrainingContext& ctx) {
     const auto schedule_hp =
@@ -426,6 +323,11 @@ void runOptimizerWindowFromEpoch(
     int accum_steps,
     int optimizer_step)
 {
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measurePeakMemory(
+            ctx, "optimizer.window_start", batch_idx, accum_steps - 1);
+    }
+
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
     const GRIM::Tensor& lm_head_weights =
         parameter_registry.requireLmHeadParameters("runOptimizerWindowFromEpoch").weights;
@@ -451,6 +353,11 @@ void runOptimizerWindowFromEpoch(
     const auto clip = GRIM::GradClip::clipGradientNorms(
         parameter_groups.data(), parameter_groups.size(),
         ctx.optimizer.optimizer_state.gradient_clip_scratch, clipping_hp, schedule_hp, clip_stream);
+
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measurePeakMemory(
+            ctx, "optimizer.gradient_clipping_complete", batch_idx, accum_steps - 1);
+    }
 
     result.grad_rms = clip.global_rms_post;
     result.grad_rms_valid = true;
@@ -494,6 +401,11 @@ void runOptimizerWindowFromEpoch(
             optimizer_step,
             result.learning_rate,
             batch_idx);
+    }
+
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measurePeakMemory(
+            ctx, "optimizer.update_complete", batch_idx, accum_steps - 1);
     }
 
     GRIM::Diagnostics::runOptimizerMomentDiagnostic(
@@ -672,14 +584,13 @@ BatchResult processBatch(
             " — scheduler produced batch_size=0; fix the upstream filter");
     }
 
-    // Peak-memory sample BEFORE this batch's forward graph is allocated. The
-    // previous batch's forward_outputs/loss_state were already cleared at that
-    // batch's processBatch scope exit, so device_used here is the persistent
-    // static floor: params + grads + optimizer state + CUDA context +
-    // cuBLAS/FlashAttention workspace + durable TrainingState buffers. Compared
-    // against the post_forward / post_backward samples this attributes the
-    // per-step retained forward graph vs. the static baseline.
-    updatePeakGpuMemory(ctx, batch_idx, "pre_forward");
+    // Persistent floor before this microbatch owns device-side batch bindings or
+    // a forward graph: parameters, accumulated gradients, optimizer state,
+    // durable workspaces, CUDA libraries, and allocator retention.
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measurePeakMemory(
+            ctx, "microbatch.persistent_floor", batch_idx, plan.accumulation_slot);
+    }
 
     // beginBatch() must run EVERY BatchPayload pass to clear previous entries;
     // otherwise accumulation slots 1+ inherit stale entries.
@@ -724,6 +635,10 @@ BatchResult processBatch(
         ctx.config,
         payload,
         stream);
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measurePeakMemory(
+            ctx, "microbatch.batch_upload_complete", batch_idx, plan.accumulation_slot);
+    }
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
     const auto model_hp = GRIM::HyperParameters::modelHP(ctx.config);
     const auto& model_config = ctx.config;
@@ -787,20 +702,20 @@ BatchResult processBatch(
     // Peak-memory sample: with all forward activations live alongside the
     // persistent params / grad buffers / optimizer state, this brackets the high
     // end of the step (backward then frees activations as it fills grads).
-    updatePeakGpuMemory(ctx, batch_idx, "post_forward");
-    // Per-tensor forward-output size breakdown: lists every live retained
-    // ModelForwardOutputs tensor with element/byte size plus the total. Attributes
-    // the post_forward memory jump to individual forward products.
-    if (shouldEmitGpuMemoryDiagnostics(ctx, batch_idx)) {
-        ctx.logging.logger->log(
-            forward_outputs.describeRetainedSizes("batch=" + std::to_string(batch_idx + 1)));
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measureForwardMemory(
+            ctx, forward_outputs, batch_idx, plan.accumulation_slot);
     }
     // Rule 20 ownership taxonomy: processBatch owns the single batch-boundary
     // clear path for the active forward/loss step-state. Do NOT add a second
     // explicit clear() site inside this function.
     ProcessBatchStepStateClearScope step_state_clear_scope{
         forward_outputs,
-        autograd_loss_state};
+        autograd_loss_state,
+        &ctx,
+        batch_idx,
+        plan.accumulation_slot,
+        "microbatch.graph_cleared"};
 
     GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
         &model_config,
@@ -834,6 +749,10 @@ BatchResult processBatch(
     }
     if (!std::isfinite(loss_result.loss_value)) {
         throw std::runtime_error("Non-finite loss: " + std::to_string(loss_result.loss_value));
+    }
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measurePeakMemory(
+            ctx, "loss.graph_live", batch_idx, plan.accumulation_slot);
     }
 
     // Atom insertion uses the shared diagnostic-sync cadence documented for
@@ -883,7 +802,10 @@ BatchResult processBatch(
     // Peak-memory sample: captures any backward-only transient (reduction
     // scratch, etc.) the post-forward sample missed. The high-water mark keeps
     // whichever bracket is larger.
-    updatePeakGpuMemory(ctx, batch_idx, "post_backward");
+    if constexpr (Memory::EnablePeakMemoryMeasurer) {
+        Memory::measurePeakMemory(
+            ctx, "backward.complete_graph_live", batch_idx, plan.accumulation_slot);
+    }
 
     result.loss = loss_result.loss_value;
     result.text_loss = loss_result.text_loss;
@@ -1365,11 +1287,19 @@ EpochResult runEpoch(
         BatchAutogradPlan autograd_plan;
         autograd_plan.should_accumulate = shouldAccumulateGradients(ctx.optimizer);
         autograd_plan.batch_idx = static_cast<uint64_t>(batch_idx);
+        autograd_plan.accumulation_slot = ctx.optimizer.accumulationSlot();
 
         const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
 
         BatchResult batch_result = processBatch(
             ctx, state, payload, batch_idx, epoch_idx, autograd_plan);
+
+        // processBatch has returned, so all microbatch-local forward, loss,
+        // backward, and uploaded-batch owners have completed destruction.
+        if constexpr (Memory::EnablePeakMemoryMeasurer) {
+            Memory::measurePeakMemory(
+                ctx, "microbatch.complete", batch_idx, autograd_plan.accumulation_slot);
+        }
 
         // LR: index by optimizer step (NOT global_step). global_step is per
         // BatchPayload pass; using it advances warmup/decay accum_steps times

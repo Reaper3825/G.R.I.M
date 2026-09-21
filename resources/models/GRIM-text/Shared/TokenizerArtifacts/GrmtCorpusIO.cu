@@ -449,6 +449,7 @@ void validateConceptBlockSpanMetadata(
     };
     validate_optional(spans->reasoning, "reasoning");
     validate_optional(spans->determine, "determine");
+    validate_optional(spans->define, "define");
     validate_optional(spans->execute, "execute");
     validate_optional(spans->update, "update");
     if (!spans->knowns.empty() && !spans->unknowns.empty() &&
@@ -493,6 +494,7 @@ void validateConceptBlockSpanTokenSlices(
     };
     validate_optional(spans->reasoning, "reasoning");
     validate_optional(spans->determine, "determine");
+    validate_optional(spans->define, "define");
     validate_optional(spans->execute, "execute");
     validate_optional(spans->update, "update");
 }
@@ -531,6 +533,7 @@ void validateConceptBlockSpanTokenRange(
     };
     validate_optional(spans->reasoning, "reasoning");
     validate_optional(spans->determine, "determine");
+    validate_optional(spans->define, "define");
     validate_optional(spans->execute, "execute");
     validate_optional(spans->update, "update");
 }
@@ -755,7 +758,7 @@ void writeConceptBlockSpansForSequence(
     if (!sequence.concept_block_spans) {
         writeScalar(output, std::uint32_t{0}, sink);
         writeScalar(output, std::uint32_t{0}, sink);
-        for (int index = 0; index < 4; ++index) {
+        for (int index = 0; index < 5; ++index) {
             writeScalar(output, std::uint8_t{0}, sink);
         }
         return;
@@ -764,6 +767,7 @@ void writeConceptBlockSpansForSequence(
     write_entries(sequence.concept_block_spans->unknowns, "unknowns");
     write_optional(sequence.concept_block_spans->reasoning, "reasoning");
     write_optional(sequence.concept_block_spans->determine, "determine");
+    write_optional(sequence.concept_block_spans->define, "define");
     write_optional(sequence.concept_block_spans->execute, "execute");
     write_optional(sequence.concept_block_spans->update, "update");
 }
@@ -802,6 +806,7 @@ readConceptBlockSpansForSequence(
     };
     read_optional(spans->reasoning);
     read_optional(spans->determine);
+    read_optional(spans->define);
     read_optional(spans->execute);
     read_optional(spans->update);
     if (spans->empty()) {

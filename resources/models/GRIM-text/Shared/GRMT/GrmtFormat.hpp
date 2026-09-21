@@ -12,6 +12,9 @@
 
 namespace GRIM {
 
+// Version 32 persists the model-visible Define span between Determine and
+// Execute in ConceptBlock span metadata.
+//
 // Version 31 makes the model-visible Answer label explicit and widens
 // Determine/Execute/Update/Answer spans to include section markers and
 // separators. Rebuild GRMT rows; the compiled model and checkpoint formats
@@ -72,7 +75,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 31;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 32;
 
 } // namespace GRIM
 

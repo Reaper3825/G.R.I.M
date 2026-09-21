@@ -13,7 +13,8 @@
 int main() {
     const nlohmann::json row{
         {"prompt", "Add 10 and 2."},
-        {"determine", "10 + 2 = sum"},
+        {"determine", "Compute the total by adding the two supplied quantities."},
+        {"define", "Let the supplied quantities be addends; sum is their total."},
         {"execute", "<TOOL>(10 + 2)</TOOL> -> sum"},
         {"answer", "The sum is 12."},
     };
@@ -46,6 +47,7 @@ int main() {
         return result;
     };
     spans->determine = entry(rendered.determine);
+    spans->define = entry(rendered.define);
     spans->execute = entry(rendered.execute);
     sequence.concept_block_spans = spans;
     sequence.answer_span = GRIM::GoalTokenSpan{
@@ -59,7 +61,7 @@ int main() {
         std::vector<GRIM::TokenizerArtifacts::GrmtSequence> rows{sequence};
         GRIMText::Training::applySlidingWindows(
             rows, "section-mask", GRIM::HyperParameters::TrainingStage::SFT,
-            {"determine", "execute", "answer"}, {"prompt"},
+            {"determine", "define", "execute", "answer"}, {"prompt"},
             1024, 768, 1, false, false, logger);
         assert(rows.size() == 1);
         const auto& projected = rows.front();
@@ -69,6 +71,8 @@ int main() {
             const bool supervised =
                 (position >= rendered.determine.begin &&
                  position < rendered.determine.end) ||
+                (position >= rendered.define.begin &&
+                 position < rendered.define.end) ||
                 (position >= rendered.execute.begin &&
                  position < rendered.execute.end) ||
                 (position >= rendered.answer.begin &&

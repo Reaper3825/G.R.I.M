@@ -109,7 +109,7 @@ void logDiagnosticSample(TrainingContext& ctx,
     }
 
     const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT",
-        "A tank holds 120 liters. After using some, 84 liters remain. How many liters were used?");
+        "A tank holds 120 liters. After using a few liters, 84 liters remain. How many liters were used?");
 
     // Mirror the reasoning-model contract used at runtime: upstream models
     // supply structured state, while this model determines the next output.
@@ -117,11 +117,11 @@ void logDiagnosticSample(TrainingContext& ctx,
     // never treated as answer targets.
     GRIM::ReasoningState reasoning_state;
     reasoning_state.knowns = {
-        "tank capacity = 120 liters",
-        "remaining volume = 84 liters"
+        "tank_liters = 120;",
+        "remaining_liters = 84;"
     };
     reasoning_state.unknowns = {
-        "used volume"
+        "used_liters"
     };
     reasoning_state.goal = GRIM::ConceptBlockGoal{
         "Determine how many liters were used.",

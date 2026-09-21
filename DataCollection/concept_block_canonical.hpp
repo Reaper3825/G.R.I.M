@@ -35,7 +35,7 @@ struct SuccessCriterionByteSpans {
 struct RenderResult {
     std::string text;
     // State labels are model-visible. Goal/collection ranges cover values;
-    // Determine/Execute/Update/Answer ranges cover their complete labeled
+    // Determine/Define/Execute/Update/Answer ranges cover their complete labeled
     // sections so SFT can teach section transitions as well as content.
     LogicalByteSpan target_state;
     LogicalByteSpan criteria;
@@ -51,9 +51,10 @@ struct RenderResult {
     // collection has an outer span.
     std::vector<LogicalByteSpan> knowns;
     std::vector<LogicalByteSpan> unknowns;
-    // Authored Determine/Execute/Update phases immediately preceding Answer.
+    // Authored Determine/Define/Execute/Update phases immediately preceding Answer.
     LogicalByteSpan reasoning;
     LogicalByteSpan determine;
+    LogicalByteSpan define;
     LogicalByteSpan execute;
     LogicalByteSpan update;
     // Authored final answer section, including its visible label.
@@ -258,6 +259,7 @@ inline RenderResult render(const nlohmann::json& j) {
         span.present = true;
     };
     append_phase("determine", result.determine);
+    append_phase("define", result.define);
     append_phase("execute", result.execute);
     append_phase("update", result.update);
 
@@ -313,7 +315,7 @@ inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
             if (step.is_string()) out << step.get<std::string>() << "\n";
         }
     }
-    for (const char* phase : {"determine", "execute", "update"}) {
+    for (const char* phase : {"determine", "define", "execute", "update"}) {
         if (j.contains(phase) && j[phase].is_string()
             && !j[phase].get<std::string>().empty()) {
             out << j[phase].get<std::string>() << "\n";
@@ -339,6 +341,7 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
         {"unknowns", cb.unknowns},
         {"explanation", cb.explanation.empty() ? cb.intermediates : cb.explanation},
         {"determine", cb.determine},
+        {"define", cb.define},
         {"execute", cb.execute},
         {"update", cb.update},
         {"answer", cb.answer},
@@ -453,6 +456,7 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
             << "</" << label << ">\n\n";
     };
     append_phase("determine", cb.determine);
+    append_phase("define", cb.define);
     append_phase("execute", cb.execute);
     append_phase("update", cb.update);
 

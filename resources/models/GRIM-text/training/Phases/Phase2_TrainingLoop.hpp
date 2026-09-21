@@ -49,6 +49,7 @@ namespace GRIMText::Training {
 struct BatchAutogradPlan {
     bool should_accumulate = false;
     uint64_t batch_idx = 0;
+    int accumulation_slot = 0;
 };
 
 /**

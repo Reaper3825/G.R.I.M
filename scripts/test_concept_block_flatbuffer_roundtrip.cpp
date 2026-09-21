@@ -10,7 +10,8 @@ int main() {
     GRIM::ConceptBlock source;
     source.id = "phase-fields-round-trip";
     source.prompt = "Prompt";
-    source.determine = "Determine what must be done.";
+    source.determine = "Select the operation needed to produce the requested result.";
+    source.define = "Define local terms for this reasoning step.";
     source.execute = "Execute the selected operation.";
     source.update = "Update the working state.";
     source.answer = "Answer";
@@ -24,15 +25,18 @@ int main() {
     assert(GRIM::ConceptBlockIO::loadFlatBuffer(path, loaded, &error));
     assert(loaded.size() == 1);
     assert(loaded[0].determine == source.determine);
+    assert(loaded[0].define == source.define);
     assert(loaded[0].execute == source.execute);
     assert(loaded[0].update == source.update);
     assert(loaded[0].answer == source.answer);
 
     const auto rendered = GRIM::ConceptCanonical::render(loaded[0]);
     assert(rendered.determine.present);
+    assert(rendered.define.present);
     assert(rendered.execute.present);
     assert(rendered.update.present);
-    assert(rendered.determine.begin < rendered.execute.begin);
+    assert(rendered.determine.begin < rendered.define.begin);
+    assert(rendered.define.begin < rendered.execute.begin);
     assert(rendered.execute.begin < rendered.update.begin);
     assert(rendered.update.begin < rendered.answer.begin);
 

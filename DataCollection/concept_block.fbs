@@ -1,4 +1,6 @@
 // FlatBuffers schema for the GRIM concept-block dataset.
+// Authoring, rendering, and span contract:
+//   docs/GRIM_REASONING_DATA_CONTRACT.md
 // Regenerate C++ with:
 //   flatc --cpp --scoped-enums -o DataCollection DataCollection/concept_block.fbs
 //
@@ -46,6 +48,7 @@ table ConceptBlock {
     determine: string;
     execute: string;
     update: string;
+    define: string;
 }
 
 table ConceptBlockDataset {

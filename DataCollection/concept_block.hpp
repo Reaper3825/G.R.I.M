@@ -55,6 +55,7 @@ struct ConceptBlock {
     std::vector<std::string> unknowns;
     std::vector<std::string> intermediates;
     std::string determine;
+    std::string define;
     std::string execute;
     std::string update;
     std::string answer;

@@ -447,6 +447,7 @@ private:
     std::vector<std::shared_ptr<UITextArea>> cbKnownAreas_;
     std::vector<std::shared_ptr<UITextArea>> cbUnknownAreas_;
     std::shared_ptr<UITextArea>  cbDetermineArea_;
+    std::shared_ptr<UITextArea>  cbDefineArea_;
     std::shared_ptr<UITextArea>  cbExecuteArea_;
     std::shared_ptr<UITextArea>  cbUpdateArea_;
     std::shared_ptr<UITextArea>  cbAnswerArea_;

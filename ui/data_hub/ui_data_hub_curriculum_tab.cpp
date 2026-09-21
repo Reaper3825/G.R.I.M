@@ -542,7 +542,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
     } // end if (conceptMode) — EXP / EXEC hidden in PT mode
 
-    // ─── Determine / Execute / Update (concept mode only) ─
+    // ─── Determine / Define / Execute / Update (concept mode only) ─
     if (structuredEditorMode) {
     struct PhaseField {
         const char* label;
@@ -550,6 +550,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     };
     const PhaseField phaseFields[] = {
         {"Determine", cbDetermineArea_},
+        {"Define", cbDefineArea_},
         {"Execute", cbExecuteArea_},
         {"Update", cbUpdateArea_}
     };
@@ -795,6 +796,7 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
         cbUnknownAreas_[i]->setText(cb.unknowns[i]);
     }
     if (cbDetermineArea_) cbDetermineArea_->setText(cb.determine);
+    if (cbDefineArea_)    cbDefineArea_->setText(cb.define);
     if (cbExecuteArea_)   cbExecuteArea_->setText(cb.execute);
     if (cbUpdateArea_)    cbUpdateArea_->setText(cb.update);
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
@@ -848,6 +850,7 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbPromptArea_) cbPromptArea_->setText("");
     if (cbTargetStateArea_) cbTargetStateArea_->setText("");
     if (cbDetermineArea_) cbDetermineArea_->setText("");
+    if (cbDefineArea_) cbDefineArea_->setText("");
     if (cbExecuteArea_) cbExecuteArea_->setText("");
     if (cbUpdateArea_) cbUpdateArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
@@ -953,6 +956,7 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     out.name = cbNameInput_ ? cbNameInput_->getText() : "";
     out.prompt = cbPromptArea_ ? cbPromptArea_->getText() : "";
     out.determine = cbDetermineArea_ ? cbDetermineArea_->getText() : "";
+    out.define = cbDefineArea_ ? cbDefineArea_->getText() : "";
     out.execute = cbExecuteArea_ ? cbExecuteArea_->getText() : "";
     out.update = cbUpdateArea_ ? cbUpdateArea_->getText() : "";
     out.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
@@ -1024,6 +1028,7 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
         out.raw = std::move(out.prompt);
         out.prompt.clear();
         out.determine.clear();
+        out.define.clear();
         out.execute.clear();
         out.update.clear();
         out.answer.clear();

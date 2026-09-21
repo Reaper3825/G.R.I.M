@@ -7,3 +7,8 @@
 - Python scripts, data-generation scripts, migration scripts, linters, static diagnostics, and focused script/unit tests are allowed and encouraged when they validate the current task.
 - Keep builds scoped to the explicitly requested target; do not build unrelated training or runtime targets as a side effect.
 - Do not perform package installation or dependency mutation unless the user explicitly requests it. Existing toolchains and installed dependencies may be used for permitted builds.
+
+## Reasoning data contract
+
+- Before creating, transforming, or reviewing GRIM ConceptBlock reasoning examples, read `docs/GRIM_REASONING_DATA_CONTRACT.md`.
+- Changes to `DataCollection/concept_block.fbs`, `DataCollection/concept_block.hpp`, `DataCollection/concept_block_canonical.hpp`, ConceptBlock/Goal span projection, or concept supervision policy must update `docs/GRIM_REASONING_DATA_CONTRACT.md` when they affect the documented contract.

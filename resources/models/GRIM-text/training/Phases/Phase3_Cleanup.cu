@@ -374,8 +374,8 @@ void finalizeEpochOutcome(
     ctx.logging.logger->log("[Epoch " + std::to_string(epoch_idx + 1) + "] " +
                             Internal::formatMetric("avg_loss", result.avg_loss));
 
-    // Peak GPU memory high-water mark across the run so far, sampled each batch
-    // in Phase2 to reflect params + grads + activations + optimizer state.
+    // Peak GPU memory high-water mark across the run so far, sampled at named
+    // Phase2 ownership boundaries.
     if (ctx.peak_gpu_used_bytes > 0) {
         const double mib = static_cast<double>(ctx.peak_gpu_used_bytes) / (1024.0 * 1024.0);
         const double gib = mib / 1024.0;
@@ -391,6 +391,12 @@ void finalizeEpochOutcome(
                                static_cast<double>(ctx.gpu_total_bytes);
             peak_line << ", " << std::setprecision(1) << pct << "% of "
                       << std::setprecision(2) << total_gib << " GiB total";
+        }
+        if (!ctx.peak_gpu_used_owner.empty()) {
+            peak_line << ", owner=" << ctx.peak_gpu_used_owner
+                      << ", batch=" << (ctx.peak_gpu_used_batch + 1)
+                      << ", accumulation_slot="
+                      << ctx.peak_gpu_used_accumulation_slot;
         }
         peak_line << ")";
         ctx.logging.logger->log(peak_line.str());

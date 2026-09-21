@@ -22,12 +22,13 @@ struct ConceptBlockSpans {
     std::vector<ConceptBlockSpanEntry> unknowns;
     std::optional<ConceptBlockSpanEntry> reasoning;
     std::optional<ConceptBlockSpanEntry> determine;
+    std::optional<ConceptBlockSpanEntry> define;
     std::optional<ConceptBlockSpanEntry> execute;
     std::optional<ConceptBlockSpanEntry> update;
 
     bool empty() const noexcept {
         return knowns.empty() && unknowns.empty() && !reasoning &&
-               !determine && !execute && !update;
+               !determine && !define && !execute && !update;
     }
 };
 

@@ -60,6 +60,7 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     cb.name               = j.value("name", std::string());
     cb.prompt             = j.value("prompt", std::string());
     cb.determine          = j.value("determine", std::string());
+    cb.define             = j.value("define", std::string());
     cb.execute            = j.value("execute", std::string());
     cb.update             = j.value("update", std::string());
     cb.answer             = j.value("answer", std::string());
@@ -785,6 +786,7 @@ std::vector<size_t> DatasetTarget::searchConceptBlocks(
             bool match = toLower(cb.name).find(lq) != std::string::npos
                       || toLower(cb.prompt).find(lq) != std::string::npos
                       || toLower(cb.determine).find(lq) != std::string::npos
+                      || toLower(cb.define).find(lq) != std::string::npos
                       || toLower(cb.execute).find(lq) != std::string::npos
                       || toLower(cb.update).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos
@@ -827,6 +829,7 @@ std::vector<size_t> DatasetTarget::filterConceptBlocks(
             bool match = toLower(cb.name).find(lq) != std::string::npos
                       || toLower(cb.prompt).find(lq) != std::string::npos
                       || toLower(cb.determine).find(lq) != std::string::npos
+                      || toLower(cb.define).find(lq) != std::string::npos
                       || toLower(cb.execute).find(lq) != std::string::npos
                       || toLower(cb.update).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos;
