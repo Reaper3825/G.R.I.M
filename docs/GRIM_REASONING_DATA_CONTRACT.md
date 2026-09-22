@@ -19,6 +19,9 @@ The normative implementation is split across:
   inference-time state accepted from upstream producers.
 - [`Phase2_InferenceLoop.hpp`](../resources/models/GRIM-text/training/Phases/Phase2_InferenceLoop.hpp):
   structured inference entrypoint.
+- [`ConceptSupervision.cu`](../resources/models/GRIM-text/training/Phases/Startup/ConceptSupervision.cu):
+  runtime projection of configured ConceptBlock fields onto causal targets and
+  masked context before window construction.
 - [`concept_block.fbs`](../DataCollection/concept_block.fbs): persisted training
   example fields. This is supporting storage, not the organizing model contract.
 

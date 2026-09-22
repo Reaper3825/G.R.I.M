@@ -648,8 +648,12 @@ add_executable(train_gpu
     ../Phases/Startup/Validation/Phase2Handoff.hpp
     ../Phases/Startup/SlidingWindow.cu
     ../Phases/Startup/SlidingWindow.hpp
+    ../Phases/Startup/ConceptSupervision.cu
+    ../Phases/Startup/ConceptSupervision.hpp
     ../Phases/Startup/ClassBalancedWeights.cu
     ../Phases/Startup/ClassBalancedWeights.hpp
+    ../Phases/Startup/OutputUnigramPrior.cu
+    ../Phases/Startup/OutputUnigramPrior.hpp
     ../Phases/Startup/InitFacts.cu
     ../Phases/Startup/InitFacts.hpp
     ../Phases/ConfigDump.cu
@@ -716,6 +720,7 @@ add_executable(train_gpu
     ../metrics_collector.hpp
     ../TrainingEvents.hpp
     ../../Shared/DataLoader/DataLoader.cu
+    ../../Shared/DataLoader/CurriculumRegistry.cu
     ../../Shared/SoftRestart/SoftRestart.cu
 )
 
@@ -884,6 +889,7 @@ target_include_directories(atom_insertion_state_machine_test PRIVATE
 add_executable(unigrambyte_self_test
     ../../Tests/unigrambyte_self_test.cu
     ../Phases/Startup/SlidingWindow.cu
+    ../Phases/Startup/ConceptSupervision.cu
     ../../Shared/Batching/LocalAtomSelectionData.cu
 )
 
@@ -958,9 +964,12 @@ add_executable(train_tokenizer
     ../train_tokenizer.cu
     ../Subprocess/subprocess_status_io.cpp
     ../Phases/Startup/SlidingWindow.cu
+    ../Phases/Startup/ConceptSupervision.cu
     ../Phases/ConfigDump.cu
     ../Phases/DataStatsDump.cu
-    ../../Shared/DataLoader/DataLoader.cu
+    ../../Shared/DataLoader/CurriculumRegistry.cu
+    ../../Shared/DataLoader/ConceptBlockCorpusReader.cu
+    ../../Shared/DataLoader/ConceptBlockGrmtCompiler.cu
 )
 
 set_target_properties(train_tokenizer PROPERTIES

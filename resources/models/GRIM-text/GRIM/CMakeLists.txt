@@ -91,6 +91,7 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Validation/StartupValidation.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Validation/Phase2Handoff.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/SlidingWindow.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/ConceptSupervision.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/ClassBalancedWeights.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/InitFacts.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Subprocess/tokenizer_subprocess.cpp

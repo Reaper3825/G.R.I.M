@@ -41,7 +41,7 @@
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Shared/GRMT/GrmtFormat.hpp"
-#include "../Shared/DataLoader/DataLoader.hpp"
+#include "../Shared/DataLoader/ConceptBlockGrmtCompiler.hpp"
 #include "Subprocess/subprocess_status_io.hpp" // Foundational status-file IPC. The envelope schema lives there; tokenizer-
 
 namespace fs = std::filesystem;
