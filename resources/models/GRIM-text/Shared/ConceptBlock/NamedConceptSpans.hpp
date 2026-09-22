@@ -13,6 +13,34 @@ namespace GRIM {
 
 inline constexpr std::uint32_t kNoNamedConceptSpanEntry =
     std::numeric_limits<std::uint32_t>::max();
+inline constexpr std::int32_t kUnresolvedConceptSpanDelimiterId = -1;
+
+// Training policy authored on a span definition. Nested definitions inherit
+// their nearest explicit ancestor policy unless they override it.
+enum class ConceptSpanSupervision : std::uint8_t {
+    Inherit = 0,
+    Context,
+    Supervised,
+};
+
+// Config-authored recursive schema for one model-visible ConceptBlock field.
+// Delimiter text is authored in JSON. The corresponding token IDs are resolved
+// exactly once after tokenizer initialization and reused for every row. A node
+// with children but no delimiters is a transparent structural grouping node.
+struct NamedConceptSpanDefinition {
+    std::string name;
+    ConceptSpanSupervision supervision = ConceptSpanSupervision::Inherit;
+
+    std::string open_delimiter;
+    std::string close_delimiter;
+    std::int32_t open_delimiter_id = kUnresolvedConceptSpanDelimiterId;
+    std::int32_t close_delimiter_id = kUnresolvedConceptSpanDelimiterId;
+
+    std::vector<NamedConceptSpanDefinition> children;
+};
+
+using NamedConceptSpanDefinitions =
+    std::vector<NamedConceptSpanDefinition>;
 
 // One configurable model-visible span node after canonical rendering and
 // tokenization. Root nodes may own child nodes for collection entries and
