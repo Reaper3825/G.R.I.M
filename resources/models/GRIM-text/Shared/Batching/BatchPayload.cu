@@ -485,9 +485,6 @@ BatchPayload buildBatchPayload(
         const auto& r = raw[b];
         const int seq_len = r.length;
         const size_t row_offset = static_cast<size_t>(b) * S;
-        const GRIM::GoalSpanView goal_spans = payload.goalSpansForRow(
-            static_cast<std::size_t>(b));
-
         // Bulk copy token IDs (contiguous source → contiguous destination row)
         std::memcpy(&payload.input_ids[row_offset],
                     r.token_ids->data(),
@@ -512,29 +509,16 @@ BatchPayload buildBatchPayload(
                     seq_len * sizeof(int));
         // Padding positions beyond seq_len already have target=-1 from assign().
         // Apply typed-span ownership and defense-mask layout-only targets while
-        // counting the final LM-supervised rows in one pass.
+        // counting the final LM-supervised rows in one pass. Concept-field
+        // supervision is already authoritative in the sequence target array;
+        // batching must not reinterpret it by field name.
         // UNK, PAD, and BOS are never valid prediction targets.
         // EOS IS a valid target — model must learn to predict end-of-sequence.
         // This is a safety net; DataLoader should already mask these.
         int valid_count = 0;
         for (int t = 0; t < seq_len - 1; ++t) {
             int& target = payload.target_ids[row_offset + t];
-            const int target_position = t + 1;
-            bool predicts_constraint_token = false;
-            for (std::size_t constraint_index = 0;
-                 constraint_index < goal_spans.constraintCount();
-                 ++constraint_index) {
-                const GRIM::GoalTokenSpan& span =
-                    goal_spans.constraintSpan(constraint_index);
-                if (target_position >= span.begin && target_position < span.end) {
-                    predicts_constraint_token = true;
-                    break;
-                }
-            }
-
-            if (predicts_constraint_token) {
-                target = -1;
-            } else if (r.atom_aux_target_mask->at(static_cast<std::size_t>(t)) != 0) {
+            if (r.atom_aux_target_mask->at(static_cast<std::size_t>(t)) != 0) {
                 target = -1;
             } else if (target >= 0 && GRIM::Tokenizer::isNeverTargetSpecialTokenId(target)) {
                 // Non-content token leaked through DataLoader — mask it

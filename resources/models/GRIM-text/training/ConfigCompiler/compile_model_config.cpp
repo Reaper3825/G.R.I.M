@@ -27,7 +27,7 @@ using json = nlohmann::json;
 namespace {
 
 constexpr std::uint32_t kSchemaVersion = 8;
-constexpr std::uint32_t kSemanticVersion = 9;
+constexpr std::uint32_t kSemanticVersion = 10;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -132,16 +132,19 @@ GRIMConfig::ConceptSupervisionTarget parseConceptSupervisionTarget(
     if (normalized == "constraints") {
         return GRIMConfig::ConceptSupervisionTarget_Constraints;
     }
-    if (normalized == "knowns_and_unknowns") {
-        return GRIMConfig::ConceptSupervisionTarget_KnownsAndUnknowns;
+    if (normalized == "knowns") {
+        return GRIMConfig::ConceptSupervisionTarget_Knowns;
     }
     if (normalized == "answer") {
         return GRIMConfig::ConceptSupervisionTarget_Answer;
     }
+    if (normalized == "unknowns") {
+        return GRIMConfig::ConceptSupervisionTarget_Unknowns;
+    }
     throw std::runtime_error(
         "concept_supervision_target has unknown value '" + value +
         "' (valid: target_state, success_criteria_and_evidence, constraints, "
-        "knowns_and_unknowns, answer)");
+        "knowns, unknowns, answer)");
 }
 
 // Small, dependency-free SHA-256 implementation. The compiler must remain a

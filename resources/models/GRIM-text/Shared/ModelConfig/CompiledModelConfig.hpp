@@ -24,8 +24,9 @@ enum class ConceptSupervisionTarget : std::uint8_t {
     TargetState = 1,
     SuccessCriteriaAndEvidence = 2,
     Constraints = 3,
-    KnownsAndUnknowns = 4,
+    Knowns = 4,
     Answer = 5,
+    Unknowns = 6,
 };
 
 const char* conceptSupervisionTargetToString(ConceptSupervisionTarget target);

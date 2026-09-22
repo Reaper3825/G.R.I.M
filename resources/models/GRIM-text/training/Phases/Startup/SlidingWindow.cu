@@ -9,6 +9,7 @@
 #include "SlidingWindow.hpp"
 #include "ConceptSupervision.hpp"
 #include "../../../Shared/ConceptBlock/ConceptBlockSpans.hpp"
+#include "../../../Shared/ConceptBlock/NamedConceptSpans.hpp"
 #include "../../../Shared/Goal/Goal.hpp"
 #include "../../../Shared/UnigramByte/TokenLayout.hpp"
 
@@ -398,6 +399,55 @@ bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
     return true;
 }
 
+std::shared_ptr<const GRIM::NamedConceptSpans> offsetNamedConceptSpans(
+    const std::shared_ptr<const GRIM::NamedConceptSpans>& source,
+    std::int32_t offset) {
+    if (!source || offset == 0) return source;
+    auto shifted = std::make_shared<GRIM::NamedConceptSpans>(*source);
+    for (auto& entry : shifted->entries) {
+        entry.span.begin += offset;
+        entry.span.end += offset;
+    }
+    return shifted;
+}
+
+bool namedConceptSpansFitPrefix(
+    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
+    size_t source_end) {
+    return spans && std::all_of(
+        spans->entries.begin(), spans->entries.end(),
+        [source_end](const GRIM::NamedConceptSpan& entry) {
+            return static_cast<size_t>(entry.span.end) <= source_end;
+        });
+}
+
+std::shared_ptr<const GRIM::NamedConceptSpans> sliceNamedConceptSpansForSftWindow(
+    const std::shared_ptr<const GRIM::NamedConceptSpans>& source,
+    size_t prefix_length,
+    size_t response_source_begin,
+    size_t response_source_end) {
+    if (!source) return nullptr;
+    auto sliced = std::make_shared<GRIM::NamedConceptSpans>();
+    sliced->entries.reserve(source->entries.size());
+    for (const auto& source_entry : source->entries) {
+        GRIM::NamedConceptSpan entry = source_entry;
+        if (entry.span.end <= static_cast<std::int32_t>(prefix_length)) {
+            sliced->entries.push_back(std::move(entry));
+            continue;
+        }
+        if (entry.span.begin >= static_cast<std::int32_t>(response_source_begin) &&
+            entry.span.end <= static_cast<std::int32_t>(response_source_end)) {
+            const auto offset = static_cast<std::int32_t>(prefix_length) -
+                static_cast<std::int32_t>(response_source_begin);
+            entry.span.begin += offset;
+            entry.span.end += offset;
+            sliced->entries.push_back(std::move(entry));
+        }
+    }
+    if (sliced->empty()) return nullptr;
+    return sliced;
+}
+
 void appendSftTokenRange(GrmtSequence& destination,
                          const GrmtSequence& source,
                          size_t begin,
@@ -583,6 +633,11 @@ SftWindowConstruction constructSftWindows(
                     prefix_length,
                     prefix_length + response_begin,
                     prefix_length + response_end);
+                window.named_concept_spans = sliceNamedConceptSpansForSftWindow(
+                    sequence.named_concept_spans,
+                    prefix_length,
+                    prefix_length + response_begin,
+                    prefix_length + response_end);
                 appendSftTokenRange(window, sequence, 0, prefix_length);
                 appendSftTokenRange(
                     window,
@@ -680,6 +735,8 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             seq.goal = offsetGoalSpans(seq.goal, 1);
             seq.concept_block_spans =
                 offsetConceptBlockSpans(seq.concept_block_spans, 1);
+            seq.named_concept_spans =
+                offsetNamedConceptSpans(seq.named_concept_spans, 1);
             if (seq.answer_span.has_value()) {
                 ++seq.answer_span->begin;
                 ++seq.answer_span->end;
@@ -744,7 +801,8 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             parsed_unsupervised_fields.push_back(
                 parseConceptField(field, policy_source + " unsupervised_fields"));
         }
-        std::array<bool, 11> listed_fields{};
+        std::array<bool, static_cast<std::size_t>(ConceptField::Count)>
+            listed_fields{};
         const auto validate_field_list = [&](const auto& fields, const char* name) {
             for (const auto field : fields) {
                 const auto index = static_cast<std::size_t>(field);
@@ -973,6 +1031,10 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             if (is_first_window &&
                 conceptBlockSpansFitPrefix(seq.concept_block_spans, end)) {
                 window.concept_block_spans = seq.concept_block_spans;
+            }
+            if (is_first_window &&
+                namedConceptSpansFitPrefix(seq.named_concept_spans, end)) {
+                window.named_concept_spans = seq.named_concept_spans;
             }
 
             // For non-first windows, prepend BOS token (gated on add_bos_token config)

@@ -1,6 +1,7 @@
 #include "../DataCollection/concept_block_canonical.hpp"
 #include "../resources/models/GRIM-text/training/Phases/Startup/SlidingWindow.hpp"
 #include "../resources/models/GRIM-text/Shared/ConceptBlock/ConceptBlockSpans.hpp"
+#include "../resources/models/GRIM-text/Shared/ConceptBlock/NamedConceptSpans.hpp"
 #include "../resources/models/GRIM-text/Shared/UnigramByte/TokenLayout.hpp"
 
 #include <cassert>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 int main() {
@@ -35,24 +37,19 @@ int main() {
     sequence.token_exec_slot_indices.assign(length, -1);
     sequence.prompt_length = static_cast<std::int32_t>(rendered.prompt_byte_end);
     sequence.prompt_end_pos = sequence.prompt_length - 1;
-    auto spans = std::make_shared<GRIM::ConceptBlockSpans>();
-    const auto entry = [&](const GRIM::ConceptCanonical::LogicalByteSpan& span) {
-        GRIM::ConceptBlockSpanEntry result;
+    auto named_spans = std::make_shared<GRIM::NamedConceptSpans>();
+    for (const auto& rendered_span : rendered.named_spans) {
+        GRIM::NamedConceptSpan result;
+        result.name = rendered_span.name;
         result.span = GRIM::GoalTokenSpan{
-            static_cast<std::int32_t>(span.begin),
-            static_cast<std::int32_t>(span.end)};
+            static_cast<std::int32_t>(rendered_span.span.begin),
+            static_cast<std::int32_t>(rendered_span.span.end)};
         result.token_ids.assign(
-            sequence.token_ids.begin() + span.begin,
-            sequence.token_ids.begin() + span.end);
-        return result;
-    };
-    spans->determine = entry(rendered.determine);
-    spans->define = entry(rendered.define);
-    spans->execute = entry(rendered.execute);
-    sequence.concept_block_spans = spans;
-    sequence.answer_span = GRIM::GoalTokenSpan{
-        static_cast<std::int32_t>(rendered.answer.begin),
-        static_cast<std::int32_t>(rendered.answer.end)};
+            sequence.token_ids.begin() + rendered_span.span.begin,
+            sequence.token_ids.begin() + rendered_span.span.end);
+        named_spans->entries.push_back(std::move(result));
+    }
+    sequence.named_concept_spans = std::move(named_spans);
 
     const auto log_path = std::filesystem::path("build") /
         "training_concept_section_mask_tests.log";
@@ -81,6 +78,56 @@ int main() {
                    (supervised ? projected.token_ids[position] : -1));
         }
         assert(projected.targets.back() == -1);
+
+        const auto make_collection_row = [](bool known) {
+            GRIM::TokenizerArtifacts::GrmtSequence result;
+            result.concept_block_id = known
+                ? "knowns-only-section-mask-test"
+                : "unknowns-only-section-mask-test";
+            result.token_ids = {100, 101, 102, 103, 104, 105};
+            result.targets.assign(result.token_ids.size(), -1);
+            result.token_numeric_values.assign(result.token_ids.size(), 0.0f);
+            result.token_atom_mask.assign(result.token_ids.size(), 0);
+            result.token_atom_flags.assign(result.token_ids.size(), 0);
+            result.atom_entry_ids.assign(
+                result.token_ids.size(), GRIM::Tokenizer::kAtomEntryNone);
+            result.token_local_atom_indices.assign(
+                result.token_ids.size(), GRIM::Tokenizer::kLocalAtomIndexNone);
+            result.token_exec_slot_indices.assign(result.token_ids.size(), -1);
+            result.prompt_length = 2;
+            result.prompt_end_pos = 1;
+
+            auto collection_spans = std::make_shared<GRIM::ConceptBlockSpans>();
+            GRIM::ConceptBlockSpanEntry collection_entry{
+                {result.token_ids[2], result.token_ids[3]},
+                GRIM::GoalTokenSpan{2, 4}};
+            if (known) {
+                collection_spans->knowns.push_back(std::move(collection_entry));
+            } else {
+                collection_spans->unknowns.push_back(std::move(collection_entry));
+            }
+            result.concept_block_spans = std::move(collection_spans);
+            return result;
+        };
+
+        for (const bool known : {true, false}) {
+            std::vector<GRIM::TokenizerArtifacts::GrmtSequence> collection_rows{
+                make_collection_row(known)};
+            GRIMText::Training::applySlidingWindows(
+                collection_rows,
+                known ? "knowns-only-mask" : "unknowns-only-mask",
+                GRIM::HyperParameters::TrainingStage::SFT,
+                {known ? "knowns" : "unknowns"},
+                {"prompt"},
+                1024, 768, 1, false, false, logger);
+            assert(collection_rows.size() == 1);
+            const auto& collection = collection_rows.front();
+            assert(collection.token_ids.size() == 4);
+            assert(collection.targets[0] == -1);
+            assert(collection.targets[1] == collection.token_ids[2]);
+            assert(collection.targets[2] == collection.token_ids[3]);
+            assert(collection.targets[3] == -1);
+        }
     }
     std::filesystem::remove(log_path);
 }

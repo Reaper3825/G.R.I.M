@@ -17,6 +17,7 @@
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Batching/LocalAtomSelectionData.hpp"
 #include "../Shared/ConceptBlock/ConceptBlockSpans.hpp"
+#include "../Shared/ConceptBlock/NamedConceptSpans.hpp"
 #include "../Shared/Goal/Goal.hpp"
 #include "../Shared/UnigramByte/Detectors/DetectorRegistry.hpp"
 #include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
@@ -2816,6 +2817,16 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     concept_spans->update = GRIM::ConceptBlockSpanEntry{
         {sequence.token_ids[3]}, GRIM::GoalTokenSpan{3, 4}};
     sequence.concept_block_spans = std::move(concept_spans);
+    auto named_spans = std::make_shared<GRIM::NamedConceptSpans>();
+    named_spans->entries.push_back(GRIM::NamedConceptSpan{
+        "knowns",
+        {sequence.token_ids[0], sequence.token_ids[1]},
+        GRIM::GoalTokenSpan{0, 2}});
+    named_spans->entries.push_back(GRIM::NamedConceptSpan{
+        "answer",
+        {sequence.token_ids[2], sequence.token_ids[3]},
+        GRIM::GoalTokenSpan{2, 4}});
+    sequence.named_concept_spans = std::move(named_spans);
 
     const uint32_t entry_id = registerSelfTestAtom(
         *sequence.atom_table, AtomType::ATOM_INT, "42");
@@ -2907,6 +2918,11 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
         round_trip.sequences[0].concept_block_spans->unknowns[0].span.begin == 2 &&
             round_trip.sequences[0].concept_block_spans->unknowns[0].span.end == 4,
         "Unknown logical span must survive GRMT round-trip");
+    ASSERT_TRUE(round_trip.sequences[0].named_concept_spans != nullptr &&
+                    round_trip.sequences[0].named_concept_spans->size() == 2 &&
+                    round_trip.sequences[0].named_concept_spans->find("answer") != nullptr &&
+                    round_trip.sequences[0].named_concept_spans->find("answer")->span.end == 4,
+                "Ordered named ConceptBlock spans must survive GRMT round-trip");
 
     auto validationRejects = [](const TokenizerArtifacts::GrmtSequence& sequence) {
         try {
@@ -3261,6 +3277,14 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
         sft_sequence.prompt_end_pos = 1;
         sft_sequence.answer_span = GRIM::GoalTokenSpan{
             2, static_cast<std::int32_t>(sft_sequence.token_ids.size())};
+        auto sft_named_spans = std::make_shared<GRIM::NamedConceptSpans>();
+        sft_named_spans->entries.push_back(GRIM::NamedConceptSpan{
+            "answer",
+            std::vector<std::int32_t>(
+                sft_sequence.token_ids.begin() + 2,
+                sft_sequence.token_ids.end()),
+            *sft_sequence.answer_span});
+        sft_sequence.named_concept_spans = std::move(sft_named_spans);
         std::vector<TokenizerArtifacts::GrmtSequence> sft_sequences{
             std::move(sft_sequence)};
         GRIMText::Training::applySlidingWindows(
@@ -3348,6 +3372,21 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
             {multi_tokens[8], multi_tokens[9]}, GRIM::GoalTokenSpan{8, 10}};
         multi_field_sequence.concept_block_spans = std::move(field_spans);
         multi_field_sequence.answer_span = GRIM::GoalTokenSpan{10, 12};
+        auto multi_named_spans = std::make_shared<GRIM::NamedConceptSpans>();
+        const auto add_named_span = [&](const char* name, std::int32_t begin,
+                                        std::int32_t end) {
+            multi_named_spans->entries.push_back(GRIM::NamedConceptSpan{
+                name,
+                std::vector<std::int32_t>(
+                    multi_tokens.begin() + begin, multi_tokens.begin() + end),
+                GRIM::GoalTokenSpan{begin, end}});
+        };
+        add_named_span("determine", 2, 4);
+        add_named_span("define", 4, 6);
+        add_named_span("execute", 6, 8);
+        add_named_span("update", 8, 10);
+        add_named_span("answer", 10, 12);
+        multi_field_sequence.named_concept_spans = std::move(multi_named_spans);
         std::vector<TokenizerArtifacts::GrmtSequence> multi_field_sequences{
             std::move(multi_field_sequence)};
         GRIMText::Training::applySlidingWindows(

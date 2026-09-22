@@ -221,7 +221,8 @@ It retains these fields as masked context when present:
   "target_state",
   "success_criteria_and_evidence",
   "constraints",
-  "knowns_and_unknowns"
+  "knowns",
+  "unknowns"
 ]
 ```
 
@@ -760,6 +761,41 @@ semantic ordering remains the same.
 The renderer first records half-open UTF-8 byte ranges `[begin, end)`. Corpus
 compilation projects them to half-open token ranges over the owning sequence.
 Never assume one byte equals one token.
+
+The renderer exposes exactly one ordered named span for each rendered
+top-level model-visible field. Collection fields own all of their child
+entries. A named span begins at the first model-visible byte of its field and
+ends immediately before the next top-level field, so the ordered named spans
+partition the rendered structured sequence without gaps or overlap. The final
+field ends at the end of the rendered text.
+
+| Named field | Cardinality | Named span contents |
+|---|---:|---|
+| `prompt` | zero or one | prompt value and following separator |
+| `target_state` | zero or one | complete labeled target-state section and following separator |
+| `success_criteria` | zero or one | complete outer criteria section, every criterion/evidence entry, and following separator |
+| `constraints` | zero or one | complete outer constraints section, every constraint entry, and following separator |
+| `knowns` | zero or one | every repeated labeled known entry and its separators |
+| `unknowns` | zero or one | every repeated labeled unknown entry and its separators |
+| `reasoning` | zero or one | all rendered legacy reasoning lines |
+| `determine` | zero or one | complete labeled section and following separator |
+| `define` | zero or one | complete labeled section and following separator |
+| `execute` | zero or one | complete labeled section and following separator |
+| `update` | zero or one | complete labeled section and following separator |
+| `answer` | zero or one | complete labeled section through end of text |
+
+Corpus compilation persists this ordered container in GRMT. The current staged
+migration resolves `reasoning`, `determine`, `define`, `execute`, `update`, and
+`answer` supervision exclusively through these named spans. Prompt, goal
+decomposition, `knowns`, and `unknowns` still use their legacy metadata paths
+until their child-aware consumers are aligned; those legacy paths are an
+explicit migration boundary, not alternate semantics for the migrated fields.
+Sliding-window construction preserves, offsets, or slices named spans alongside
+the token row.
+
+The renderer temporarily retains the lower-level spans below for child
+metadata and migration of existing consumers. They are not additional
+top-level configurable fields.
 
 | Field | Span count | What the span includes |
 |---|---:|---|

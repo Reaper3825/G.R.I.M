@@ -13,6 +13,7 @@
 
 namespace GRIM { struct Goal; }
 namespace GRIM { struct ConceptBlockSpans; }
+namespace GRIM { struct NamedConceptSpans; }
 
 namespace GRIM::TokenizerArtifacts {
 
@@ -68,6 +69,10 @@ struct GrmtSequence {
     // Authored top-level ConceptBlock known/unknown metadata. This remains
     // independent of Goal while sharing the same immutable row lifetime.
     std::shared_ptr<const GRIM::ConceptBlockSpans> concept_block_spans;
+
+    // Ordered, uniquely named top-level model-visible fields. This is the
+    // migration target for all configurable ConceptBlock supervision.
+    std::shared_ptr<const GRIM::NamedConceptSpans> named_concept_spans;
 
     bool hasAnyValidTarget() const;
     void validateForWrite(const std::string& source) const;

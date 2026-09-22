@@ -13,13 +13,15 @@ enum class ConceptField : std::uint8_t {
     TargetState,
     SuccessCriteriaAndEvidence,
     Constraints,
-    KnownsAndUnknowns,
+    Knowns,
+    Unknowns,
     Reasoning,
     Determine,
     Define,
     Execute,
     Update,
     Answer,
+    Count,
 };
 
 const char* conceptFieldName(ConceptField field);

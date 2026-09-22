@@ -2,6 +2,7 @@
 #include "../GRMT/GrmtSourceIdentity.hpp"
 
 #include "../ConceptBlock/ConceptBlockSpans.hpp"
+#include "../ConceptBlock/NamedConceptSpans.hpp"
 #include "../Goal/Goal.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
@@ -538,6 +539,84 @@ void validateConceptBlockSpanTokenRange(
     validate_optional(spans->update, "update");
 }
 
+void validateNamedConceptSpanMetadata(
+    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
+    const std::string& source) {
+    if (!spans) return;
+    if (spans->empty()) {
+        throw std::runtime_error(
+            "[GRMT] " + source + ": named_concept_spans has no entries");
+    }
+    std::unordered_set<std::string> names;
+    std::int32_t previous_end = -1;
+    for (const auto& entry : spans->entries) {
+        if (entry.name.empty()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": named concept span has an empty name");
+        }
+        if (!names.insert(entry.name).second) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": duplicate named concept span '" +
+                entry.name + "'");
+        }
+        if (entry.token_ids.empty() || !entry.span.valid() ||
+            static_cast<std::size_t>(entry.span.length()) !=
+                entry.token_ids.size()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": named concept span '" + entry.name +
+                "' does not match its token count");
+        }
+        if (previous_end > entry.span.begin) {
+            throw std::runtime_error(
+                "[GRMT] " + source +
+                ": named concept spans overlap or are out of order");
+        }
+        previous_end = entry.span.end;
+        for (const auto token_id : entry.token_ids) {
+            if (token_id < 0) {
+                throw std::runtime_error(
+                    "[GRMT] " + source + ": named concept span '" +
+                    entry.name + "' contains a negative token id");
+            }
+        }
+    }
+}
+
+void validateNamedConceptSpanTokenSlices(
+    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
+    const std::vector<int>& sequence_token_ids,
+    const std::string& source) {
+    if (!spans) return;
+    for (const auto& entry : spans->entries) {
+        if (entry.span.begin < 0 ||
+            static_cast<std::size_t>(entry.span.end) > sequence_token_ids.size() ||
+            !std::equal(entry.token_ids.begin(), entry.token_ids.end(),
+                        sequence_token_ids.begin() + entry.span.begin)) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": named concept span '" + entry.name +
+                "' tokens do not match the delimited sequence span");
+        }
+    }
+}
+
+void validateNamedConceptSpanTokenRange(
+    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
+    std::uint32_t vocab_size,
+    const std::string& source) {
+    if (!spans) return;
+    for (const auto& entry : spans->entries) {
+        for (std::size_t index = 0; index < entry.token_ids.size(); ++index) {
+            if (static_cast<std::uint32_t>(entry.token_ids[index]) >= vocab_size) {
+                throw std::runtime_error(
+                    "[GRMT] " + source + ": named concept span '" + entry.name +
+                    "' token id=" + std::to_string(entry.token_ids[index]) +
+                    " at index=" + std::to_string(index) +
+                    " is outside vocab_size=" + std::to_string(vocab_size));
+            }
+        }
+    }
+}
+
 void validateSequenceTokenRange(const GrmtSequence& sequence,
                                 std::uint32_t vocab_size,
                                 const std::string& source) {
@@ -598,6 +677,54 @@ GRIM::GoalTokenSpan readGoalSpan(std::istream& input,
     return GRIM::GoalTokenSpan{
         readScalar<std::int32_t>(input, source),
         readScalar<std::int32_t>(input, source)};
+}
+
+void writeNamedConceptSpansForSequence(
+    std::ostream& output,
+    const GrmtSequence& sequence,
+    const std::string& sink) {
+    validateNamedConceptSpanMetadata(sequence.named_concept_spans, sink);
+    const std::uint32_t count = sequence.named_concept_spans
+        ? checkedCount(sequence.named_concept_spans->entries.size(),
+                       "named_concept_spans", sink)
+        : 0;
+    writeScalar(output, count, sink);
+    if (!sequence.named_concept_spans) return;
+    for (const auto& entry : sequence.named_concept_spans->entries) {
+        const std::uint32_t name_size = checkedCount(
+            entry.name.size(), "named_concept_span.name", sink);
+        writeScalar(output, name_size, sink);
+        writeExact(output, entry.name.data(), name_size, sink);
+        writeTokenIds(output, entry.token_ids, entry.name, sink);
+        writeGoalSpan(output, entry.span, sink);
+    }
+}
+
+std::shared_ptr<const GRIM::NamedConceptSpans>
+readNamedConceptSpansForSequence(
+    std::istream& input,
+    const std::string& source) {
+    const std::uint32_t count = readScalar<std::uint32_t>(input, source);
+    if (count == 0) return nullptr;
+    auto spans = std::make_shared<GRIM::NamedConceptSpans>();
+    spans->entries.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const std::uint32_t name_size = readScalar<std::uint32_t>(input, source);
+        if (name_size == 0 || name_size > 1024) {
+            throw std::runtime_error(
+                "[GRMT] invalid named concept span name length in " + source);
+        }
+        GRIM::NamedConceptSpan entry;
+        entry.name.resize(name_size);
+        readExact(input, entry.name.data(), name_size, source);
+        entry.token_ids = readTokenIds(input, source);
+        entry.span = readGoalSpan(input, source);
+        spans->entries.push_back(std::move(entry));
+    }
+    std::shared_ptr<const GRIM::NamedConceptSpans> immutable_spans =
+        std::move(spans);
+    validateNamedConceptSpanMetadata(immutable_spans, source);
+    return immutable_spans;
 }
 
 void writeGoalForSequence(std::ostream& output,
@@ -1115,6 +1242,9 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
     validateConceptBlockSpanMetadata(concept_block_spans, source);
     validateConceptBlockSpanTokenSlices(
         concept_block_spans, token_ids, source);
+    validateNamedConceptSpanMetadata(named_concept_spans, source);
+    validateNamedConceptSpanTokenSlices(
+        named_concept_spans, token_ids, source);
 
     std::unordered_set<std::uint64_t> slot_ids;
     std::unordered_set<std::int32_t> slot_indices;
@@ -1277,6 +1407,8 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     validateGoalTokenRange(sequence.goal, vocab_size_, sink);
     validateConceptBlockSpanTokenRange(
         sequence.concept_block_spans, vocab_size_, sink);
+    validateNamedConceptSpanTokenRange(
+        sequence.named_concept_spans, vocab_size_, sink);
 
     GRIM::GRMT::writeConceptBlockId(file_, sequence.concept_block_id, sink);
     const std::uint32_t len = static_cast<std::uint32_t>(sequence.token_ids.size());
@@ -1306,6 +1438,7 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     }
     writeGoalForSequence(file_, sequence, sink);
     writeConceptBlockSpansForSequence(file_, sequence, sink);
+    writeNamedConceptSpansForSequence(file_, sequence, sink);
     writeExact(file_, sequence.token_exec_slot_indices.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
 
     const std::uint32_t csb_count =
@@ -1458,6 +1591,8 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     seq.goal = readGoalForSequence(file_, source);
     seq.concept_block_spans =
         readConceptBlockSpansForSequence(file_, source);
+    seq.named_concept_spans =
+        readNamedConceptSpansForSequence(file_, source);
 
     seq.token_exec_slot_indices.resize(seq_len);
     readExact(file_, seq.token_exec_slot_indices.data(), static_cast<std::size_t>(seq_len) * sizeof(std::int32_t), source);
@@ -1519,6 +1654,8 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     validateGoalTokenRange(seq.goal, header_.vocab_size, source);
     validateConceptBlockSpanTokenRange(
         seq.concept_block_spans, header_.vocab_size, source);
+    validateNamedConceptSpanTokenRange(
+        seq.named_concept_spans, header_.vocab_size, source);
 
     out_sequence = std::move(seq);
     ++sequences_read_;

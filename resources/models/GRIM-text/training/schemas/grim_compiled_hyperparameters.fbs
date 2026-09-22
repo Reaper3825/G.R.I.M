@@ -43,8 +43,9 @@ enum ConceptSupervisionTarget : ubyte {
   TargetState = 1,
   SuccessCriteriaAndEvidence = 2,
   Constraints = 3,
-  KnownsAndUnknowns = 4,
-  Answer = 5
+  Knowns = 4,
+  Answer = 5,
+  Unknowns = 6
 }
 
 enum ModelCapability : ushort {

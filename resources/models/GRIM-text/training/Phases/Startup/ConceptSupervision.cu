@@ -8,6 +8,7 @@
 #include "ConceptSupervision.hpp"
 
 #include "../../../Shared/ConceptBlock/ConceptBlockSpans.hpp"
+#include "../../../Shared/ConceptBlock/NamedConceptSpans.hpp"
 #include "../../../Shared/Goal/Goal.hpp"
 #include "../../../Shared/TokenizerArtifacts/GrmtSequence.hpp"
 
@@ -25,6 +26,16 @@ namespace GRIMText::Training {
 namespace {
 
 using GrmtSequence = GRIM::TokenizerArtifacts::GrmtSequence;
+
+std::optional<GRIM::GoalTokenSpan> namedConceptFieldSpan(
+    const GrmtSequence& sequence,
+    ConceptField field) {
+    if (!sequence.named_concept_spans) return std::nullopt;
+    const auto* entry = sequence.named_concept_spans->find(
+        conceptFieldName(field));
+    return entry ? std::optional<GRIM::GoalTokenSpan>{entry->span}
+                 : std::nullopt;
+}
 
 std::optional<GRIM::GoalTokenSpan> conceptFieldSpan(
     const GrmtSequence& sequence,
@@ -47,37 +58,31 @@ std::optional<GRIM::GoalTokenSpan> conceptFieldSpan(
             if (sequence.goal && sequence.goal->constraints)
                 return sequence.goal->constraints->span;
             return std::nullopt;
-        case ConceptField::KnownsAndUnknowns:
+        case ConceptField::Knowns:
             if (sequence.concept_block_spans &&
-                !sequence.concept_block_spans->knowns.empty() &&
-                !sequence.concept_block_spans->unknowns.empty()) {
+                !sequence.concept_block_spans->knowns.empty()) {
                 return GRIM::GoalTokenSpan{
                     sequence.concept_block_spans->knowns.front().span.begin,
+                    sequence.concept_block_spans->knowns.back().span.end};
+            }
+            return std::nullopt;
+        case ConceptField::Unknowns:
+            if (sequence.concept_block_spans &&
+                !sequence.concept_block_spans->unknowns.empty()) {
+                return GRIM::GoalTokenSpan{
+                    sequence.concept_block_spans->unknowns.front().span.begin,
                     sequence.concept_block_spans->unknowns.back().span.end};
             }
             return std::nullopt;
         case ConceptField::Reasoning:
-            if (sequence.concept_block_spans && sequence.concept_block_spans->reasoning)
-                return sequence.concept_block_spans->reasoning->span;
-            return std::nullopt;
         case ConceptField::Determine:
-            if (sequence.concept_block_spans && sequence.concept_block_spans->determine)
-                return sequence.concept_block_spans->determine->span;
-            return std::nullopt;
         case ConceptField::Define:
-            if (sequence.concept_block_spans && sequence.concept_block_spans->define)
-                return sequence.concept_block_spans->define->span;
-            return std::nullopt;
         case ConceptField::Execute:
-            if (sequence.concept_block_spans && sequence.concept_block_spans->execute)
-                return sequence.concept_block_spans->execute->span;
-            return std::nullopt;
         case ConceptField::Update:
-            if (sequence.concept_block_spans && sequence.concept_block_spans->update)
-                return sequence.concept_block_spans->update->span;
-            return std::nullopt;
         case ConceptField::Answer:
-            return sequence.answer_span;
+            return namedConceptFieldSpan(sequence, field);
+        case ConceptField::Count:
+            break;
     }
     return std::nullopt;
 }
@@ -130,6 +135,15 @@ void retainMetadataThrough(GrmtSequence& sequence, std::int32_t cut) {
         if (retained->empty()) sequence.concept_block_spans.reset();
         else sequence.concept_block_spans = std::move(retained);
     }
+    if (sequence.named_concept_spans) {
+        auto retained = std::make_shared<GRIM::NamedConceptSpans>();
+        retained->entries.reserve(sequence.named_concept_spans->entries.size());
+        for (const auto& entry : sequence.named_concept_spans->entries) {
+            if (entry.span.end <= cut) retained->entries.push_back(entry);
+        }
+        if (retained->empty()) sequence.named_concept_spans.reset();
+        else sequence.named_concept_spans = std::move(retained);
+    }
 }
 
 } // namespace
@@ -141,14 +155,15 @@ const char* conceptFieldName(ConceptField field) {
         case ConceptField::SuccessCriteriaAndEvidence:
             return "success_criteria_and_evidence";
         case ConceptField::Constraints: return "constraints";
-        case ConceptField::KnownsAndUnknowns:
-            return "knowns_and_unknowns";
+        case ConceptField::Knowns: return "knowns";
+        case ConceptField::Unknowns: return "unknowns";
         case ConceptField::Reasoning: return "reasoning";
         case ConceptField::Determine: return "determine";
         case ConceptField::Define: return "define";
         case ConceptField::Execute: return "execute";
         case ConceptField::Update: return "update";
         case ConceptField::Answer: return "answer";
+        case ConceptField::Count: break;
     }
     return "unknown";
 }
@@ -159,7 +174,8 @@ ConceptField parseConceptField(const std::string& name, const std::string& sourc
     if (name == "success_criteria_and_evidence")
         return ConceptField::SuccessCriteriaAndEvidence;
     if (name == "constraints") return ConceptField::Constraints;
-    if (name == "knowns_and_unknowns") return ConceptField::KnownsAndUnknowns;
+    if (name == "knowns") return ConceptField::Knowns;
+    if (name == "unknowns") return ConceptField::Unknowns;
     if (name == "reasoning") return ConceptField::Reasoning;
     if (name == "determine") return ConceptField::Determine;
     if (name == "define") return ConceptField::Define;

@@ -44,11 +44,11 @@ must author it as `false`.
 
 `concept_supervision_target` selects the single concept-block span supervised
 during SFT. Valid values are `target_state`,
-`success_criteria_and_evidence`, `constraints`, `knowns_and_unknowns`, and
+`success_criteria_and_evidence`, `constraints`, `knowns`, `unknowns`, and
 `answer`. Phase 1 keeps all earlier contract fields as context, truncates the
 row at the selected span, and masks every target outside that span. The
 canonical dependency order is target state, success criteria/evidence,
-constraints, knowns/unknowns, then any reasoning and the answer. Use `answer`
+constraints, knowns, unknowns, then any reasoning and the answer. Use `answer`
 for ordinary answer-generation models.
 
 `local_atom_retrieval_enabled` selects the causal sequence-local typed-atom

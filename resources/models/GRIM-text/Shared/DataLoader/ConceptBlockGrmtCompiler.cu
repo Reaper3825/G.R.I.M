@@ -3,6 +3,7 @@
 #include "ConceptBlockCorpusReader.hpp"
 #include "../../../../../DataCollection/concept_block_canonical.hpp"
 #include "../ConceptBlock/ConceptBlockSpans.hpp"
+#include "../ConceptBlock/NamedConceptSpans.hpp"
 #include "../Goal/Goal.hpp"
 #include "../GRMT/GrmtFormat.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
@@ -32,6 +33,7 @@
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
+using json = nlohmann::json;
 
 namespace GRIM {
 
@@ -219,6 +221,9 @@ bool PrepareTrainingDataFromCache(
 			boundaries.push_back(span.begin);
 			boundaries.push_back(span.end);
 		};
+		for (const auto& named_span : rendered.named_spans) {
+			add_span(named_span.span);
+		}
 		add_span(rendered.target_state);
 		add_span(rendered.criteria);
 		for (const auto& entry : rendered.success_criteria) {
@@ -527,6 +532,28 @@ bool PrepareTrainingDataFromCache(
 		return immutable_spans;
 	};
 
+	auto materialize_named_concept_spans = [&token_span, &span_token_ids](
+		const GRIM::ConceptCanonical::RenderResult& rendered,
+		const std::vector<size_t>& boundaries,
+		const std::vector<size_t>& token_counts,
+		const TokenizedSequence& sequence)
+		-> std::shared_ptr<const GRIM::NamedConceptSpans> {
+		auto spans = std::make_shared<GRIM::NamedConceptSpans>();
+		spans->entries.reserve(rendered.named_spans.size());
+		for (const auto& rendered_span : rendered.named_spans) {
+			GRIM::NamedConceptSpan entry;
+			entry.name = rendered_span.name;
+			entry.span = token_span(
+				rendered_span.span, boundaries, token_counts, entry.name);
+			entry.token_ids = span_token_ids(sequence, entry.span, entry.name);
+			spans->entries.push_back(std::move(entry));
+		}
+		if (spans->empty()) return nullptr;
+		std::shared_ptr<const GRIM::NamedConceptSpans> immutable_spans =
+			std::move(spans);
+		return immutable_spans;
+	};
+
 	std::cout << "[DataLoader] Encoding " << concept_json_entries.size()
 	          << " concept sequences..." << std::endl << std::flush;
 	std::vector<TokenizedSequence> all_tokens;
@@ -553,6 +580,8 @@ bool PrepareTrainingDataFromCache(
 				seq->execution_active = false;
 				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
 				assign_prompt_span(*seq, rendered, boundaries, token_counts);
+				seq->named_concept_spans = materialize_named_concept_spans(
+					rendered, boundaries, token_counts, *seq);
 				if (rendered.answer.present) {
 					seq->answer_span = token_span(
 						rendered.answer, boundaries, token_counts, "answer");
@@ -582,6 +611,8 @@ bool PrepareTrainingDataFromCache(
 			seq->execution_gate_target =
 				GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
 			assign_prompt_span(*seq, rendered, boundaries, token_counts);
+			seq->named_concept_spans = materialize_named_concept_spans(
+				rendered, boundaries, token_counts, *seq);
 			if (rendered.answer.present) {
 				seq->answer_span = token_span(
 					rendered.answer, boundaries, token_counts, "answer");

@@ -75,7 +75,9 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 32;
+// v33 persists one ordered, uniquely named aggregate token span for every
+// rendered top-level model-visible ConceptBlock field.
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 33;
 
 } // namespace GRIM
 

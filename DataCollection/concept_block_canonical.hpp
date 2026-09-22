@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -32,8 +33,17 @@ struct SuccessCriterionByteSpans {
     LogicalByteSpan evidence;
 };
 
+struct NamedLogicalByteSpan {
+    std::string name;
+    LogicalByteSpan span;
+};
+
 struct RenderResult {
     std::string text;
+    // Exactly one entry per rendered top-level model-visible field, in
+    // canonical order. Collection fields own the complete rendered collection,
+    // including every child entry.
+    std::vector<NamedLogicalByteSpan> named_spans;
     // State labels are model-visible. Goal/collection ranges cover values;
     // Determine/Define/Execute/Update/Answer ranges cover their complete labeled
     // sections so SFT can teach section transitions as well as content.
@@ -63,7 +73,29 @@ struct RenderResult {
     // and are never emitted into model-visible text.
     size_t prompt_byte_begin = 0;
     size_t prompt_byte_end = 0;
+
+    const LogicalByteSpan* findNamedSpan(std::string_view name) const noexcept {
+        for (const auto& entry : named_spans) {
+            if (std::string_view(entry.name) == name) {
+                return &entry.span;
+            }
+        }
+        return nullptr;
+    }
 };
+
+inline void appendNamedSpan(RenderResult& result,
+                            const char* name,
+                            size_t begin,
+                            size_t end) {
+    if (end <= begin) return;
+    if (result.findNamedSpan(name) != nullptr) {
+        throw std::logic_error(
+            std::string("duplicate top-level canonical span '") + name + "'");
+    }
+    result.named_spans.push_back(
+        NamedLogicalByteSpan{name, LogicalByteSpan{begin, end, true}});
+}
 
 inline void appendLogicalSpan(std::ostringstream& out,
                               const std::string& text,
@@ -118,6 +150,9 @@ inline RenderResult render(const nlohmann::json& j) {
         // Keep the pinned prompt visually separate from goal decomposition
         // while leaving the separator outside the logical prompt span.
         out << ((has_goal_decomposition || has_concept_entries) ? "\n\n" : "\n");
+        appendNamedSpan(
+            result, "prompt", result.prompt_byte_begin,
+            static_cast<size_t>(out.tellp()));
     }
 
     auto append_entry_collection = [&out](
@@ -139,16 +174,21 @@ inline RenderResult render(const nlohmann::json& j) {
     if (j.contains("goal") && j["goal"].is_object()) {
         const auto& goal = j["goal"];
         if (goal.contains("target_state") && goal["target_state"].is_string()) {
+            const size_t field_begin = static_cast<size_t>(out.tellp());
             appendStateField(
                 out, "target_state", goal["target_state"].get<std::string>(), result.target_state);
             if (result.target_state.present) {
                 out << "\n\n";
+                appendNamedSpan(
+                    result, "target_state", field_begin,
+                    static_cast<size_t>(out.tellp()));
             }
         }
 
         if (goal.contains("success_criteria") &&
             goal["success_criteria"].is_array() &&
             !goal["success_criteria"].empty()) {
+            const size_t field_begin = static_cast<size_t>(out.tellp());
             out << "<criteria>\n";
             result.criteria.begin = static_cast<size_t>(out.tellp());
             size_t criteria_content_end = result.criteria.begin;
@@ -190,11 +230,15 @@ inline RenderResult render(const nlohmann::json& j) {
             result.criteria.present =
                 result.criteria.end > result.criteria.begin;
             out << "\n</criteria>\n\n";
+            appendNamedSpan(
+                result, "success_criteria", field_begin,
+                static_cast<size_t>(out.tellp()));
         }
 
         if (goal.contains("constraints") &&
             goal["constraints"].is_array() &&
             !goal["constraints"].empty()) {
+            const size_t field_begin = static_cast<size_t>(out.tellp());
             out << "<constraints>\n";
             result.constraints_span.begin = static_cast<size_t>(out.tellp());
             size_t constraints_content_end = result.constraints_span.begin;
@@ -220,14 +264,25 @@ inline RenderResult render(const nlohmann::json& j) {
             result.constraints_span.present =
                 result.constraints_span.end > result.constraints_span.begin;
             out << "\n</constraints>\n\n";
+            appendNamedSpan(
+                result, "constraints", field_begin,
+                static_cast<size_t>(out.tellp()));
         }
     }
 
     if (j.contains("knowns") && j["knowns"].is_array()) {
+        const size_t field_begin = static_cast<size_t>(out.tellp());
         append_entry_collection(j["knowns"], result.knowns, "knowns");
+        appendNamedSpan(
+            result, "knowns", field_begin,
+            static_cast<size_t>(out.tellp()));
     }
     if (j.contains("unknowns") && j["unknowns"].is_array()) {
+        const size_t field_begin = static_cast<size_t>(out.tellp());
         append_entry_collection(j["unknowns"], result.unknowns, "unknowns");
+        appendNamedSpan(
+            result, "unknowns", field_begin,
+            static_cast<size_t>(out.tellp()));
     }
 
     const nlohmann::json* explanation = nullptr;
@@ -245,6 +300,8 @@ inline RenderResult render(const nlohmann::json& j) {
         if (reasoning_end > reasoning_begin) {
             result.reasoning = LogicalByteSpan{
                 reasoning_begin, reasoning_end, true};
+            appendNamedSpan(
+                result, "reasoning", reasoning_begin, reasoning_end);
         }
     }
 
@@ -259,9 +316,23 @@ inline RenderResult render(const nlohmann::json& j) {
         span.present = true;
     };
     append_phase("determine", result.determine);
+    if (result.determine.present) {
+        appendNamedSpan(
+            result, "determine", result.determine.begin, result.determine.end);
+    }
     append_phase("define", result.define);
+    if (result.define.present) {
+        appendNamedSpan(result, "define", result.define.begin, result.define.end);
+    }
     append_phase("execute", result.execute);
+    if (result.execute.present) {
+        appendNamedSpan(
+            result, "execute", result.execute.begin, result.execute.end);
+    }
     append_phase("update", result.update);
+    if (result.update.present) {
+        appendNamedSpan(result, "update", result.update.begin, result.update.end);
+    }
 
     // Answers are training content independently of whether an arithmetic
     // result exists. This is required for NOOP-supervised Q/A blocks.
@@ -272,6 +343,8 @@ inline RenderResult render(const nlohmann::json& j) {
             << "\n</answer>";
         result.answer.end = static_cast<size_t>(out.tellp());
         result.answer.present = true;
+        appendNamedSpan(
+            result, "answer", result.answer.begin, result.answer.end);
     }
 
     result.text = out.str();
@@ -303,6 +376,9 @@ inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
         out << j["prompt"].get<std::string>();
         result.prompt_byte_end = static_cast<size_t>(out.tellp());
         out << "\n";
+        appendNamedSpan(
+            result, "prompt", result.prompt_byte_begin,
+            static_cast<size_t>(out.tellp()));
     }
     const nlohmann::json* explanation = nullptr;
     if (j.contains("explanation") && j["explanation"].is_array()) {
@@ -311,20 +387,32 @@ inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
         explanation = &j["intermediates"];
     }
     if (explanation) {
+        const size_t field_begin = static_cast<size_t>(out.tellp());
         for (const auto& step : *explanation) {
             if (step.is_string()) out << step.get<std::string>() << "\n";
+        }
+        const size_t field_end = static_cast<size_t>(out.tellp());
+        if (field_end > field_begin) {
+            result.reasoning = LogicalByteSpan{field_begin, field_end, true};
+            appendNamedSpan(result, "reasoning", field_begin, field_end);
         }
     }
     for (const char* phase : {"determine", "define", "execute", "update"}) {
         if (j.contains(phase) && j[phase].is_string()
             && !j[phase].get<std::string>().empty()) {
+            const size_t field_begin = static_cast<size_t>(out.tellp());
             out << j[phase].get<std::string>() << "\n";
+            appendNamedSpan(
+                result, phase, field_begin,
+                static_cast<size_t>(out.tellp()));
         }
     }
     if (j.contains("answer") && j["answer"].is_string()
         && !j["answer"].get<std::string>().empty()) {
         appendLogicalSpan(
             out, j["answer"].get<std::string>(), result.answer);
+        appendNamedSpan(
+            result, "answer", result.answer.begin, result.answer.end);
     }
     result.text = out.str();
     return result;

@@ -21,7 +21,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::uint32_t kSupportedSchemaVersion = 8;
-constexpr std::uint32_t kSupportedSemanticVersion = 9;
+constexpr std::uint32_t kSupportedSemanticVersion = 10;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -282,7 +282,7 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     const auto& d = c.derived_architecture;
     const auto& f = c.features;
     if (c.concept_supervision_target <= ConceptSupervisionTarget::Unspecified ||
-        c.concept_supervision_target > ConceptSupervisionTarget::Answer) {
+        c.concept_supervision_target > ConceptSupervisionTarget::Unknowns) {
         throw std::runtime_error("compiled concept supervision target is invalid");
     }
     if (a.d_model == 0 || a.num_layers == 0 || a.num_heads == 0 ||
@@ -398,9 +398,9 @@ const char* conceptSupervisionTargetToString(ConceptSupervisionTarget target) {
         case ConceptSupervisionTarget::SuccessCriteriaAndEvidence:
             return "success_criteria_and_evidence";
         case ConceptSupervisionTarget::Constraints: return "constraints";
-        case ConceptSupervisionTarget::KnownsAndUnknowns:
-            return "knowns_and_unknowns";
+        case ConceptSupervisionTarget::Knowns: return "knowns";
         case ConceptSupervisionTarget::Answer: return "answer";
+        case ConceptSupervisionTarget::Unknowns: return "unknowns";
         case ConceptSupervisionTarget::Unspecified: break;
     }
     throw std::runtime_error(
