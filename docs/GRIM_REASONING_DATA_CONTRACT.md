@@ -68,17 +68,19 @@ fields are retained for state persisted into later generation passes.
 `update`, `answer`, `raw`, and identity metadata. This prevents upstream callers
 from smuggling an answer or output state into the supplied state.
 
-Current implementation detail: `renderReasoningPrompt()` removes `answer` and
-uses the same canonical renderer as training. When called through
-`ReasoningState::withPrompt()`, the prefix naturally ends after the final
-goal/known/unknown field because output-phase fields are absent.
+`renderReasoningPrompt()` uses the same recursive, config-authored renderer as
+training and applies the same `ignore` filtering. It does not remove a specially
+named output field. `ReasoningState::withPrompt()` supplies only upstream state,
+so normal prefixes end before the output fields because those values are absent.
 
 ## 2. Exact canonical model-visible order
 
 Only non-empty fields render. Authored array order is preserved.
 
 ```text
+<prompt>
 PROMPT VALUE
+</prompt>
 
 <target_state>
 TARGET STATE VALUE
@@ -88,6 +90,7 @@ TARGET STATE VALUE
 <criterion>
 CRITERION 1 VALUE
 </criterion>
+
 <evidence>
 EVIDENCE 1 VALUE
 </evidence>
@@ -95,6 +98,7 @@ EVIDENCE 1 VALUE
 <criterion>
 CRITERION 2 VALUE
 </criterion>
+
 </criteria>
 
 <constraints>
@@ -105,6 +109,7 @@ CONSTRAINT 1 VALUE
 <constraint>
 CONSTRAINT 2 VALUE
 </constraint>
+
 </constraints>
 
 <knowns>
@@ -143,8 +148,8 @@ ANSWER VALUE
 
 Important rendering facts:
 
-- The prompt value is model-visible, but `<prompt>` tags are not emitted. The
-  tagged prompt shown in DataHub is an inspection-only preview.
+- The prompt and its `<prompt>...</prompt>` tags are model-visible. DataHub uses
+  the same configured renderer; there is no separate inspection-only layout.
 - Goal, state, phase, and answer tags shown above are literal model-visible
   tokens/bytes.
 - Every known and unknown is rendered in its own repeated section. There is no
@@ -207,28 +212,38 @@ be available in the inference prefix for strict equivalence.
 
 ### 3.3 Current supervision policy
 
-The active SFT field policy in `ai_config.json` supervises:
+The authoritative policy is `training.config.concept_spans`, a recursive array
+of objects. The former supervised/unsupervised name lists are removed. Each
+object declares `name`, `supervision`, `source_path`, `repeat`,
+`open_delimiter`, `close_delimiter`, and `children`.
 
-```json
-"supervised_fields": ["determine", "define", "execute", "answer"]
-```
+- `source_path` is a JSON pointer relative to the parent's selected source value.
+  An empty pointer selects that value itself.
+- `repeat: true` emits one instance of the node per source-array item.
+- A node with children traverses those definitions; a leaf renders text.
+  An un-repeated text array renders newline-terminated lines in one span.
+- Delimiters must be either both present or both empty. A delimiter-free parent
+  is transparent: its children still belong to its span tree.
+- `context` retains tokens with masked LM targets. `supervised` retains tokens
+  and teaches their causal next-token targets, including delimiters/separators.
+- `ignore` removes tokens from the loaded SFT row. `inherit` uses the nearest
+  ancestor's policy; roots require an explicit policy. Explicit child policies
+  override ancestor policy, including under an ignored ancestor.
+- Every span follows these rules, including prompt and collection wrappers.
+  Supervising the first retained token requires a preceding causal token (BOS).
+- PT uses the complete compiled text with ordinary causal targets; SFT policy
+  selection happens before window construction.
 
-It retains these fields as masked context when present:
+The active configuration supervises determine, define, execute, and answer.
+Prompt, target state, criteria/evidence, constraints, knowns, unknowns, legacy
+reasoning, and update are context. Criterion/evidence pair children and constraint
+entries inherit their parents unless explicitly overridden.
 
-```json
-"unsupervised_fields": [
-  "prompt",
-  "target_state",
-  "success_criteria_and_evidence",
-  "constraints",
-  "knowns",
-  "unknowns"
-]
-```
-
-This makes `define` a model-supervised span. Knowns and unknowns remain persisted
-state and, when supplied on later passes, are visible context rather than
-supervision targets.
+For example the criteria root selects `/goal/success_criteria`; its transparent
+`success_criterion` child selects `""` with `repeat: true`, and that child's
+criterion/evidence leaves select `/criterion` and `/evidence`. Constraints use
+the identical structure with a repeated scalar child. No field-name switches
+are involved in rendering, token-span projection, or supervision.
 
 ## 4. Semantic contract for each model-visible span
 
@@ -239,7 +254,8 @@ spans must not depend on information revealed only later.
 
 Canonical position: first.
 
-Visible form: raw prompt value with no prompt tags.
+Visible form: `<prompt>`, a newline, the prompt value, a newline, `</prompt>`,
+and two trailing newlines, exactly like every other tagged scalar.
 
 Inference ownership: supplied by the caller, separately from `ReasoningState`.
 
@@ -357,6 +373,7 @@ Visible form:
 <constraint>
 VALUE
 </constraint>
+
 </constraints>
 ```
 
@@ -437,9 +454,9 @@ Canonical position: after unknowns and before `determine`.
 
 Visible form: newline-terminated plain text with no wrapper tag.
 
-Source fields: `explanation` takes precedence when present as an array;
-otherwise `intermediates` is used. One aggregate span covers all rendered
-lines.
+Source adapters normalize non-empty `explanation`, otherwise `intermediates`,
+into `/explanation`. The configured delimiter-free `reasoning` leaf renders
+that array as newline-terminated lines in one span. No reasoning tag is added.
 
 Definition: older free-form reasoning content retained for compatibility.
 
@@ -707,7 +724,9 @@ inference boundary.
 ### 6.2 Exact model-visible inference prefix
 
 ```text
+<prompt>
 A tank holds 120 liters. After using a few, 84 liters remain. How many liters were used?
+</prompt>
 
 <target_state>
 The consumed volume is known and reported in liters.
@@ -717,12 +736,14 @@ The consumed volume is known and reported in liters.
 <criterion>
 The response reports the difference between the initial and remaining volumes.
 </criterion>
+
 </criteria>
 
 <constraints>
 <constraint>
 Preserve liters as the unit.
 </constraint>
+
 </constraints>
 
 ```
@@ -762,61 +783,45 @@ The renderer first records half-open UTF-8 byte ranges `[begin, end)`. Corpus
 compilation projects them to half-open token ranges over the owning sequence.
 Never assume one byte equals one token.
 
-The renderer exposes exactly one ordered named span for each rendered
-top-level model-visible field. Collection fields own all of their child
-entries. A named span begins at the first model-visible byte of its field and
-ends immediately before the next top-level field, so the ordered named spans
-partition the rendered structured sequence without gaps or overlap. The final
-field ends at the end of the rendered text.
+The renderer exposes a depth-first, parent-first ordered tree. Nodes store a
+configured name, a half-open range, a parent index, and direct child indices.
+Repeated instances share a name; names are unique only among sibling definitions,
+not among rendered instances. Roots and siblings cannot overlap; children must
+be contained by their parent. Every tagged node includes its opening/closing
+delimiter, content, and following separator. There are no value-only exceptions.
 
-| Named field | Cardinality | Named span contents |
-|---|---:|---|
-| `prompt` | zero or one | prompt value and following separator |
-| `target_state` | zero or one | complete labeled target-state section and following separator |
-| `success_criteria` | zero or one | complete outer criteria section, every criterion/evidence entry, and following separator |
-| `constraints` | zero or one | complete outer constraints section, every constraint entry, and following separator |
-| `knowns` | zero or one | every repeated labeled known entry and its separators |
-| `unknowns` | zero or one | every repeated labeled unknown entry and its separators |
-| `reasoning` | zero or one | all rendered legacy reasoning lines |
-| `determine` | zero or one | complete labeled section and following separator |
-| `define` | zero or one | complete labeled section and following separator |
-| `execute` | zero or one | complete labeled section and following separator |
-| `update` | zero or one | complete labeled section and following separator |
-| `answer` | zero or one | complete labeled section through end of text |
+Tagged nodes render an opening delimiter plus newline, children or
+newline-terminated leaf content, then a closing delimiter plus two newlines.
+Transparent parents add no bytes. Empty/missing values and parents with no
+rendered children emit nothing. This uniform rule applies to the final answer
+as well: it has the same trailing separator as every tagged scalar.
 
-Corpus compilation persists this ordered container in GRMT. The current staged
-migration resolves `reasoning`, `determine`, `define`, `execute`, `update`, and
-`answer` supervision exclusively through these named spans. Prompt, goal
-decomposition, `knowns`, and `unknowns` still use their legacy metadata paths
-until their child-aware consumers are aligned; those legacy paths are an
-explicit migration boundary, not alternate semantics for the migrated fields.
-Sliding-window construction preserves, offsets, or slices named spans alongside
-the token row.
+Each delimiter text resolves once to one exact vocabulary piece ID after the
+tokenizer loads. Missing/exact-match failures are fatal, including UNK fallback.
+Compilation tokenizes content with forced boundaries, inserts the cached IDs
+with neutral atom side channels, and records ranges into the owning token row.
+Delimiter strings are supplied by configuration, not duplicated in source data.
+The cached IDs are derived state, never authored JSON.
 
-The renderer temporarily retains the lower-level spans below for child
-metadata and migration of existing consumers. They are not additional
-top-level configurable fields.
+GRMT v34 replaces fixed Goal, phase, collection, and Answer records with generic
+named nodes. The wire representation stores each node's name, range, and parent;
+child lists are reconstructed on read and validated. Token slices are not
+duplicated in metadata. A corpus-level structural layout identity is stored once
+and shared by all loaded rows. Changed names, paths, order, nesting, repetition,
+or delimiters require corpus regeneration; changed supervision policies do not.
+Adding a span does **not** require a GRMT binary format/version change.
+Pre-v34 files must be regenerated; there is no legacy reader.
 
-| Field | Span count | What the span includes |
-|---|---:|---|
-| prompt | one boundary pair | prompt value only; no prompt tags |
-| target state | zero or one | value only |
-| criteria outer | zero or one | inner criterion/evidence sections, not outer criteria tags |
-| criterion | one per entry | value only |
-| evidence | zero or one per criterion | value only |
-| constraints outer | zero or one | inner constraint sections, not outer constraints tags |
-| constraint | one per entry | value only |
-| known | one per entry | value only |
-| unknown | one per entry | value only |
-| legacy reasoning | zero or one | all lines and appended newlines |
-| determine | zero or one | opening tag, value, closing tag, trailing separator |
-| define | zero or one | opening tag, value, closing tag, trailing separator |
-| execute | zero or one | opening tag, value, closing tag, trailing separator |
-| update | zero or one | opening tag, value, closing tag, trailing separator |
-| answer | zero or one | opening tag, value, closing tag |
+SFT projects policies before windowing. Ignore filtering remaps every aligned
+token channel and the tree. Windowing clips intersecting ranges and rebuilds
+parent/child indices for both pinned-prefix SFT and PT windows. Batch payloads
+and forward outputs retain the same immutable generic tree per row. The separate
+runtime prefix geometry is derived from the first supervised token; it is not
+special prompt-span storage.
 
-A token span is valid when `begin >= 0` and `end > begin`. Empty field values do
-not produce value spans.
+The source ConceptBlock FlatBuffer and its JSON adapter remain authoring
+storage. Adding a genuinely new source property may still require changing that
+source model/adapter, but not the GRMT span format.
 
 ## 8. Supporting storage and non-visible data
 

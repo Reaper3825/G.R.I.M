@@ -18,8 +18,7 @@
 #pragma once
 
 #include "../AtomInsertion/AtomInsertionDecisionLayout.hpp"
-#include "../ConceptBlock/ConceptBlockSpanView.hpp"
-#include "../Goal/GoalSpanView.hpp"
+#include "../ConceptBlock/NamedConceptSpans.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
@@ -33,7 +32,6 @@
 
 // Forward declaration for GRMT-authored training rows.
 namespace GRIM {
-struct Goal;
 namespace TokenizerArtifacts { struct GrmtSequence; }
 }
 
@@ -106,13 +104,8 @@ struct BatchPayload {
     // <prompt> byte span. For a non-empty span, start = end - length + 1.
     std::vector<int32_t> prompt_lengths;       // [batch_size], 0 = no complete prompt in this row
     std::vector<int32_t> prompt_end_positions; // [batch_size], inclusive; -1 when length is 0
-    // Immutable authored Goal metadata aligned one-to-one with training rows.
-    // Entries may be null when a source row has no goal identifier.
-    std::vector<std::shared_ptr<const GRIM::Goal>> goals; // [batch_size]
-    // Top-level ConceptBlock known/unknown spans, aligned one-to-one with
-    // training rows and intentionally independent of Goal.
-    std::vector<std::shared_ptr<const GRIM::ConceptBlockSpans>>
-        concept_block_spans; // [batch_size]
+    // Immutable generic span trees aligned with the realized batch rows.
+    std::vector<std::shared_ptr<const GRIM::NamedConceptSpans>> named_concept_spans;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)
@@ -275,8 +268,7 @@ struct BatchPayload {
         throw std::runtime_error("BatchPayload.mode contains an unknown value");
     }
 
-    GRIM::GoalSpanView goalSpansForRow(std::size_t row) const;
-    GRIM::ConceptBlockSpanView conceptBlockSpansForRow(std::size_t row) const;
+    const GRIM::NamedConceptSpans* namedConceptSpansForRow(std::size_t row) const;
     const uint8_t* atomAuxTargetMaskForRow(std::size_t row) const;
 
     void validate(const char* caller) const {
@@ -342,31 +334,12 @@ struct BatchPayload {
                 std::string(caller) +
                 ": training prompt-boundary arrays must both have batch_size entries");
         }
-        if (isTraining() && static_cast<int>(goals.size()) != batch_size) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.goals.size()=" +
-                std::to_string(goals.size()) + " != batch_size=" +
-                std::to_string(batch_size));
-        }
-        if (isInference() && !goals.empty()) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": inference BatchPayload must not carry training-row goal metadata");
-        }
-        if (isTraining() &&
-            static_cast<int>(concept_block_spans.size()) != batch_size) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": BatchPayload.concept_block_spans.size()=" +
-                std::to_string(concept_block_spans.size()) +
-                " != batch_size=" + std::to_string(batch_size));
-        }
-        if (isInference() && !concept_block_spans.empty()) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": inference BatchPayload must not carry training-row "
-                "ConceptBlock span metadata");
-        }
+        if ((isTraining() && named_concept_spans.size() != static_cast<size_t>(batch_size)) ||
+            (isInference() && !named_concept_spans.empty()))
+            throw std::runtime_error(std::string(caller) + ": invalid named concept span row count");
+        for (size_t row = 0; row < named_concept_spans.size(); ++row)
+            if (named_concept_spans[row]) GRIM::validateNamedConceptSpans(
+                *named_concept_spans[row], static_cast<size_t>(seq_lengths.at(row)));
         if (!prompt_lengths.empty() || !prompt_end_positions.empty()) {
             if (static_cast<int>(prompt_lengths.size()) != batch_size ||
                 static_cast<int>(prompt_end_positions.size()) != batch_size) {

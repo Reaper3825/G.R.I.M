@@ -249,21 +249,9 @@ void bindLoRAParametersForLayer(
 
 }  // namespace
 
-GoalSpanView ModelForwardRequest::goalSpansForRow(std::size_t row) const {
-    if (!payload) {
-        throw std::runtime_error(
-            "ModelForwardRequest::goalSpansForRow: payload is NULL");
-    }
-    return payload->goalSpansForRow(row);
-}
-
-ConceptBlockSpanView ModelForwardRequest::conceptBlockSpansForRow(
-    std::size_t row) const {
-    if (!payload) {
-        throw std::runtime_error(
-            "ModelForwardRequest::conceptBlockSpansForRow: payload is NULL");
-    }
-    return payload->conceptBlockSpansForRow(row);
+const NamedConceptSpans* ModelForwardRequest::namedConceptSpansForRow(std::size_t row) const {
+    if (!payload) throw std::runtime_error("ModelForwardRequest: payload is NULL");
+    return payload->namedConceptSpansForRow(row);
 }
 
 void ModelForwardRequest::validate(const char* caller) const {
@@ -408,11 +396,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto& payload = *request.payload;
     (void)runtime_payload;
     ModelForwardOutputs forward_outputs;
-    forward_outputs.setGoalMetadata(
-        static_cast<std::size_t>(payload.batch_size), payload.goals);
-    forward_outputs.setConceptBlockSpanMetadata(
-        static_cast<std::size_t>(payload.batch_size),
-        payload.concept_block_spans);
+    forward_outputs.setNamedConceptSpanMetadata(
+        static_cast<std::size_t>(payload.batch_size), payload.named_concept_spans);
     const auto* bindings = request.bindings;
     const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");

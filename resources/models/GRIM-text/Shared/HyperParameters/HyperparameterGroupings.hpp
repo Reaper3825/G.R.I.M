@@ -35,8 +35,7 @@ struct DataLoadingHP {
     int min_seq_valid_tokens = 0;
     int sliding_window_stride = 0;
     TrainingStage training_stage = TrainingStage::UNSPECIFIED;
-    std::vector<std::string> supervised_fields;
-    std::vector<std::string> unsupervised_fields;
+    GRIM::NamedConceptSpanDefinitions concept_spans;
 };
 
 struct PathsHP {
@@ -58,6 +57,7 @@ struct CheckpointLoadHP {
 };
 
 struct TokenizerHP {
+    GRIM::NamedConceptSpanDefinitions concept_spans;
     // Training consumes data_path. Tokenizer generation writes output_data_path.
     // They may intentionally name different GRMT artifacts sharing vocab_path.
     std::string data_path;
@@ -872,10 +872,8 @@ inline DataLoadingHP dataLoadingHP(const GRIM::Config::AiConfigSnapshot& snapsho
     view.min_seq_valid_tokens = snapshotTrainingConfigField<int>(snapshot, "min_seq_valid_tokens");
     view.sliding_window_stride = snapshotTrainingConfigField<int>(snapshot, "sliding_window_stride");
     view.training_stage = snapshotTrainingConfigField<TrainingStage>(snapshot, "training_stage");
-    view.supervised_fields = snapshotTrainingConfigField<std::vector<std::string>>(
-        snapshot, "supervised_fields");
-    view.unsupervised_fields = snapshotTrainingConfigField<std::vector<std::string>>(
-        snapshot, "unsupervised_fields");
+    view.concept_spans = snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
+        snapshot, "concept_spans");
     return view;
 }
 
@@ -917,6 +915,7 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     const auto paths = pathsHP(snapshot);
 
     TokenizerHP view;
+    view.concept_spans = snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(snapshot, "concept_spans");
     view.data_path = paths.data_path;
     view.output_data_path = resolveCurriculumGrmtPath(
         snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_output_grmt"),

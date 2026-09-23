@@ -86,9 +86,12 @@ void emitProgress(const ProgressCallback& progress, const std::string& message)
 
 LoadedTrainingCorpus readGrmtCorpusWithProgressOrThrow(
 	const std::string& path,
+    const GRIM::NamedConceptSpanDefinitions& definitions,
 	const ProgressCallback& progress)
 {
 	GRIM::TokenizerArtifacts::GrmtCorpusReader reader(path);
+    if (reader.conceptSpanLayout() != GRIM::conceptSpanLayout(definitions))
+        throw std::runtime_error("[DataLoader] concept span layout changed; regenerate GRMT");
 	const GRIM::GRMT::Header header = reader.header();
 
 	std::ostringstream header_msg;
@@ -262,7 +265,7 @@ SequenceData buildPhase1SequenceData(
 		logger.log(message);
 	};
 	auto corpus = readGrmtCorpusWithProgressOrThrow(
-		tokenizer_hp.data_path,
+		tokenizer_hp.data_path, data_hp.concept_spans,
 		progress_logger);
 	emitProgress(progress_logger, "[Data] GRMT deserialization complete; validating side channels...");
 	sanitizeNumericSideChannels(corpus.sequences);
@@ -297,8 +300,7 @@ SequenceData buildPhase1SequenceData(
 	logger.log("[Data] Applying sliding windows to train split...");
 	applySlidingWindows(data.train_seqs, "train",
 						data_hp.training_stage,
-						data_hp.supervised_fields,
-						data_hp.unsupervised_fields,
+						data_hp.concept_spans,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Train split post-window sequence count=" +
@@ -317,8 +319,7 @@ SequenceData buildPhase1SequenceData(
 	logger.log("[Data] Applying sliding windows to validation split...");
 	applySlidingWindows(data.val_seqs, "val",
 						data_hp.training_stage,
-						data_hp.supervised_fields,
-						data_hp.unsupervised_fields,
+						data_hp.concept_spans,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Validation split post-window sequence count=" +

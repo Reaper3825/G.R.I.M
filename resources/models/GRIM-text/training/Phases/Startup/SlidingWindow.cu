@@ -8,9 +8,7 @@
 
 #include "SlidingWindow.hpp"
 #include "ConceptSupervision.hpp"
-#include "../../../Shared/ConceptBlock/ConceptBlockSpans.hpp"
 #include "../../../Shared/ConceptBlock/NamedConceptSpans.hpp"
-#include "../../../Shared/Goal/Goal.hpp"
 #include "../../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
@@ -216,189 +214,6 @@ size_t truncateEndBeforeSplitAtom(
     return span->begin;
 }
 
-std::shared_ptr<const GRIM::Goal> offsetGoalSpans(
-    const std::shared_ptr<const GRIM::Goal>& source,
-    std::int32_t offset) {
-    if (!source || offset == 0) {
-        return source;
-    }
-
-    auto shifted = std::make_shared<GRIM::Goal>();
-    if (source->target_state.has_value()) {
-        GRIM::TargetState target_state;
-        target_state.token_ids = source->target_state->token_ids;
-        target_state.span = GRIM::GoalTokenSpan{
-            source->target_state->span.begin + offset,
-            source->target_state->span.end + offset};
-        shifted->target_state = std::move(target_state);
-    }
-    if (source->success_criteria.has_value()) {
-        GRIM::SuccessCriteria criteria = *source->success_criteria;
-        criteria.span.begin += offset;
-        criteria.span.end += offset;
-        for (auto& entry : criteria.entries) {
-            entry.criterion_span.begin += offset;
-            entry.criterion_span.end += offset;
-            if (entry.evidence_span.valid()) {
-                entry.evidence_span.begin += offset;
-                entry.evidence_span.end += offset;
-            }
-        }
-        shifted->success_criteria = std::move(criteria);
-    }
-    if (source->constraints.has_value()) {
-        GRIM::Constraints constraints = *source->constraints;
-        constraints.span.begin += offset;
-        constraints.span.end += offset;
-        for (auto& entry : constraints.entries) {
-            entry.constraint_span.begin += offset;
-            entry.constraint_span.end += offset;
-        }
-        shifted->constraints = std::move(constraints);
-    }
-    return shifted;
-}
-
-std::shared_ptr<const GRIM::ConceptBlockSpans> offsetConceptBlockSpans(
-    const std::shared_ptr<const GRIM::ConceptBlockSpans>& source,
-    std::int32_t offset) {
-    if (!source || offset == 0) {
-        return source;
-    }
-    auto shifted = std::make_shared<GRIM::ConceptBlockSpans>(*source);
-    auto shift_entries = [offset](
-        std::vector<GRIM::ConceptBlockSpanEntry>& entries) {
-        for (auto& entry : entries) {
-            entry.span.begin += offset;
-            entry.span.end += offset;
-        }
-    };
-    shift_entries(shifted->knowns);
-    shift_entries(shifted->unknowns);
-    auto shift_optional = [offset](
-        std::optional<GRIM::ConceptBlockSpanEntry>& entry) {
-        if (!entry) return;
-        entry->span.begin += offset;
-        entry->span.end += offset;
-    };
-    shift_optional(shifted->reasoning);
-    shift_optional(shifted->determine);
-    shift_optional(shifted->define);
-    shift_optional(shifted->execute);
-    shift_optional(shifted->update);
-    std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
-        std::move(shifted);
-    return immutable_spans;
-}
-
-bool conceptBlockSpansFitPrefix(
-    const std::shared_ptr<const GRIM::ConceptBlockSpans>& spans,
-    size_t source_end) {
-    if (!spans) {
-        return false;
-    }
-    auto entries_fit = [source_end](
-        const std::vector<GRIM::ConceptBlockSpanEntry>& entries) {
-        return std::all_of(
-            entries.begin(), entries.end(),
-            [source_end](const GRIM::ConceptBlockSpanEntry& entry) {
-                return static_cast<size_t>(entry.span.end) <= source_end;
-            });
-    };
-    const auto optional_fits = [source_end](
-        const std::optional<GRIM::ConceptBlockSpanEntry>& entry) {
-        return !entry || static_cast<size_t>(entry->span.end) <= source_end;
-    };
-    return entries_fit(spans->knowns) && entries_fit(spans->unknowns) &&
-           optional_fits(spans->reasoning) &&
-           optional_fits(spans->determine) &&
-           optional_fits(spans->define) &&
-           optional_fits(spans->execute) && optional_fits(spans->update);
-}
-
-std::shared_ptr<const GRIM::ConceptBlockSpans> sliceConceptBlockSpansForSftWindow(
-    const std::shared_ptr<const GRIM::ConceptBlockSpans>& source,
-    size_t prefix_length,
-    size_t response_source_begin,
-    size_t response_source_end) {
-    if (!source) {
-        return nullptr;
-    }
-
-    auto sliced = std::make_shared<GRIM::ConceptBlockSpans>();
-    auto slice_entries = [prefix_length, response_source_begin, response_source_end](
-        const std::vector<GRIM::ConceptBlockSpanEntry>& entries,
-        std::vector<GRIM::ConceptBlockSpanEntry>& destination) {
-        destination.reserve(entries.size());
-        for (const auto& source_entry : entries) {
-            GRIM::ConceptBlockSpanEntry entry = source_entry;
-            if (entry.span.end <= static_cast<std::int32_t>(prefix_length)) {
-                destination.push_back(std::move(entry));
-                continue;
-            }
-            if (entry.span.begin >= static_cast<std::int32_t>(response_source_begin) &&
-                entry.span.end <= static_cast<std::int32_t>(response_source_end)) {
-                const std::int32_t offset = static_cast<std::int32_t>(prefix_length) -
-                    static_cast<std::int32_t>(response_source_begin);
-                entry.span.begin += offset;
-                entry.span.end += offset;
-                destination.push_back(std::move(entry));
-            }
-        }
-    };
-    slice_entries(source->knowns, sliced->knowns);
-    slice_entries(source->unknowns, sliced->unknowns);
-    auto slice_optional = [prefix_length, response_source_begin, response_source_end](
-        const std::optional<GRIM::ConceptBlockSpanEntry>& source_entry,
-        std::optional<GRIM::ConceptBlockSpanEntry>& destination) {
-        if (!source_entry) return;
-        GRIM::ConceptBlockSpanEntry entry = *source_entry;
-        if (entry.span.end <= static_cast<std::int32_t>(prefix_length)) {
-            destination = std::move(entry);
-            return;
-        }
-        if (entry.span.begin >= static_cast<std::int32_t>(response_source_begin) &&
-            entry.span.end <= static_cast<std::int32_t>(response_source_end)) {
-            const std::int32_t offset = static_cast<std::int32_t>(prefix_length) -
-                static_cast<std::int32_t>(response_source_begin);
-            entry.span.begin += offset;
-            entry.span.end += offset;
-            destination = std::move(entry);
-        }
-    };
-    slice_optional(source->reasoning, sliced->reasoning);
-    slice_optional(source->determine, sliced->determine);
-    slice_optional(source->define, sliced->define);
-    slice_optional(source->execute, sliced->execute);
-    slice_optional(source->update, sliced->update);
-    if (sliced->empty()) {
-        return nullptr;
-    }
-    std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
-        std::move(sliced);
-    return immutable_spans;
-}
-
-bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
-                    size_t source_end) {
-    if (!goal) {
-        return false;
-    }
-    if (goal->target_state.has_value() &&
-        static_cast<size_t>(goal->target_state->span.end) > source_end) {
-        return false;
-    }
-    if (goal->success_criteria.has_value() &&
-        static_cast<size_t>(goal->success_criteria->span.end) > source_end) {
-        return false;
-    }
-    if (goal->constraints.has_value() &&
-        static_cast<size_t>(goal->constraints->span.end) > source_end) {
-        return false;
-    }
-    return true;
-}
-
 std::shared_ptr<const GRIM::NamedConceptSpans> offsetNamedConceptSpans(
     const std::shared_ptr<const GRIM::NamedConceptSpans>& source,
     std::int32_t offset) {
@@ -411,41 +226,17 @@ std::shared_ptr<const GRIM::NamedConceptSpans> offsetNamedConceptSpans(
     return shifted;
 }
 
-bool namedConceptSpansFitPrefix(
-    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
-    size_t source_end) {
-    return spans && std::all_of(
-        spans->entries.begin(), spans->entries.end(),
-        [source_end](const GRIM::NamedConceptSpan& entry) {
-            return static_cast<size_t>(entry.span.end) <= source_end;
-        });
-}
-
 std::shared_ptr<const GRIM::NamedConceptSpans> sliceNamedConceptSpansForSftWindow(
     const std::shared_ptr<const GRIM::NamedConceptSpans>& source,
-    size_t prefix_length,
-    size_t response_source_begin,
-    size_t response_source_end) {
+    size_t prefix_length, size_t response_source_begin, size_t response_source_end) {
     if (!source) return nullptr;
-    auto sliced = std::make_shared<GRIM::NamedConceptSpans>();
-    sliced->entries.reserve(source->entries.size());
-    for (const auto& source_entry : source->entries) {
-        GRIM::NamedConceptSpan entry = source_entry;
-        if (entry.span.end <= static_cast<std::int32_t>(prefix_length)) {
-            sliced->entries.push_back(std::move(entry));
-            continue;
-        }
-        if (entry.span.begin >= static_cast<std::int32_t>(response_source_begin) &&
-            entry.span.end <= static_cast<std::int32_t>(response_source_end)) {
-            const auto offset = static_cast<std::int32_t>(prefix_length) -
-                static_cast<std::int32_t>(response_source_begin);
-            entry.span.begin += offset;
-            entry.span.end += offset;
-            sliced->entries.push_back(std::move(entry));
-        }
-    }
-    if (sliced->empty()) return nullptr;
-    return sliced;
+    size_t length = response_source_end;
+    for (const auto& e : source->entries) length = std::max(length, static_cast<size_t>(e.span.end));
+    std::vector<int32_t> map(length + 1, 0);
+    for (size_t i = 0; i < length; ++i)
+        map[i + 1] = map[i] + ((i < prefix_length ||
+            (i >= response_source_begin && i < response_source_end)) ? 1 : 0);
+    return GRIM::remapNamedConceptSpans(source, map);
 }
 
 void appendSftTokenRange(GrmtSequence& destination,
@@ -626,13 +417,8 @@ SftWindowConstruction constructSftWindows(
                 window = sequence;
             } else {
                 window.concept_block_id = sequence.concept_block_id;
+                window.concept_span_layout = sequence.concept_span_layout;
                 window.atom_table = sequence.atom_table;
-                window.goal = sequence.goal;
-                window.concept_block_spans = sliceConceptBlockSpansForSftWindow(
-                    sequence.concept_block_spans,
-                    prefix_length,
-                    prefix_length + response_begin,
-                    prefix_length + response_end);
                 window.named_concept_spans = sliceNamedConceptSpansForSftWindow(
                     sequence.named_concept_spans,
                     prefix_length,
@@ -732,15 +518,8 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             if (seq.prompt_end_pos >= 0) {
                 seq.prompt_end_pos += 1;
             }
-            seq.goal = offsetGoalSpans(seq.goal, 1);
-            seq.concept_block_spans =
-                offsetConceptBlockSpans(seq.concept_block_spans, 1);
             seq.named_concept_spans =
                 offsetNamedConceptSpans(seq.named_concept_spans, 1);
-            if (seq.answer_span.has_value()) {
-                ++seq.answer_span->begin;
-                ++seq.answer_span->end;
-            }
             added_bos_out++;
         }
 
@@ -774,95 +553,38 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
                          GRIM::HyperParameters::TrainingStage training_stage,
-                         const std::vector<std::string>& supervised_fields,
-                         const std::vector<std::string>& unsupervised_fields,
+                         const GRIM::NamedConceptSpanDefinitions& concept_spans,
                          int max_seq_len,
                          int sliding_window_stride,
                          int min_seq_valid_tokens,
                          bool add_bos_token,
                          bool add_eos_token,
                          TrainingLogger& logger) {
+    // BOS must exist before projection so any first span can be supervised.
+    size_t added_bos = 0, ignored_eos = 0;
+    injectBoundaryTokens(sequences, training_stage, add_bos_token, false, added_bos, ignored_eos);
     if (training_stage == GRIM::HyperParameters::TrainingStage::SFT) {
-        if (supervised_fields.empty()) {
-            throw std::runtime_error(
-                "Sliding window (" + split_name +
-                "): SFT supervised_fields must not be empty");
-        }
-        std::vector<ConceptField> parsed_supervised_fields;
-        std::vector<ConceptField> parsed_unsupervised_fields;
-        parsed_supervised_fields.reserve(supervised_fields.size());
-        parsed_unsupervised_fields.reserve(unsupervised_fields.size());
-        const std::string policy_source = "Sliding window (" + split_name + ")";
-        for (const auto& field : supervised_fields) {
-            parsed_supervised_fields.push_back(
-                parseConceptField(field, policy_source + " supervised_fields"));
-        }
-        for (const auto& field : unsupervised_fields) {
-            parsed_unsupervised_fields.push_back(
-                parseConceptField(field, policy_source + " unsupervised_fields"));
-        }
-        std::array<bool, static_cast<std::size_t>(ConceptField::Count)>
-            listed_fields{};
-        const auto validate_field_list = [&](const auto& fields, const char* name) {
-            for (const auto field : fields) {
-                const auto index = static_cast<std::size_t>(field);
-                if (index >= listed_fields.size()) {
-                    throw std::runtime_error(
-                        "Sliding window (" + split_name + "): invalid field in " + name);
-                }
-                if (listed_fields[index]) {
-                    throw std::runtime_error(
-                        "Sliding window (" + split_name +
-                        "): duplicate or overlapping field in SFT policy");
-                }
-                listed_fields[index] = true;
-            }
-        };
-        validate_field_list(parsed_supervised_fields, "supervised_fields");
-        validate_field_list(parsed_unsupervised_fields, "unsupervised_fields");
-        if (listed_fields[static_cast<std::size_t>(ConceptField::Prompt)] &&
-            std::find(parsed_supervised_fields.begin(), parsed_supervised_fields.end(),
-                      ConceptField::Prompt) != parsed_supervised_fields.end()) {
-            throw std::runtime_error(
-                "Sliding window (" + split_name + "): prompt cannot be supervised");
-        }
-        const auto unprojected = std::remove_if(
-            sequences.begin(), sequences.end(), [&](auto& sequence) {
-                return !projectConceptSupervision(
-                    sequence, parsed_supervised_fields, parsed_unsupervised_fields,
-                    "Sliding window (" + split_name +
-                        ", SFT, concept_block_id=" +
-                        sequence.concept_block_id + ")");
-            });
-        const auto ignored_rows = static_cast<std::size_t>(
-            std::distance(unprojected, sequences.end()));
-        sequences.erase(unprojected, sequences.end());
-        const auto format_fields = [](const auto& fields) {
-            std::string result = "[";
-            for (std::size_t index = 0; index < fields.size(); ++index) {
-                if (index != 0) result += ",";
-                result += conceptFieldName(fields[index]);
-            }
-            return result + "]";
-        };
-        logger.log("[Data] SFT concept field policy (" + split_name +
-                   "): supervised=" + format_fields(parsed_supervised_fields) +
-                   " unsupervised=" + format_fields(parsed_unsupervised_fields) +
-                   " rows_without_supervised_fields=" +
-                   std::to_string(ignored_rows));
+        const auto end = std::remove_if(sequences.begin(), sequences.end(), [&](auto& sequence) {
+            return !projectConceptSupervision(sequence, concept_spans,
+                "Sliding window (" + split_name + ", " + sequence.concept_block_id + ")");
+        });
+        const auto ignored = std::distance(end, sequences.end());
+        sequences.erase(end, sequences.end());
+        logger.log("[Data] Recursive SFT span policy (" + split_name +
+                   "): rows_without_supervision=" + std::to_string(ignored));
     }
 
     // Bracket sequences with BOS/EOS before windowing so window math sees
     // fully-bracketed input. Per-split summary is emitted here so each
     // train/val pass reports its own boundary-injection count.
-    size_t added_bos = 0;
+    size_t unused_bos = 0;
     size_t added_eos = 0;
     injectBoundaryTokens(
         sequences,
         training_stage,
-        add_bos_token,
+        false,
         add_eos_token,
-        added_bos,
+        unused_bos,
         added_eos);
     if (added_bos > 0 || added_eos > 0) {
         logger.log("[Data] Boundary tokens (" + split_name + "): added_bos=" +
@@ -1023,19 +745,11 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
 
             GRIM::TokenizerArtifacts::GrmtSequence window;
             window.concept_block_id = seq.concept_block_id;
-            // PT windows do not pin goal metadata. Retain it only on the
-            // leading window when every authored logical span is present.
-            if (is_first_window && goalFitsPrefix(seq.goal, end)) {
-                window.goal = seq.goal;
-            }
-            if (is_first_window &&
-                conceptBlockSpansFitPrefix(seq.concept_block_spans, end)) {
-                window.concept_block_spans = seq.concept_block_spans;
-            }
-            if (is_first_window &&
-                namedConceptSpansFitPrefix(seq.named_concept_spans, end)) {
-                window.named_concept_spans = seq.named_concept_spans;
-            }
+            window.concept_span_layout = seq.concept_span_layout;
+            window.named_concept_spans = sliceNamedConceptSpansForSftWindow(
+                seq.named_concept_spans, 0, start, end);
+            if (!is_first_window && add_bos_token)
+                window.named_concept_spans = offsetNamedConceptSpans(window.named_concept_spans, 1);
 
             // For non-first windows, prepend BOS token (gated on add_bos_token config)
             if (prepend_bos) {

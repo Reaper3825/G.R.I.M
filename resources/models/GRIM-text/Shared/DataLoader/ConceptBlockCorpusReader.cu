@@ -72,6 +72,8 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	if (const auto* values = source.explanation()) {
 		for (const auto* value : *values) j["explanation"].push_back(fbString(value));
 	}
+	// Normalize the legacy source alias here; span traversal never branches on names.
+	if (j["explanation"].empty()) j["explanation"] = j["intermediates"];
 	j["step_index"] = json::array();
 	if (const auto* values = source.step_index()) {
 		for (const auto value : *values) j["step_index"].push_back(value);

@@ -1,5 +1,5 @@
 #include "../DataCollection/reasoning_state_json.hpp"
-#include "../DataCollection/concept_block_canonical.hpp"
+#include "../tests/concept_span_test_helpers.hpp"
 #include <cassert>
 #include <iostream>
 using nlohmann::json;
@@ -10,6 +10,7 @@ template<class F> void rejects(F f) {
     assert(rejected);
 }
 int main() {
+    const auto definitions = testSpanDefinitions();
     GRIM::ReasoningState state;
     state.knowns = {"capacity = 120 liters", "remaining = 84 liters"};
     state.unknowns = {"consumed volume"};
@@ -26,7 +27,7 @@ int main() {
     assert(restored.goal->success_criteria[0].evidence == "Subtraction applies");
     auto block = restored.withPrompt("Question?");
     assert(block.answer.empty() && block.id.empty() && block.raw.empty());
-    const auto input = GRIM::ConceptCanonical::renderReasoningPrompt(block);
+    const auto input = GRIM::ConceptCanonical::renderReasoningPrompt(block, definitions);
     assert(input.find("<knowns>\ncapacity = 120 liters") != std::string::npos);
     assert(input.find("<unknowns>\nconsumed volume") != std::string::npos);
     assert(input.find("<target_state>\nFind consumed volume") != std::string::npos);
@@ -34,8 +35,8 @@ int main() {
     assert(input.find("<evidence>\nSubtraction applies") != std::string::npos);
     assert(input.find("<constraints>\n<constraint>\nUse liters") != std::string::npos);
     block.answer = "consumed = 36 liters";
-    auto training = GRIM::ConceptCanonical::render(block);
-    assert(input == training.text.substr(0, training.answer.begin));
+    auto training = GRIM::ConceptCanonical::render(block, definitions);
+    assert(input == training.text.substr(0, training.findNamedSpan("answer")->begin));
     assert(!GRIM::reasoningStateFromJson(json::object()).goal);
     assert(!GRIM::reasoningStateFromJson({{"goal", nullptr}}).goal);
     assert(GRIM::reasoningStateToJson(GRIM::ReasoningState{}).at("knowns").empty());

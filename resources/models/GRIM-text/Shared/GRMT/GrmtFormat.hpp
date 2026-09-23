@@ -12,72 +12,10 @@
 
 namespace GRIM {
 
-// Version 32 persists the model-visible Define span between Determine and
-// Execute in ConceptBlock span metadata.
-//
-// Version 31 makes the model-visible Answer label explicit and widens
-// Determine/Execute/Update/Answer spans to include section markers and
-// separators. Rebuild GRMT rows; the compiled model and checkpoint formats
-// are unchanged.
-
-// Version 30 persists token spans for reasoning and the authored
-// Determine/Execute/Update phases so Phase 1 can apply field-list SFT
-// supervision instead of a single selected target.
-
-// Version 28 reorders model-visible ConceptBlock state to target state ->
-// success criteria/evidence -> constraints -> knowns/unknowns -> reasoning ->
-// answer, stores the neutral authored answer span, and defers SFT target
-// selection to Phase-1 supervision projection.
-//
-// Version 27 gives constraints the same collection shape as success criteria:
-// one outer <constraints> span containing the ordered <constraint> entries.
-// The rendered label layout changed with it (entries are now <constraint>
-// inside a single <constraints> wrapper instead of one <constraints> wrapper
-// per entry), so artifacts must be regenerated from source blocks.
-// v27 also corrects the outer-span check for both collections: since v26 made
-// entry labels model-visible, an outer span contains its entries rather than
-// coinciding with them, so equality was unsatisfiable for success criteria.
-//
-// Version 26 makes supplied state labels visible in reasoning-model context.
-// Rebuild artifacts so label tokens and all logical spans agree.
-//
-// Version 25 adds a required
-// length-prefixed concept_block_id before each row's sequence length.
-// Older artifacts must be regenerated from source blocks.
-//
-// v24 invalidates SFT artifacts authored before answer-only target masking.
-//
-// v23 adds top-level ConceptBlock known/unknown token IDs and one invisible
-// logical token span per ordered entry. These collections remain independent
-// of row-level Goal metadata.
-//
-// v22 adds the independent sequence-local typed atom table and the opening-only
-// local index channel. Local addresses are (AtomType, local_index) and do not
-// reuse durable AtomTable entry IDs.
-//
-// v21 changes numeric atoms from one metadata-bearing placeholder token to a
-// typed boundary span. The serialized row shape is unchanged: atom metadata is
-// carried only at the opening boundary, while content and closing boundaries
-// have empty side channels.
-//
-// v20 adds ordered constraint token IDs and one invisible logical token span
-// per constraint. There is intentionally no collection-wide constraint span.
-//
-// v19 adds invisible logical token spans for target state, the full criteria
-// collection, and each ordered criterion/evidence pair. Evidence spans may be
-// absent for criteria awaiting evidence generation. The prompt is pinned ahead
-// of the goal decomposition; delimiter strings never enter model-visible tokens.
-//
-// v18 adds row-level Goal metadata: target-state tokens and ordered,
-// evidence-paired success-criterion tokens.
-//
-// v17 replaced arithmetic-specific teacher records with variable-arity
-// TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
-// through per-row CompiledTransitionBinding tables. Argument and result payload
-// values remain outside transition metadata.
-// v33 persists one ordered, uniquely named aggregate token span for every
-// rendered top-level model-visible ConceptBlock field.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 33;
+// v34 replaces fixed Goal/ConceptBlock/Answer records with recursive named
+// span ranges and a corpus-level structural schema. Adding configured spans
+// changes the layout identity, not this binary format. Regenerate older GRMT.
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 34;
 
 } // namespace GRIM
 

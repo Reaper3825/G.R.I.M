@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../Shared/ConceptBlock/NamedConceptSpans.hpp"
 //======================================================//
 //  Startup/SlidingWindow.hpp
 //
@@ -91,9 +92,7 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 //   sequences            - in/out: sequences to window (mutated in place)
 //   split_name           - "train" / "val", used only for log lines
 //   training_stage       - selects PT document windows or SFT prompt-pinned windows
-//   supervised_fields    - SFT concept fields exposed as causal LM targets
-//   unsupervised_fields  - SFT concept fields retained as masked context;
-//                          fields in neither list are ignored by the loss
+//   concept_spans        - recursive context/supervised/ignore span definitions
 //   max_seq_len          - maximum window length
 //   sliding_window_stride - hop size between windows; usually < max_seq_len
 //   min_seq_valid_tokens - minimum unmasked targets per output sequence
@@ -104,8 +103,7 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
                          GRIM::HyperParameters::TrainingStage training_stage,
-                         const std::vector<std::string>& supervised_fields,
-                         const std::vector<std::string>& unsupervised_fields,
+                         const GRIM::NamedConceptSpanDefinitions& concept_spans,
                          int max_seq_len,
                          int sliding_window_stride,
                          int min_seq_valid_tokens,

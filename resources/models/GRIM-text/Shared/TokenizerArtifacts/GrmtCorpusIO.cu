@@ -1,9 +1,7 @@
 #include "GrmtCorpusIO.hpp"
 #include "../GRMT/GrmtSourceIdentity.hpp"
 
-#include "../ConceptBlock/ConceptBlockSpans.hpp"
 #include "../ConceptBlock/NamedConceptSpans.hpp"
-#include "../Goal/Goal.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
@@ -149,474 +147,6 @@ std::uint32_t checkedCount(std::size_t count,
     return static_cast<std::uint32_t>(count);
 }
 
-void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
-                          const std::string& source) {
-    if (!goal) {
-        return;
-    }
-    if (!goal->target_state.has_value() &&
-        !goal->success_criteria.has_value() &&
-        !goal->constraints.has_value()) {
-        throw std::runtime_error(
-            "[GRMT] " + source +
-            ": goal has no target_state, success_criteria, or constraints");
-    }
-
-    auto validate_token_ids = [&source](const std::vector<std::int32_t>& token_ids,
-                                        const GRIM::GoalTokenSpan& span,
-                                        const std::string& field) {
-        if (token_ids.empty()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": " + field + " has no tokens");
-        }
-        if (!span.valid() ||
-            static_cast<std::size_t>(span.length()) != token_ids.size()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": " + field +
-                " logical span does not match its token count");
-        }
-        for (std::size_t index = 0; index < token_ids.size(); ++index) {
-            if (token_ids[index] < 0) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": " + field + " contains negative token id at index=" +
-                    std::to_string(index));
-            }
-        }
-    };
-    auto validate_optional_token_ids =
-        [&source, &validate_token_ids](
-            const std::vector<std::int32_t>& token_ids,
-            const GRIM::GoalTokenSpan& span,
-            const std::string& field) {
-            if (token_ids.empty()) {
-                if (span.begin != -1 || span.end != -1) {
-                    throw std::runtime_error(
-                        "[GRMT] " + source + ": " + field +
-                        " absent tokens require an absent logical span");
-                }
-                return false;
-            }
-            validate_token_ids(token_ids, span, field);
-            return true;
-        };
-
-    if (goal->target_state.has_value()) {
-        validate_token_ids(
-            goal->target_state->token_ids,
-            goal->target_state->span,
-            "goal.target_state");
-    }
-    if (goal->success_criteria.has_value()) {
-        const auto& criteria = *goal->success_criteria;
-        const auto& entries = criteria.entries;
-        if (entries.empty()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": goal.success_criteria has no entries");
-        }
-        if (!criteria.span.valid()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": goal.success_criteria span is invalid");
-        }
-        for (std::size_t index = 0; index < entries.size(); ++index) {
-            const std::string prefix =
-                "goal.success_criteria[" + std::to_string(index) + "]";
-            validate_token_ids(
-                entries[index].token_ids,
-                entries[index].criterion_span,
-                prefix + ".criterion");
-            const bool has_evidence = validate_optional_token_ids(
-                entries[index].evidence_token_ids,
-                entries[index].evidence_span,
-                prefix + ".evidence");
-            if (has_evidence && entries[index].criterion_span.end >
-                entries[index].evidence_span.begin) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": " + prefix +
-                    " criterion/evidence spans are out of order");
-            }
-            if (index > 0) {
-                const auto& previous = entries[index - 1];
-                const std::int32_t previous_end = previous.evidence_span.valid()
-                    ? previous.evidence_span.end
-                    : previous.criterion_span.end;
-                if (previous_end > entries[index].criterion_span.begin) {
-                    throw std::runtime_error(
-                        "[GRMT] " + source +
-                        ": success-criterion pairs overlap or are out of order");
-                }
-            }
-        }
-        // The outer span opens after the collection's opening label and closes
-        // after the final entry's closing label, so it contains the ordered
-        // pairs rather than coinciding with them. Entry labels are model-
-        // visible (v26), which is why this is containment, not equality.
-        const auto& last_entry = entries.back();
-        const std::int32_t last_end = last_entry.evidence_span.valid()
-            ? last_entry.evidence_span.end
-            : last_entry.criterion_span.end;
-        if (criteria.span.begin > entries.front().criterion_span.begin ||
-            criteria.span.end < last_end) {
-            throw std::runtime_error(
-                "[GRMT] " + source +
-                ": outer criteria span does not enclose the ordered pairs");
-        }
-    }
-    if (goal->constraints.has_value()) {
-        const auto& constraints = *goal->constraints;
-        const auto& entries = constraints.entries;
-        if (entries.empty()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": goal.constraints has no entries");
-        }
-        if (!constraints.span.valid()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": goal.constraints span is invalid");
-        }
-        for (std::size_t index = 0; index < entries.size(); ++index) {
-            const std::string field =
-                "goal.constraints[" + std::to_string(index) + "]";
-            validate_token_ids(
-                entries[index].token_ids,
-                entries[index].constraint_span,
-                field);
-            if (index > 0 &&
-                entries[index - 1].constraint_span.end >
-                    entries[index].constraint_span.begin) {
-                throw std::runtime_error(
-                    "[GRMT] " + source +
-                    ": constraint spans overlap or are out of order");
-            }
-        }
-        if (constraints.span.begin > entries.front().constraint_span.begin ||
-            constraints.span.end < entries.back().constraint_span.end) {
-            throw std::runtime_error(
-                "[GRMT] " + source +
-                ": outer constraints span does not enclose the ordered entries");
-        }
-    }
-}
-
-void validateGoalTokenSlices(const std::shared_ptr<const GRIM::Goal>& goal,
-                             const std::vector<int>& sequence_token_ids,
-                             const std::string& source) {
-    if (!goal) {
-        return;
-    }
-    auto validate = [&sequence_token_ids, &source](
-        const std::vector<std::int32_t>& expected,
-        const GRIM::GoalTokenSpan& span,
-        const std::string& field) {
-        if (static_cast<std::size_t>(span.end) > sequence_token_ids.size() ||
-            !std::equal(
-                expected.begin(), expected.end(),
-                sequence_token_ids.begin() + span.begin)) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": " + field +
-                " tokens do not match the delimited sequence span");
-        }
-    };
-    if (goal->target_state.has_value()) {
-        validate(goal->target_state->token_ids,
-                 goal->target_state->span,
-                 "goal.target_state");
-    }
-    if (goal->success_criteria.has_value()) {
-        for (std::size_t index = 0;
-             index < goal->success_criteria->entries.size();
-             ++index) {
-            const auto& entry = goal->success_criteria->entries[index];
-            const std::string prefix =
-                "goal.success_criteria[" + std::to_string(index) + "]";
-            validate(entry.token_ids, entry.criterion_span,
-                     prefix + ".criterion");
-            if (!entry.evidence_token_ids.empty()) {
-                validate(entry.evidence_token_ids, entry.evidence_span,
-                         prefix + ".evidence");
-            }
-        }
-    }
-    if (goal->constraints.has_value()) {
-        for (std::size_t index = 0;
-             index < goal->constraints->entries.size();
-             ++index) {
-            const auto& entry = goal->constraints->entries[index];
-            validate(
-                entry.token_ids,
-                entry.constraint_span,
-                "goal.constraints[" + std::to_string(index) + "]");
-        }
-    }
-}
-
-void validateGoalTokenRange(const std::shared_ptr<const GRIM::Goal>& goal,
-                            std::uint32_t vocab_size,
-                            const std::string& source) {
-    if (!goal) {
-        return;
-    }
-    auto validate = [vocab_size, &source](
-        const std::vector<std::int32_t>& token_ids,
-        const std::string& field) {
-        for (std::size_t index = 0; index < token_ids.size(); ++index) {
-            if (static_cast<std::uint32_t>(token_ids[index]) >= vocab_size) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": " + field + " token id=" +
-                    std::to_string(token_ids[index]) + " at index=" +
-                    std::to_string(index) + " is outside vocab_size=" +
-                    std::to_string(vocab_size));
-            }
-        }
-    };
-
-    if (goal->target_state.has_value()) {
-        validate(goal->target_state->token_ids, "goal.target_state");
-    }
-    if (goal->success_criteria.has_value()) {
-        for (std::size_t index = 0;
-             index < goal->success_criteria->entries.size();
-             ++index) {
-            const auto& entry = goal->success_criteria->entries[index];
-            const std::string prefix =
-                "goal.success_criteria[" + std::to_string(index) + "]";
-            validate(entry.token_ids, prefix + ".criterion");
-            validate(entry.evidence_token_ids, prefix + ".evidence");
-        }
-    }
-    if (goal->constraints.has_value()) {
-        for (std::size_t index = 0;
-             index < goal->constraints->entries.size();
-             ++index) {
-            validate(
-                goal->constraints->entries[index].token_ids,
-                "goal.constraints[" + std::to_string(index) + "]");
-        }
-    }
-}
-
-void validateConceptBlockSpanMetadata(
-    const std::shared_ptr<const GRIM::ConceptBlockSpans>& spans,
-    const std::string& source) {
-    if (!spans) {
-        return;
-    }
-    if (spans->empty()) {
-        throw std::runtime_error(
-            "[GRMT] " + source +
-            ": concept_block_spans has no populated fields");
-    }
-
-    auto validate_entries = [&source](
-        const std::vector<GRIM::ConceptBlockSpanEntry>& entries,
-        const char* field) {
-        for (std::size_t index = 0; index < entries.size(); ++index) {
-            const auto& entry = entries[index];
-            const std::string entry_field =
-                std::string(field) + "[" + std::to_string(index) + "]";
-            if (entry.token_ids.empty()) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": " + entry_field +
-                    " has no tokens");
-            }
-            if (!entry.span.valid() ||
-                static_cast<std::size_t>(entry.span.length()) !=
-                    entry.token_ids.size()) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": " + entry_field +
-                    " logical span does not match its token count");
-            }
-            for (std::size_t token = 0; token < entry.token_ids.size(); ++token) {
-                if (entry.token_ids[token] < 0) {
-                    throw std::runtime_error(
-                        "[GRMT] " + source + ": " + entry_field +
-                        " contains negative token id at index=" +
-                        std::to_string(token));
-                }
-            }
-            if (index > 0 && entries[index - 1].span.end > entry.span.begin) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": " + field +
-                    " spans overlap or are out of order");
-            }
-        }
-    };
-
-    validate_entries(spans->knowns, "knowns");
-    validate_entries(spans->unknowns, "unknowns");
-    const auto validate_optional = [&validate_entries](
-        const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
-        const char* field) {
-        if (!entry) return;
-        validate_entries(std::vector<GRIM::ConceptBlockSpanEntry>{*entry}, field);
-    };
-    validate_optional(spans->reasoning, "reasoning");
-    validate_optional(spans->determine, "determine");
-    validate_optional(spans->define, "define");
-    validate_optional(spans->execute, "execute");
-    validate_optional(spans->update, "update");
-    if (!spans->knowns.empty() && !spans->unknowns.empty() &&
-        spans->knowns.back().span.end > spans->unknowns.front().span.begin) {
-        throw std::runtime_error(
-            "[GRMT] " + source +
-            ": known spans must precede unknown spans");
-    }
-}
-
-void validateConceptBlockSpanTokenSlices(
-    const std::shared_ptr<const GRIM::ConceptBlockSpans>& spans,
-    const std::vector<int>& sequence_token_ids,
-    const std::string& source) {
-    if (!spans) {
-        return;
-    }
-    auto validate_entries = [&sequence_token_ids, &source](
-        const std::vector<GRIM::ConceptBlockSpanEntry>& entries,
-        const char* field) {
-        for (std::size_t index = 0; index < entries.size(); ++index) {
-            const auto& entry = entries[index];
-            if (static_cast<std::size_t>(entry.span.end) >
-                    sequence_token_ids.size() ||
-                !std::equal(
-                    entry.token_ids.begin(), entry.token_ids.end(),
-                    sequence_token_ids.begin() + entry.span.begin)) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": " + field + "[" +
-                    std::to_string(index) +
-                    "] tokens do not match the delimited sequence span");
-            }
-        }
-    };
-    validate_entries(spans->knowns, "knowns");
-    validate_entries(spans->unknowns, "unknowns");
-    const auto validate_optional = [&validate_entries](
-        const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
-        const char* field) {
-        if (!entry) return;
-        validate_entries(std::vector<GRIM::ConceptBlockSpanEntry>{*entry}, field);
-    };
-    validate_optional(spans->reasoning, "reasoning");
-    validate_optional(spans->determine, "determine");
-    validate_optional(spans->define, "define");
-    validate_optional(spans->execute, "execute");
-    validate_optional(spans->update, "update");
-}
-
-void validateConceptBlockSpanTokenRange(
-    const std::shared_ptr<const GRIM::ConceptBlockSpans>& spans,
-    std::uint32_t vocab_size,
-    const std::string& source) {
-    if (!spans) {
-        return;
-    }
-    auto validate_entries = [vocab_size, &source](
-        const std::vector<GRIM::ConceptBlockSpanEntry>& entries,
-        const char* field) {
-        for (std::size_t index = 0; index < entries.size(); ++index) {
-            const auto& token_ids = entries[index].token_ids;
-            for (std::size_t token = 0; token < token_ids.size(); ++token) {
-                if (static_cast<std::uint32_t>(token_ids[token]) >= vocab_size) {
-                    throw std::runtime_error(
-                        "[GRMT] " + source + ": " + field + "[" +
-                        std::to_string(index) + "] token id=" +
-                        std::to_string(token_ids[token]) + " at index=" +
-                        std::to_string(token) + " is outside vocab_size=" +
-                        std::to_string(vocab_size));
-                }
-            }
-        }
-    };
-    validate_entries(spans->knowns, "knowns");
-    validate_entries(spans->unknowns, "unknowns");
-    const auto validate_optional = [&validate_entries](
-        const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
-        const char* field) {
-        if (!entry) return;
-        validate_entries(std::vector<GRIM::ConceptBlockSpanEntry>{*entry}, field);
-    };
-    validate_optional(spans->reasoning, "reasoning");
-    validate_optional(spans->determine, "determine");
-    validate_optional(spans->define, "define");
-    validate_optional(spans->execute, "execute");
-    validate_optional(spans->update, "update");
-}
-
-void validateNamedConceptSpanMetadata(
-    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
-    const std::string& source) {
-    if (!spans) return;
-    if (spans->empty()) {
-        throw std::runtime_error(
-            "[GRMT] " + source + ": named_concept_spans has no entries");
-    }
-    std::unordered_set<std::string> names;
-    std::int32_t previous_end = -1;
-    for (const auto& entry : spans->entries) {
-        if (entry.name.empty()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": named concept span has an empty name");
-        }
-        if (!names.insert(entry.name).second) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": duplicate named concept span '" +
-                entry.name + "'");
-        }
-        if (entry.token_ids.empty() || !entry.span.valid() ||
-            static_cast<std::size_t>(entry.span.length()) !=
-                entry.token_ids.size()) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": named concept span '" + entry.name +
-                "' does not match its token count");
-        }
-        if (previous_end > entry.span.begin) {
-            throw std::runtime_error(
-                "[GRMT] " + source +
-                ": named concept spans overlap or are out of order");
-        }
-        previous_end = entry.span.end;
-        for (const auto token_id : entry.token_ids) {
-            if (token_id < 0) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": named concept span '" +
-                    entry.name + "' contains a negative token id");
-            }
-        }
-    }
-}
-
-void validateNamedConceptSpanTokenSlices(
-    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
-    const std::vector<int>& sequence_token_ids,
-    const std::string& source) {
-    if (!spans) return;
-    for (const auto& entry : spans->entries) {
-        if (entry.span.begin < 0 ||
-            static_cast<std::size_t>(entry.span.end) > sequence_token_ids.size() ||
-            !std::equal(entry.token_ids.begin(), entry.token_ids.end(),
-                        sequence_token_ids.begin() + entry.span.begin)) {
-            throw std::runtime_error(
-                "[GRMT] " + source + ": named concept span '" + entry.name +
-                "' tokens do not match the delimited sequence span");
-        }
-    }
-}
-
-void validateNamedConceptSpanTokenRange(
-    const std::shared_ptr<const GRIM::NamedConceptSpans>& spans,
-    std::uint32_t vocab_size,
-    const std::string& source) {
-    if (!spans) return;
-    for (const auto& entry : spans->entries) {
-        for (std::size_t index = 0; index < entry.token_ids.size(); ++index) {
-            if (static_cast<std::uint32_t>(entry.token_ids[index]) >= vocab_size) {
-                throw std::runtime_error(
-                    "[GRMT] " + source + ": named concept span '" + entry.name +
-                    "' token id=" + std::to_string(entry.token_ids[index]) +
-                    " at index=" + std::to_string(index) +
-                    " is outside vocab_size=" + std::to_string(vocab_size));
-            }
-        }
-    }
-}
-
 void validateSequenceTokenRange(const GrmtSequence& sequence,
                                 std::uint32_t vocab_size,
                                 const std::string& source) {
@@ -646,25 +176,6 @@ void validateSequenceTokenRange(const GrmtSequence& sequence,
     }
 }
 
-void writeTokenIds(std::ostream& output,
-                   const std::vector<std::int32_t>& token_ids,
-                   const std::string& field,
-                   const std::string& sink) {
-    const std::uint32_t count = checkedCount(token_ids.size(), field, sink);
-    writeScalar(output, count, sink);
-    writeExact(output, token_ids.data(),
-               static_cast<std::size_t>(count) * sizeof(std::int32_t), sink);
-}
-
-std::vector<std::int32_t> readTokenIds(std::istream& input,
-                                       const std::string& source) {
-    const std::uint32_t count = readScalar<std::uint32_t>(input, source);
-    std::vector<std::int32_t> token_ids(count);
-    readExact(input, token_ids.data(),
-              static_cast<std::size_t>(count) * sizeof(std::int32_t), source);
-    return token_ids;
-}
-
 void writeGoalSpan(std::ostream& output,
                    const GRIM::GoalTokenSpan& span,
                    const std::string& sink) {
@@ -683,7 +194,6 @@ void writeNamedConceptSpansForSequence(
     std::ostream& output,
     const GrmtSequence& sequence,
     const std::string& sink) {
-    validateNamedConceptSpanMetadata(sequence.named_concept_spans, sink);
     const std::uint32_t count = sequence.named_concept_spans
         ? checkedCount(sequence.named_concept_spans->entries.size(),
                        "named_concept_spans", sink)
@@ -695,7 +205,7 @@ void writeNamedConceptSpansForSequence(
             entry.name.size(), "named_concept_span.name", sink);
         writeScalar(output, name_size, sink);
         writeExact(output, entry.name.data(), name_size, sink);
-        writeTokenIds(output, entry.token_ids, entry.name, sink);
+        writeScalar(output, entry.parent_entry_index, sink);
         writeGoalSpan(output, entry.span, sink);
     }
 }
@@ -706,6 +216,7 @@ readNamedConceptSpansForSequence(
     const std::string& source) {
     const std::uint32_t count = readScalar<std::uint32_t>(input, source);
     if (count == 0) return nullptr;
+    if (count > 1048576) throw std::runtime_error("[GRMT] excessive span node count: " + source);
     auto spans = std::make_shared<GRIM::NamedConceptSpans>();
     spans->entries.reserve(count);
     for (std::uint32_t index = 0; index < count; ++index) {
@@ -717,231 +228,16 @@ readNamedConceptSpansForSequence(
         GRIM::NamedConceptSpan entry;
         entry.name.resize(name_size);
         readExact(input, entry.name.data(), name_size, source);
-        entry.token_ids = readTokenIds(input, source);
+        entry.parent_entry_index = readScalar<std::uint32_t>(input, source);
+        if (entry.parent_entry_index != GRIM::kNoNamedConceptSpanEntry) {
+            if (entry.parent_entry_index >= index) throw std::runtime_error("[GRMT] invalid span parent: " + source);
+            spans->entries[entry.parent_entry_index].child_entry_indices.push_back(index);
+        }
         entry.span = readGoalSpan(input, source);
         spans->entries.push_back(std::move(entry));
     }
     std::shared_ptr<const GRIM::NamedConceptSpans> immutable_spans =
         std::move(spans);
-    validateNamedConceptSpanMetadata(immutable_spans, source);
-    return immutable_spans;
-}
-
-void writeGoalForSequence(std::ostream& output,
-                          const GrmtSequence& sequence,
-                          const std::string& sink) {
-    validateGoalMetadata(sequence.goal, sink);
-    const std::uint8_t has_goal = sequence.goal ? 1 : 0;
-    writeScalar(output, has_goal, sink);
-    if (!sequence.goal) {
-        return;
-    }
-
-    const std::uint8_t has_target_state =
-        sequence.goal->target_state.has_value() ? 1 : 0;
-    writeScalar(output, has_target_state, sink);
-    if (has_target_state != 0) {
-        writeTokenIds(output, sequence.goal->target_state->token_ids,
-                      "goal.target_state", sink);
-        writeGoalSpan(output, sequence.goal->target_state->span, sink);
-    }
-
-    const std::uint8_t has_success_criteria =
-        sequence.goal->success_criteria.has_value() ? 1 : 0;
-    writeScalar(output, has_success_criteria, sink);
-    if (has_success_criteria != 0) {
-        const auto& entries = sequence.goal->success_criteria->entries;
-        const std::uint32_t entry_count =
-            checkedCount(entries.size(), "goal.success_criteria", sink);
-        writeGoalSpan(output, sequence.goal->success_criteria->span, sink);
-        writeScalar(output, entry_count, sink);
-        for (const auto& entry : entries) {
-            writeTokenIds(output, entry.token_ids,
-                          "goal.success_criteria.criterion", sink);
-            writeGoalSpan(output, entry.criterion_span, sink);
-            writeTokenIds(output, entry.evidence_token_ids,
-                          "goal.success_criteria.evidence", sink);
-            writeGoalSpan(output, entry.evidence_span, sink);
-        }
-    }
-
-    const std::uint8_t has_constraints =
-        sequence.goal->constraints.has_value() ? 1 : 0;
-    writeScalar(output, has_constraints, sink);
-    if (has_constraints != 0) {
-        const auto& entries = sequence.goal->constraints->entries;
-        const std::uint32_t entry_count =
-            checkedCount(entries.size(), "goal.constraints", sink);
-        writeGoalSpan(output, sequence.goal->constraints->span, sink);
-        writeScalar(output, entry_count, sink);
-        for (const auto& entry : entries) {
-            writeTokenIds(output, entry.token_ids,
-                          "goal.constraints", sink);
-            writeGoalSpan(output, entry.constraint_span, sink);
-        }
-    }
-}
-
-std::shared_ptr<const GRIM::Goal> readGoalForSequence(
-    std::istream& input,
-    const std::string& source) {
-    const std::uint8_t has_goal = readScalar<std::uint8_t>(input, source);
-    if (has_goal > 1) {
-        throw std::runtime_error(
-            "[GRMT] invalid goal flag in " + source);
-    }
-    if (has_goal == 0) {
-        return nullptr;
-    }
-
-    auto goal = std::make_shared<GRIM::Goal>();
-    const std::uint8_t has_target_state =
-        readScalar<std::uint8_t>(input, source);
-    if (has_target_state > 1) {
-        throw std::runtime_error(
-            "[GRMT] invalid target_state flag in " + source);
-    }
-    if (has_target_state != 0) {
-        GRIM::TargetState target_state;
-        target_state.token_ids = readTokenIds(input, source);
-        target_state.span = readGoalSpan(input, source);
-        goal->target_state = std::move(target_state);
-    }
-
-    const std::uint8_t has_success_criteria =
-        readScalar<std::uint8_t>(input, source);
-    if (has_success_criteria > 1) {
-        throw std::runtime_error(
-            "[GRMT] invalid success_criteria flag in " + source);
-    }
-    if (has_success_criteria != 0) {
-        GRIM::SuccessCriteria success_criteria;
-        success_criteria.span = readGoalSpan(input, source);
-        const std::uint32_t entry_count =
-            readScalar<std::uint32_t>(input, source);
-        success_criteria.entries.reserve(entry_count);
-        for (std::uint32_t index = 0; index < entry_count; ++index) {
-            GRIM::SuccessCriterion entry;
-            entry.token_ids = readTokenIds(input, source);
-            entry.criterion_span = readGoalSpan(input, source);
-            entry.evidence_token_ids = readTokenIds(input, source);
-            entry.evidence_span = readGoalSpan(input, source);
-            success_criteria.entries.push_back(std::move(entry));
-        }
-        goal->success_criteria = std::move(success_criteria);
-    }
-
-    const std::uint8_t has_constraints =
-        readScalar<std::uint8_t>(input, source);
-    if (has_constraints > 1) {
-        throw std::runtime_error(
-            "[GRMT] invalid constraints flag in " + source);
-    }
-    if (has_constraints != 0) {
-        GRIM::Constraints constraints;
-        constraints.span = readGoalSpan(input, source);
-        const std::uint32_t entry_count =
-            readScalar<std::uint32_t>(input, source);
-        constraints.entries.reserve(entry_count);
-        for (std::uint32_t index = 0; index < entry_count; ++index) {
-            GRIM::Constraint entry;
-            entry.token_ids = readTokenIds(input, source);
-            entry.constraint_span = readGoalSpan(input, source);
-            constraints.entries.push_back(std::move(entry));
-        }
-        goal->constraints = std::move(constraints);
-    }
-
-    std::shared_ptr<const GRIM::Goal> immutable_goal = std::move(goal);
-    validateGoalMetadata(immutable_goal, source);
-    return immutable_goal;
-}
-
-void writeConceptBlockSpansForSequence(
-    std::ostream& output,
-    const GrmtSequence& sequence,
-    const std::string& sink) {
-    validateConceptBlockSpanMetadata(sequence.concept_block_spans, sink);
-    auto write_entries = [&output, &sink](
-        const std::vector<GRIM::ConceptBlockSpanEntry>& entries,
-        const char* field) {
-        const std::uint32_t entry_count =
-            checkedCount(entries.size(), field, sink);
-        writeScalar(output, entry_count, sink);
-        for (const auto& entry : entries) {
-            writeTokenIds(output, entry.token_ids, field, sink);
-            writeGoalSpan(output, entry.span, sink);
-        }
-    };
-	const auto write_optional = [&output, &sink](
-		const std::optional<GRIM::ConceptBlockSpanEntry>& entry,
-		const char* field) {
-		writeScalar(output, static_cast<std::uint8_t>(entry.has_value()), sink);
-		if (!entry) return;
-		writeTokenIds(output, entry->token_ids, field, sink);
-		writeGoalSpan(output, entry->span, sink);
-	};
-
-    if (!sequence.concept_block_spans) {
-        writeScalar(output, std::uint32_t{0}, sink);
-        writeScalar(output, std::uint32_t{0}, sink);
-        for (int index = 0; index < 5; ++index) {
-            writeScalar(output, std::uint8_t{0}, sink);
-        }
-        return;
-    }
-    write_entries(sequence.concept_block_spans->knowns, "knowns");
-    write_entries(sequence.concept_block_spans->unknowns, "unknowns");
-    write_optional(sequence.concept_block_spans->reasoning, "reasoning");
-    write_optional(sequence.concept_block_spans->determine, "determine");
-    write_optional(sequence.concept_block_spans->define, "define");
-    write_optional(sequence.concept_block_spans->execute, "execute");
-    write_optional(sequence.concept_block_spans->update, "update");
-}
-
-std::shared_ptr<const GRIM::ConceptBlockSpans>
-readConceptBlockSpansForSequence(
-    std::istream& input,
-    const std::string& source) {
-    auto spans = std::make_shared<GRIM::ConceptBlockSpans>();
-    auto read_entries = [&input, &source](
-        std::vector<GRIM::ConceptBlockSpanEntry>& entries) {
-        const std::uint32_t entry_count =
-            readScalar<std::uint32_t>(input, source);
-        entries.reserve(entry_count);
-        for (std::uint32_t index = 0; index < entry_count; ++index) {
-            GRIM::ConceptBlockSpanEntry entry;
-            entry.token_ids = readTokenIds(input, source);
-            entry.span = readGoalSpan(input, source);
-            entries.push_back(std::move(entry));
-        }
-    };
-    read_entries(spans->knowns);
-    read_entries(spans->unknowns);
-    const auto read_optional = [&input, &source](
-        std::optional<GRIM::ConceptBlockSpanEntry>& destination) {
-        const std::uint8_t present = readScalar<std::uint8_t>(input, source);
-        if (present > 1) {
-            throw std::runtime_error(
-                "[GRMT] invalid optional concept-field span flag in " + source);
-        }
-        if (present == 0) return;
-        GRIM::ConceptBlockSpanEntry entry;
-        entry.token_ids = readTokenIds(input, source);
-        entry.span = readGoalSpan(input, source);
-        destination = std::move(entry);
-    };
-    read_optional(spans->reasoning);
-    read_optional(spans->determine);
-    read_optional(spans->define);
-    read_optional(spans->execute);
-    read_optional(spans->update);
-    if (spans->empty()) {
-        return nullptr;
-    }
-    std::shared_ptr<const GRIM::ConceptBlockSpans> immutable_spans =
-        std::move(spans);
-    validateConceptBlockSpanMetadata(immutable_spans, source);
     return immutable_spans;
 }
 
@@ -1104,12 +400,6 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                      ": prompt_length extends before the sequence start");
         }
     }
-    if (answer_span.has_value() &&
-        (!answer_span->valid() ||
-         static_cast<std::size_t>(answer_span->end) > n)) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": answer span is outside the sequence");
-    }
     if (execution_active &&
         execution_gate_target != GRIM::Execution::ExecutionGateTarget::EXECUTE) {
         throw std::runtime_error("[GRMT] " + source +
@@ -1237,14 +527,7 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                  ": inactive sequence carries execution metadata");
     }
 
-    validateGoalMetadata(goal, source);
-    validateGoalTokenSlices(goal, token_ids, source);
-    validateConceptBlockSpanMetadata(concept_block_spans, source);
-    validateConceptBlockSpanTokenSlices(
-        concept_block_spans, token_ids, source);
-    validateNamedConceptSpanMetadata(named_concept_spans, source);
-    validateNamedConceptSpanTokenSlices(
-        named_concept_spans, token_ids, source);
+    if (named_concept_spans) GRIM::validateNamedConceptSpans(*named_concept_spans, n);
 
     std::unordered_set<std::uint64_t> slot_ids;
     std::unordered_set<std::int32_t> slot_indices;
@@ -1404,11 +687,13 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     const std::string sink = temp_path_.string() + "#seq" + std::to_string(written_sequences_);
     sequence.validateForWrite(sink);
     validateSequenceTokenRange(sequence, vocab_size_, sink);
-    validateGoalTokenRange(sequence.goal, vocab_size_, sink);
-    validateConceptBlockSpanTokenRange(
-        sequence.concept_block_spans, vocab_size_, sink);
-    validateNamedConceptSpanTokenRange(
-        sequence.named_concept_spans, vocab_size_, sink);
+    if (written_sequences_ == 0) {
+        concept_span_layout_ = sequence.conceptSpanLayoutIdentity();
+        writeScalar(file_, checkedCount(concept_span_layout_.size(), "concept span layout", sink), sink);
+        writeExact(file_, concept_span_layout_.data(), concept_span_layout_.size(), sink);
+    } else if (concept_span_layout_ != sequence.conceptSpanLayoutIdentity()) {
+        throw std::runtime_error("[GRMT] cannot mix concept span layouts in one corpus");
+    }
 
     GRIM::GRMT::writeConceptBlockId(file_, sequence.concept_block_id, sink);
     const std::uint32_t len = static_cast<std::uint32_t>(sequence.token_ids.size());
@@ -1430,14 +715,6 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     writeScalar(file_, gate_target, sink);
     writeScalar(file_, sequence.prompt_end_pos, sink);
     writeScalar(file_, sequence.prompt_length, sink);
-    const std::uint8_t has_answer_span = sequence.answer_span.has_value() ? 1 : 0;
-    writeScalar(file_, has_answer_span, sink);
-    if (sequence.answer_span.has_value()) {
-        writeScalar(file_, sequence.answer_span->begin, sink);
-        writeScalar(file_, sequence.answer_span->end, sink);
-    }
-    writeGoalForSequence(file_, sequence, sink);
-    writeConceptBlockSpansForSequence(file_, sequence, sink);
     writeNamedConceptSpansForSequence(file_, sequence, sink);
     writeExact(file_, sequence.token_exec_slot_indices.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
 
@@ -1522,16 +799,22 @@ GrmtCorpusReader::GrmtCorpusReader(const fs::path& path)
       file_buffer_(kReadBufferBytes)
 {
     pathString(path_);
+    file_.open(path_, std::ios::binary);
+    if (!file_.is_open()) {
+        throw std::runtime_error("[GRMT] cannot open file for read: " + path_.string());
+    }
+    // MSVC requires an open FILE for setvbuf; no reads have occurred yet.
     if (file_.rdbuf()->pubsetbuf(
             file_buffer_.data(),
             static_cast<std::streamsize>(file_buffer_.size())) == nullptr) {
         throw std::runtime_error("[GRMT] failed to configure read buffer for: " + path_.string());
     }
-    file_.open(path_, std::ios::binary);
-    if (!file_.is_open()) {
-        throw std::runtime_error("[GRMT] cannot open file for read: " + path_.string());
-    }
     header_ = GRIM::GRMT::readHeaderOrThrow(file_, path_.string());
+    const auto layout_size = readScalar<std::uint32_t>(file_, path_.string());
+    if (layout_size > 1048576) throw std::runtime_error("[GRMT] excessive concept span layout length");
+    auto layout = std::make_shared<std::string>(layout_size, '\0');
+    readExact(file_, layout->data(), layout_size, path_.string());
+    concept_span_layout_ = std::move(layout);
 }
 
 GrmtCorpusReader::~GrmtCorpusReader() {
@@ -1553,6 +836,7 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     }
 
     GrmtSequence seq;
+    seq.concept_span_layout = concept_span_layout_;
     seq.concept_block_id = std::move(concept_block_id);
     seq.token_ids.resize(seq_len);
     seq.targets.resize(seq_len);
@@ -1579,18 +863,6 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     seq.execution_gate_target = static_cast<GRIM::Execution::ExecutionGateTarget>(gate_target);
     seq.prompt_end_pos = readScalar<std::int32_t>(file_, source);
     seq.prompt_length = readScalar<std::int32_t>(file_, source);
-    const std::uint8_t has_answer_span = readScalar<std::uint8_t>(file_, source);
-    if (has_answer_span > 1) {
-        throw std::runtime_error("[GRMT] invalid answer-span presence flag in " + source);
-    }
-    if (has_answer_span != 0) {
-        seq.answer_span = GRIM::GoalTokenSpan{
-            readScalar<std::int32_t>(file_, source),
-            readScalar<std::int32_t>(file_, source)};
-    }
-    seq.goal = readGoalForSequence(file_, source);
-    seq.concept_block_spans =
-        readConceptBlockSpansForSequence(file_, source);
     seq.named_concept_spans =
         readNamedConceptSpansForSequence(file_, source);
 
@@ -1651,11 +923,6 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
 
     seq.validateForWrite(source);
     validateSequenceTokenRange(seq, header_.vocab_size, source);
-    validateGoalTokenRange(seq.goal, header_.vocab_size, source);
-    validateConceptBlockSpanTokenRange(
-        seq.concept_block_spans, header_.vocab_size, source);
-    validateNamedConceptSpanTokenRange(
-        seq.named_concept_spans, header_.vocab_size, source);
 
     out_sequence = std::move(seq);
     ++sequences_read_;

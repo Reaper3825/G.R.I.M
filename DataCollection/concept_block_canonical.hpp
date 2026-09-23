@@ -3,12 +3,13 @@
 //
 //  GRIM-text corpus compilation uses the model-visible renderer below.
 //  State tags are shared by training and structured inference. DataHub
-//  additionally displays an inspection-only prompt wrapper.
+//  displays the same config-authored tree as corpus compilation.
 //======================================================//
 
 #pragma once
 
 #include "concept_block.hpp"
+#include "../resources/models/GRIM-text/Shared/ConceptBlock/NamedConceptSpans.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -28,52 +29,24 @@ struct LogicalByteSpan {
     bool present = false;
 };
 
-struct SuccessCriterionByteSpans {
-    LogicalByteSpan criterion;
-    LogicalByteSpan evidence;
-};
-
 struct NamedLogicalByteSpan {
     std::string name;
     LogicalByteSpan span;
+    std::uint32_t parent_entry_index = kNoNamedConceptSpanEntry;
+    std::vector<std::uint32_t> child_entry_indices;
+};
+
+struct DelimiterByteSpan {
+    size_t begin;
+    size_t end;
+    std::int32_t token_id;
 };
 
 struct RenderResult {
     std::string text;
-    // Exactly one entry per rendered top-level model-visible field, in
-    // canonical order. Collection fields own the complete rendered collection,
-    // including every child entry.
+    std::vector<DelimiterByteSpan> delimiters;
+    // Depth-first ordered tree; repeated entries retain their configured name.
     std::vector<NamedLogicalByteSpan> named_spans;
-    // State labels are model-visible. Goal/collection ranges cover values;
-    // Determine/Define/Execute/Update/Answer ranges cover their complete labeled
-    // sections so SFT can teach section transitions as well as content.
-    LogicalByteSpan target_state;
-    LogicalByteSpan criteria;
-    std::vector<SuccessCriterionByteSpans> success_criteria;
-    // Mirrors the criteria collection: one outer <constraints> span plus an
-    // independent <constraint> span per entry. Constraints have no evidence
-    // pairing, so entries are bare spans rather than paired records.
-    LogicalByteSpan constraints_span;
-    std::vector<LogicalByteSpan> constraints;
-    // Top-level ConceptBlock collections. They follow the completed Goal so a
-    // state-identification model can derive execution inputs from the complete
-    // objective contract. Each entry owns an independent span; neither
-    // collection has an outer span.
-    std::vector<LogicalByteSpan> knowns;
-    std::vector<LogicalByteSpan> unknowns;
-    // Authored Determine/Define/Execute/Update phases immediately preceding Answer.
-    LogicalByteSpan reasoning;
-    LogicalByteSpan determine;
-    LogicalByteSpan define;
-    LogicalByteSpan execute;
-    LogicalByteSpan update;
-    // Authored final answer section, including its visible label.
-    LogicalByteSpan answer;
-    // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
-    // and are never emitted into model-visible text.
-    size_t prompt_byte_begin = 0;
-    size_t prompt_byte_end = 0;
-
     const LogicalByteSpan* findNamedSpan(std::string_view name) const noexcept {
         for (const auto& entry : named_spans) {
             if (std::string_view(entry.name) == name) {
@@ -84,342 +57,102 @@ struct RenderResult {
     }
 };
 
-inline void appendNamedSpan(RenderResult& result,
-                            const char* name,
-                            size_t begin,
-                            size_t end) {
-    if (end <= begin) return;
-    if (result.findNamedSpan(name) != nullptr) {
-        throw std::logic_error(
-            std::string("duplicate top-level canonical span '") + name + "'");
-    }
-    result.named_spans.push_back(
-        NamedLogicalByteSpan{name, LogicalByteSpan{begin, end, true}});
-}
-
-inline void appendLogicalSpan(std::ostringstream& out,
-                              const std::string& text,
-                              LogicalByteSpan& span) {
-    if (text.empty()) {
-        return;
-    }
-    span.begin = static_cast<size_t>(out.tellp());
-    out << text;
-    span.end = static_cast<size_t>(out.tellp());
-    span.present = true;
-}
-
-inline void appendStateField(std::ostringstream& out, const char* label,
-                             const std::string& value, LogicalByteSpan& span) {
-    if (value.empty()) return;
-    out << "<" << label << ">\n";
-    appendLogicalSpan(out, value, span);
-    out << "\n</" << label << ">";
-}
-
-inline RenderResult render(const nlohmann::json& j) {
+// Every configured node uses this traversal. Source storage is addressed by
+// relative JSON pointers; arrays repeat only when the definition requests it.
+inline RenderResult render(const nlohmann::json& source,
+                           const NamedConceptSpanDefinitions& definitions) {
+    validateConceptSpanDefinitions(definitions);
     RenderResult result;
-    if (j.contains("raw") && j["raw"].is_string()
-        && !j["raw"].get<std::string>().empty()) {
-        result.text = j["raw"].get<std::string>();
+    if (source.contains("raw") && !source.at("raw").get<std::string>().empty()) {
+        result.text = source.at("raw").get<std::string>();
         return result;
     }
-    std::ostringstream out;
-    const bool has_goal_decomposition =
-        j.contains("goal") && j["goal"].is_object() &&
-        ((j["goal"].contains("target_state") &&
-          j["goal"]["target_state"].is_string() &&
-          !j["goal"]["target_state"].get<std::string>().empty()) ||
-         (j["goal"].contains("success_criteria") &&
-          j["goal"]["success_criteria"].is_array() &&
-          !j["goal"]["success_criteria"].empty()) ||
-         (j["goal"].contains("constraints") &&
-          j["goal"]["constraints"].is_array() &&
-          !j["goal"]["constraints"].empty()));
-    const bool has_concept_entries =
-        (j.contains("knowns") && j["knowns"].is_array() &&
-         !j["knowns"].empty()) ||
-        (j.contains("unknowns") && j["unknowns"].is_array() &&
-         !j["unknowns"].empty());
-
-    if (j.contains("prompt") && j["prompt"].is_string()
-        && !j["prompt"].get<std::string>().empty()) {
-        result.prompt_byte_begin = static_cast<size_t>(out.tellp());
-        out << j["prompt"].get<std::string>();
-        result.prompt_byte_end = static_cast<size_t>(out.tellp());
-        // Keep the pinned prompt visually separate from goal decomposition
-        // while leaving the separator outside the logical prompt span.
-        out << ((has_goal_decomposition || has_concept_entries) ? "\n\n" : "\n");
-        appendNamedSpan(
-            result, "prompt", result.prompt_byte_begin,
-            static_cast<size_t>(out.tellp()));
-    }
-
-    auto append_entry_collection = [&out](
-        const nlohmann::json& source,
-        std::vector<LogicalByteSpan>& spans, const char* label) {
-        spans.reserve(source.size());
-        for (const auto& source_entry : source) {
-            LogicalByteSpan entry;
-            if (source_entry.is_string()) {
-                appendStateField(
-                    out, label, source_entry.get<std::string>(), entry);
-                if (entry.present) {
-                    out << "\n\n";
-                }
-            }
-            spans.push_back(entry);
+    std::function<void(const NamedConceptSpanDefinition&, const nlohmann::json&,
+                       std::uint32_t, bool)> emit;
+    emit = [&](const auto& d, const auto& parent_value, std::uint32_t parent, bool selected) {
+        const auto pointer = nlohmann::json::json_pointer(d.source_path);
+        if (!selected && !parent_value.contains(pointer)) return;
+        const auto& value = selected ? parent_value : parent_value.at(pointer);
+        if (!selected && d.repeat) {
+            if (!value.is_array()) throw std::runtime_error("Repeated concept span needs an array: " + d.name);
+            for (const auto& item : value) emit(d, item, parent, true);
+            return;
         }
+        if (value.is_null() || value.empty()) return;
+        const size_t begin = result.text.size();
+        const size_t delimiter_begin = result.delimiters.size();
+        const auto index = static_cast<std::uint32_t>(result.named_spans.size());
+        result.named_spans.push_back({d.name, {}, parent, {}});
+        const auto delimiter = [&](const std::string& text, std::int32_t id) {
+            if (text.empty()) return;
+            const auto start = result.text.size();
+            result.text += text;
+            result.delimiters.push_back({start, result.text.size(), id});
+        };
+        delimiter(d.open_delimiter, d.open_delimiter_id);
+        if (!d.open_delimiter.empty()) result.text += "\n";
+        const size_t content_begin = result.text.size();
+        if (!d.children.empty()) {
+            for (const auto& child : d.children) emit(child, value, index, false);
+        } else {
+            const auto append = [&](const auto& scalar) {
+                if (!scalar.is_string()) throw std::runtime_error("Concept span leaf needs text: " + d.name);
+                const auto text = scalar.template get<std::string>();
+                if (!text.empty()) result.text += text + "\n";
+            };
+            if (value.is_array()) for (const auto& item : value) append(item);
+            else append(value);
+        }
+        if (result.text.size() == content_begin) {
+            result.text.resize(begin);
+            result.delimiters.resize(delimiter_begin);
+            result.named_spans.resize(index);
+            return;
+        }
+        delimiter(d.close_delimiter, d.close_delimiter_id);
+        if (!d.close_delimiter.empty()) result.text += "\n\n";
+        result.named_spans[index].span = {begin, result.text.size(), true};
+        if (parent != kNoNamedConceptSpanEntry)
+            result.named_spans[parent].child_entry_indices.push_back(index);
     };
-    if (j.contains("goal") && j["goal"].is_object()) {
-        const auto& goal = j["goal"];
-        if (goal.contains("target_state") && goal["target_state"].is_string()) {
-            const size_t field_begin = static_cast<size_t>(out.tellp());
-            appendStateField(
-                out, "target_state", goal["target_state"].get<std::string>(), result.target_state);
-            if (result.target_state.present) {
-                out << "\n\n";
-                appendNamedSpan(
-                    result, "target_state", field_begin,
-                    static_cast<size_t>(out.tellp()));
-            }
-        }
-
-        if (goal.contains("success_criteria") &&
-            goal["success_criteria"].is_array() &&
-            !goal["success_criteria"].empty()) {
-            const size_t field_begin = static_cast<size_t>(out.tellp());
-            out << "<criteria>\n";
-            result.criteria.begin = static_cast<size_t>(out.tellp());
-            size_t criteria_content_end = result.criteria.begin;
-            result.success_criteria.reserve(goal["success_criteria"].size());
-            for (size_t index = 0; index < goal["success_criteria"].size(); ++index) {
-                const auto& source_entry = goal["success_criteria"][index];
-                SuccessCriterionByteSpans entry;
-                if (source_entry.is_object()) {
-                    if (source_entry.contains("criterion") &&
-                        source_entry["criterion"].is_string()) {
-                        appendStateField(
-                            out, "criterion",
-                            source_entry["criterion"].get<std::string>(),
-                            entry.criterion);
-                        if (entry.criterion.present) {
-                            criteria_content_end = static_cast<size_t>(out.tellp());
-                        }
-                    }
-                    if (entry.criterion.present) {
-                        out << "\n";
-                    }
-                    if (source_entry.contains("evidence") &&
-                        source_entry["evidence"].is_string()) {
-                        appendStateField(
-                            out, "evidence",
-                            source_entry["evidence"].get<std::string>(),
-                            entry.evidence);
-                        if (entry.evidence.present) {
-                            criteria_content_end = static_cast<size_t>(out.tellp());
-                        }
-                    }
-                }
-                result.success_criteria.push_back(entry);
-                if (index + 1 < goal["success_criteria"].size()) {
-                    out << "\n\n";
-                }
-            }
-            result.criteria.end = criteria_content_end;
-            result.criteria.present =
-                result.criteria.end > result.criteria.begin;
-            out << "\n</criteria>\n\n";
-            appendNamedSpan(
-                result, "success_criteria", field_begin,
-                static_cast<size_t>(out.tellp()));
-        }
-
-        if (goal.contains("constraints") &&
-            goal["constraints"].is_array() &&
-            !goal["constraints"].empty()) {
-            const size_t field_begin = static_cast<size_t>(out.tellp());
-            out << "<constraints>\n";
-            result.constraints_span.begin = static_cast<size_t>(out.tellp());
-            size_t constraints_content_end = result.constraints_span.begin;
-            result.constraints.reserve(goal["constraints"].size());
-            for (size_t index = 0; index < goal["constraints"].size(); ++index) {
-                const auto& source_constraint = goal["constraints"][index];
-                LogicalByteSpan constraint;
-                if (source_constraint.is_string()) {
-                    appendStateField(
-                        out, "constraint",
-                        source_constraint.get<std::string>(),
-                        constraint);
-                    if (constraint.present) {
-                        constraints_content_end = static_cast<size_t>(out.tellp());
-                    }
-                }
-                result.constraints.push_back(constraint);
-                if (index + 1 < goal["constraints"].size()) {
-                    out << "\n\n";
-                }
-            }
-            result.constraints_span.end = constraints_content_end;
-            result.constraints_span.present =
-                result.constraints_span.end > result.constraints_span.begin;
-            out << "\n</constraints>\n\n";
-            appendNamedSpan(
-                result, "constraints", field_begin,
-                static_cast<size_t>(out.tellp()));
-        }
-    }
-
-    if (j.contains("knowns") && j["knowns"].is_array()) {
-        const size_t field_begin = static_cast<size_t>(out.tellp());
-        append_entry_collection(j["knowns"], result.knowns, "knowns");
-        appendNamedSpan(
-            result, "knowns", field_begin,
-            static_cast<size_t>(out.tellp()));
-    }
-    if (j.contains("unknowns") && j["unknowns"].is_array()) {
-        const size_t field_begin = static_cast<size_t>(out.tellp());
-        append_entry_collection(j["unknowns"], result.unknowns, "unknowns");
-        appendNamedSpan(
-            result, "unknowns", field_begin,
-            static_cast<size_t>(out.tellp()));
-    }
-
-    const nlohmann::json* explanation = nullptr;
-    if (j.contains("explanation") && j["explanation"].is_array()) {
-        explanation = &j["explanation"];
-    } else if (j.contains("intermediates") && j["intermediates"].is_array()) {
-        explanation = &j["intermediates"];
-    }
-    if (explanation) {
-        const size_t reasoning_begin = static_cast<size_t>(out.tellp());
-        for (const auto& step : *explanation) {
-            if (step.is_string()) out << step.get<std::string>() << "\n";
-        }
-        const size_t reasoning_end = static_cast<size_t>(out.tellp());
-        if (reasoning_end > reasoning_begin) {
-            result.reasoning = LogicalByteSpan{
-                reasoning_begin, reasoning_end, true};
-            appendNamedSpan(
-                result, "reasoning", reasoning_begin, reasoning_end);
-        }
-    }
-
-    auto append_phase = [&j, &out](const char* name, LogicalByteSpan& span) {
-        if (!j.contains(name) || !j[name].is_string() ||
-            j[name].get_ref<const std::string&>().empty()) return;
-        span.begin = static_cast<size_t>(out.tellp());
-        LogicalByteSpan value_span;
-        appendStateField(out, name, j[name].get_ref<const std::string&>(), value_span);
-        out << "\n\n";
-        span.end = static_cast<size_t>(out.tellp());
-        span.present = true;
-    };
-    append_phase("determine", result.determine);
-    if (result.determine.present) {
-        appendNamedSpan(
-            result, "determine", result.determine.begin, result.determine.end);
-    }
-    append_phase("define", result.define);
-    if (result.define.present) {
-        appendNamedSpan(result, "define", result.define.begin, result.define.end);
-    }
-    append_phase("execute", result.execute);
-    if (result.execute.present) {
-        appendNamedSpan(
-            result, "execute", result.execute.begin, result.execute.end);
-    }
-    append_phase("update", result.update);
-    if (result.update.present) {
-        appendNamedSpan(result, "update", result.update.begin, result.update.end);
-    }
-
-    // Answers are training content independently of whether an arithmetic
-    // result exists. This is required for NOOP-supervised Q/A blocks.
-    if (j.contains("answer") && j["answer"].is_string()
-        && !j["answer"].get<std::string>().empty()) {
-        result.answer.begin = static_cast<size_t>(out.tellp());
-        out << "<answer>\n" << j["answer"].get_ref<const std::string&>()
-            << "\n</answer>";
-        result.answer.end = static_cast<size_t>(out.tellp());
-        result.answer.present = true;
-        appendNamedSpan(
-            result, "answer", result.answer.begin, result.answer.end);
-    }
-
-    result.text = out.str();
+    for (const auto& d : definitions) emit(d, source, kNoNamedConceptSpanEntry, false);
     return result;
 }
 
-// Supplied state is context, never a target. Removing the answer through the
-// same renderer guarantees an exact match to the SFT prefix byte layout.
-inline std::string renderReasoningPrompt(const nlohmann::json& supplied_state) {
-    if (supplied_state.contains("raw") && supplied_state["raw"].is_string() &&
-        !supplied_state["raw"].get_ref<const std::string&>().empty())
-        throw std::invalid_argument("Structured reasoning requires state fields, not an opaque raw sequence");
-    auto context = supplied_state;
-    context.erase("answer");
-    return render(context).text;
-}
-
-inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
-    RenderResult result;
-    if (j.contains("raw") && j["raw"].is_string()
-        && !j["raw"].get<std::string>().empty()) {
-        result.text = j["raw"].get<std::string>();
-        return result;
+inline std::string renderReasoningPrompt(
+    const nlohmann::json& supplied_state, const NamedConceptSpanDefinitions& definitions) {
+    if (supplied_state.contains("raw") && !supplied_state.at("raw").get<std::string>().empty())
+        throw std::invalid_argument("Structured reasoning input cannot contain raw text");
+    const auto rendered = render(supplied_state, definitions);
+    const auto policies = conceptSpanPolicies(rendered.named_spans, definitions);
+    std::vector<bool> keep(rendered.text.size(), true);
+    for (size_t i = 0; i < rendered.named_spans.size(); ++i) {
+        const auto& span = rendered.named_spans[i].span;
+        std::fill(keep.begin() + span.begin, keep.begin() + span.end,
+                  policies[i] != ConceptSpanSupervision::Ignore);
     }
-    std::ostringstream out;
-    if (j.contains("prompt") && j["prompt"].is_string()
-        && !j["prompt"].get<std::string>().empty()) {
-        result.prompt_byte_begin = static_cast<size_t>(out.tellp());
-        out << j["prompt"].get<std::string>();
-        result.prompt_byte_end = static_cast<size_t>(out.tellp());
-        out << "\n";
-        appendNamedSpan(
-            result, "prompt", result.prompt_byte_begin,
-            static_cast<size_t>(out.tellp()));
-    }
-    const nlohmann::json* explanation = nullptr;
-    if (j.contains("explanation") && j["explanation"].is_array()) {
-        explanation = &j["explanation"];
-    } else if (j.contains("intermediates") && j["intermediates"].is_array()) {
-        explanation = &j["intermediates"];
-    }
-    if (explanation) {
-        const size_t field_begin = static_cast<size_t>(out.tellp());
-        for (const auto& step : *explanation) {
-            if (step.is_string()) out << step.get<std::string>() << "\n";
-        }
-        const size_t field_end = static_cast<size_t>(out.tellp());
-        if (field_end > field_begin) {
-            result.reasoning = LogicalByteSpan{field_begin, field_end, true};
-            appendNamedSpan(result, "reasoning", field_begin, field_end);
-        }
-    }
-    for (const char* phase : {"determine", "define", "execute", "update"}) {
-        if (j.contains(phase) && j[phase].is_string()
-            && !j[phase].get<std::string>().empty()) {
-            const size_t field_begin = static_cast<size_t>(out.tellp());
-            out << j[phase].get<std::string>() << "\n";
-            appendNamedSpan(
-                result, phase, field_begin,
-                static_cast<size_t>(out.tellp()));
-        }
-    }
-    if (j.contains("answer") && j["answer"].is_string()
-        && !j["answer"].get<std::string>().empty()) {
-        appendLogicalSpan(
-            out, j["answer"].get<std::string>(), result.answer);
-        appendNamedSpan(
-            result, "answer", result.answer.begin, result.answer.end);
-    }
-    result.text = out.str();
+    std::string result;
+    for (size_t i = 0; i < keep.size(); ++i) if (keep[i]) result += rendered.text[i];
     return result;
 }
 
+// Plain-text authoring adapter used for raw/PT exports and the data editor.
+// This has no structured span metadata or supervision semantics.
 inline std::string renderPlainText(const nlohmann::json& j) {
-    return renderPlainTextWithPromptBoundary(j).text;
+    if (j.contains("raw") && !j.at("raw").get<std::string>().empty())
+        return j.at("raw").get<std::string>();
+    std::string text;
+    const auto append = [&](const char* field) {
+        if (j.contains(field) && !j.at(field).get<std::string>().empty())
+            text += j.at(field).get<std::string>() + "\n";
+    };
+    append("prompt");
+    const auto lines = j.contains("explanation") ? j.at("explanation") :
+                       j.value("intermediates", nlohmann::json::array());
+    for (const auto& line : lines) text += line.get<std::string>() + "\n";
+    for (const auto* phase : {"determine", "define", "execute", "update"}) append(phase);
+    text += j.value("answer", std::string{});
+    return text;
 }
 
 inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
@@ -461,104 +194,12 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
     return j;
 }
 
-inline RenderResult render(const ConceptBlock& cb) {
-    return render(toCanonicalJson(cb));
+inline RenderResult render(const ConceptBlock& cb, const NamedConceptSpanDefinitions& definitions) {
+    return render(toCanonicalJson(cb), definitions);
 }
 
-inline std::string renderReasoningPrompt(const ConceptBlock& supplied_state) {
-    return renderReasoningPrompt(toCanonicalJson(supplied_state));
-}
-
-// Human-facing inspection form. State and answer tags also appear in model input;
-// the prompt wrapper remains inspection-only.
-inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
-    if (cb.format_type == "raw" || !cb.raw.empty()) {
-        return cb.raw;
-    }
-    std::ostringstream out;
-
-    if (!cb.prompt.empty()) {
-        out << "<prompt>\n" << cb.prompt << "\n</prompt>\n\n";
-    }
-
-    if (cb.goal.has_value()) {
-        if (!cb.goal->target_state.empty()) {
-            out << "<target_state>\n"
-                << cb.goal->target_state
-                << "\n</target_state>\n\n";
-        }
-        if (!cb.goal->success_criteria.empty()) {
-            out << "<criteria>\n";
-            for (size_t index = 0;
-                 index < cb.goal->success_criteria.size();
-                 ++index) {
-                const auto& entry = cb.goal->success_criteria[index];
-                out << "    <criterion>\n"
-                    << "    " << entry.criterion << "\n"
-                    << "    </criterion>\n";
-                if (!entry.evidence.empty()) {
-                    out << "    <evidence>\n"
-                        << "    " << entry.evidence << "\n"
-                        << "    </evidence>\n";
-                }
-                if (index + 1 < cb.goal->success_criteria.size()) {
-                    out << "\n";
-                }
-            }
-            out << "</criteria>\n\n";
-        }
-        if (!cb.goal->constraints.empty()) {
-            out << "<constraints>\n";
-            for (size_t index = 0;
-                 index < cb.goal->constraints.size();
-                 ++index) {
-                out << "    <constraint>\n"
-                    << "    " << cb.goal->constraints[index] << "\n"
-                    << "    </constraint>\n";
-                if (index + 1 < cb.goal->constraints.size()) {
-                    out << "\n";
-                }
-            }
-            out << "</constraints>\n\n";
-        }
-    }
-
-    for (const auto& known : cb.knowns) {
-        out << "<knowns>\n"
-            << known
-            << "\n</knowns>\n\n";
-    }
-    for (const auto& unknown : cb.unknowns) {
-        out << "<unknowns>\n"
-            << unknown
-            << "\n</unknowns>\n\n";
-    }
-
-    const auto& explanation = cb.explanation.empty()
-        ? cb.intermediates
-        : cb.explanation;
-    auto append_phase = [&out](const char* label, const std::string& value) {
-        if (value.empty()) return;
-        out << "<" << label << ">\n"
-            << value << "\n"
-            << "</" << label << ">\n\n";
-    };
-    append_phase("determine", cb.determine);
-    append_phase("define", cb.define);
-    append_phase("execute", cb.execute);
-    append_phase("update", cb.update);
-
-    if (!explanation.empty() || !cb.answer.empty()) {
-        out << "<answer>\n";
-        for (const auto& step : explanation) {
-            out << step << "\n";
-        }
-        if (!cb.answer.empty()) {
-            out << cb.answer << "\n";
-        }
-        out << "</answer>\n";
-    }
-    return out.str();
+inline std::string renderReasoningPrompt(const ConceptBlock& supplied_state, const NamedConceptSpanDefinitions& definitions) {
+    return renderReasoningPrompt(toCanonicalJson(supplied_state), definitions);
 }
 
 inline std::string renderPlainText(const ConceptBlock& cb) {

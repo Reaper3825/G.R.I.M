@@ -48,6 +48,7 @@ private:
     std::uint32_t written_sequences_ = 0;
     std::uint32_t vocab_size_ = 0;
     bool committed_ = false;
+    std::string concept_span_layout_;
 };
 
 class GrmtCorpusReader {
@@ -61,6 +62,7 @@ public:
     GrmtCorpusReader& operator=(GrmtCorpusReader&&) = delete;
 
     const GRIM::GRMT::Header& header() const { return header_; }
+    const std::string& conceptSpanLayout() const { return *concept_span_layout_; }
     std::uint32_t sequencesRead() const { return sequences_read_; }
 
     bool readNext(GrmtSequence& out_sequence);
@@ -74,6 +76,7 @@ private:
     std::ifstream file_;
     GRIM::GRMT::Header header_{};
     std::uint32_t sequences_read_ = 0;
+    std::shared_ptr<const std::string> concept_span_layout_;
 };
 
 GRIM::GRMT::Header loadGrmtHeader(const std::filesystem::path& path);

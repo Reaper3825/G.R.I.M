@@ -1,0 +1,149 @@
+[
+  {
+    "name": "prompt",
+    "supervision": "context",
+    "open_delimiter": "<prompt>",
+    "close_delimiter": "</prompt>",
+    "source_path": "/prompt",
+    "repeat": false,
+    "children": []
+  },
+  {
+    "name": "target_state",
+    "supervision": "context",
+    "open_delimiter": "<target_state>",
+    "close_delimiter": "</target_state>",
+    "source_path": "/goal/target_state",
+    "repeat": false,
+    "children": []
+  },
+  {
+    "name": "success_criteria_and_evidence",
+    "supervision": "context",
+    "open_delimiter": "<criteria>",
+    "close_delimiter": "</criteria>",
+    "children": [
+      {
+        "name": "success_criterion",
+        "supervision": "inherit",
+        "open_delimiter": "",
+        "close_delimiter": "",
+        "children": [
+          {
+            "name": "criterion",
+            "supervision": "inherit",
+            "open_delimiter": "<criterion>",
+            "close_delimiter": "</criterion>",
+            "source_path": "/criterion",
+            "repeat": false,
+            "children": []
+          },
+          {
+            "name": "evidence",
+            "supervision": "inherit",
+            "open_delimiter": "<evidence>",
+            "close_delimiter": "</evidence>",
+            "source_path": "/evidence",
+            "repeat": false,
+            "children": []
+          }
+        ],
+        "source_path": "",
+        "repeat": true
+      }
+    ],
+    "source_path": "/goal/success_criteria",
+    "repeat": false
+  },
+  {
+    "name": "constraints",
+    "supervision": "context",
+    "open_delimiter": "<constraints>",
+    "close_delimiter": "</constraints>",
+    "children": [
+      {
+        "name": "constraint",
+        "supervision": "inherit",
+        "open_delimiter": "<constraint>",
+        "close_delimiter": "</constraint>",
+        "source_path": "",
+        "repeat": true,
+        "children": []
+      }
+    ],
+    "source_path": "/goal/constraints",
+    "repeat": false
+  },
+  {
+    "name": "knowns",
+    "supervision": "context",
+    "open_delimiter": "<knowns>",
+    "close_delimiter": "</knowns>",
+    "source_path": "/knowns",
+    "repeat": true,
+    "children": []
+  },
+  {
+    "name": "unknowns",
+    "supervision": "context",
+    "open_delimiter": "<unknowns>",
+    "close_delimiter": "</unknowns>",
+    "source_path": "/unknowns",
+    "repeat": true,
+    "children": []
+  },
+  {
+    "name": "reasoning",
+    "supervision": "context",
+    "open_delimiter": "",
+    "close_delimiter": "",
+    "source_path": "/explanation",
+    "repeat": false,
+    "children": []
+  },
+  {
+    "name": "determine",
+    "supervision": "supervised",
+    "open_delimiter": "<determine>",
+    "close_delimiter": "</determine>",
+    "source_path": "/determine",
+    "repeat": false,
+    "children": []
+  },
+  {
+    "name": "define",
+    "supervision": "supervised",
+    "open_delimiter": "<define>",
+    "close_delimiter": "</define>",
+    "source_path": "/define",
+    "repeat": false,
+    "children": []
+  },
+  {
+    "name": "execute",
+    "supervision": "supervised",
+    "open_delimiter": "<execute>",
+    "close_delimiter": "</execute>",
+    "source_path": "/execute",
+    "repeat": false,
+    "children": []
+  },
+  {
+    "name": "update",
+    "supervision": "context",
+    "open_delimiter": "<update>",
+    "close_delimiter": "</update>",
+    "source_path": "/update",
+    "repeat": false,
+    "children": []
+  },
+  {
+    "name": "answer",
+    "supervision": "supervised",
+    "open_delimiter": "<answer>",
+    "close_delimiter": "</answer>",
+    "source_path": "/answer",
+    "repeat": false,
+    "children": []
+  }
+]

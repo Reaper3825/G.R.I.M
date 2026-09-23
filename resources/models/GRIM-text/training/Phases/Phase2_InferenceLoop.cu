@@ -1012,7 +1012,7 @@ Phase2TextInferenceResult executePhase2TextInference(
     const GRIM::ConceptBlock& supplied_state,
     const GRIM::HyperParameters::GenerationHP& generation_hp) {
     return executePhase2TextInference(ctx, tokenizer,
-        GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state), generation_hp);
+        GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state, ctx.config.concept_spans), generation_hp);
 }
 
 } // namespace GRIMText::Training

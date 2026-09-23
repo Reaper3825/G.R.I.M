@@ -16,9 +16,7 @@
 #include "../Shared/UnigramByte/SequenceLocalAtomTable.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Batching/LocalAtomSelectionData.hpp"
-#include "../Shared/ConceptBlock/ConceptBlockSpans.hpp"
 #include "../Shared/ConceptBlock/NamedConceptSpans.hpp"
-#include "../Shared/Goal/Goal.hpp"
 #include "../Shared/UnigramByte/Detectors/DetectorRegistry.hpp"
 #include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
@@ -2798,34 +2796,9 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
     sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
     sequence.token_exec_slot_indices.assign(n, -1);
-    sequence.answer_span = GRIM::GoalTokenSpan{2, 4};
-    auto concept_spans = std::make_shared<GRIM::ConceptBlockSpans>();
-    concept_spans->knowns.push_back(GRIM::ConceptBlockSpanEntry{
-        {sequence.token_ids[0], sequence.token_ids[1]},
-        GRIM::GoalTokenSpan{0, 2}});
-    concept_spans->unknowns.push_back(GRIM::ConceptBlockSpanEntry{
-        {sequence.token_ids[2], sequence.token_ids[3]},
-        GRIM::GoalTokenSpan{2, 4}});
-    concept_spans->reasoning = GRIM::ConceptBlockSpanEntry{
-        {sequence.token_ids[0]}, GRIM::GoalTokenSpan{0, 1}};
-    concept_spans->determine = GRIM::ConceptBlockSpanEntry{
-        {sequence.token_ids[1]}, GRIM::GoalTokenSpan{1, 2}};
-    concept_spans->define = GRIM::ConceptBlockSpanEntry{
-        {sequence.token_ids[1]}, GRIM::GoalTokenSpan{1, 2}};
-    concept_spans->execute = GRIM::ConceptBlockSpanEntry{
-        {sequence.token_ids[2]}, GRIM::GoalTokenSpan{2, 3}};
-    concept_spans->update = GRIM::ConceptBlockSpanEntry{
-        {sequence.token_ids[3]}, GRIM::GoalTokenSpan{3, 4}};
-    sequence.concept_block_spans = std::move(concept_spans);
     auto named_spans = std::make_shared<GRIM::NamedConceptSpans>();
-    named_spans->entries.push_back(GRIM::NamedConceptSpan{
-        "knowns",
-        {sequence.token_ids[0], sequence.token_ids[1]},
-        GRIM::GoalTokenSpan{0, 2}});
-    named_spans->entries.push_back(GRIM::NamedConceptSpan{
-        "answer",
-        {sequence.token_ids[2], sequence.token_ids[3]},
-        GRIM::GoalTokenSpan{2, 4}});
+    named_spans->entries.push_back({"knowns", {0, 2}});
+    named_spans->entries.push_back({"answer", {2, 4}});
     sequence.named_concept_spans = std::move(named_spans);
 
     const uint32_t entry_id = registerSelfTestAtom(
@@ -2877,10 +2850,6 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
                 "Source IDs must not alter token arrays");
     ASSERT_TRUE(round_trip.sequences[0].concept_block_id == valid.concept_block_id,
                 "Source concept block ID must survive GRMT round-trip");
-    ASSERT_TRUE(round_trip.sequences[0].answer_span.has_value() &&
-                    round_trip.sequences[0].answer_span->begin == 2 &&
-                    round_trip.sequences[0].answer_span->end == 4,
-                "Answer span must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].token_ids == valid.token_ids,
                 "Typed atom span token IDs must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].token_atom_mask == valid.token_atom_mask,
@@ -2896,28 +2865,6 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
                     ->getRawText(AtomType::ATOM_INT, 0)
                     .value_or("") == "42",
                 "Round-tripped local atom address must retain its value");
-    ASSERT_TRUE(round_trip.sequences[0].concept_block_spans != nullptr,
-                "Top-level ConceptBlock spans must survive GRMT round-trip");
-    ASSERT_EQ(round_trip.sequences[0].concept_block_spans->knowns.size(),
-              static_cast<std::size_t>(1),
-              "Known entry count must survive GRMT round-trip");
-    ASSERT_EQ(round_trip.sequences[0].concept_block_spans->unknowns.size(),
-              static_cast<std::size_t>(1),
-              "Unknown entry count must survive GRMT round-trip");
-    ASSERT_TRUE(round_trip.sequences[0].concept_block_spans->reasoning.has_value() &&
-                    round_trip.sequences[0].concept_block_spans->determine.has_value() &&
-                    round_trip.sequences[0].concept_block_spans->define.has_value() &&
-                    round_trip.sequences[0].concept_block_spans->execute.has_value() &&
-                    round_trip.sequences[0].concept_block_spans->update.has_value(),
-                "Reasoning and Determine/Define/Execute/Update spans must survive GRMT round-trip");
-    ASSERT_TRUE(
-        round_trip.sequences[0].concept_block_spans->knowns[0].token_ids ==
-            valid.concept_block_spans->knowns[0].token_ids,
-        "Known token IDs must survive GRMT round-trip");
-    ASSERT_TRUE(
-        round_trip.sequences[0].concept_block_spans->unknowns[0].span.begin == 2 &&
-            round_trip.sequences[0].concept_block_spans->unknowns[0].span.end == 4,
-        "Unknown logical span must survive GRMT round-trip");
     ASSERT_TRUE(round_trip.sequences[0].named_concept_spans != nullptr &&
                     round_trip.sequences[0].named_concept_spans->size() == 2 &&
                     round_trip.sequences[0].named_concept_spans->find("answer") != nullptr &&
@@ -3186,7 +3133,6 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
             "atom-span-pt-test",
             GRIM::HyperParameters::TrainingStage::PT,
             {},
-            {},
             6,
             4,
             0,
@@ -3204,7 +3150,7 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
         GRIMText::Training::applySlidingWindows(
             tool_sequences, "tool-span-pt-test",
             GRIM::HyperParameters::TrainingStage::PT,
-            {}, {}, 6, 4, 0, false, false, logger);
+            {}, 6, 4, 0, false, false, logger);
         if (!validateWindows(tool_sequences, 6, "PT TOOL")) {
             return false;
         }
@@ -3237,7 +3183,6 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
             "atom-span-exact-capacity-test",
             GRIM::HyperParameters::TrainingStage::PT,
             {},
-            {},
             4,
             3,
             0,
@@ -3258,8 +3203,7 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                 overcapacity_sequences,
                 "atom-span-overcapacity-test",
                 GRIM::HyperParameters::TrainingStage::PT,
-                {},
-                {},
+            {},
                 3,
                 2,
                 0,
@@ -3272,151 +3216,31 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
         ASSERT_TRUE(rejected_overcapacity_atom,
                     "A typed atom span larger than window capacity must fail loudly");
 
+        GRIM::NamedConceptSpanDefinition output_definition;
+        output_definition.name = "any_output_field";
+        output_definition.source_path = "/any_output_field";
+        output_definition.supervision = GRIM::ConceptSpanSupervision::Supervised;
+        GRIM::NamedConceptSpanDefinitions definitions{output_definition};
         auto sft_sequence = makeWindowingAtomSequence(6, 5);
-        sft_sequence.prompt_length = 2;
-        sft_sequence.prompt_end_pos = 1;
-        sft_sequence.answer_span = GRIM::GoalTokenSpan{
-            2, static_cast<std::int32_t>(sft_sequence.token_ids.size())};
-        auto sft_named_spans = std::make_shared<GRIM::NamedConceptSpans>();
-        sft_named_spans->entries.push_back(GRIM::NamedConceptSpan{
-            "answer",
-            std::vector<std::int32_t>(
-                sft_sequence.token_ids.begin() + 2,
-                sft_sequence.token_ids.end()),
-            *sft_sequence.answer_span});
-        sft_sequence.named_concept_spans = std::move(sft_named_spans);
-        std::vector<TokenizerArtifacts::GrmtSequence> sft_sequences{
-            std::move(sft_sequence)};
+        sft_sequence.concept_span_layout =
+            std::make_shared<const std::string>(GRIM::conceptSpanLayout(definitions));
+        auto spans = std::make_shared<GRIM::NamedConceptSpans>();
+        spans->entries.push_back({"any_output_field",
+            {2, static_cast<int32_t>(sft_sequence.token_ids.size())}});
+        sft_sequence.named_concept_spans = spans;
+        std::vector<TokenizerArtifacts::GrmtSequence> sft_sequences{std::move(sft_sequence)};
         GRIMText::Training::applySlidingWindows(
-            sft_sequences,
-            "atom-span-sft-test",
-            GRIM::HyperParameters::TrainingStage::SFT,
-            {"answer"},
-            {},
-            8,
-            6,
-            0,
-            false,
-            false,
-            logger);
-        ASSERT_TRUE(sft_sequences.size() > 1,
-                    "SFT atom-span fixture should produce multiple windows");
-        if (!validateWindows(sft_sequences, 8, "SFT")) {
-            return false;
+            sft_sequences, "atom-span-sft-test", GRIM::HyperParameters::TrainingStage::SFT,
+            definitions, 8, 6, 0, false, false, logger);
+        ASSERT_TRUE(sft_sequences.size() > 1, "SFT atom fixture must produce multiple windows");
+        if (!validateWindows(sft_sequences, 8, "SFT")) return false;
+        for (const auto& window : sft_sequences) {
+            if (window.named_concept_spans)
+                GRIM::validateNamedConceptSpans(*window.named_concept_spans, window.token_ids.size());
         }
+        // Uniform per-field masks, overrides, ignore and tree slicing are
+        // covered by the CPU-only concept_section_mask_tests target.
 
-        auto target_state_sequence = makeWindowingAtomSequence(6, 5);
-        const std::vector<int> original_tokens = target_state_sequence.token_ids;
-        auto goal = std::make_shared<GRIM::Goal>();
-        goal->target_state = GRIM::TargetState{
-            {original_tokens[2], original_tokens[3]},
-            GRIM::GoalTokenSpan{2, 4}};
-        target_state_sequence.goal = std::move(goal);
-        target_state_sequence.answer_span = GRIM::GoalTokenSpan{
-            10, static_cast<std::int32_t>(target_state_sequence.token_ids.size())};
-        target_state_sequence.execution_active = true;
-        target_state_sequence.execution_gate_target =
-            GRIM::Execution::ExecutionGateTarget::EXECUTE;
-        std::fill(target_state_sequence.token_exec_slot_indices.begin(),
-                  target_state_sequence.token_exec_slot_indices.end(), 0);
-        std::vector<TokenizerArtifacts::GrmtSequence> target_state_sequences{
-            std::move(target_state_sequence)};
-        GRIMText::Training::applySlidingWindows(
-            target_state_sequences,
-            "target-state-sft-test",
-            GRIM::HyperParameters::TrainingStage::SFT,
-            {"target_state"},
-            {},
-            8,
-            6,
-            0,
-            false,
-            false,
-            logger);
-        ASSERT_EQ(target_state_sequences.size(), static_cast<std::size_t>(1),
-                  "Target-state projection should produce one short sequence");
-        const auto& projected = target_state_sequences.front();
-        ASSERT_EQ(projected.token_ids.size(), static_cast<std::size_t>(4),
-                  "Target-state projection must remove all later fields");
-        ASSERT_TRUE(projected.targets[0] == -1 &&
-                        projected.targets[1] == original_tokens[2] &&
-                        projected.targets[2] == original_tokens[3] &&
-                        projected.targets[3] == -1,
-                    "Only target-state tokens should remain supervised");
-        ASSERT_TRUE(projected.prompt_length == 2 && projected.prompt_end_pos == 1,
-                    "The target-state prefix must remain pinned context");
-        ASSERT_TRUE(projected.goal && projected.goal->target_state.has_value(),
-                    "Selected target-state metadata must survive projection");
-        ASSERT_TRUE(!projected.answer_span.has_value(),
-                    "Neutral answer metadata must not survive target-state projection");
-        ASSERT_TRUE(!projected.execution_active &&
-                        projected.execution_gate_target ==
-                            GRIM::Execution::ExecutionGateTarget::UNSUPERVISED &&
-                        std::all_of(projected.token_exec_slot_indices.begin(),
-                                    projected.token_exec_slot_indices.end(),
-                                    [](std::int32_t slot) { return slot == -1; }),
-                    "Pre-reasoning contract targets must not retain execution supervision");
-
-        auto multi_field_sequence = makeWindowingAtomSequence(6, 5);
-        const std::vector<int> multi_tokens = multi_field_sequence.token_ids;
-        multi_field_sequence.prompt_length = 2;
-        multi_field_sequence.prompt_end_pos = 1;
-        auto field_spans = std::make_shared<GRIM::ConceptBlockSpans>();
-        field_spans->determine = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[2], multi_tokens[3]}, GRIM::GoalTokenSpan{2, 4}};
-        field_spans->define = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[4], multi_tokens[5]}, GRIM::GoalTokenSpan{4, 6}};
-        field_spans->execute = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[6], multi_tokens[7]}, GRIM::GoalTokenSpan{6, 8}};
-        field_spans->update = GRIM::ConceptBlockSpanEntry{
-            {multi_tokens[8], multi_tokens[9]}, GRIM::GoalTokenSpan{8, 10}};
-        multi_field_sequence.concept_block_spans = std::move(field_spans);
-        multi_field_sequence.answer_span = GRIM::GoalTokenSpan{10, 12};
-        auto multi_named_spans = std::make_shared<GRIM::NamedConceptSpans>();
-        const auto add_named_span = [&](const char* name, std::int32_t begin,
-                                        std::int32_t end) {
-            multi_named_spans->entries.push_back(GRIM::NamedConceptSpan{
-                name,
-                std::vector<std::int32_t>(
-                    multi_tokens.begin() + begin, multi_tokens.begin() + end),
-                GRIM::GoalTokenSpan{begin, end}});
-        };
-        add_named_span("determine", 2, 4);
-        add_named_span("define", 4, 6);
-        add_named_span("execute", 6, 8);
-        add_named_span("update", 8, 10);
-        add_named_span("answer", 10, 12);
-        multi_field_sequence.named_concept_spans = std::move(multi_named_spans);
-        std::vector<TokenizerArtifacts::GrmtSequence> multi_field_sequences{
-            std::move(multi_field_sequence)};
-        GRIMText::Training::applySlidingWindows(
-            multi_field_sequences,
-            "multi-field-sft-test",
-            GRIM::HyperParameters::TrainingStage::SFT,
-            {"determine", "define", "execute", "answer"},
-            {"prompt", "update"},
-            32,
-            24,
-            1,
-            false,
-            false,
-            logger);
-        ASSERT_EQ(multi_field_sequences.size(), static_cast<std::size_t>(1),
-                  "Multi-field projection should retain one sequence");
-        const auto& multi = multi_field_sequences.front();
-        ASSERT_EQ(multi.token_ids.size(), static_cast<std::size_t>(12),
-                  "Multi-field projection should cut after the last listed field");
-        for (std::size_t position = 1; position < multi.token_ids.size(); ++position) {
-            const bool supervised =
-                (position >= 2 && position < 4) ||
-                (position >= 4 && position < 6) ||
-                (position >= 6 && position < 8) ||
-                (position >= 10 && position < 12);
-            ASSERT_TRUE(
-                multi.targets[position - 1] ==
-                    (supervised ? multi.token_ids[position] : -1),
-                "Multi-field projection authored an incorrect causal target mask");
-        }
     }
     std::filesystem::remove("output/training_sliding_window_atom_span.log");
     return true;

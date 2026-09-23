@@ -94,7 +94,10 @@ TokenizerBundleManifest loadTokenizerArtifactBundle(
     TokenizerVocabFile(vocab_path).readInto(hp, tokenizer.unigramLM());
 
     TokenizerBundleManifest manifest{};
-    manifest.grmt_header = loadGrmtHeader(grmt_path);
+    GrmtCorpusReader corpus(grmt_path);
+    manifest.grmt_header = corpus.header();
+    if (corpus.conceptSpanLayout() != GRIM::conceptSpanLayout(hp.concept_spans))
+        throw std::runtime_error("[TokenizerArtifactBundle] concept span layout changed; regenerate GRMT");
     manifest.tokenizer_vocab_size = static_cast<std::uint32_t>(tokenizer.vocabSize());
     validateVocabAgreement(manifest.grmt_header,
                            manifest.tokenizer_vocab_size,

@@ -1,4 +1,5 @@
 #pragma once
+#include "../ConceptBlock/NamedConceptSpans.hpp"
 // Traditional include guard in addition to #pragma once: nvcc dedupes by
 // path-string, not by canonical inode, so the same header pulled in via two
 // different ../ chains (e.g. .../GRIM/../Shared/... vs .../Layers/Embedding/../../Shared/...)
@@ -486,8 +487,7 @@ struct LanguageModelConfig {
     float cosine_decay_min_lr = 0.0f;
     int sliding_window_stride = 0;
     int min_seq_valid_tokens = 0;
-    std::vector<std::string> supervised_fields;
-    std::vector<std::string> unsupervised_fields;
+    GRIM::NamedConceptSpanDefinitions concept_spans;
     int log_interval = 0;
     int atom_stats_interval = 0;
     int atom_stats_max_seqs = 0;
@@ -1773,8 +1773,8 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(dropout_rate);
     GRIM_LOAD_CONFIG_FIELD(sliding_window_stride);
     GRIM_LOAD_CONFIG_FIELD(min_seq_valid_tokens);
-    GRIM_LOAD_CONFIG_FIELD(supervised_fields);
-    GRIM_LOAD_CONFIG_FIELD(unsupervised_fields);
+    GRIM_LOAD_CONFIG_FIELD(concept_spans);
+    GRIM::validateConceptSpanDefinitions(params.concept_spans);
     GRIM_LOAD_CONFIG_FIELD(warmup_fraction);
     GRIM_LOAD_CONFIG_FIELD(cosine_decay_enabled);
     GRIM_LOAD_CONFIG_FIELD(cosine_warm_restarts);
@@ -2444,8 +2444,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(cosine_decay_min_lr);
     GRIM_WRITE_FINAL_CONFIG_FIELD(sliding_window_stride);
     GRIM_WRITE_FINAL_CONFIG_FIELD(min_seq_valid_tokens);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(supervised_fields);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(unsupervised_fields);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(concept_spans);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_stats_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_stats_max_seqs);

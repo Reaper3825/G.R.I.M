@@ -282,8 +282,7 @@ void UIDataHubPanel::completeGeneratorFill() {
         generatorQueuedBlocks_.push_back(generatorLastFrame_.conceptBlock);
         if (genPreviewArea_) {
             genPreviewArea_->setText(
-                GRIM::ConceptCanonical::renderLogicalTrainingPreview(
-                    generatorLastFrame_.conceptBlock));
+                buildTrainingPreview(generatorLastFrame_.conceptBlock, true));
         }
         ++generatorGeneratedCount_;
         generatorAdapterStatus_ = bindings.adapterId + " — valid bindings";

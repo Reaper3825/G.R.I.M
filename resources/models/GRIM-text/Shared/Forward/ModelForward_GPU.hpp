@@ -76,8 +76,7 @@ struct ModelForwardRequest {
     // Training callers leave this null.
     KvCacheState* kv_cache = nullptr;
 
-    GoalSpanView goalSpansForRow(std::size_t row) const;
-    ConceptBlockSpanView conceptBlockSpansForRow(std::size_t row) const;
+    const NamedConceptSpans* namedConceptSpansForRow(std::size_t row) const;
     void validate(const char* caller) const;
 };
 

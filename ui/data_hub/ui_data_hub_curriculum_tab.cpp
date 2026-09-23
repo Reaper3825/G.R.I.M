@@ -1130,7 +1130,8 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
 
 std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const {
     return conceptMode
-        ? GRIM::ConceptCanonical::renderLogicalTrainingPreview(cb)
+        ? GRIM::ConceptCanonical::render(cb, aiConfig.at("training").at("config").at("concept_spans")
+              .get<GRIM::NamedConceptSpanDefinitions>()).text
         : GRIM::ConceptCanonical::renderPlainText(cb);
 }
 

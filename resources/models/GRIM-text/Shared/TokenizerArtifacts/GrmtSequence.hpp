@@ -11,8 +11,6 @@
 #include <string>
 #include <vector>
 
-namespace GRIM { struct Goal; }
-namespace GRIM { struct ConceptBlockSpans; }
 namespace GRIM { struct NamedConceptSpans; }
 
 namespace GRIM::TokenizerArtifacts {
@@ -50,29 +48,22 @@ struct GrmtSequence {
     bool execution_active = false;
     GRIM::Execution::ExecutionGateTarget execution_gate_target =
         GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-    // Prefix geometry. GRMT stores the literal authored prompt; Phase 1
-    // rewrites it to every token before the first supervised SFT field.
+    // Runtime prefix geometry: all tokens before the first supervised token.
     std::int32_t prompt_end_pos = -1;
     std::int32_t prompt_length = 0;
-    // Neutral authored answer location. Phase 1 may combine this with any
-    // other field spans named by the compiled SFT field policy.
-    std::optional<GRIM::GoalTokenSpan> answer_span;
     std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
     std::vector<GRIM::Execution::CompiledTransitionBinding> compiled_transition_bindings;
     std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
     std::vector<GRIM::Execution::TransitionInvocation> transition_targets;
 
-    // Authored row-level goal metadata. Shared ownership lets sliding-window
-    // rows retain one immutable Goal without copying its runtime Tensor state.
-    std::shared_ptr<const GRIM::Goal> goal;
-
-    // Authored top-level ConceptBlock known/unknown metadata. This remains
-    // independent of Goal while sharing the same immutable row lifetime.
-    std::shared_ptr<const GRIM::ConceptBlockSpans> concept_block_spans;
-
-    // Ordered, uniquely named top-level model-visible fields. This is the
-    // migration target for all configurable ConceptBlock supervision.
+    // Generic tree over the owning token row. Persisted without field enums.
     std::shared_ptr<const GRIM::NamedConceptSpans> named_concept_spans;
+    // Corpus-level structural schema, excluding supervision policy.
+    std::shared_ptr<const std::string> concept_span_layout;
+    const std::string& conceptSpanLayoutIdentity() const {
+        static const std::string empty_layout = "[]";
+        return concept_span_layout ? *concept_span_layout : empty_layout;
+    }
 
     bool hasAnyValidTarget() const;
     void validateForWrite(const std::string& source) const;
