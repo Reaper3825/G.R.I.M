@@ -160,10 +160,13 @@ void logDiagnosticSample(TrainingContext& ctx,
     try {
         auto tokenizer = LoadInferenceTokenizer(ctx.config, *ctx.logging.logger);
         const auto inference_state = reasoning_state.withPrompt(prompt);
+        const auto concept_spans =
+            GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
+                ctx.config, "concept_spans");
         // The SFT target now includes the section labels, so let the model
         // generate <determine> itself from the supplied structured state.
         const std::string diagnostic_prefix =
-            GRIM::ConceptCanonical::renderReasoningPrompt(inference_state, ctx.config.concept_spans);
+            GRIM::ConceptCanonical::renderReasoningPrompt(inference_state, concept_spans);
         const auto start = std::chrono::steady_clock::now();
         auto sample = executePhase2TextInference(
             ctx, *tokenizer, diagnostic_prefix, cfg);

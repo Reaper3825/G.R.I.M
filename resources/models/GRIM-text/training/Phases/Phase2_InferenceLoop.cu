@@ -1011,8 +1011,11 @@ Phase2TextInferenceResult executePhase2TextInference(
     GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::ConceptBlock& supplied_state,
     const GRIM::HyperParameters::GenerationHP& generation_hp) {
+    const auto concept_spans =
+        GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
+            ctx.config, "concept_spans");
     return executePhase2TextInference(ctx, tokenizer,
-        GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state, ctx.config.concept_spans), generation_hp);
+        GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state, concept_spans), generation_hp);
 }
 
 } // namespace GRIMText::Training
