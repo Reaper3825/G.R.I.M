@@ -1,169 +1,119 @@
 //======================================================//
 //  AddGradFn.cu
-//  Element-wise tensor add forward + autograd backward.
-//  Forward delegates to TensorContract::add() (no local kernel).
-//  Backward accumulates grad_output unchanged into both inputs.
+//  Add delivers gradients directly to producer accumulators or leaf buffers.
 //======================================================//
 
 #include "AddGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../GradientAccumulation.hpp"
-#include "../TensorContract_GPU.hpp"
-#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
-#include <cuda_runtime.h>
-#include <cstdio>
-#include <cstdint>
-#include <cmath>
 #include <stdexcept>
-#include <string>
-#include <vector>
-#include <algorithm>
 
-#define AG_TRACE(...) do { if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
+namespace GRIM::autograd {
+namespace {
 
-namespace GRIM {
-
-using MemoryAccounting::cudaMallocOrThrow;
-
-namespace autograd {
-
-AddGradFn::AddGradFn() {
-    op_name = "add";
+// Leaf storage remains owned by the input tensor. Non-leaf captures keep only
+// the producer alive; its pending gradient is created on first delivery.
+void captureAddInput(Tensor& input, std::shared_ptr<GradFn>& producer,
+                     Tensor*& leaf_gradient, cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("AddGradFn::capture: stream is NULL");
+    input.require("AddGradFn::capture");
+    producer.reset();
+    leaf_gradient = nullptr;
+    if (!input.requires_grad) return;
+    if (input.is_leaf) {
+        if (input.grad_fn) throw std::runtime_error("AddGradFn::capture: leaf has a producer");
+        input.ensure_grad();
+        leaf_gradient = input.grad_.get();
+        if (!leaf_gradient) throw std::runtime_error("AddGradFn::capture: missing leaf gradient");
+    } else {
+        if (!input.grad_fn) throw std::runtime_error("AddGradFn::capture: non-leaf has no producer");
+        producer = input.grad_fn;
+    }
 }
+
+} // namespace
+
+AddGradFn::AddGradFn() { op_name = "add"; }
 
 void AddGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
     a_requires_grad = a.requires_grad;
     b_requires_grad = b.requires_grad;
     a_shape = a.shape;
     b_shape = b.shape;
-
-    a_grad_fn = a.grad_fn;
-    b_grad_fn = b.grad_fn;
-    register_input(a.grad_fn);
-    register_input(b.grad_fn);
-
     element_count = a.numel();
-
-    // ISSUE #56 FIX: Handle grad buffer ownership based on tensor type
-    // Leaf tensors (weights) persist, safe to use their grad buffer directly
-    // Non-leaf tensors (activations) are temporary, need owned buffer
-    if (a_requires_grad) {
-        if (a.is_leaf) {
-            a.ensure_grad();
-            grad_a = a.grad_data();
-            AG_TRACE("[AddGradFn] Using persistent grad_a buffer (leaf): %p\n", (void*)grad_a);
-        } else {
-            const size_t a_numel = a.numel();
-            float* buffer_a = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_grad_a", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(buffer_a, 0, a_numel * sizeof(float), stream);
-            owned_grad_a = std::shared_ptr<float>(buffer_a, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            grad_a = owned_grad_a.get();
-            AG_TRACE("[AddGradFn] Allocated owned grad_a buffer (non-leaf): %zu floats at %p\n", a_numel, (void*)grad_a);
-        }
-    }
-    if (b_requires_grad) {
-        if (b.is_leaf) {
-            b.ensure_grad();
-            grad_b = b.grad_data();
-            AG_TRACE("[AddGradFn] Using persistent grad_b buffer (leaf): %p\n", (void*)grad_b);
-        } else {
-            const size_t b_numel = b.numel();
-            float* buffer_b = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_b), b_numel * sizeof(float), "AddGradFn_grad_b", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(buffer_b, 0, b_numel * sizeof(float), stream);
-            owned_grad_b = std::shared_ptr<float>(buffer_b, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            grad_b = owned_grad_b.get();
-            AG_TRACE("[AddGradFn] Allocated owned grad_b buffer (non-leaf): %zu floats at %p\n", b_numel, (void*)grad_b);
-        }
-    }
+    captureAddInput(a, a_grad_fn, leaf_grad_a, stream);
+    captureAddInput(b, b_grad_fn, leaf_grad_b, stream);
+    register_input(a_grad_fn);
+    register_input(b_grad_fn);
 }
 
 void AddGradFn::capture_single_input(Tensor& a, cudaStream_t stream) {
     a_requires_grad = a.requires_grad;
     b_requires_grad = false;
     a_shape = a.shape;
-
-    a_grad_fn = a.grad_fn;
-    register_input(a.grad_fn);
-
     element_count = a.numel();
-
-    if (a_requires_grad) {
-        if (a.is_leaf) {
-            a.ensure_grad();
-            grad_a = a.grad_data();
-        } else {
-            const size_t a_numel = a.numel();
-            float* buffer_a = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_single_grad_a", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(buffer_a, 0, a_numel * sizeof(float), stream);
-            owned_grad_a = std::shared_ptr<float>(buffer_a, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            grad_a = owned_grad_a.get();
-        }
-    }
+    b_grad_fn.reset();
+    leaf_grad_b = nullptr;
+    captureAddInput(a, a_grad_fn, leaf_grad_a, stream);
+    register_input(a_grad_fn);
 }
 
 void AddGradFn::apply_impl(const Tensor& grad_output,
-                           cudaStream_t stream,
-                           const Batching::BatchPayload* backward_payload,
-                           const Batching::BatchDeviceBindings* backward_bindings) {
+                         cudaStream_t stream,
+                         const Batching::BatchPayload* backward_payload,
+                         const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("add", this);
-
-    // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
-    if (applied) {
-        return;
+    if (applied) return;
+    grad_output.require("AddGradFn::apply grad_output");
+    if (!stream || grad_output.numel() != element_count) {
+        throw std::runtime_error("AddGradFn::apply: invalid stream or gradient size");
     }
     applied = true;
 
-    if (!grad_output.data) {
-        throw std::runtime_error("AddGradFn::apply: grad_output.data is NULL - backward called with null gradient");
-    }
+    auto deliver = [&](bool required, const TensorContract::TensorShape& shape,
+                       const std::shared_ptr<GradFn>& producer, Tensor* leaf) {
+        if (!required) return;
+        // Preserve the input's shape for same-numel views. This view borrows
+        // grad_output only for delivery; receive_gradient copies into its own
+        // accumulator and never adopts this pointer.
+        Tensor contribution;
+        contribution.data = grad_output.data;
+        contribution.shape = shape;
+        contribution.owns_data = false;
+        contribution.stream = stream;
+        if (producer) {
+            producer->receive_gradient(contribution, stream);
+        } else {
+            if (!leaf) throw std::runtime_error("AddGradFn::apply: missing leaf destination");
+            accumulate_grad(*leaf, contribution, 1.0f, stream, "AddGradFn::apply leaf");
+            leaf->record_leaf_gradient_delivery();
+        }
+    };
 
-    const size_t count = grad_output.numel();
-
-    if (a_requires_grad && grad_a) {
-        accumulate_grad(grad_a, grad_output.data, count, 1.0f, stream, "AddGradFn::apply grad_a");
-    }
-    if (b_requires_grad && grad_b) {
-        accumulate_grad(grad_b, grad_output.data, count, 1.0f, stream, "AddGradFn::apply grad_b");
-    }
-
-    // CONTINUE AUTOGRAD CHAIN using stored grad_fn pointers.
-    // For c = a + b: dc/da = 1, dc/db = 1. We propagate the per-input grad
-    // buffers (grad_a/grad_b), NOT the shared grad_output pointer: the worklist
-    // AutogradEngine borrows the first contributed pointer as a producer's
-    // accumulator and sums later fan-in contributions into it in place. Handing
-    // the same grad_output.data to both edges would alias the two producers'
-    // accumulators, so one producer's fan-in would corrupt the other's gradient.
-    // grad_a/grad_b are distinct owned buffers (non-leaf) holding the same value.
-    if (a_requires_grad && a_grad_fn && a_grad_fn->op_name) {
-        Tensor view;
-        view.data = grad_a; view.shape = a_shape;
-        view.owns_data = false; view.stream = stream;
-        a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
-
-    if (b_requires_grad && b_grad_fn && b_grad_fn != a_grad_fn && b_grad_fn->op_name) {
-        Tensor view;
-        view.data = grad_b; view.shape = b_shape;
-        view.owns_data = false; view.stream = stream;
-        b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    // Both mathematical inputs contribute, including add(x, x). Finish both
+    // writes before issuing one notification per deduplicated producer edge.
+    deliver(a_requires_grad, a_shape, a_grad_fn, leaf_grad_a);
+    deliver(b_requires_grad, b_shape, b_grad_fn, leaf_grad_b);
+    auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+        if (!producer) return;
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(producer.get());
+        } else {
+            // Preserve the legacy recursive path without re-accumulating the
+            // contribution through apply() while an engine is active.
+            producer->apply(producer->pending_gradient("AddGradFn::apply producer"),
+                            stream, backward_payload, backward_bindings);
+        }
+    };
+    notify(a_grad_fn);
+    if (b_grad_fn != a_grad_fn) notify(b_grad_fn);
 }
 
 void AddGradFn::release_saved() {
     GradFn::release_saved();
-
-    grad_a = nullptr;
-    grad_b = nullptr;
-
+    leaf_grad_a = nullptr;
+    leaf_grad_b = nullptr;
     a_grad_fn.reset();
     b_grad_fn.reset();
 }
@@ -188,5 +138,4 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     return result;
 }
 
-}  // namespace autograd
-}  // namespace GRIM
+}  // namespace GRIM::autograd

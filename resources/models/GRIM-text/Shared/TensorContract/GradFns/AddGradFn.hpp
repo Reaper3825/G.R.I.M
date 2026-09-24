@@ -11,8 +11,8 @@
 //  Backward path uses TensorContract/GradientAccumulation.hpp; do not add
 //  per-TU kernel_accumulate_grad copies here.
 //
-//  NOTE: AddGradFn is also reused by autograd::dropout's identity-edge
-//  path (single-input pass-through), via capture_single_input(...).
+//  capture_single_input(...) supports an identity edge. No private input-
+//  gradient storage is allocated; producer accumulators receive contributions.
 //======================================================//
 
 #include "../TensorContract_GPU.hpp"
@@ -27,10 +27,9 @@ namespace autograd {
 struct AddGradFn : public GradFn {
     bool a_requires_grad = false;
     bool b_requires_grad = false;
-    float* grad_a = nullptr;
-    float* grad_b = nullptr;
-    std::shared_ptr<float> owned_grad_a;
-    std::shared_ptr<float> owned_grad_b;
+    // Borrowed leaf destinations; their input tensors outlive backward.
+    Tensor* leaf_grad_a = nullptr;
+    Tensor* leaf_grad_b = nullptr;
     TensorContract::TensorShape a_shape;
     TensorContract::TensorShape b_shape;
     std::shared_ptr<GradFn> a_grad_fn;
