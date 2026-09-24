@@ -30,6 +30,10 @@ def main():
     ])
     source = (tests / 'add_gradfn_host_test.cpp').read_text(encoding='utf-8')
     source = source.replace('// REAL_IMPLEMENTATIONS', implementations)
+    compile_and_run(source)
+
+
+def compile_and_run(source):
     # Persistent temporary output directory; no repository/runtime build changes.
     out = Path(tempfile.mkdtemp(prefix='grim-add-gradfn-test-'))
     cpp = out / 'test.cpp'

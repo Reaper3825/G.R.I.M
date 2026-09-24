@@ -25,7 +25,10 @@ namespace autograd {
 
 struct SiluGradFn : public GradFn {
     bool input_requires_grad = false;
-    std::shared_ptr<Tensor> input_gradient;
+    // Borrow the leaf destination or retain its producer; no private gradient.
+    std::shared_ptr<GradFn> input_producer;
+    Tensor* leaf_input_gradient = nullptr;
+    TensorContract::TensorShape input_shape;
     const float* cached_input = nullptr;          ///< Non-owning ref into source tensor
     std::size_t cached_size = 0;
 

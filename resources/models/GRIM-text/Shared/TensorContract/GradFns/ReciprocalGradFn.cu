@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "ReciprocalGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../TensorContract_GPU.hpp"
 
 #include <cuda_runtime.h>
@@ -98,8 +99,19 @@ void ReciprocalGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
 
     if (input_requires_grad) {
-        input_gradient = capture_input_gradient(
-            x, stream, "ReciprocalGradFn::capture_input");
+        if (!stream) throw std::runtime_error("ReciprocalGradFn::capture: stream is NULL");
+        x.require("ReciprocalGradFn::capture");
+        input_shape = x.shape;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("ReciprocalGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf_input_gradient = x.grad_.get();
+            if (!leaf_input_gradient) throw std::runtime_error("ReciprocalGradFn::capture: missing leaf gradient");
+        } else {
+            if (!x.grad_fn) throw std::runtime_error("ReciprocalGradFn::capture: non-leaf has no producer");
+            input_producer = x.grad_fn;
+            register_input(input_producer);
+        }
     }
 }
 
@@ -120,6 +132,13 @@ void ReciprocalGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!input_requires_grad) return;
+    if (!stream) throw std::runtime_error("ReciprocalGradFn::apply: stream is NULL");
+    grad_output.require("ReciprocalGradFn::apply grad_output");
+    if (grad_output.numel() != input_shape.total_elements()) {
+        throw std::runtime_error("ReciprocalGradFn::apply: gradient size mismatch");
+    }
+    Tensor* input_gradient = input_producer
+        ? &input_producer->gradient_destination(input_shape, stream) : leaf_input_gradient;
     if (!input_gradient) {
         throw std::runtime_error("ReciprocalGradFn::apply: input gradient Tensor is NULL");
     }
@@ -136,16 +155,25 @@ void ReciprocalGradFn::apply_impl(const Tensor& grad_output,
         grad_output.data, cached_output, input_gradient->data, count);
     trackKernelLaunch("kernel_reciprocal_backward", stream);
 
-    propagate_input_gradient(
-        input_gradient, stream, backward_payload, backward_bindings,
-        "ReciprocalGradFn::apply");
+    // The contribution is already in its destination; notify without copying it.
+    if (input_producer) {
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(input_producer.get());
+        } else {
+            input_producer->apply(input_producer->pending_gradient("ReciprocalGradFn::apply producer"),
+                              stream, backward_payload, backward_bindings);
+        }
+    } else {
+        leaf_input_gradient->record_leaf_gradient_delivery();
+    }
 }
 
 void ReciprocalGradFn::release_saved() {
     GradFn::release_saved();
     cached_output = nullptr;
     cached_size = 0;
-    input_gradient.reset();
+    input_producer.reset();
+    leaf_input_gradient = nullptr;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

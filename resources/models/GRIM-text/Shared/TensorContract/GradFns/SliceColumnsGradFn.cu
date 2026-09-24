@@ -6,6 +6,7 @@
 //======================================================//
 
 #include "SliceColumnsGradFn.hpp"
+#include "../AutogradEngine.hpp"
 
 #include <cuda_runtime.h>
 #include <stdexcept>
@@ -62,8 +63,19 @@ void SliceColumnsGradFn::capture_inputs(Tensor& x, cudaStream_t stream) {
     x_requires_grad = x.requires_grad;
 
     if (x_requires_grad) {
-        x_gradient = capture_input_gradient(
-            x, stream, "SliceColumnsGradFn::capture_inputs");
+        if (!stream) throw std::runtime_error("SliceColumnsGradFn::capture: stream is NULL");
+        x.require("SliceColumnsGradFn::capture");
+        x_shape = x.shape;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("SliceColumnsGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf_x_gradient = x.grad_.get();
+            if (!leaf_x_gradient) throw std::runtime_error("SliceColumnsGradFn::capture: missing leaf gradient");
+        } else {
+            if (!x.grad_fn) throw std::runtime_error("SliceColumnsGradFn::capture: non-leaf has no producer");
+            x_producer = x.grad_fn;
+            register_input(x_producer);
+        }
     }
 }
 
@@ -76,20 +88,36 @@ void SliceColumnsGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!x_requires_grad) return;
+    if (!stream) throw std::runtime_error("SliceColumnsGradFn::apply: stream is NULL");
+    grad_output.require("SliceColumnsGradFn::apply grad_output");
+    if (grad_output.numel() != static_cast<size_t>(rows) * out_cols) {
+        throw std::runtime_error("SliceColumnsGradFn::apply: gradient size mismatch");
+    }
+    Tensor* x_gradient = x_producer
+        ? &x_producer->gradient_destination(x_shape, stream) : leaf_x_gradient;
     if (!x_gradient) {
         throw std::runtime_error("SliceColumnsGradFn::apply: x gradient Tensor is NULL");
     }
 
     kernel_slice_columns_backward<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         x_gradient->data, grad_output.data, rows, in_cols, col_offset, out_cols);
-    propagate_input_gradient(
-        x_gradient, stream, backward_payload, backward_bindings,
-        "SliceColumnsGradFn::apply");
+    // The contribution is already in its destination; notify without copying it.
+    if (x_producer) {
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(x_producer.get());
+        } else {
+            x_producer->apply(x_producer->pending_gradient("SliceColumnsGradFn::apply producer"),
+                              stream, backward_payload, backward_bindings);
+        }
+    } else {
+        leaf_x_gradient->record_leaf_gradient_delivery();
+    }
 }
 
 void SliceColumnsGradFn::release_saved() {
     GradFn::release_saved();
-    x_gradient.reset();
+    x_producer.reset();
+    leaf_x_gradient = nullptr;
 }
 
 Tensor slice_columns(const Tensor& x, int col_offset, int out_cols, cudaStream_t stream) {

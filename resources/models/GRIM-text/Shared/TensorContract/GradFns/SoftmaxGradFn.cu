@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "SoftmaxGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
@@ -139,10 +140,20 @@ SoftmaxGradFn::~SoftmaxGradFn() {
 
 void SoftmaxGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
-
     if (input_requires_grad) {
-        input_gradient = capture_input_gradient(
-            x, stream, "SoftmaxGradFn::capture_input");
+        if (!stream) throw std::runtime_error("SoftmaxGradFn::capture: stream is NULL");
+        x.require("SoftmaxGradFn::capture");
+        input_shape = x.shape;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("SoftmaxGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf_input_gradient = x.grad_.get();
+            if (!leaf_input_gradient) throw std::runtime_error("SoftmaxGradFn::capture: missing leaf gradient");
+        } else {
+            if (!x.grad_fn) throw std::runtime_error("SoftmaxGradFn::capture: non-leaf has no producer");
+            input_producer = x.grad_fn;
+            register_input(input_producer);
+        }
     }
 }
 
@@ -163,6 +174,13 @@ void SoftmaxGradFn::apply_impl(const Tensor& grad_output,
     if (applied) return;
     applied = true;
     if (!input_requires_grad) return;
+    if (!stream) throw std::runtime_error("SoftmaxGradFn::apply: stream is NULL");
+    grad_output.require("SoftmaxGradFn::apply grad_output");
+    if (grad_output.numel() != input_shape.total_elements()) {
+        throw std::runtime_error("SoftmaxGradFn::apply: gradient size mismatch");
+    }
+    Tensor* input_gradient = input_producer
+        ? &input_producer->gradient_destination(input_shape, stream) : leaf_input_gradient;
     if (!saved_softmax || !input_gradient) {
         throw std::runtime_error("SoftmaxGradFn::apply: saved data or grad buffer is NULL");
     }
@@ -170,9 +188,17 @@ void SoftmaxGradFn::apply_impl(const Tensor& grad_output,
     kernel_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         grad_output.data, saved_softmax, input_gradient->data, num_tokens, dim, inv_temperature);
 
-    propagate_input_gradient(
-        input_gradient, stream, backward_payload, backward_bindings,
-        "SoftmaxGradFn::apply");
+    // The contribution is already in its destination; notify without copying it.
+    if (input_producer) {
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(input_producer.get());
+        } else {
+            input_producer->apply(input_producer->pending_gradient("SoftmaxGradFn::apply producer"),
+                              stream, backward_payload, backward_bindings);
+        }
+    } else {
+        leaf_input_gradient->record_leaf_gradient_delivery();
+    }
 }
 
 void SoftmaxGradFn::release_saved() {
@@ -181,7 +207,8 @@ void SoftmaxGradFn::release_saved() {
         GRIM::MemoryAccounting::free(saved_softmax);
         saved_softmax = nullptr;
     }
-    input_gradient.reset();
+    input_producer.reset();
+    leaf_input_gradient = nullptr;
 }
 
 Tensor softmax(const Tensor& x, float temperature, cudaStream_t stream) {

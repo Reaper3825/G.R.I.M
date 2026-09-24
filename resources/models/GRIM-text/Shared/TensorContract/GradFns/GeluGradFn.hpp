@@ -24,7 +24,10 @@ namespace autograd {
 
 struct GeluGradFn : public GradFn {
     bool input_requires_grad = false;
-    std::shared_ptr<Tensor> input_gradient;
+    // Borrow the leaf destination or retain its producer; no private gradient.
+    std::shared_ptr<GradFn> input_producer;
+    Tensor* leaf_input_gradient = nullptr;
+    TensorContract::TensorShape input_shape;
     std::shared_ptr<float> owned_cache;            ///< ISSUE #51: owned copy of cached input
     const float* cached_input = nullptr;           ///< Points to owned_cache.get()
     std::size_t cached_size = 0;

@@ -27,7 +27,10 @@ namespace autograd {
 
 struct ZeroPadGradFn : public GradFn {
     bool input_requires_grad = false;
-    std::shared_ptr<Tensor> input_gradient;
+    // Borrow the leaf destination or retain its producer; no private gradient.
+    std::shared_ptr<GradFn> input_producer;
+    Tensor* leaf_input_gradient = nullptr;
+    TensorContract::TensorShape input_shape;
     std::size_t input_count = 0;
     std::size_t offset_elements = 0;        ///< row_offset * cols
 

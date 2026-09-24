@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "ZeroPadGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
 
@@ -35,8 +36,19 @@ void ZeroPadGradFn::capture_input(Tensor& x, cudaStream_t stream, size_t offset_
     offset_elements = offset_elems;
 
     if (input_requires_grad) {
-        input_gradient = capture_input_gradient(
-            x, stream, "ZeroPadGradFn::capture_input");
+        if (!stream) throw std::runtime_error("ZeroPadGradFn::capture: stream is NULL");
+        x.require("ZeroPadGradFn::capture");
+        input_shape = x.shape;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("ZeroPadGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf_input_gradient = x.grad_.get();
+            if (!leaf_input_gradient) throw std::runtime_error("ZeroPadGradFn::capture: missing leaf gradient");
+        } else {
+            if (!x.grad_fn) throw std::runtime_error("ZeroPadGradFn::capture: non-leaf has no producer");
+            input_producer = x.grad_fn;
+            register_input(input_producer);
+        }
     }
 }
 
@@ -49,6 +61,13 @@ void ZeroPadGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!input_requires_grad) return;
+    if (!stream) throw std::runtime_error("ZeroPadGradFn::apply: stream is NULL");
+    grad_output.require("ZeroPadGradFn::apply grad_output");
+    if (offset_elements > grad_output.numel() || input_count > grad_output.numel() - offset_elements) {
+        throw std::runtime_error("ZeroPadGradFn::apply: gradient slice out of bounds");
+    }
+    Tensor* input_gradient = input_producer
+        ? &input_producer->gradient_destination(input_shape, stream) : leaf_input_gradient;
     if (!input_gradient) {
         throw std::runtime_error("ZeroPadGradFn::apply: input gradient Tensor is NULL");
     }
@@ -62,14 +81,23 @@ void ZeroPadGradFn::apply_impl(const Tensor& grad_output,
                     "ZeroPadGradFn::apply input_grad");
     trackKernelLaunch("zero_pad_backward", stream);
 
-    propagate_input_gradient(
-        input_gradient, stream, backward_payload, backward_bindings,
-        "ZeroPadGradFn::apply");
+    // The contribution is already in its destination; notify without copying it.
+    if (input_producer) {
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(input_producer.get());
+        } else {
+            input_producer->apply(input_producer->pending_gradient("ZeroPadGradFn::apply producer"),
+                              stream, backward_payload, backward_bindings);
+        }
+    } else {
+        leaf_input_gradient->record_leaf_gradient_delivery();
+    }
 }
 
 void ZeroPadGradFn::release_saved() {
     GradFn::release_saved();
-    input_gradient.reset();
+    input_producer.reset();
+    leaf_input_gradient = nullptr;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

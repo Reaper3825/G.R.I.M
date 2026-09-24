@@ -23,7 +23,10 @@ namespace autograd {
 
 struct MulScalarGradFn : public GradFn {
     bool input_requires_grad = false;
-    std::shared_ptr<Tensor> input_gradient;
+    // Borrow the leaf destination or retain its producer; no private gradient.
+    std::shared_ptr<GradFn> input_producer;
+    Tensor* leaf_input_gradient = nullptr;
+    TensorContract::TensorShape input_shape;
     float scalar = 0.0f;
     std::size_t count = 0;
 

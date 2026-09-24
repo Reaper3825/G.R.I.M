@@ -20,7 +20,18 @@ inline const char* cudaGetErrorString(int) { return "fake CUDA"; }
 namespace GRIM {
 namespace Batching { struct BatchPayload {}; struct BatchDeviceBindings {}; }
 namespace VerboseLogging { constexpr bool ENABLE_GRADFLOW_LOGS = false; }
-namespace TensorContract { struct TensorShape { size_t count = 0; }; }
+namespace TensorContract {
+struct TensorShape {
+    size_t count = 0;
+    int layout = 0;
+    size_t total_elements() const { return count; }
+    void require(const char*) const { if (!count) throw std::runtime_error("empty shape"); }
+    bool is_2d_layout() const { return true; }
+    bool is_4d() const { return false; }
+    size_t as_2d() const { return count; }
+    size_t as_4d() const { return count; }
+};
+}
 namespace MemoryAccounting {
 enum class Kind { EngineGradient };
 inline void classify(void*, Kind) {}
@@ -78,6 +89,7 @@ struct GradFn {
     }
     virtual void collect_input_edges(std::vector<GradFn*>& out) const { out = engine_inputs_; }
     void receive_gradient(const Tensor&, cudaStream_t);
+    Tensor& gradient_destination(const TensorContract::TensorShape&, cudaStream_t);
     const Tensor& pending_gradient(const char*) const;
     void apply(const Tensor&, cudaStream_t, const Batching::BatchPayload*, const Batching::BatchDeviceBindings*);
     void run_backward(cudaStream_t, const Batching::BatchPayload*, const Batching::BatchDeviceBindings*);

@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "AddScalarGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
 
@@ -86,8 +87,19 @@ void AddScalarGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     count = x.numel();
 
     if (input_requires_grad) {
-        input_gradient = capture_input_gradient(
-            x, stream, "AddScalarGradFn::capture_input");
+        if (!stream) throw std::runtime_error("AddScalarGradFn::capture: stream is NULL");
+        x.require("AddScalarGradFn::capture");
+        input_shape = x.shape;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("AddScalarGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf_input_gradient = x.grad_.get();
+            if (!leaf_input_gradient) throw std::runtime_error("AddScalarGradFn::capture: missing leaf gradient");
+        } else {
+            if (!x.grad_fn) throw std::runtime_error("AddScalarGradFn::capture: non-leaf has no producer");
+            input_producer = x.grad_fn;
+            register_input(input_producer);
+        }
     }
 }
 
@@ -100,6 +112,13 @@ void AddScalarGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!input_requires_grad) return;
+    if (!stream) throw std::runtime_error("AddScalarGradFn::apply: stream is NULL");
+    grad_output.require("AddScalarGradFn::apply grad_output");
+    if (grad_output.numel() != input_shape.total_elements()) {
+        throw std::runtime_error("AddScalarGradFn::apply: gradient size mismatch");
+    }
+    Tensor* input_gradient = input_producer
+        ? &input_producer->gradient_destination(input_shape, stream) : leaf_input_gradient;
     if (!input_gradient) {
         throw std::runtime_error("AddScalarGradFn::apply: input gradient Tensor is NULL");
     }
@@ -112,14 +131,23 @@ void AddScalarGradFn::apply_impl(const Tensor& grad_output,
     accumulate_grad(input_gradient->data, grad_output.data, n, 1.0f, stream, "AddScalarGradFn::apply input_grad");
     trackKernelLaunch("add_scalar_backward", stream);
 
-    propagate_input_gradient(
-        input_gradient, stream, backward_payload, backward_bindings,
-        "AddScalarGradFn::apply");
+    // The contribution is already in its destination; notify without copying it.
+    if (input_producer) {
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(input_producer.get());
+        } else {
+            input_producer->apply(input_producer->pending_gradient("AddScalarGradFn::apply producer"),
+                              stream, backward_payload, backward_bindings);
+        }
+    } else {
+        leaf_input_gradient->record_leaf_gradient_delivery();
+    }
 }
 
 void AddScalarGradFn::release_saved() {
     GradFn::release_saved();
-    input_gradient.reset();
+    input_producer.reset();
+    leaf_input_gradient = nullptr;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

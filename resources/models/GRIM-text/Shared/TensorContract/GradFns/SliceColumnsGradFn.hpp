@@ -18,7 +18,10 @@ namespace autograd {
 
 struct SliceColumnsGradFn : public GradFn {
     bool x_requires_grad = false;
-    std::shared_ptr<Tensor> x_gradient;
+    // Borrow the leaf destination or retain its producer; no private gradient.
+    std::shared_ptr<GradFn> x_producer;
+    Tensor* leaf_x_gradient = nullptr;
+    TensorContract::TensorShape x_shape;
     int rows = 0;
     int in_cols = 0;
     int col_offset = 0;
