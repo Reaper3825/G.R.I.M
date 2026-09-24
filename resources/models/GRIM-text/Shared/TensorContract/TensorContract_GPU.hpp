@@ -734,9 +734,13 @@ struct GradFn {
 
     /**
      * Accept one downstream contribution into this node-owned accumulator.
-     * Raw storage access remains inside TensorContract accumulation kernels.
+     * Contributions accumulate into the same destination used by direct writers.
      */
     void receive_gradient(const Tensor& contribution, cudaStream_t stream);
+
+    // Zero-initialized on first access; subsequent writers accumulate in place.
+    // Borrowed reference: ownership stays here. Notify the scheduler after writing.
+    Tensor& gradient_destination(const TensorContract::TensorShape& shape, cudaStream_t stream);
 
     /**
      * Return the complete node-owned gradient after the scheduler has observed
@@ -1173,9 +1177,10 @@ cublasHandle_t get_autograd_cublas_handle();
  * Creates MatMulGradFn node if either input requires_grad
  * Requires: call set_autograd_cublas_handle() first
  *
- * TAPE-BASED: Saves owned forward copies of A/B internally for backward.
- * Callers must pass the actual tensors only; there is no external cache
- * plumbing on the public API.
+ * Borrows forward A/B data for backward; no input copies are made.
+ * Callers must retain their storage unchanged through backward (activations
+ * in ModelForwardOutputs, weights in the parameter registry). Leaf gradient
+ * storage must also remain alive. Producers own non-leaf gradient destinations.
  *
  * @param transpose_b If true, computes A @ B^T instead of A @ B
  */

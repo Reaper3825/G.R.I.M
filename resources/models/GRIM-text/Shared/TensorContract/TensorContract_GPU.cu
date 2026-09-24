@@ -775,26 +775,29 @@ void GradFn::propagate_input_gradient(
 
 void GradFn::receive_gradient(const Tensor& contribution, cudaStream_t stream) {
     contribution.require("GradFn::receive_gradient contribution");
-    if (stream == nullptr) {
-        throw std::runtime_error("GradFn::receive_gradient: stream is NULL");
-    }
+    autograd::accumulate_grad(
+        gradient_destination(contribution.shape, stream), contribution,
+        1.0f, stream, "GradFn::receive_gradient");
+}
 
+Tensor& GradFn::gradient_destination(const TensorContract::TensorShape& shape,
+                                     cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("GradFn::gradient_destination: stream is NULL");
+    shape.require("GradFn::gradient_destination");
     if (!pending_gradient_) {
-        Tensor accumulator = Tensor::zeros(
-            contribution.shape,
-            false,
-            stream,
-            "GradFn_pending_gradient");
+        Tensor accumulator = Tensor::zeros(shape, false, stream, "GradFn_pending_gradient");
         MemoryAccounting::classify(accumulator.data, MemoryAccounting::Kind::EngineGradient);
         pending_gradient_ = std::make_shared<Tensor>(std::move(accumulator));
     }
-
-    autograd::accumulate_grad(
-        *pending_gradient_,
-        contribution,
-        1.0f,
-        stream,
-        "GradFn::receive_gradient");
+    const auto& existing = pending_gradient_->shape;
+    bool matching_shape = existing.layout == shape.layout;
+    if (matching_shape && shape.is_2d_layout()) matching_shape = existing.as_2d() == shape.as_2d();
+    if (matching_shape && shape.is_4d()) matching_shape = existing.as_4d() == shape.as_4d();
+    if (!matching_shape || pending_gradient_->numel() != shape.total_elements()) {
+        throw std::runtime_error("GradFn::gradient_destination: gradient shape mismatch");
+    }
+    pending_gradient_->require("GradFn::gradient_destination");
+    return *pending_gradient_;
 }
 
 const Tensor& GradFn::pending_gradient(const char* context) const {

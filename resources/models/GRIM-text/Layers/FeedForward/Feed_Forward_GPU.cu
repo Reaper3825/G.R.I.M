@@ -144,6 +144,7 @@ void FeedForwardLayer::forward(const Tensor& input,
         W_gate,
         forward_outputs.loraProjectionOrNull(
             layer_slot, LoRAMatrixClass::FFN_GATE),
+        forward_outputs.loraRankOutput(layer_slot, LoRAMatrixClass::FFN_GATE),
         MatmulOrientation::DIRECT_WEIGHT,
         stream);
     ffn_silu_out = autograd::silu(ffn_gate_out, stream,
@@ -157,6 +158,7 @@ void FeedForwardLayer::forward(const Tensor& input,
         W1,
         forward_outputs.loraProjectionOrNull(
             layer_slot, LoRAMatrixClass::FFN_UP),
+        forward_outputs.loraRankOutput(layer_slot, LoRAMatrixClass::FFN_UP),
         MatmulOrientation::DIRECT_WEIGHT,
         stream);
 
@@ -177,6 +179,7 @@ void FeedForwardLayer::forward(const Tensor& input,
         W2,
         forward_outputs.loraProjectionOrNull(
             layer_slot, LoRAMatrixClass::FFN_DOWN),
+        forward_outputs.loraRankOutput(layer_slot, LoRAMatrixClass::FFN_DOWN),
         MatmulOrientation::DIRECT_WEIGHT,
         stream);
     

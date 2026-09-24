@@ -89,6 +89,10 @@ private:
         requireSize(ffn_silu_out_per_layer, "ffn_silu_out_per_layer");
         requireSize(ffn_linear1_out_per_layer, "ffn_linear1_out_per_layer");
         requireSize(ffn_swiglu_out_per_layer, "ffn_swiglu_out_per_layer");
+        if (lora_rank_out_per_layer.size() != expected) {
+            throw std::runtime_error(
+                std::string(caller) + ": per-layer LoRA rank output count mismatch");
+        }
         if (lora_parameters_per_layer.size() != expected) {
             throw std::runtime_error(
                 std::string(caller) +
@@ -165,6 +169,8 @@ public:
     std::vector<Tensor> ffn_linear1_out_per_layer;
     std::vector<Tensor> ffn_swiglu_out_per_layer;
     std::vector<LoRALayerParameterViews> lora_parameters_per_layer;
+    // One rank projection per matrix class, retained for the second LoRA MatMul.
+    std::vector<std::array<Tensor, 5>> lora_rank_out_per_layer;
 
     void reserveLayerOutputs(size_t num_layers) {
         ln1_out_per_layer.reserve(num_layers);
@@ -189,6 +195,7 @@ public:
         ffn_linear1_out_per_layer.reserve(num_layers);
         ffn_swiglu_out_per_layer.reserve(num_layers);
         lora_parameters_per_layer.reserve(num_layers);
+        lora_rank_out_per_layer.reserve(num_layers);
     }
 
     void pushLayerOutputs() {
@@ -214,7 +221,13 @@ public:
         ffn_linear1_out_per_layer.emplace_back();
         ffn_swiglu_out_per_layer.emplace_back();
         lora_parameters_per_layer.emplace_back();
+        lora_rank_out_per_layer.emplace_back();
         requireConsistentLayerStorage("ModelForwardOutputs::pushLayerOutputs");
+    }
+
+    Tensor& loraRankOutput(size_t layer_idx, LoRAMatrixClass matrix_class) {
+        validateLayerIndex(layer_idx, "ModelForwardOutputs::loraRankOutput");
+        return lora_rank_out_per_layer[layer_idx][loraProjectionIndex(matrix_class)];
     }
 
     void bindLoRAProjection(
@@ -317,6 +330,7 @@ public:
         clearTensorVector(ffn_silu_out_per_layer);
         clearTensorVector(ffn_linear1_out_per_layer);
         clearTensorVector(ffn_swiglu_out_per_layer);
+        lora_rank_out_per_layer.clear();
         lora_parameters_per_layer.clear();
     }
 
@@ -345,6 +359,11 @@ public:
         count += countGradFns(ffn_silu_out_per_layer);
         count += countGradFns(ffn_linear1_out_per_layer);
         count += countGradFns(ffn_swiglu_out_per_layer);
+        for (const auto& layer : lora_rank_out_per_layer) {
+            for (const auto& tensor : layer) {
+                if (tensor.grad_fn) ++count;
+            }
+        }
         return count;
     }
 
@@ -367,6 +386,8 @@ public:
     // target-state production belongs to the frozen target model.
     Tensor mean_pool;
     Tensor lm_head_input_tensor;
+    // Optional transformed weights consumed by logits MatMul; live through backward.
+    Tensor lm_head_effective_weights;
     // LM-head residual SwiGLU adapter (config.lm_head_mlp_enabled) retained
     // intermediates. gate/silu/up must survive until backward: SiluGradFn and
     // ElementwiseMulGradFn hold non-owning pointers into their input buffers
@@ -465,6 +486,7 @@ public:
         // until their downstream result tensors have released their GradFns.
         atom_insertion_decision_logits = Tensor();
         logits_tensor = Tensor();
+        lm_head_effective_weights = Tensor();
         atom_insertion_gap_states = Tensor();
         atom_insertion_projection_sum = Tensor();
         atom_insertion_right_projected = Tensor();
@@ -542,6 +564,13 @@ public:
         reportVector("ffn_silu_out_per_layer", ffn_silu_out_per_layer);
         reportVector("ffn_linear1_out_per_layer", ffn_linear1_out_per_layer);
         reportVector("ffn_swiglu_out_per_layer", ffn_swiglu_out_per_layer);
+        constexpr const char* projection_names[] = {"qkv", "attention_output", "ffn_gate", "ffn_up", "ffn_down"};
+        for (size_t layer = 0; layer < lora_rank_out_per_layer.size(); ++layer) {
+            for (size_t projection = 0; projection < 5; ++projection) {
+                reportTensor("lora_rank_out_per_layer[" + std::to_string(layer) + "]." +
+                             projection_names[projection], lora_rank_out_per_layer[layer][projection]);
+            }
+        }
 
         // Cross-layer live tensors
         reportTensor("embedding_tensor", embedding_tensor);
@@ -555,6 +584,7 @@ public:
         reportTensor("final_normalized_hidden_states", final_normalized_hidden_states);
         reportTensor("mean_pool", mean_pool);
         reportTensor("lm_head_input_tensor", lm_head_input_tensor);
+        reportTensor("lm_head_effective_weights", lm_head_effective_weights);
         reportTensor("lm_head_mlp_gate_out", lm_head_mlp_gate_out);
         reportTensor("lm_head_mlp_silu_out", lm_head_mlp_silu_out);
         reportTensor("lm_head_mlp_up_out", lm_head_mlp_up_out);

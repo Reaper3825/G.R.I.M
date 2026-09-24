@@ -449,7 +449,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
-    ../../Layers/ArgSelector/ArgSelector_GPU.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchDeviceUpload.cu
@@ -467,7 +466,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
     ../../Shared/Loss/ComputeLoss/AtomInsertionLoss.cu
-    ../../Shared/Loss/ComputeLoss/ArgSelectorLoss.cu
     ../../Shared/Loss/ComputeLoss/CrossEntropyNLL.cu
     ../../Shared/Loss/LossSignals/LossSignals.cu
 )

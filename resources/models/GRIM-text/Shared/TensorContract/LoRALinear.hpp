@@ -24,6 +24,7 @@ Tensor lora_linear(
     const Tensor& x,
     const Tensor& W_base,
     const LoRAProjectionView* lora,
+    Tensor& rank_out,  // Caller-owned storage retained through backward.
     MatmulOrientation orientation,
     cudaStream_t stream);
 

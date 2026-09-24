@@ -184,6 +184,7 @@ void encoderSelfAttentionForward(
         W_qkv,
         forward_outputs.loraProjectionOrNull(
             layer_slot, LoRAMatrixClass::QKV),
+        forward_outputs.loraRankOutput(layer_slot, LoRAMatrixClass::QKV),
         MatmulOrientation::TRANSPOSED_WEIGHT,
         request.stream);
     if (qkv_debug > 0) {
@@ -331,6 +332,7 @@ void encoderSelfAttentionForward(
         W_o,
         forward_outputs.loraProjectionOrNull(
             layer_slot, LoRAMatrixClass::ATTENTION_OUTPUT),
+        forward_outputs.loraRankOutput(layer_slot, LoRAMatrixClass::ATTENTION_OUTPUT),
         MatmulOrientation::TRANSPOSED_WEIGHT,
         request.stream);
     if (request.hp.output_bias_enabled) {
@@ -429,6 +431,7 @@ void encoderSelfAttentionForwardCached(
         W_qkv,
         forward_outputs.loraProjectionOrNull(
             layer_slot, LoRAMatrixClass::QKV),
+        forward_outputs.loraRankOutput(layer_slot, LoRAMatrixClass::QKV),
         MatmulOrientation::TRANSPOSED_WEIGHT,
         request.stream);
     if (request.hp.qkv_bias_enabled) {
@@ -509,6 +512,7 @@ void encoderSelfAttentionForwardCached(
         W_o,
         forward_outputs.loraProjectionOrNull(
             layer_slot, LoRAMatrixClass::ATTENTION_OUTPUT),
+        forward_outputs.loraRankOutput(layer_slot, LoRAMatrixClass::ATTENTION_OUTPUT),
         MatmulOrientation::TRANSPOSED_WEIGHT,
         request.stream);
     if (request.hp.output_bias_enabled) {

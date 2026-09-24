@@ -7,6 +7,7 @@
 #include "TensorContract_GPU.hpp"
 #include "AttentionEpilogue.hpp"
 #include "AutogradQKVDiagnostics.hpp"
+#include "AutogradEngine.hpp"
 #include "LMHeadGemmDiagnostics.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "../Diagnostics/MemoryAllocationTracker.hpp"
@@ -151,113 +152,70 @@ static void requireEncoderAttentionHP(const GRIM::HyperParameters::EncoderSelfAt
  *   grad_A = grad_C @ B^T  [M,N] @ [N,K] = [M,K]
  *   grad_B = A^T @ grad_C  [K,M] @ [M,N] = [K,N]
  *
- * TAPE-BASED: Saves owned forward copies of A/B for backward and writes directly to grad buffers.
- * 
- * ISSUE #48 FIX: Stores stable data (shapes, grad pointers, grad_fn) instead of Tensor* 
- * which may become dangling after the forward function returns.
- * 
- * ISSUE #55 FIX: For non-leaf (activation) tensors, owns grad buffers.
- * For leaf (weight) tensors, uses their persistent grad buffers directly.
+ * Forward values are borrowed from ModelForwardOutputs / parameter storage.
+ * Callers must retain them unchanged until backward finishes. Gradients go
+ * directly to producer accumulators or persistent leaf gradient buffers.
  */
 struct MatMulGradFn : public GradFn {
-    // ISSUE #48: Don't store Tensor* - they become dangling after forward returns
-    // Instead, store what we actually need for backward:
     bool a_requires_grad = false;
     bool b_requires_grad = false;
-    
-    std::shared_ptr<Tensor> a_gradient;
-    std::shared_ptr<Tensor> b_gradient;
-    
-    // ISSUE #51 FIX: Own copies of cached activations instead of dangling external pointers.
-    // Same pattern as GeluGradFn/RMSNormGradFn — allocate, copy, wrap in shared_ptr.
-    std::shared_ptr<float> owned_cached_a;  // Owned GPU copy of A activations (for grad_B)
-    std::shared_ptr<float> owned_cached_b;  // Owned GPU copy of B activations (for grad_A)
-    const float* cached_a = nullptr;  // Points to owned_cached_a.get()
-    const float* cached_b = nullptr;  // Points to owned_cached_b.get()
-    int M = 0, K = 0, N = 0;   // Dimensions
+    std::shared_ptr<GradFn> a_grad_fn, b_grad_fn;
+    Tensor* leaf_grad_a = nullptr;
+    Tensor* leaf_grad_b = nullptr;
+    TensorContract::TensorShape a_shape, b_shape;
+    const float* cached_a = nullptr;
+    const float* cached_b = nullptr;
+    int M = 0, K = 0, N = 0;
     cublasHandle_t cublas_handle = nullptr;
-    bool transpose_b = false;  // Was B transposed in forward?
-    cudaStream_t cache_stream = nullptr;  // Stream for cache copy operations
+    bool transpose_b = false;
     const char* a_name = nullptr;
     const char* b_name = nullptr;
-    
+
     MatMulGradFn() { op_name = "matmul"; }
-    
-    // shared_ptr members destruct automatically
-    
 
     void capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
+        if (!stream) throw std::runtime_error("MatMulGradFn::capture_inputs: stream is NULL");
         a_requires_grad = a.requires_grad;
         b_requires_grad = b.requires_grad;
+        a_shape = a.shape;
+        b_shape = b.shape;
         a_name = a.name;
         b_name = b.name;
-
-        if (a_requires_grad) {
-            a_gradient = capture_input_gradient(
-                a, stream, "MatMulGradFn::capture_inputs A");
-            AG_TRACE("[MatMulGradFn] Captured grad_A Tensor data: %p\n", (void*)a_gradient->data);
-        }
-        if (b_requires_grad) {
-            b_gradient = capture_input_gradient(
-                b, stream, "MatMulGradFn::capture_inputs B");
-            AG_TRACE("[MatMulGradFn] Captured grad_B Tensor data: %p\n", (void*)b_gradient->data);
-        }
+        auto capture = [&](Tensor& input, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+            input.require("MatMulGradFn::capture_inputs");
+            if (!input.requires_grad) return;
+            if (input.is_leaf) {
+                if (input.grad_fn) throw std::runtime_error("MatMulGradFn::capture_inputs: leaf has a producer");
+                input.ensure_grad();
+                leaf = input.grad_.get();
+                if (!leaf) throw std::runtime_error("MatMulGradFn::capture_inputs: missing leaf gradient");
+            } else {
+                if (!input.grad_fn) throw std::runtime_error("MatMulGradFn::capture_inputs: non-leaf has no producer");
+                producer = input.grad_fn;
+                register_input(producer);
+            }
+        };
+        capture(a, a_grad_fn, leaf_grad_a);
+        capture(b, b_grad_fn, leaf_grad_b);
     }
 
-    // ISSUE #51 FIX: Copy forward data to owned buffers instead of storing dangling pointers.
-    // Same owned-save pattern as GeluGradFn::set_cache_copy / RMSNormGradFn::set_cache_copy.
-    void set_cache_copy(const float* a_forward, const float* b_forward, int m, int k, int n,
-                        cublasHandle_t handle, cudaStream_t stream, bool transB = false) {
-        transpose_b = transB;
+    void set_borrowed_inputs(const float* a, const float* b, int m, int k, int n,
+                             cublasHandle_t handle, bool transB) {
+        if (m <= 0 || k <= 0 || n <= 0 ||
+            (a_requires_grad && !b) || (b_requires_grad && !a)) {
+            throw std::runtime_error("MatMulGradFn::set_borrowed_inputs: invalid forward inputs");
+        }
         M = m; K = k; N = n;
+        transpose_b = transB;
         cublas_handle = handle;
-        cache_stream = stream;
-        
-        // Validate that required forward tensors are available for owned copies.
-        if (a_requires_grad && !b_forward) {
-            throw std::runtime_error(
-                "MatMulGradFn::set_cache_copy: b_forward is NULL but input_a requires grad "
-                "(A.grad=true requires saved B for grad_A)");
-        }
-        if (b_requires_grad && !a_forward) {
-            throw std::runtime_error(
-                "MatMulGradFn::set_cache_copy: a_forward is NULL but input_b requires grad "
-                "(B.grad=true requires saved A for grad_B)");
-        }
-        
-        // Allocate and copy A forward tensor (needed for grad_B = A^T @ grad_C)
-        if (b_requires_grad && a_forward) {
-            const size_t a_size = static_cast<size_t>(m) * k;
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), a_size * sizeof(float), "MatMulGradFn_cache_a", GRIM::MemoryAccounting::Kind::Saved);
-            cudaMemcpyAsync(buffer, a_forward, a_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            owned_cached_a = std::shared_ptr<float>(buffer, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            cached_a = owned_cached_a.get();
-            AG_TRACE("[MatMulGradFn] Copied cache_a: %zu floats to %p\n", a_size, (void*)cached_a);
-        }
-        
-        // Allocate and copy B forward tensor (needed for grad_A = grad_C @ B^T)
-        if (a_requires_grad && b_forward) {
-            // B shape: [K,N] normal or [N,K] if transposed
-            const size_t b_size = static_cast<size_t>(k) * n;
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), b_size * sizeof(float), "MatMulGradFn_cache_b", GRIM::MemoryAccounting::Kind::Saved);
-            cudaMemcpyAsync(buffer, b_forward, b_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            owned_cached_b = std::shared_ptr<float>(buffer, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            cached_b = owned_cached_b.get();
-            AG_TRACE("[MatMulGradFn] Copied cache_b: %zu floats to %p\n", b_size, (void*)cached_b);
-        }
+        cached_a = b_requires_grad ? a : nullptr;
+        cached_b = a_requires_grad ? b : nullptr;
     }
-    
+
     void apply_impl(const Tensor& grad_output,
                     cudaStream_t stream,
                     const Batching::BatchPayload* backward_payload,
                     const Batching::BatchDeviceBindings* backward_bindings) override {
-        (void)backward_bindings;
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("matmul", this);
         
@@ -270,22 +228,29 @@ struct MatMulGradFn : public GradFn {
         if (!cublas_handle) {
             throw std::runtime_error("MatMulGradFn::apply: cublas_handle is NULL");
         }
-        if (a_requires_grad && !a_gradient) {
-            throw std::runtime_error("MatMulGradFn::apply: A gradient Tensor is NULL - capture_inputs() must be called");
+        grad_output.require("MatMulGradFn::apply grad_output");
+        if (!stream || grad_output.numel() != static_cast<size_t>(M) * N) {
+            throw std::runtime_error("MatMulGradFn::apply: invalid stream or gradient size");
         }
-        if (b_requires_grad && !b_gradient) {
-            throw std::runtime_error("MatMulGradFn::apply: B gradient Tensor is NULL - capture_inputs() must be called");
-        }
+        auto destination = [&](bool required, const std::shared_ptr<GradFn>& producer,
+                               Tensor* leaf, const TensorContract::TensorShape& shape) -> Tensor* {
+            if (!required) return nullptr;
+            if (producer) return &producer->gradient_destination(shape, stream);
+            if (!leaf || leaf->numel() != shape.total_elements()) {
+                throw std::runtime_error("MatMulGradFn::apply: invalid leaf destination");
+            }
+            leaf->require("MatMulGradFn::apply leaf");
+            return leaf;
+        };
+        Tensor* a_gradient = destination(a_requires_grad, a_grad_fn, leaf_grad_a, a_shape);
+        Tensor* b_gradient = destination(b_requires_grad, b_grad_fn, leaf_grad_b, b_shape);
+        float* grad_a_data = a_gradient ? a_gradient->data : nullptr;
+        float* grad_b_data = b_gradient ? b_gradient->data : nullptr;
 
-        float* grad_a_data = nullptr;
-        float* grad_b_data = nullptr;
-        if (a_requires_grad) grad_a_data = a_gradient->data;
-        if (b_requires_grad) grad_b_data = b_gradient->data;
-        
         const float alpha = 1.0f;
         const float beta_accum = 1.0f;  // Accumulate to existing gradient
         
-        cublasSetStream(cublas_handle, stream);;
+        cublasSetStream(cublas_handle, stream);
 
         // Trace-mode stage barriers make asynchronous cuBLAS failures attributable to
         // the exact half of matmul backward. They compile out with the shared autograd
@@ -512,29 +477,30 @@ struct MatMulGradFn : public GradFn {
                           stream);
 
 
-        if (a_requires_grad) {
-            propagate_input_gradient(
-                a_gradient, stream, backward_payload, backward_bindings,
-                "MatMulGradFn::apply A");
-        }
-        if (b_requires_grad &&
-            (b_gradient->is_leaf || !a_requires_grad ||
-             b_gradient->grad_fn != a_gradient->grad_fn)) {
-            propagate_input_gradient(
-                b_gradient, stream, backward_payload, backward_bindings,
-                "MatMulGradFn::apply B");
-        }
+        if (leaf_grad_a) leaf_grad_a->record_leaf_gradient_delivery();
+        if (leaf_grad_b) leaf_grad_b->record_leaf_gradient_delivery();
+        // Both GEMMs have accumulated before one notification per producer edge.
+        auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+            if (!producer) return;
+            if (auto* engine = AutogradEngine::active()) {
+                engine->contribute(producer.get());
+            } else {
+                producer->apply(producer->pending_gradient("MatMulGradFn::apply producer"),
+                                stream, backward_payload, backward_bindings);
+            }
+        };
+        notify(a_grad_fn);
+        if (b_grad_fn != a_grad_fn) notify(b_grad_fn);
     }
-    
+
     void release_saved() override {
         GradFn::release_saved();
-        // ISSUE #51 FIX: Release owned cache copies (shared_ptr → deferred cleanup)
-        owned_cached_a.reset();
-        owned_cached_b.reset();
         cached_a = nullptr;
         cached_b = nullptr;
-        a_gradient.reset();
-        b_gradient.reset();
+        leaf_grad_a = nullptr;
+        leaf_grad_b = nullptr;
+        a_grad_fn.reset();
+        b_grad_fn.reset();
     }
 };
 
@@ -552,7 +518,7 @@ cublasHandle_t get_autograd_cublas_handle() {
 /**
  * autograd::matmul - Matrix multiplication with automatic differentiation
  * 
- * TAPE-BASED: Saves owned forward copies of A and B for backward.
+ * Borrows A/B storage; callers retain unchanged forward values through backward.
  *
  * @param a Input tensor A [M, K]
  * @param b Input tensor B [K, N]
@@ -665,35 +631,8 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
         result.is_leaf = false;
         auto grad_fn = std::make_shared<MatMulGradFn>();
         
-        // ISSUE #48 FIX: Capture stable data from tensors NOW, before they go out of scope
-        // Don't store Tensor* - the tensors may be stack variables that become dangling
-        // ISSUE #55 FIX: Pass stream for async allocation of owned grad buffers
         grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
-        
-        // Save the actual forward inputs owned by this matmul node.
-        const float* effective_a_cache = a.data;
-        const float* effective_b_cache = b.data;
-        
-        // Null check: grad_B = A^T @ grad_C requires saved A; grad_A = grad_C @ B^T requires saved B
-        if (grad_fn->b_requires_grad && !effective_a_cache) {
-            throw std::runtime_error(
-            "autograd::matmul: input_a data is NULL while input_b requires grad. "
-            "matmul must save forward A for grad_B. "
-                "Context: A.name=" + std::string(a.name ? a.name : "<unnamed>") +
-                " A.data=" + std::to_string(reinterpret_cast<uintptr_t>(a.data)) +
-                " B.name=" + std::string(b.name ? b.name : "<unnamed>") +
-                " B.data=" + std::to_string(reinterpret_cast<uintptr_t>(b.data)) +
-                " shape(A)=[" + std::to_string(M) + "," + std::to_string(K) + "]"
-                " shape(B)=[" + std::to_string(b_shape.rows) + "," + std::to_string(b_shape.cols) + "]"
-                " transpose_b=" + std::to_string(transpose_b ? 1 : 0));
-        }
-        if (grad_fn->a_requires_grad && !effective_b_cache) {
-            throw std::runtime_error(
-                "autograd::matmul: Cannot compute grad for input_a - input_b data is NULL. "
-                "Second input tensor has null data.");
-        }
-        
-        grad_fn->set_cache_copy(effective_a_cache, effective_b_cache, M, K, N, handle, stream, transpose_b);
+        grad_fn->set_borrowed_inputs(a.data, b.data, M, K, N, handle, transpose_b);
         result.grad_fn = grad_fn;
     }
     

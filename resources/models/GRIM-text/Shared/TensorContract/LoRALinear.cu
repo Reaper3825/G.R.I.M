@@ -45,6 +45,7 @@ Tensor lora_linear(
     const Tensor& x,
     const Tensor& W_base,
     const LoRAProjectionView* lora,
+    Tensor& rank_out,  // Caller-owned storage retained through backward.
     MatmulOrientation orientation,
     cudaStream_t stream) {
     if (stream == nullptr || stream == 0) {
@@ -113,8 +114,11 @@ Tensor lora_linear(
         requireShape(a_shape, rank, output_width, "A");
     }
 
+    if (rank_out.data) {
+        throw std::runtime_error(
+            "lora_linear: rank output must be empty at the start of a forward window");
+    }
     Tensor base_out = matmul(x, W_base, stream, transpose_weight);
-    Tensor rank_out;
     Tensor delta_out;
     if (transpose_weight) {
         rank_out = matmul(x, A, stream, true);

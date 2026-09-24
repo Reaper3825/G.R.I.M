@@ -351,7 +351,7 @@ void forwardLmHead(
     // only, without plumbing a new authored config field yet.
     const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
     const bool use_centered_weights = hp.center_hidden_states;
-    Tensor effective_weights_storage;
+    Tensor& effective_weights_storage = forward_outputs.lm_head_effective_weights;
     const Tensor* effective_weights = &lm_weights;
     if (use_centered_weights && use_token_type_gate) {
         effective_weights_storage = autograd::center_rows_by_token_type_gate(lm_weights, stream);
