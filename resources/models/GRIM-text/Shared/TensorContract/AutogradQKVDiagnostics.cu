@@ -4,7 +4,7 @@
 //======================================================//
 
 #include "AutogradQKVDiagnostics.hpp"
-#include "../CudaAllocUtils.hpp"
+#include "../Diagnostics/MemoryAllocationTracker.hpp"
 #include "../LogRecorder/BatchLogTape.hpp"
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../VerboseLogging.hpp"
@@ -22,7 +22,7 @@
 
 namespace {
 
-using GRIM::CudaAlloc::cudaMallocOrThrow;
+using GRIM::MemoryAccounting::cudaMallocOrThrow;
 
 const char* requireTag(const char* tag, const char* context) {
     if (!context || !*context) {
@@ -225,7 +225,7 @@ void checkNonFiniteStats(const char* tag,
 
     cudaError_t err = cudaMemcpyAsync(d_stats, &init, sizeof(init), cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_stats);
+        GRIM::MemoryAccounting::free(d_stats);
         throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " cudaMemcpyAsync H2D failed: " + cudaGetErrorString(err));
     }
@@ -235,7 +235,7 @@ void checkNonFiniteStats(const char* tag,
     scanNonFiniteKernel<<<blocks, kThreads, 0, stream>>>(data, count, d_stats);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
-        cudaFree(d_stats);
+        GRIM::MemoryAccounting::free(d_stats);
         throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " scanNonFiniteKernel launch failed: " + cudaGetErrorString(err));
     }
@@ -243,19 +243,19 @@ void checkNonFiniteStats(const char* tag,
     NonFiniteStats out{};
     err = cudaMemcpyAsync(&out, d_stats, sizeof(out), cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_stats);
+        GRIM::MemoryAccounting::free(d_stats);
         throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " cudaMemcpyAsync D2H failed: " + cudaGetErrorString(err));
     }
 
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
-        cudaFree(d_stats);
+        GRIM::MemoryAccounting::free(d_stats);
         throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " cudaStreamSynchronize failed: " + cudaGetErrorString(err));
     }
 
-    cudaFree(d_stats);
+    GRIM::MemoryAccounting::free(d_stats);
 
     if (out.nan_count == 0 && out.inf_count == 0) {
         return;
@@ -316,7 +316,7 @@ void logGradFlowTensorStatsImpl(const char* tag,
     gradFlowStatsKernel<<<blocks, kThreads, 0, stream>>>(data, count, d_partials);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
                                  " gradFlowStatsKernel launch failed: " + cudaGetErrorString(err));
     }
@@ -326,7 +326,7 @@ void logGradFlowTensorStatsImpl(const char* tag,
                           static_cast<std::size_t>(blocks) * sizeof(GradFlowBlockStats),
                           cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
                                  " cudaMemcpyAsync D2H failed: " + cudaGetErrorString(err));
     }
@@ -335,13 +335,13 @@ void logGradFlowTensorStatsImpl(const char* tag,
     const std::size_t first_count = std::min<std::size_t>(count, 4);
     err = cudaMemcpyAsync(first_values, data, first_count * sizeof(float), cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
                                  " first-value copy failed: " + cudaGetErrorString(err));
     }
 
     err = cudaStreamSynchronize(stream);
-    cudaFree(d_partials);
+    GRIM::MemoryAccounting::free(d_partials);
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
                                  " stream synchronization failed: " + cudaGetErrorString(err));
@@ -426,7 +426,7 @@ void logGradFlowBf16TensorStatsImpl(const char* tag,
     gradFlowBf16StatsKernel<<<blocks, kThreads, 0, stream>>>(data, count, d_partials);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("logGradFlowBf16TensorStats: ") + checked_tag +
                                  " gradFlowBf16StatsKernel launch failed: " + cudaGetErrorString(err));
     }
@@ -436,7 +436,7 @@ void logGradFlowBf16TensorStatsImpl(const char* tag,
                           static_cast<std::size_t>(blocks) * sizeof(GradFlowBlockStats),
                           cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("logGradFlowBf16TensorStats: ") + checked_tag +
                                  " cudaMemcpyAsync D2H failed: " + cudaGetErrorString(err));
     }
@@ -445,13 +445,13 @@ void logGradFlowBf16TensorStatsImpl(const char* tag,
     const std::size_t first_count = std::min<std::size_t>(count, 4);
     err = cudaMemcpyAsync(first_raw, data, first_count * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("logGradFlowBf16TensorStats: ") + checked_tag +
                                  " first-value copy failed: " + cudaGetErrorString(err));
     }
 
     err = cudaStreamSynchronize(stream);
-    cudaFree(d_partials);
+    GRIM::MemoryAccounting::free(d_partials);
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("logGradFlowBf16TensorStats: ") + checked_tag +
                                  " stream synchronization failed: " + cudaGetErrorString(err));

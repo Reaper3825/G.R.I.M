@@ -5,7 +5,7 @@
 
 #include "DropoutGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -126,7 +126,7 @@ __global__ void kernel_dropout_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -150,7 +150,7 @@ void DropoutGradFn::save(const std::uint8_t* mask, float dropout_prob, size_t n,
     count = n;
     scale = (dropout_prob < 1.0f) ? 1.0f / (1.0f - dropout_prob) : 0.0f;
 
-    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_mask), n * sizeof(std::uint8_t), "DropoutGradFn_saved_mask");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_mask), n * sizeof(std::uint8_t), "DropoutGradFn_saved_mask", GRIM::MemoryAccounting::Kind::Saved);
     cudaMemcpyAsync(saved_mask, mask, n * sizeof(std::uint8_t), cudaMemcpyDeviceToDevice, stream);
 }
 
@@ -206,7 +206,7 @@ void DropoutGradFn::apply_impl(const Tensor& grad_output,
 void DropoutGradFn::release_saved() {
     GradFn::release_saved();
     if (saved_mask) {
-        cudaFree(saved_mask);
+        GRIM::MemoryAccounting::free(saved_mask);
         saved_mask = nullptr;
     }
     input_gradient.reset();
@@ -259,7 +259,7 @@ Tensor dropout(const Tensor& x, float p, std::uint64_t seed, cudaStream_t stream
         result.grad_fn = grad_fn;
     }
 
-    const cudaError_t free_err = cudaFreeAsync(mask, stream);
+    const cudaError_t free_err = GRIM::MemoryAccounting::freeAsync(mask, stream);
     if (free_err != cudaSuccess) {
         throw std::runtime_error(
             std::string("autograd::dropout: cudaFreeAsync(mask) failed: ") +

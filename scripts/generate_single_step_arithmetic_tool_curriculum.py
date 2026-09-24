@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate and optionally merge the single-step arithmetic tool curriculum.
 
-Every ConceptBlock teaches one symbolic Determine phase followed by one
+Every ConceptBlock teaches a natural-language Determine and local Define followed by one
 variable-based arithmetic expression inside an authored TOOL span. The
 postfix pointer binds the pending tool result to the unknown, and the answer
 references that same variable. Update remains deliberately empty for a later
@@ -23,6 +23,7 @@ from typing import Any, Iterable
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+MANUAL_VOCAB_PATH = ROOT_DIR / "resources/models/GRIM-text/training/manual_vocab.json"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / ".codex_tmp" / "single_step_arithmetic_tool_v1"
 DEFAULT_COUNT = 60_000
 DEFAULT_SEED = 7_913
@@ -185,23 +186,31 @@ def arithmetic_values(operation: str, occurrence: int, decimal_values: bool) -> 
 
 def variable_names(operation: str, slug: str) -> tuple[str, str, str]:
     if operation == "add":
-        return f"starting_{slug}", f"added_{slug}", f"total_{slug}"
+        return f"start_{slug}", f"change_{slug}", f"total_{slug}"
     if operation == "sub":
-        return f"available_{slug}", f"used_{slug}", f"remaining_{slug}"
+        return f"start_{slug}", f"change_{slug}", f"remainder_{slug}"
     if operation == "mul":
-        return "group_count", f"{slug}_per_group", f"total_{slug}"
+        return "group_count", f"quantity_{slug}", f"total_{slug}"
     if operation == "div":
-        return f"total_{slug}", "group_count", f"{slug}_per_group"
+        return f"total_{slug}", "group_count", f"quantity_{slug}"
     raise ValueError(f"unsupported operation {operation}")
 
 
-def known_bindings(operation: str, names: tuple[str, str, str], lhs: str, rhs: str, unit: str) -> list[str]:
-    lhs_name, rhs_name, _ = names
-    if operation in ("add", "sub"):
-        return [f"{lhs_name} = {lhs} {unit}", f"{rhs_name} = {rhs} {unit}"]
-    if operation == "mul":
-        return [f"{lhs_name} = {lhs} groups", f"{rhs_name} = {rhs} {unit} per group"]
-    return [f"{lhs_name} = {lhs} {unit}", f"{rhs_name} = {rhs} groups"]
+def local_definitions(names: tuple[str, str, str], lhs: str, rhs: str) -> str:
+    lhs_name, rhs_name, result_name = names
+    return "\n".join((
+        f"{variable_reference(lhs_name)} -> {lhs};",
+        f"{variable_reference(rhs_name)} -> {rhs};",
+        f"{variable_reference(result_name)};",
+    ))
+
+
+DETERMINE = {
+    "add": "Add the starting and additional quantities to find the combined amount.",
+    "sub": "Subtract the quantity used from the starting quantity to find the amount remaining.",
+    "mul": "Multiply the number of groups by the quantity in each group to find the total amount.",
+    "div": "Divide the total quantity by the number of equal groups to find the amount per group.",
+}
 
 
 def answer_text(operation: str, result: str, unit: str) -> str:
@@ -258,9 +267,10 @@ def make_entry(index: int, seed: int = DEFAULT_SEED) -> tuple[dict[str, Any], di
         "id": f"{ENTRY_PREFIX}{index:06d}",
         "name": f"Single-step arithmetic tool: {mode} {OP_WORDS[operation]} {category}",
         "prompt": prompt,
-        "knowns": known_bindings(operation, names, lhs, rhs, spec.unit),
-        "unknowns": [result_name],
-        "determine": f"{lhs_name} {symbol} {rhs_name} = {result_name}",
+        "knowns": [],
+        "unknowns": [],
+        "determine": DETERMINE[operation],
+        "define": local_definitions(names, lhs, rhs),
         "execute": f"<TOOL>{tool_expression}</TOOL> -> {result_reference}",
         "update": "",
         "answer": answer_text(operation, result_reference, spec.unit),
@@ -296,7 +306,7 @@ def make_entry(index: int, seed: int = DEFAULT_SEED) -> tuple[dict[str, Any], di
 
 def validate_entry(entry: dict[str, Any], metadata: dict[str, Any], seen_ids: set[str], seen_prompts: set[str]) -> None:
     expected_fields = {
-        "id", "name", "prompt", "knowns", "unknowns", "determine", "execute",
+        "id", "name", "prompt", "knowns", "unknowns", "determine", "define", "execute",
         "update", "answer", "goal", "format_type", "source_sequence_id", "timestamp",
     }
     if set(entry) != expected_fields:
@@ -308,8 +318,13 @@ def validate_entry(entry: dict[str, Any], metadata: dict[str, Any], seen_ids: se
         raise ValueError(f"duplicate block id {block_id}")
     if not entry["prompt"] or entry["prompt"] in seen_prompts:
         raise ValueError(f"{block_id}: empty or duplicate prompt")
-    if len(entry["knowns"]) != 2 or len(entry["unknowns"]) != 1:
-        raise ValueError(f"{block_id}: expected two knowns and one unknown")
+    if entry["knowns"] != [] or entry["unknowns"] != []:
+        raise ValueError(f"{block_id}: persisted state must be empty")
+    if entry["define"] != local_definitions(
+            metadata["names"], format_decimal(metadata["lhs"]), format_decimal(metadata["rhs"])):
+        raise ValueError(f"{block_id}: invalid local definitions")
+    if entry["determine"] != DETERMINE[metadata["operation"]]:
+        raise ValueError(f"{block_id}: invalid natural-language determine")
     if entry["update"] != "":
         raise ValueError(f"{block_id}: Update must remain empty")
     if entry["execute"].count("<TOOL>") != 1 or entry["execute"].count("</TOOL>") != 1:
@@ -406,6 +421,13 @@ def write_json_atomic(path: Path, value: Any) -> None:
 def generate_dataset(output_dir: Path, count: int, seed: int) -> dict[str, Any]:
     if count != DEFAULT_COUNT:
         raise ValueError(f"this course requires exactly {DEFAULT_COUNT:,} entries")
+    vocab_bytes = MANUAL_VOCAB_PATH.read_bytes()
+    vocab = json.loads(vocab_bytes)["tokens"]
+    # Reuse exact identifier prefix pieces; unit suffixes retain their natural spelling.
+    prefixes = {name.split("_", 1)[0] + "_"
+                for operation in OPERATIONS for name in variable_names(operation, "liters")}
+    if missing := prefixes - vocab.keys():
+        raise ValueError(f"manual vocabulary is missing identifier pieces: {sorted(missing)}")
     jsonl_path = output_dir / "concept_blocks.jsonl"
     registry_path = output_dir / "curriculum_registry.json"
     manifest_path = output_dir / "single_step_arithmetic_tool_v1_manifest.json"
@@ -453,6 +475,10 @@ def generate_dataset(output_dir: Path, count: int, seed: int) -> dict[str, Any]:
         "generator": "scripts/generate_single_step_arithmetic_tool_curriculum.py",
         "seed": seed,
         "entry_count": count,
+        "definition_policy": "two ${variable} -> value; bindings and one ${variable}; declaration; persisted knowns/unknowns empty",
+        "manual_vocab": str(MANUAL_VOCAB_PATH.relative_to(ROOT_DIR)),
+        "manual_vocab_sha256": hashlib.sha256(vocab_bytes).hexdigest(),
+        "variable_prefix_pieces": sorted(prefixes),
         "mode_counts": {
             mode: sum(value for family, value in family_counts.items() if family.startswith(mode + ":"))
             for mode in MODES

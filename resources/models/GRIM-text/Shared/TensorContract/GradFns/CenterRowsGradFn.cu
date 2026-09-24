@@ -7,7 +7,7 @@
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../TokenTypeGate.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -133,7 +133,7 @@ __global__ void kernel_center_rows_by_token_type_gate(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -162,7 +162,7 @@ void CenterRowsGradFn::capture_input(Tensor& input, int dim, int rows, cudaStrea
     }
 
     float* buf = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterRowsGradFn_input_grad");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterRowsGradFn_input_grad", GRIM::MemoryAccounting::Kind::Gradient);
     cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
     owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
     input_grad = owned_input_grad.get();

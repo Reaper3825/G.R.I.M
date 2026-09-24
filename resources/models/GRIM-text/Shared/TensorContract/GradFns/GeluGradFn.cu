@@ -5,7 +5,7 @@
 
 #include "GeluGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -117,7 +117,7 @@ __global__ void kernel_gelu_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -146,7 +146,7 @@ void GeluGradFn::set_cache_copy(const float* external_cache, size_t size, cudaSt
     cached_size = size;
 
     float* buffer = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), size * sizeof(float), "GeluGradFn_cache");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), size * sizeof(float), "GeluGradFn_cache", GRIM::MemoryAccounting::Kind::Saved);
     cudaMemcpyAsync(buffer, external_cache, size * sizeof(float),
                    cudaMemcpyDeviceToDevice, stream);
 

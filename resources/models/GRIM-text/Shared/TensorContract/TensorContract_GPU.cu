@@ -8,7 +8,7 @@
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../Batching/BatchPayload.hpp"  // BatchPayload for batch geometry in autograd ops
 #include "../VerboseLogging.hpp"
-#include "../CudaAllocUtils.hpp"
+#include "../Diagnostics/MemoryAllocationTracker.hpp"
 #include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../LogRecorder/BatchLogTape.hpp"
@@ -60,7 +60,7 @@ std::atomic<int> TensorLifecycleCounters::move_counter{0};
 // set_autograd_cublas_handle() and autograd matmul uses get_autograd_cublas_handle() (thread-local).
 
 // cudaMallocOrThrow and helpers now live in shared header
-using GRIM::CudaAlloc::cudaMallocOrThrow;
+using GRIM::MemoryAccounting::cudaMallocOrThrow;
 using GRIM::CudaAlloc::detail::buildCudaAllocFailureMessage;
 
 //======================================================//
@@ -222,16 +222,16 @@ void logTensorContractApplyGradOutputStats(const GRIM::GradFn& grad_fn,
     const int blocks = std::max(1, std::min(kMaxBlocks, blocks_needed));
 
     TensorContractGradFlowBlockStats* d_partials = nullptr;
-    GRIM::CudaAlloc::cudaMallocOrThrow(
+    GRIM::MemoryAccounting::cudaMallocOrThrow(
         reinterpret_cast<void**>(&d_partials),
         static_cast<std::size_t>(blocks) * sizeof(TensorContractGradFlowBlockStats),
-        "TensorContract_apply_gradflow_partials");
+        "TensorContract_apply_gradflow_partials", GRIM::MemoryAccounting::Kind::Gradient);
 
     tensorContractApplyGradFlowStatsKernel<<<blocks, kThreads, 0, stream>>>(
         grad_output.data, count, d_partials);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: stats kernel failed for op=") +
                                  op_name + ": " + cudaGetErrorString(err));
     }
@@ -241,7 +241,7 @@ void logTensorContractApplyGradOutputStats(const GRIM::GradFn& grad_fn,
                           static_cast<std::size_t>(blocks) * sizeof(TensorContractGradFlowBlockStats),
                           cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: partial copy failed for op=") +
                                  op_name + ": " + cudaGetErrorString(err));
     }
@@ -250,13 +250,13 @@ void logTensorContractApplyGradOutputStats(const GRIM::GradFn& grad_fn,
     const std::size_t first_count = std::min<std::size_t>(count, 4);
     err = cudaMemcpyAsync(first_values, grad_output.data, first_count * sizeof(float), cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
-        cudaFree(d_partials);
+        GRIM::MemoryAccounting::free(d_partials);
         throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: first-value copy failed for op=") +
                                  op_name + ": " + cudaGetErrorString(err));
     }
 
     err = cudaStreamSynchronize(stream);
-    cudaFree(d_partials);
+    GRIM::MemoryAccounting::free(d_partials);
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: stream synchronization failed for op=") +
                                  op_name + ": " + cudaGetErrorString(err));
@@ -382,7 +382,7 @@ void queueForDeferredCleanup(void* ptr) {
     if (!ptr) {
         return;
     }
-    const cudaError_t status = cudaFree(ptr);
+    const cudaError_t status = GRIM::MemoryAccounting::free(ptr);
     if (status != cudaSuccess) {
         std::fprintf(stderr,
                      "[queueForDeferredCleanup] cudaFree(%p) failed: %s\n",
@@ -729,6 +729,7 @@ std::shared_ptr<Tensor> GradFn::capture_input_gradient(Tensor& input,
         false,
         stream,
         context));
+    MemoryAccounting::classify(gradient->data, MemoryAccounting::Kind::Gradient);
     gradient->is_leaf = false;
     gradient->grad_fn = input.grad_fn;
     return gradient;
@@ -784,6 +785,7 @@ void GradFn::receive_gradient(const Tensor& contribution, cudaStream_t stream) {
             false,
             stream,
             "GradFn_pending_gradient");
+        MemoryAccounting::classify(accumulator.data, MemoryAccounting::Kind::EngineGradient);
         pending_gradient_ = std::make_shared<Tensor>(std::move(accumulator));
     }
 
@@ -1122,7 +1124,7 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     // 0.0f has all-zero bytes, so byte-wise memset is correct.
     cudaError_t err = cudaMemsetAsync(t.data, 0, bytes, stream);
     if (err != cudaSuccess) {
-        cudaFree(t.data);
+        GRIM::MemoryAccounting::free(t.data);
         t.data = nullptr;
         throw std::runtime_error(std::string("Tensor::zeros cudaMemsetAsync failed for ") +
                                  (name ? name : "unnamed") + ": " + cudaGetErrorString(err) +
@@ -1359,7 +1361,8 @@ void Tensor::alloc_grad() {
     const size_t bytes = count * sizeof(float);
 
     float* ptr = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&ptr), bytes, name ? name : "alloc_grad");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&ptr), bytes, name ? name : "alloc_grad",
+                      is_leaf ? MemoryAccounting::Kind::LeafGradient : MemoryAccounting::Kind::Gradient);
     cudaMemsetAsync(ptr, 0, bytes, stream);
 
     TENSOR_LOG_LIFECYCLE(alloc_counter,

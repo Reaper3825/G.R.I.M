@@ -5,7 +5,7 @@
 
 #include "RMSNormGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -169,7 +169,7 @@ __global__ void kernel_rmsnorm_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -197,7 +197,7 @@ void RMSNormGradFn::capture_inputs(Tensor& x, Tensor& gamma_tensor, cudaStream_t
         } else {
             const size_t grad_size = x.shape.total_elements();
             float* buf = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), grad_size * sizeof(float), "RMSNormGradFn_input_grad");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), grad_size * sizeof(float), "RMSNormGradFn_input_grad", GRIM::MemoryAccounting::Kind::Gradient);
             {
                 const cudaError_t ms_err =
                     cudaMemsetAsync(buf, 0, grad_size * sizeof(float), stream);
@@ -226,7 +226,7 @@ void RMSNormGradFn::set_cache_copy(const float* external_cache, size_t size, int
     eps = e;
 
     float* buffer = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), size * sizeof(float), "RMSNormGradFn_cache");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), size * sizeof(float), "RMSNormGradFn_cache", GRIM::MemoryAccounting::Kind::Saved);
     cudaMemcpyAsync(buffer, external_cache, size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
     owned_cache = std::shared_ptr<float>(buffer, [](float* p) {

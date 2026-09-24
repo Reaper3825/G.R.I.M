@@ -6,7 +6,7 @@
 #include "CenterColumnsGradFn.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -301,7 +301,7 @@ void check_center_columns_kernel_launch(const char* caller, cudaStream_t stream)
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -351,7 +351,7 @@ void CenterColumnsGradFn::capture_input(Tensor& input, int cols, int rows, int g
     }
 
     float* buf = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterColumnsGradFn_input_grad");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterColumnsGradFn_input_grad", GRIM::MemoryAccounting::Kind::Gradient);
     cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
     owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
     input_grad = owned_input_grad.get();

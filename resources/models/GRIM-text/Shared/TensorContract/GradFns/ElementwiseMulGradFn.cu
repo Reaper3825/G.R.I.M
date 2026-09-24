@@ -12,7 +12,7 @@
 
 #include "ElementwiseMulGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -93,7 +93,7 @@ __global__ void kernel_elementwise_mul_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -118,7 +118,7 @@ void ElementwiseMulGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t str
         } else {
             const size_t n = a.numel();
             float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_a");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_a", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
             owned_a_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
             a_grad = owned_a_grad.get();
@@ -131,7 +131,7 @@ void ElementwiseMulGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t str
         } else {
             const size_t n = b.numel();
             float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_b");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_b", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
             owned_b_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
             b_grad = owned_b_grad.get();

@@ -5,7 +5,7 @@
 
 #include "ArgSelectorCeGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <stdexcept>
@@ -13,7 +13,7 @@
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -58,7 +58,7 @@ ArgSelectorCeGradFn::~ArgSelectorCeGradFn() {
 
 void ArgSelectorCeGradFn::release_saved() {
     if (saved_probs) {
-        cudaFree(saved_probs);
+        GRIM::MemoryAccounting::free(saved_probs);
         saved_probs = nullptr;
     }
     GradFn::release_saved();
@@ -89,7 +89,7 @@ void ArgSelectorCeGradFn::apply_impl(const Tensor& grad_output,
     const size_t total_elems = static_cast<size_t>(total_tokens) * num_classes;
     float* grad_logits = nullptr;
     cudaMallocOrThrow(reinterpret_cast<void**>(&grad_logits), total_elems * sizeof(float),
-                      "ArgSelectorCeGradFn_grad_logits");
+                      "ArgSelectorCeGradFn_grad_logits", GRIM::MemoryAccounting::Kind::Gradient);
     std::shared_ptr<float> grad_guard(grad_logits, [](float* p) { queueForDeferredCleanup(p); });
 
     const int blocks = (total_tokens + kRowBlock - 1) / kRowBlock;

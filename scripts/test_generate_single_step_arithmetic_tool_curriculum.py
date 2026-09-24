@@ -1,4 +1,6 @@
 import importlib.util
+import collections
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -38,9 +40,10 @@ class SingleStepArithmeticToolCurriculumTests(unittest.TestCase):
         entry, metadata = MODULE.make_entry(0)
         self.assertIn("<TOOL>(", entry["execute"])
         self.assertIn(MODULE.SYMBOLS[metadata["operation"]], entry["execute"])
-        self.assertIn("=", entry["determine"])
-        self.assertIn(entry["unknowns"][0], entry["determine"])
-        result_reference = MODULE.variable_reference(entry["unknowns"][0])
+        self.assertNotIn("=", entry["determine"])
+        self.assertEqual(entry["knowns"], [])
+        self.assertEqual(entry["unknowns"], [])
+        result_reference = MODULE.variable_reference(metadata["names"][2])
         self.assertTrue(entry["execute"].endswith(f" -> {result_reference}"))
         self.assertIn(result_reference, entry["answer"])
         self.assertNotIn(MODULE.format_decimal(metadata["result"]), entry["answer"])
@@ -50,12 +53,34 @@ class SingleStepArithmeticToolCurriculumTests(unittest.TestCase):
         self.assertNotIn(MODULE.format_decimal(metadata["rhs"]), payload)
 
     def test_count_values_are_integral(self):
+        operations = collections.Counter()
+        vocab = json.loads(MODULE.MANUAL_VOCAB_PATH.read_text(encoding="utf-8"))["tokens"]
         for index in range(60_000):
-            _, metadata = MODULE.make_entry(index)
+            entry, metadata = MODULE.make_entry(index)
+            operations[metadata["operation"]] += 1
+            names = metadata["names"]
+            self.assertEqual(entry["define"].splitlines(), [
+                "${" + names[0] + "} -> " + MODULE.format_decimal(metadata["lhs"]) + ";",
+                "${" + names[1] + "} -> " + MODULE.format_decimal(metadata["rhs"]) + ";",
+                "${" + names[2] + "};",
+            ])
+            for name in names:
+                self.assertIn(name.split("_", 1)[0] + "_", vocab)
             if metadata["category"] == "count":
                 self.assertEqual(metadata["lhs"], metadata["lhs"].to_integral())
                 self.assertEqual(metadata["rhs"], metadata["rhs"].to_integral())
                 self.assertEqual(metadata["result"], metadata["result"].to_integral())
+        self.assertEqual(dict(operations), dict.fromkeys(MODULE.OPERATIONS, 15_000))
+
+    def test_rejects_legacy_state_and_malformed_definitions(self):
+        for field, value in (("knowns", ["start_liters = 120 liters"]),
+                             ("unknowns", ["remaining_liters"]),
+                             ("define", "${start_liters} -> 120")):
+            with self.subTest(field=field):
+                entry, metadata = MODULE.make_entry(0)
+                entry[field] = value
+                with self.assertRaises(ValueError):
+                    MODULE.validate_entry(entry, metadata, set(), set())
 
 
 if __name__ == "__main__":

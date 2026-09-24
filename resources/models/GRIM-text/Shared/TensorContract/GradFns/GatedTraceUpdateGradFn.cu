@@ -4,7 +4,7 @@
 //======================================================//
 
 #include "GatedTraceUpdateGradFn.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <stdexcept>
@@ -12,7 +12,7 @@
 
 namespace GRIM::autograd {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace {
 
@@ -56,9 +56,9 @@ GatedTraceUpdateGradFn::GatedTraceUpdateGradFn() {
 }
 
 GatedTraceUpdateGradFn::~GatedTraceUpdateGradFn() {
-    if (saved_old_trace) cudaFree(saved_old_trace);
-    if (saved_candidate) cudaFree(saved_candidate);
-    if (saved_gate_vals) cudaFree(saved_gate_vals);
+    if (saved_old_trace) GRIM::MemoryAccounting::free(saved_old_trace);
+    if (saved_candidate) GRIM::MemoryAccounting::free(saved_candidate);
+    if (saved_gate_vals) GRIM::MemoryAccounting::free(saved_gate_vals);
 }
 
 void GatedTraceUpdateGradFn::capture(
@@ -75,11 +75,11 @@ void GatedTraceUpdateGradFn::capture(
     cudaMallocOrThrow(
         reinterpret_cast<void**>(&saved_old_trace),
         dm * sizeof(float),
-        "gated_trace_saved_old");
+        "gated_trace_saved_old", GRIM::MemoryAccounting::Kind::Saved);
     cudaMallocOrThrow(
         reinterpret_cast<void**>(&saved_candidate),
         dm * sizeof(float),
-        "gated_trace_saved_cand");
+        "gated_trace_saved_cand", GRIM::MemoryAccounting::Kind::Saved);
     cudaMemcpyAsync(saved_old_trace, old_trace_t.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(saved_candidate, candidate_t.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
@@ -165,9 +165,9 @@ void GatedTraceUpdateGradFn::apply_impl(
 
 void GatedTraceUpdateGradFn::release_saved() {
     GradFn::release_saved();
-    if (saved_old_trace) { cudaFree(saved_old_trace); saved_old_trace = nullptr; }
-    if (saved_candidate) { cudaFree(saved_candidate); saved_candidate = nullptr; }
-    if (saved_gate_vals) { cudaFree(saved_gate_vals); saved_gate_vals = nullptr; }
+    if (saved_old_trace) { GRIM::MemoryAccounting::free(saved_old_trace); saved_old_trace = nullptr; }
+    if (saved_candidate) { GRIM::MemoryAccounting::free(saved_candidate); saved_candidate = nullptr; }
+    if (saved_gate_vals) { GRIM::MemoryAccounting::free(saved_gate_vals); saved_gate_vals = nullptr; }
     old_trace_gradient.reset();
     candidate_gradient.reset();
     gate_logits_gradient.reset();

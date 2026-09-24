@@ -5,7 +5,7 @@
 
 #include "CrossEntropyLogitsGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -56,7 +56,7 @@ __global__ void kernel_ce_logits_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -137,7 +137,7 @@ Tensor cross_entropy_logits(const Tensor& logits, int target_idx, cudaStream_t s
 
     float* saved_probs = nullptr;
     if (logits.requires_grad) {
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_probs), static_cast<size_t>(C) * sizeof(float), "ce_logits_saved_probs");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_probs), static_cast<size_t>(C) * sizeof(float), "ce_logits_saved_probs", GRIM::MemoryAccounting::Kind::Saved);
     }
 
     kernel_ce_logits_forward<<<1, 32, 0, stream>>>(

@@ -112,6 +112,7 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output,
     if (a_requires_grad && !grad_a) {
         grad_a = std::make_shared<Tensor>(Tensor::zeros(
             a_shape, false, stream, "ConcatGradFn_grad_a"));
+        MemoryAccounting::classify(grad_a->data, MemoryAccounting::Kind::Gradient);
     }
     if (b_requires_grad && !grad_b) {
         if (a_grad_fn && b_grad_fn == a_grad_fn) {
@@ -123,6 +124,7 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output,
         } else {
             grad_b = std::make_shared<Tensor>(Tensor::zeros(
                 b_shape, false, stream, "ConcatGradFn_grad_b"));
+            MemoryAccounting::classify(grad_b->data, MemoryAccounting::Kind::Gradient);
         }
     }
 

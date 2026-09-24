@@ -5,7 +5,7 @@
 
 #include "LogSoftmaxGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cfloat>
@@ -140,7 +140,7 @@ __global__ void kernel_log_softmax_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -166,7 +166,7 @@ void LogSoftmaxGradFn::save(const float* log_softmax_output, int tokens, int d, 
     dim = d;
     if (copy) {
         const size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_log_softmax), bytes, "LogSoftmaxGradFn_saved");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_log_softmax), bytes, "LogSoftmaxGradFn_saved", GRIM::MemoryAccounting::Kind::Saved);
         throwIfCudaFailed(
             cudaMemcpyAsync(saved_log_softmax, log_softmax_output, bytes, cudaMemcpyDeviceToDevice, stream),
             "LogSoftmaxGradFn::save: cudaMemcpyAsync(saved_log_softmax) failed");
@@ -207,7 +207,7 @@ void LogSoftmaxGradFn::apply_impl(const Tensor& grad_output,
 void LogSoftmaxGradFn::release_saved() {
     GradFn::release_saved();
     if (owns_saved_log_softmax && saved_log_softmax) {
-        cudaFree(saved_log_softmax);
+        GRIM::MemoryAccounting::free(saved_log_softmax);
         saved_log_softmax = nullptr;
     } else {
         saved_log_softmax = nullptr;

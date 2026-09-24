@@ -5,7 +5,7 @@
 
 #include "SoftmaxGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cfloat>
@@ -125,7 +125,7 @@ __global__ void kernel_softmax_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -151,7 +151,7 @@ void SoftmaxGradFn::save(const float* softmax_output, int tokens_, int dim_, flo
     dim = dim_;
     inv_temperature = inv_temp;
     const size_t bytes = static_cast<size_t>(tokens_) * dim_ * sizeof(float);
-    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_softmax), bytes, "SoftmaxGradFn_saved");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_softmax), bytes, "SoftmaxGradFn_saved", GRIM::MemoryAccounting::Kind::Saved);
     cudaMemcpyAsync(saved_softmax, softmax_output, bytes, cudaMemcpyDeviceToDevice, stream);
 }
 
@@ -178,7 +178,7 @@ void SoftmaxGradFn::apply_impl(const Tensor& grad_output,
 void SoftmaxGradFn::release_saved() {
     GradFn::release_saved();
     if (saved_softmax) {
-        cudaFree(saved_softmax);
+        GRIM::MemoryAccounting::free(saved_softmax);
         saved_softmax = nullptr;
     }
     input_gradient.reset();

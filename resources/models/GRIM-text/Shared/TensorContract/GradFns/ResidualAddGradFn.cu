@@ -13,7 +13,7 @@
 #include "ResidualAddGradFn.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -25,7 +25,7 @@
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -53,7 +53,7 @@ void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream
         } else {
             const size_t x_numel = x.numel();
             float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "ResidualAddGradFn_input_grad");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "ResidualAddGradFn_input_grad", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
             owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
             input_grad = owned_input_grad.get();
@@ -66,7 +66,7 @@ void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream
         } else {
             const size_t r_numel = r.numel();
             float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), r_numel * sizeof(float), "ResidualAddGradFn_residual_grad");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), r_numel * sizeof(float), "ResidualAddGradFn_residual_grad", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(buffer, 0, r_numel * sizeof(float), stream);
             owned_residual_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
             residual_grad = owned_residual_grad.get();

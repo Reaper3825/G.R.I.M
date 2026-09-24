@@ -1,5 +1,6 @@
 #pragma once
 #include "../VerboseLogging.hpp"
+#include "../Diagnostics/MemoryAllocationTracker.hpp"
 //======================================================//
 //  TensorContract_GPU.hpp
 //  Type-safe tensor abstraction + Native Autograd for CUDA
@@ -1099,7 +1100,7 @@ struct Tensor {
             TENSOR_LOG_LIFECYCLE(free_counter,
                 "[Tensor::release] #F%d cudaFree data=%p name=%s\n",
                 (void*)data, name ? name : "unnamed");
-            cudaError_t free_err = cudaFree(data);
+            cudaError_t free_err = GRIM::MemoryAccounting::free(data);
             if (free_err != cudaSuccess) {
                 fprintf(stderr, "[Tensor::release] cudaFree(%p) failed: %s (name=%s)\n",
                         (void*)data, cudaGetErrorString(free_err),

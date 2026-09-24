@@ -4,7 +4,7 @@
 //======================================================//
 
 #include "ReduceMeanGradFn.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <stdexcept>
@@ -12,7 +12,7 @@
 
 namespace GRIM::autograd {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace {
 
@@ -59,7 +59,7 @@ ReduceMeanGradFn::ReduceMeanGradFn() {
 }
 
 ReduceMeanGradFn::~ReduceMeanGradFn() {
-    if (!H_is_leaf_ && grad_H_buf) cudaFree(grad_H_buf);
+    if (!H_is_leaf_ && grad_H_buf) GRIM::MemoryAccounting::free(grad_H_buf);
 }
 
 void ReduceMeanGradFn::capture(
@@ -91,7 +91,7 @@ void ReduceMeanGradFn::capture(
             cudaMallocOrThrow(
                 reinterpret_cast<void**>(&grad_H_buf),
                 total * sizeof(float),
-                "datastream_grad_H_buf");
+                "datastream_grad_H_buf", GRIM::MemoryAccounting::Kind::Gradient);
         }
     }
 }
@@ -132,7 +132,7 @@ void ReduceMeanGradFn::apply_impl(
 
 void ReduceMeanGradFn::release_saved() {
     GradFn::release_saved();
-    if (!H_is_leaf_ && grad_H_buf) cudaFree(grad_H_buf);
+    if (!H_is_leaf_ && grad_H_buf) GRIM::MemoryAccounting::free(grad_H_buf);
     grad_H_buf = nullptr;
     H_grad_fn.reset();
 }

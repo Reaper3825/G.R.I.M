@@ -9,7 +9,7 @@
 #include "AutogradQKVDiagnostics.hpp"
 #include "LMHeadGemmDiagnostics.hpp"
 #include "../Batching/BatchPayload.hpp"
-#include "../CudaAllocUtils.hpp"
+#include "../Diagnostics/MemoryAllocationTracker.hpp"
 #include "GradientAccumulation.hpp"
 #include "../TensorConversion/TensorConversion.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
@@ -95,7 +95,7 @@ __global__ void kernelAttentionOffByOneEpilogue(
 // ═══════════════════════════════════════════════════════════════════════════
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -229,7 +229,7 @@ struct MatMulGradFn : public GradFn {
         if (b_requires_grad && a_forward) {
             const size_t a_size = static_cast<size_t>(m) * k;
             float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), a_size * sizeof(float), "MatMulGradFn_cache_a");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), a_size * sizeof(float), "MatMulGradFn_cache_a", GRIM::MemoryAccounting::Kind::Saved);
             cudaMemcpyAsync(buffer, a_forward, a_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
             owned_cached_a = std::shared_ptr<float>(buffer, [](float* p) {
                 queueForDeferredCleanup(p);
@@ -243,7 +243,7 @@ struct MatMulGradFn : public GradFn {
             // B shape: [K,N] normal or [N,K] if transposed
             const size_t b_size = static_cast<size_t>(k) * n;
             float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), b_size * sizeof(float), "MatMulGradFn_cache_b");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), b_size * sizeof(float), "MatMulGradFn_cache_b", GRIM::MemoryAccounting::Kind::Saved);
             cudaMemcpyAsync(buffer, b_forward, b_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
             owned_cached_b = std::shared_ptr<float>(buffer, [](float* p) {
                 queueForDeferredCleanup(p);
@@ -970,13 +970,13 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (q_requires_grad) {
             if (!q_is_leaf && !owned_q_grad) {
                 float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), q_elems * sizeof(float), "sdpa_owned_q_grad");
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), q_elems * sizeof(float), "sdpa_owned_q_grad", GRIM::MemoryAccounting::Kind::Gradient);
                 cudaMemsetAsync(buf, 0, q_elems * sizeof(float), stream);
                 owned_q_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
                 q_grad = buf;
             }
             float* grad_q_fp32 = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_q_fp32), q_elems * sizeof(float), "sdpa_grad_q_fp32");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_q_fp32), q_elems * sizeof(float), "sdpa_grad_q_fp32", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(grad_q_fp32, 0, q_elems * sizeof(float), stream);
             
             TensorConversion::convert_BSHD_bf16_to_BHSD(
@@ -986,19 +986,19 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
             accumulate_grad(q_grad, grad_q_fp32, q_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply q_grad");
             logGradFlowTensorStats("SDPA.apply q_grad_accum", q_grad, q_elems, stream);
-            cudaFreeAsync(grad_q_fp32, stream);
+            GRIM::MemoryAccounting::freeAsync(grad_q_fp32, stream);
         }
         
         if (k_requires_grad) {
             if (!k_is_leaf && !owned_k_grad) {
                 float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_k_grad");
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_k_grad", GRIM::MemoryAccounting::Kind::Gradient);
                 cudaMemsetAsync(buf, 0, kv_elems * sizeof(float), stream);
                 owned_k_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
                 k_grad = buf;
             }
             float* grad_k_fp32 = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_k_fp32), kv_elems * sizeof(float), "sdpa_grad_k_fp32");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_k_fp32), kv_elems * sizeof(float), "sdpa_grad_k_fp32", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(grad_k_fp32, 0, kv_elems * sizeof(float), stream);
             // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
             // dk_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
@@ -1008,19 +1008,19 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
             accumulate_grad(k_grad, grad_k_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply k_grad");
             logGradFlowTensorStats("SDPA.apply k_grad_accum", k_grad, kv_elems, stream);
-            cudaFreeAsync(grad_k_fp32, stream);
+            GRIM::MemoryAccounting::freeAsync(grad_k_fp32, stream);
         }
         
         if (v_requires_grad) {
             if (!v_is_leaf && !owned_v_grad) {
                 float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_v_grad");
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_v_grad", GRIM::MemoryAccounting::Kind::Gradient);
                 cudaMemsetAsync(buf, 0, kv_elems * sizeof(float), stream);
                 owned_v_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
                 v_grad = buf;
             }
             float* grad_v_fp32 = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_v_fp32), kv_elems * sizeof(float), "sdpa_grad_v_fp32");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_v_fp32), kv_elems * sizeof(float), "sdpa_grad_v_fp32", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(grad_v_fp32, 0, kv_elems * sizeof(float), stream);
             // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
             // dv_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
@@ -1030,7 +1030,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             // Scale = 1.0 (no normalization needed)
             accumulate_grad(v_grad, grad_v_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply v_grad");
             logGradFlowTensorStats("SDPA.apply v_grad_accum", v_grad, kv_elems, stream);
-            cudaFreeAsync(grad_v_fp32, stream);
+            GRIM::MemoryAccounting::freeAsync(grad_v_fp32, stream);
         }
         
         // CONTINUE AUTOGRAD CHAIN - call grad_fns for Q, K, V
@@ -1059,17 +1059,17 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     
     void release_saved() override {
         GradFn::release_saved();
-        if (saved_q_bf16) { cudaFree(saved_q_bf16); saved_q_bf16 = nullptr; }
-        if (saved_k_bf16) { cudaFree(saved_k_bf16); saved_k_bf16 = nullptr; }
-        if (saved_v_bf16) { cudaFree(saved_v_bf16); saved_v_bf16 = nullptr; }
-        if (saved_out_bf16) { cudaFree(saved_out_bf16); saved_out_bf16 = nullptr; }
-        if (saved_softmax_lse) { cudaFree(saved_softmax_lse); saved_softmax_lse = nullptr; }
-        if (dq_accum) { cudaFree(dq_accum); dq_accum = nullptr; }
-        if (dsoftmax_sum) { cudaFree(dsoftmax_sum); dsoftmax_sum = nullptr; }
-        if (dq_bf16) { cudaFree(dq_bf16); dq_bf16 = nullptr; }
-        if (dk_bf16) { cudaFree(dk_bf16); dk_bf16 = nullptr; }
-        if (dv_bf16) { cudaFree(dv_bf16); dv_bf16 = nullptr; }
-        if (dout_bf16) { cudaFree(dout_bf16); dout_bf16 = nullptr; }
+        if (saved_q_bf16) { GRIM::MemoryAccounting::free(saved_q_bf16); saved_q_bf16 = nullptr; }
+        if (saved_k_bf16) { GRIM::MemoryAccounting::free(saved_k_bf16); saved_k_bf16 = nullptr; }
+        if (saved_v_bf16) { GRIM::MemoryAccounting::free(saved_v_bf16); saved_v_bf16 = nullptr; }
+        if (saved_out_bf16) { GRIM::MemoryAccounting::free(saved_out_bf16); saved_out_bf16 = nullptr; }
+        if (saved_softmax_lse) { GRIM::MemoryAccounting::free(saved_softmax_lse); saved_softmax_lse = nullptr; }
+        if (dq_accum) { GRIM::MemoryAccounting::free(dq_accum); dq_accum = nullptr; }
+        if (dsoftmax_sum) { GRIM::MemoryAccounting::free(dsoftmax_sum); dsoftmax_sum = nullptr; }
+        if (dq_bf16) { GRIM::MemoryAccounting::free(dq_bf16); dq_bf16 = nullptr; }
+        if (dk_bf16) { GRIM::MemoryAccounting::free(dk_bf16); dk_bf16 = nullptr; }
+        if (dv_bf16) { GRIM::MemoryAccounting::free(dv_bf16); dv_bf16 = nullptr; }
+        if (dout_bf16) { GRIM::MemoryAccounting::free(dout_bf16); dout_bf16 = nullptr; }
         q_grad = nullptr; k_grad = nullptr; v_grad = nullptr;
         owned_q_grad.reset();
         owned_k_grad.reset();
@@ -1163,11 +1163,11 @@ Tensor scaled_dot_product_attention(
     __nv_bfloat16* out_bf16 = nullptr;
     float* softmax_lse = nullptr;
     
-    cudaMallocOrThrow(reinterpret_cast<void**>(&q_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_q_bf16");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&k_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_k_bf16");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&v_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_v_bf16");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&out_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_out_bf16");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&softmax_lse), lse_elems * sizeof(float), "sdpa_softmax_lse");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&q_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_q_bf16", GRIM::MemoryAccounting::Kind::Attention);
+    cudaMallocOrThrow(reinterpret_cast<void**>(&k_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_k_bf16", GRIM::MemoryAccounting::Kind::Attention);
+    cudaMallocOrThrow(reinterpret_cast<void**>(&v_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_v_bf16", GRIM::MemoryAccounting::Kind::Attention);
+    cudaMallocOrThrow(reinterpret_cast<void**>(&out_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_out_bf16", GRIM::MemoryAccounting::Kind::Attention);
+    cudaMallocOrThrow(reinterpret_cast<void**>(&softmax_lse), lse_elems * sizeof(float), "sdpa_softmax_lse", GRIM::MemoryAccounting::Kind::Attention);
     // Sentinel fill: 0xFF bytes → float NaN. If LSE shows NaN after kernel, kernel didn't write.
     // Valid LSE is always finite (LSE = max_score * scale + log(sum_exp)), never NaN.
     cudaMemsetAsync(softmax_lse, 0xFF, lse_elems * sizeof(float), stream);
@@ -1273,8 +1273,8 @@ Tensor scaled_dot_product_attention(
         // Allocate backward workspace
         const size_t dq_accum_bytes = flash_attn_dq_accum_bytes(batch_size, seq_len, num_heads, head_dim);
         const size_t dsoftmax_sum_bytes = flash_attn_dsoftmax_sum_bytes(batch_size, seq_len, num_heads);
-        cudaMallocOrThrow(&grad_fn->dq_accum, dq_accum_bytes, "sdpa_gradfn_dq_accum_workspace");
-        cudaMallocOrThrow(&grad_fn->dsoftmax_sum, dsoftmax_sum_bytes, "sdpa_gradfn_dsoftmax_sum_workspace");
+        cudaMallocOrThrow(&grad_fn->dq_accum, dq_accum_bytes, "sdpa_gradfn_dq_accum_workspace", GRIM::MemoryAccounting::Kind::Attention);
+        cudaMallocOrThrow(&grad_fn->dsoftmax_sum, dsoftmax_sum_bytes, "sdpa_gradfn_dsoftmax_sum_workspace", GRIM::MemoryAccounting::Kind::Attention);
         
         // ISSUE #72 FIX: FlashAttention backward kernel writes dK/dV using query head index (bidh=0..num_heads-1),
         // NOT the KV head index (bidh / h_h_k_ratio). With GQA (12 Q heads, 4 KV heads), the library writes
@@ -1285,10 +1285,10 @@ Tensor scaled_dot_product_attention(
         // then reduce the 12-head gradients down to 4 KV heads by summing grouped heads in apply().
         const size_t dk_dv_alloc_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;  // Use num_heads!
         
-        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dq_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dq_bf16");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dk_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dk_bf16");  // ISSUE #72: Sized for num_heads
-        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dv_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dv_bf16");  // ISSUE #72: Sized for num_heads
-        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dout_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dout_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dq_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dq_bf16", GRIM::MemoryAccounting::Kind::Attention);
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dk_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dk_bf16", GRIM::MemoryAccounting::Kind::Attention);  // ISSUE #72: Sized for num_heads
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dv_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dv_bf16", GRIM::MemoryAccounting::Kind::Attention);  // ISSUE #72: Sized for num_heads
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dout_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dout_bf16", GRIM::MemoryAccounting::Kind::Attention);
         throwIfCudaFailed(
             cudaMemsetAsync(grad_fn->dq_bf16, 0, q_elems * sizeof(__nv_bfloat16), stream),
             "scaled_dot_product_attention: cudaMemsetAsync(grad_fn->dq_bf16) failed");
@@ -1308,11 +1308,11 @@ Tensor scaled_dot_product_attention(
         // that immediately reveals the bug instead of silently succeeding. 
     } else {
         // Free bf16 buffers if no backward needed
-        cudaFree(q_bf16);
-        cudaFree(k_bf16);
-        cudaFree(v_bf16);
-        cudaFree(out_bf16);
-        cudaFree(softmax_lse);
+        GRIM::MemoryAccounting::free(q_bf16);
+        GRIM::MemoryAccounting::free(k_bf16);
+        GRIM::MemoryAccounting::free(v_bf16);
+        GRIM::MemoryAccounting::free(out_bf16);
+        GRIM::MemoryAccounting::free(softmax_lse);
     }
     
     return result;
@@ -1586,7 +1586,7 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
         // Owning a copy here guarantees the data survives.
         const std::size_t n_bytes = grad_output.numel() * sizeof(float);
         float* owned_buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&owned_buf), n_bytes, "SplitQKV_owned_grad");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&owned_buf), n_bytes, "SplitQKV_owned_grad", GRIM::MemoryAccounting::Kind::Gradient);
         cudaMemcpyAsync(owned_buf, grad_output.data, n_bytes, cudaMemcpyDeviceToDevice, stream);
         
         if (output_type == OutputType::Q) {
@@ -1777,7 +1777,7 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
         float* merged_qkv_grad = nullptr;
         cudaMallocOrThrow(reinterpret_cast<void**>(&merged_qkv_grad),
                           shared->qkv_numel * sizeof(float),
-                          "SplitQKV_merged_qkv_grad");
+                          "SplitQKV_merged_qkv_grad", GRIM::MemoryAccounting::Kind::Gradient);
         cudaMemsetAsync(merged_qkv_grad, 0, shared->qkv_numel * sizeof(float), stream);
         shared->owned_merged_qkv_grad.reset(merged_qkv_grad, [](float* p) {
             queueForDeferredCleanup(p);
@@ -1911,7 +1911,7 @@ struct RoPEGradFn : public GradFn {
         // Inverse RoPE rotation is applied to this copy — grad_output is NOT mutated.
         const std::size_t n_elems = grad_output.numel();
         float* grad_buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_buf), n_elems * sizeof(float), "RoPEGradFn_grad_buf");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_buf), n_elems * sizeof(float), "RoPEGradFn_grad_buf", GRIM::MemoryAccounting::Kind::Gradient);
         cudaMemcpyAsync(grad_buf, grad_output.data, n_elems * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         owned_grad_buf.reset(grad_buf, [](float* p) { queueForDeferredCleanup(p); });
 

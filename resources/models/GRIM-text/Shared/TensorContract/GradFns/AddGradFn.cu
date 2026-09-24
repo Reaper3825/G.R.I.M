@@ -8,7 +8,7 @@
 #include "AddGradFn.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -23,7 +23,7 @@
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -55,7 +55,7 @@ void AddGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
         } else {
             const size_t a_numel = a.numel();
             float* buffer_a = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_grad_a");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_grad_a", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(buffer_a, 0, a_numel * sizeof(float), stream);
             owned_grad_a = std::shared_ptr<float>(buffer_a, [](float* p) {
                 queueForDeferredCleanup(p);
@@ -72,7 +72,7 @@ void AddGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
         } else {
             const size_t b_numel = b.numel();
             float* buffer_b = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_b), b_numel * sizeof(float), "AddGradFn_grad_b");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_b), b_numel * sizeof(float), "AddGradFn_grad_b", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(buffer_b, 0, b_numel * sizeof(float), stream);
             owned_grad_b = std::shared_ptr<float>(buffer_b, [](float* p) {
                 queueForDeferredCleanup(p);
@@ -100,7 +100,7 @@ void AddGradFn::capture_single_input(Tensor& a, cudaStream_t stream) {
         } else {
             const size_t a_numel = a.numel();
             float* buffer_a = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_single_grad_a");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_single_grad_a", GRIM::MemoryAccounting::Kind::Gradient);
             cudaMemsetAsync(buffer_a, 0, a_numel * sizeof(float), stream);
             owned_grad_a = std::shared_ptr<float>(buffer_a, [](float* p) {
                 queueForDeferredCleanup(p);

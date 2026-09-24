@@ -5,7 +5,7 @@
 
 #include "ProjectOutPC1GradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -52,7 +52,7 @@ public:
     }
 
     void reset(T* next = nullptr) {
-        if (ptr_) cudaFree(ptr_);
+        if (ptr_) GRIM::MemoryAccounting::free(ptr_);
         ptr_ = next;
     }
 
@@ -61,7 +61,7 @@ public:
             throw std::runtime_error(std::string(label) + ": allocation count is 0");
         reset();
         T* raw = nullptr;
-        GRIM::CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&raw), count * sizeof(T), label);
+        GRIM::MemoryAccounting::cudaMallocOrThrow(reinterpret_cast<void**>(&raw), count * sizeof(T), label);
         ptr_ = raw;
     }
 
@@ -280,7 +280,7 @@ static __global__ void kernel_pc1_mean_backward_accum(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -328,7 +328,7 @@ void ProjectOutPC1GradFn::capture_input(Tensor& input, int rows, int cols, int n
         input, stream, "ProjectOutPC1GradFn::capture_input");
 
     float* input_copy = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&input_copy), element_count * sizeof(float), "ProjectOutPC1GradFn_input_data");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&input_copy), element_count * sizeof(float), "ProjectOutPC1GradFn_input_data", GRIM::MemoryAccounting::Kind::Saved);
     throwIfCudaFailed(cudaMemcpyAsync(input_copy, input.data, element_count * sizeof(float), cudaMemcpyDeviceToDevice, stream),
                       "ProjectOutPC1GradFn::capture_input: cudaMemcpyAsync(input_data) failed");
     owned_input_data.reset(input_copy, [](float* p) { queueForDeferredCleanup(p); });

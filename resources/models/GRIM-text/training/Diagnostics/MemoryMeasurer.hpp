@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include "../../Shared/Diagnostics/MemoryAllocationTracker.hpp"
+
 namespace GRIM::Forward {
 struct ModelForwardOutputs;
 }
@@ -15,9 +17,9 @@ struct TrainingContext;
 
 namespace Memory {
 
-// Single compile-time gate for every Phase 2 peak-memory measurement call.
-// Set to false to compile the calls down to no-ops at their call sites.
-inline constexpr bool EnablePeakMemoryMeasurer = true;
+// Shared compile-time gate for both allocation hooks and Phase 2 checkpoints.
+// Set MemoryAccounting::Enabled to false to disable both together.
+inline constexpr bool EnablePeakMemoryMeasurer = GRIM::MemoryAccounting::Enabled;
 
 // Samples device-wide CUDA memory at a named ownership boundary, updates the
 // run-wide high-water mark, and immediately logs both the current sample and

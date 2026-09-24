@@ -70,6 +70,83 @@ double toMiB(std::uint64_t bytes) {
     return static_cast<double>(bytes) / kBytesPerMiB;
 }
 
+void logAllocationMemory(TrainingContext& ctx, const std::string& owner,
+                         int batch_idx, int accumulation_slot,
+                         const GpuMemorySnapshot& device, int device_id,
+                         const GRIM::MemoryAccounting::Snapshot& allocations) {
+    using namespace GRIM::MemoryAccounting;
+    if (owner == "microbatch.persistent_floor") {
+        ctx.gpu_memory_baseline_valid = true;
+        ctx.gpu_memory_baseline_device = device_id;
+        ctx.gpu_memory_baseline_device_bytes = device.device_used;
+        ctx.gpu_memory_baseline_tracked_bytes = allocations.bytes;
+    }
+
+    std::map<Kind, std::uint64_t> categories;
+    for (const auto& entry : allocations.by_owner)
+        categories[entry.first.first] += entry.second.bytes;
+
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(2)
+         << "[GRAPH_MEMORY] sample=" << ctx.gpu_memory_measurement_count
+         << " owner=" << owner << " batch=" << (batch_idx + 1)
+         << " accumulation_slot=" << accumulation_slot
+         << " device=" << device_id << " coverage=tensor_contract"
+         << " live_allocations=" << allocations.count
+         << " tracked_bytes=" << allocations.bytes
+         << " tracked_MiB=" << toMiB(allocations.bytes)
+         << " pending_free_bytes=" << allocations.pending_free_bytes
+         << " pending_free_MiB=" << toMiB(allocations.pending_free_bytes)
+         << " observation_errors=" << allocations.observation_errors
+         << " inventory_complete=" << (allocations.observation_errors ? "false" : "true");
+    for (const auto kind : {Kind::Storage, Kind::Gradient, Kind::EngineGradient, Kind::LeafGradient,
+                            Kind::Saved, Kind::Attention}) {
+        line << " " << kindName(kind) << "_bytes=" << categories[kind]
+             << " " << kindName(kind) << "_MiB=" << toMiB(categories[kind]);
+    }
+    if (ctx.gpu_memory_baseline_valid && ctx.gpu_memory_baseline_device == device_id) {
+        const auto device_delta = static_cast<std::int64_t>(device.device_used) -
+            static_cast<std::int64_t>(ctx.gpu_memory_baseline_device_bytes);
+        const auto tracked_delta = static_cast<std::int64_t>(allocations.bytes) -
+            static_cast<std::int64_t>(ctx.gpu_memory_baseline_tracked_bytes);
+        const auto residual = device_delta - tracked_delta;
+        // Signed: a negative residual is useful evidence, not clamped away.
+        line << " baseline_device_bytes=" << ctx.gpu_memory_baseline_device_bytes
+             << " baseline_tracked_bytes=" << ctx.gpu_memory_baseline_tracked_bytes
+             << " device_delta_bytes=" << device_delta
+             << " device_delta_MiB=" << (static_cast<double>(device_delta) / (1024.0 * 1024.0))
+             << " tracked_delta_bytes=" << tracked_delta
+             << " tracked_delta_MiB=" << (static_cast<double>(tracked_delta) / (1024.0 * 1024.0))
+             << " residual_bytes=" << residual
+             << " residual_MiB=" << (static_cast<double>(residual) / (1024.0 * 1024.0));
+    } else {
+        line << " baseline=unavailable";
+    }
+    ctx.logging.logger->log(line.str());
+
+    // Detailed ownership only at the three graph lifetime boundaries. All
+    // existing checkpoints receive the compact category/reconciliation line.
+    if (owner != "forward.outputs_live" && owner != "backward.complete_graph_live" &&
+        owner != "microbatch.graph_cleared") return;
+    std::ostringstream inventory;
+    inventory << std::fixed << std::setprecision(2)
+              << "[GraphAllocationSizes] sample=" << ctx.gpu_memory_measurement_count
+              << " owner=" << owner << " batch=" << (batch_idx + 1)
+              << " accumulation_slot=" << accumulation_slot
+              << " total_bytes=" << allocations.bytes
+              << " total_MiB=" << toMiB(allocations.bytes);
+    for (const auto& entry : allocations.by_owner) {
+        std::string label = entry.first.second;
+        for (char& c : label) if (c == ' ' || c == '\n' || c == '\r' || c == '\t') c = '_';
+        inventory << "\n  " << label << " category=" << kindName(entry.first.first)
+                  << " allocations=" << entry.second.count
+                  << " bytes=" << entry.second.bytes
+                  << " MiB=" << toMiB(entry.second.bytes)
+                  << " pending_free_bytes=" << entry.second.pending_free_bytes;
+    }
+    ctx.logging.logger->log(inventory.str());
+}
+
 } // namespace
 
 void measurePeakMemory(
@@ -86,8 +163,21 @@ void measurePeakMemory(
         const std::string current_owner =
             (owner && owner[0] != '\0') ? owner : "unknown";
 
+        int device_id = -1;
+        GRIM::MemoryAccounting::Snapshot allocations;
+        bool allocation_query_ok = false;
+        try {
+            if (cudaGetDevice(&device_id) == cudaSuccess) {
+                allocations = GRIM::MemoryAccounting::registry().snapshot(device_id);
+                allocation_query_ok = true;
+            }
+        } catch (...) {
+            // Preserve the original device-wide sample if inventory fails.
+        }
+
         GpuMemorySnapshot snapshot;
         if (!queryGpuMemory(snapshot)) {
+            ctx.gpu_memory_baseline_valid = false;
             if (ctx.logging.logger) {
                 ctx.logging.logger->log(
                     "[PEAK_MEMORY] owner=" + current_owner +
@@ -169,6 +259,14 @@ void measurePeakMemory(
         }
 
         ctx.logging.logger->log(line.str());
+        if (allocation_query_ok) {
+            logAllocationMemory(ctx, current_owner, batch_idx, accumulation_slot,
+                                snapshot, device_id, allocations);
+        } else {
+            ctx.gpu_memory_baseline_valid = false;
+            ctx.logging.logger->log("[GRAPH_MEMORY] owner=" + current_owner +
+                                    " status=query_failed");
+        }
     } catch (...) {
         // Memory diagnostics must never mask or replace a training failure.
     }

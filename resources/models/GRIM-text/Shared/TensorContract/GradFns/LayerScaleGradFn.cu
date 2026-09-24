@@ -5,7 +5,7 @@
 
 #include "LayerScaleGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -123,7 +123,7 @@ inline void checkCudaLaunch(const char* kernel_name) {
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
+using MemoryAccounting::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -149,7 +149,7 @@ void LayerScaleGradFn::capture_inputs(Tensor& input, Tensor& scale_param, cudaSt
     }
 
     float* scale_buffer = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&scale_buffer), scale_param.numel() * sizeof(float), "LayerScaleGradFn_scale_data");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&scale_buffer), scale_param.numel() * sizeof(float), "LayerScaleGradFn_scale_data", GRIM::MemoryAccounting::Kind::Saved);
     cudaMemcpyAsync(scale_buffer, scale_param.data, scale_param.numel() * sizeof(float), cudaMemcpyDeviceToDevice, stream);
     owned_scale_data = std::shared_ptr<float>(scale_buffer, [](float* p) {
         queueForDeferredCleanup(p);
@@ -160,7 +160,7 @@ void LayerScaleGradFn::capture_inputs(Tensor& input, Tensor& scale_param, cudaSt
         input_data = input.data;
     } else {
         float* buffer = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), element_count * sizeof(float), "LayerScaleGradFn_input_data");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), element_count * sizeof(float), "LayerScaleGradFn_input_data", GRIM::MemoryAccounting::Kind::Saved);
         cudaMemcpyAsync(buffer, input.data, element_count * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         owned_input_data = std::shared_ptr<float>(buffer, [](float* p) {
             queueForDeferredCleanup(p);

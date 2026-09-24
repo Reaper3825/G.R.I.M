@@ -24,6 +24,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace GRIM {
@@ -492,6 +493,8 @@ public:
 
         size_t total_bytes = 0;
         size_t live_tensors = 0;
+        size_t unique_data_bytes = 0;
+        std::unordered_set<const void*> seen_data;
 
         auto mib = [](size_t bytes) {
             return static_cast<double>(bytes) / (1024.0 * 1024.0);
@@ -502,10 +505,13 @@ public:
             const size_t bytes = t.size_bytes();
             total_bytes += bytes;
             ++live_tensors;
+            const bool unique_data = seen_data.insert(t.data).second;
+            if (unique_data) unique_data_bytes += bytes;
             body << "\n  " << name
                  << " numel=" << t.numel()
                  << " bytes=" << bytes
-                 << " MiB=" << mib(bytes);
+                 << " MiB=" << mib(bytes)
+                 << " unique_data=" << (unique_data ? "true" : "false");
         };
 
         auto reportVector = [&](const std::string& name, const std::vector<Tensor>& v) {
@@ -592,6 +598,9 @@ public:
             << " live_tensors=" << live_tensors
             << " total_bytes=" << total_bytes
             << " total_MiB=" << mib(total_bytes)
+            << " unique_data_bytes=" << unique_data_bytes
+            << " unique_data_MiB=" << mib(unique_data_bytes)
+            << " aliased_bytes=" << (total_bytes - unique_data_bytes)
             << body.str();
         return out.str();
     }

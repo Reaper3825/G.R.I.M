@@ -334,6 +334,11 @@ struct TrainingContext {
     std::uint64_t last_gpu_used_bytes = 0;
     std::string last_gpu_memory_owner;
     std::uint64_t gpu_memory_measurement_count = 0;
+    /** Same-device, per-microbatch baseline for allocation reconciliation. */
+    bool gpu_memory_baseline_valid = false;
+    int gpu_memory_baseline_device = -1;
+    std::uint64_t gpu_memory_baseline_device_bytes = 0;
+    std::uint64_t gpu_memory_baseline_tracked_bytes = 0;
 
     // Move-only semantics (std::unique_ptr cannot be copied)
     // Use compiler-generated move to avoid breaking GPU resource pointers

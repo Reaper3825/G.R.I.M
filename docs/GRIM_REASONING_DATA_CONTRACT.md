@@ -550,12 +550,22 @@ Rules:
 - Do not perform the calculation or claim its result.
 - Do not treat local definitions as persisted knowns or unknowns until a later
   state update explicitly persists them.
+- In the arithmetic/calculator curriculum, assign a local value with
+  `${variable} -> value;` and declare an undefined local with `${variable};`.
+  Every entry ends with a semicolon. Numeric bindings contain only the number;
+  units remain clear from the prompt and variable names. These are authored
+  curriculum conventions for future assignment machinery, not a claim that
+  assignment execution is already implemented.
+- First-pass arithmetic examples leave `knowns` and `unknowns` empty. Both
+  assigned and undefined local variables belong in `define`; the boundary
+  between `define` and those collections is local versus persisted state.
 
 Example:
 
 ```text
-Starting liters are the amount held before use. Remaining liters are the amount
-left after use. Liters used are the amount removed from the starting liters.
+${tank_liters} -> 120;
+${remaining_liters} -> 84;
+${used_liters};
 ```
 
 ### 4.11 Execute — perform the intended action
@@ -756,8 +766,9 @@ Compute liters used by finding how many liters were subtracted from the tank.
 </determine>
 
 <define>
-Starting liters are the amount held before use. Remaining liters are the amount
-left after use. Liters used are the amount removed from the starting liters.
+${tank_liters} -> 120;
+${remaining_liters} -> 84;
+${used_liters};
 </define>
 
 <execute>
