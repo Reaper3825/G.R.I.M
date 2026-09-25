@@ -11,8 +11,8 @@
 //======================================================//
 
 #include "ElementwiseMulGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -93,8 +93,6 @@ __global__ void kernel_elementwise_mul_backward(
 
 namespace GRIM {
 
-using MemoryAccounting::cudaMallocOrThrow;
-
 namespace autograd {
 
 ElementwiseMulGradFn::ElementwiseMulGradFn() {
@@ -102,45 +100,33 @@ ElementwiseMulGradFn::ElementwiseMulGradFn() {
 }
 
 void ElementwiseMulGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("ElementwiseMulGradFn::capture: stream is NULL");
+    if (a.numel() != b.numel()) throw std::runtime_error("ElementwiseMulGradFn::capture: size mismatch");
     a_requires_grad = a.requires_grad;
     b_requires_grad = b.requires_grad;
     a_shape = a.shape;
     b_shape = b.shape;
-    a_grad_fn = a.grad_fn;
-    b_grad_fn = b.grad_fn;
-    register_input(a.grad_fn);
-    register_input(b.grad_fn);
-
-    if (a_requires_grad) {
-        if (a.is_leaf) {
-            a.ensure_grad();
-            a_grad = a.grad_data();
+    auto capture = [&](Tensor& x, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+        x.require("ElementwiseMulGradFn::capture");
+        producer.reset();
+        leaf = nullptr;
+        if (!x.requires_grad) return;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("ElementwiseMulGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf = x.grad_.get();
+            if (!leaf) throw std::runtime_error("ElementwiseMulGradFn::capture: missing leaf gradient");
         } else {
-            const size_t n = a.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_a", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
-            owned_a_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            a_grad = owned_a_grad.get();
+            if (!x.grad_fn) throw std::runtime_error("ElementwiseMulGradFn::capture: non-leaf has no producer");
+            producer = x.grad_fn;
+            register_input(producer);
         }
-    }
-    if (b_requires_grad) {
-        if (b.is_leaf) {
-            b.ensure_grad();
-            b_grad = b.grad_data();
-        } else {
-            const size_t n = b.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_b", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
-            owned_b_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            b_grad = owned_b_grad.get();
-        }
-    }
-
+    };
+    capture(a, a_grad_fn, leaf_grad_a);
+    capture(b, b_grad_fn, leaf_grad_b);
     cached_size = a.numel();
-    if (a_requires_grad) cached_b = b.data;
-    if (b_requires_grad) cached_a = a.data;
+    cached_b = a_requires_grad ? b.data : nullptr;
+    cached_a = b_requires_grad ? a.data : nullptr;
 }
 
 void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output,
@@ -149,41 +135,48 @@ void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output,
                                       const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("elementwise_mul", this);
     if (applied) return;
-    applied = true;
-
+    if (!stream) throw std::runtime_error("ElementwiseMulGradFn::apply: stream is NULL");
+    grad_output.require("ElementwiseMulGradFn::apply grad_output");
     const size_t count = grad_output.numel();
-
-    if (a_requires_grad) {
-        if (!a_grad || !cached_b) {
-            throw std::runtime_error("ElementwiseMulGradFn::apply: a_grad or cached_b is NULL");
-        }
+    if (count != cached_size) throw std::runtime_error("ElementwiseMulGradFn::apply: gradient size mismatch");
+    if ((a_requires_grad && !cached_b) || (b_requires_grad && !cached_a)) {
+        throw std::runtime_error("ElementwiseMulGradFn::apply: missing cached input");
+    }
+    auto destination = [&](bool required, const std::shared_ptr<GradFn>& producer,
+                           Tensor* leaf, const TensorContract::TensorShape& shape) -> Tensor* {
+        if (!required) return nullptr;
+        if (producer) return &producer->gradient_destination(shape, stream);
+        if (!leaf) throw std::runtime_error("ElementwiseMulGradFn::apply: missing leaf destination");
+        leaf->require("ElementwiseMulGradFn::apply leaf");
+        return leaf;
+    };
+    Tensor* a_gradient = destination(a_requires_grad, a_grad_fn, leaf_grad_a, a_shape);
+    Tensor* b_gradient = destination(b_requires_grad, b_grad_fn, leaf_grad_b, b_shape);
+    applied = true;
+    if (a_gradient) {
         kernel_elementwise_mul_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_output.data, cached_b, a_grad, count);
+            grad_output.data, cached_b, a_gradient->data, count);
         trackKernelLaunch("kernel_elementwise_mul_backward_a", stream);
-
-        if (a_grad_fn) {
-            Tensor view;
-            view.data = a_grad; view.shape = a_shape;
-            view.owns_data = false; view.stream = stream;
-            a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-        }
+        if (!a_grad_fn) leaf_grad_a->record_leaf_gradient_delivery();
     }
-
-    if (b_requires_grad) {
-        if (!b_grad || !cached_a) {
-            throw std::runtime_error("ElementwiseMulGradFn::apply: b_grad or cached_a is NULL");
-        }
+    if (b_gradient) {
         kernel_elementwise_mul_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_output.data, cached_a, b_grad, count);
+            grad_output.data, cached_a, b_gradient->data, count);
         trackKernelLaunch("kernel_elementwise_mul_backward_b", stream);
-
-        if (b_grad_fn) {
-            Tensor view;
-            view.data = b_grad; view.shape = b_shape;
-            view.owns_data = false; view.stream = stream;
-            b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-        }
+        if (!b_grad_fn) leaf_grad_b->record_leaf_gradient_delivery();
     }
+    // Complete both writes before notifying each deduplicated producer edge.
+    auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+        if (!producer) return;
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(producer.get());
+        } else {
+            producer->apply(producer->pending_gradient("ElementwiseMulGradFn::apply producer"),
+                            stream, backward_payload, backward_bindings);
+        }
+    };
+    notify(a_grad_fn);
+    if (b_grad_fn != a_grad_fn) notify(b_grad_fn);
 }
 
 void ElementwiseMulGradFn::release_saved() {
@@ -191,8 +184,8 @@ void ElementwiseMulGradFn::release_saved() {
     cached_a = nullptr;
     cached_b = nullptr;
     cached_size = 0;
-    a_grad = nullptr;
-    b_grad = nullptr;
+    leaf_grad_a = nullptr;
+    leaf_grad_b = nullptr;
     a_grad_fn.reset();
     b_grad_fn.reset();
 }

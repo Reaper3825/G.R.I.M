@@ -17,6 +17,7 @@
 //======================================================//
 
 #include "BiasAddGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../AutogradQKVDiagnostics.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
@@ -118,24 +119,36 @@ BiasAddGradFn::BiasAddGradFn() {
 void BiasAddGradFn::capture_inputs(Tensor& input, Tensor& bias,
                                    int num_tokens, int num_features,
                                    cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("BiasAddGradFn::capture: stream is NULL");
+    if (num_tokens <= 0 || num_features <= 0 ||
+        input.numel() != static_cast<size_t>(num_tokens) * num_features ||
+        bias.numel() != static_cast<size_t>(num_features)) {
+        throw std::runtime_error("BiasAddGradFn::capture: invalid dimensions");
+    }
     input_requires_grad = input.requires_grad;
     bias_requires_grad = bias.requires_grad;
     total_tokens = static_cast<size_t>(num_tokens);
     features = static_cast<size_t>(num_features);
-
-    if (input_requires_grad) {
-        input_gradient = capture_input_gradient(
-            input, stream, "BiasAddGradFn::capture_inputs input");
-        AG_TRACE("[BiasAddGradFn] Captured input gradient Tensor data: %p\n",
-                 static_cast<void*>(input_gradient->data));
-    }
-
-    if (bias_requires_grad) {
-        bias_gradient = capture_input_gradient(
-            bias, stream, "BiasAddGradFn::capture_inputs bias");
-        AG_TRACE("[BiasAddGradFn] Captured bias gradient Tensor data: %p\n",
-                 static_cast<void*>(bias_gradient->data));
-    }
+    input_shape = input.shape;
+    bias_shape = bias.shape;
+    auto capture = [&](Tensor& x, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+        x.require("BiasAddGradFn::capture");
+        producer.reset();
+        leaf = nullptr;
+        if (!x.requires_grad) return;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("BiasAddGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf = x.grad_.get();
+            if (!leaf) throw std::runtime_error("BiasAddGradFn::capture: missing leaf gradient");
+        } else {
+            if (!x.grad_fn) throw std::runtime_error("BiasAddGradFn::capture: non-leaf has no producer");
+            producer = x.grad_fn;
+            register_input(producer);
+        }
+    };
+    capture(input, input_grad_fn, leaf_grad_input);
+    capture(bias, bias_grad_fn, leaf_grad_bias);
 }
 
 void BiasAddGradFn::apply_impl(const Tensor& grad_output,
@@ -143,72 +156,56 @@ void BiasAddGradFn::apply_impl(const Tensor& grad_output,
                                const Batching::BatchPayload* backward_payload,
                                const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("bias_add", this);
-
-    if (applied) {
-        return;
-    }
-    applied = true;
-
-    if (!grad_output.data) {
-        throw std::runtime_error("BiasAddGradFn::apply: grad_output.data is NULL - backward called with null gradient");
-    }
-
+    if (applied) return;
+    if (!stream) throw std::runtime_error("BiasAddGradFn::apply: stream is NULL");
+    grad_output.require("BiasAddGradFn::apply grad_output");
     const size_t count = grad_output.numel();
+    if (count != total_tokens * features) throw std::runtime_error("BiasAddGradFn::apply: gradient size mismatch");
+    auto destination = [&](bool required, const std::shared_ptr<GradFn>& producer,
+                           Tensor* leaf, const TensorContract::TensorShape& shape) -> Tensor* {
+        if (!required) return nullptr;
+        if (producer) return &producer->gradient_destination(shape, stream);
+        if (!leaf) throw std::runtime_error("BiasAddGradFn::apply: missing leaf destination");
+        leaf->require("BiasAddGradFn::apply leaf");
+        return leaf;
+    };
+    Tensor* input_gradient = destination(input_requires_grad, input_grad_fn, leaf_grad_input, input_shape);
+    Tensor* bias_gradient = destination(bias_requires_grad, bias_grad_fn, leaf_grad_bias, bias_shape);
+    applied = true;
     logGradFlowTensorStats("BiasAdd.apply grad_output", grad_output.data, count, stream);
 
-    // Backward for input: grad_input = grad_output (pass-through, no shape change)
-    if (input_requires_grad) {
-        if (!input_gradient) {
-            throw std::runtime_error(
-                "BiasAddGradFn::apply: input gradient Tensor is NULL");
-        }
-        accumulate_grad(
-            input_gradient->data,
-            grad_output.data,
-            count,
-            1.0f,
-            stream,
-            "BiasAddGradFn::apply grad_input");
-        logGradFlowTensorStats(
-            "BiasAdd.apply grad_input_accum", input_gradient->data, count, stream);
+    if (input_gradient) {
+        accumulate_grad(input_gradient->data, grad_output.data, count, 1.0f, stream,
+                        "BiasAddGradFn::apply grad_input");
+        logGradFlowTensorStats("BiasAdd.apply grad_input_accum", input_gradient->data, count, stream);
+        if (!input_grad_fn) leaf_grad_input->record_leaf_gradient_delivery();
     }
-
-    // Backward for bias: grad_bias[j] += sum_i(grad_output[i,j])
-    if (bias_requires_grad) {
-        if (!bias_gradient) {
-            throw std::runtime_error(
-                "BiasAddGradFn::apply: bias gradient Tensor is NULL");
-        }
+    if (bias_gradient) {
         launchBiasBackward(grad_output.data, bias_gradient->data,
                            static_cast<int>(total_tokens), static_cast<int>(features), stream);
-        logGradFlowTensorStats(
-            "BiasAdd.apply grad_bias_accum", bias_gradient->data, features, stream);
+        logGradFlowTensorStats("BiasAdd.apply grad_bias_accum", bias_gradient->data, features, stream);
+        if (!bias_grad_fn) leaf_grad_bias->record_leaf_gradient_delivery();
     }
-
-    if (input_requires_grad) {
-        propagate_input_gradient(
-            input_gradient,
-            stream,
-            backward_payload,
-            backward_bindings,
-            "BiasAddGradFn::apply input");
-    }
-    if (bias_requires_grad &&
-        (bias_gradient->is_leaf || !input_requires_grad ||
-         bias_gradient->grad_fn != input_gradient->grad_fn)) {
-        propagate_input_gradient(
-            bias_gradient,
-            stream,
-            backward_payload,
-            backward_bindings,
-            "BiasAddGradFn::apply bias");
-    }
+    // Complete both writes before notifying each deduplicated producer edge.
+    auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+        if (!producer) return;
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(producer.get());
+        } else {
+            producer->apply(producer->pending_gradient("BiasAddGradFn::apply producer"),
+                            stream, backward_payload, backward_bindings);
+        }
+    };
+    notify(input_grad_fn);
+    if (bias_grad_fn != input_grad_fn) notify(bias_grad_fn);
 }
 
 void BiasAddGradFn::release_saved() {
     GradFn::release_saved();
-    input_gradient.reset();
-    bias_gradient.reset();
+    input_grad_fn.reset();
+    bias_grad_fn.reset();
+    leaf_grad_input = nullptr;
+    leaf_grad_bias = nullptr;
 }
 
 Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t stream) {

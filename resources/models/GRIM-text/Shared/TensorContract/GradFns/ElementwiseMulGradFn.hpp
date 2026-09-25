@@ -29,10 +29,9 @@ namespace autograd {
 struct ElementwiseMulGradFn : public GradFn {
     bool a_requires_grad = false;
     bool b_requires_grad = false;
-    float* a_grad = nullptr;
-    float* b_grad = nullptr;
-    std::shared_ptr<float> owned_a_grad;
-    std::shared_ptr<float> owned_b_grad;
+    // Borrow leaf gradient destinations; producers own non-leaf accumulators.
+    Tensor* leaf_grad_a = nullptr;
+    Tensor* leaf_grad_b = nullptr;
     TensorContract::TensorShape a_shape;
     TensorContract::TensorShape b_shape;
     std::shared_ptr<GradFn> a_grad_fn;
