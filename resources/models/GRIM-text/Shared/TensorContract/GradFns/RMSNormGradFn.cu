@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "RMSNormGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
@@ -182,39 +183,30 @@ RMSNormGradFn::~RMSNormGradFn() {
 }
 
 void RMSNormGradFn::capture_inputs(Tensor& x, Tensor& gamma_tensor, cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("RMSNormGradFn::capture: stream is NULL");
     input_requires_grad = x.requires_grad;
     gamma_requires_grad = gamma_tensor.requires_grad;
     input_shape = x.shape;
-
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
+    gamma_shape = gamma_tensor.shape;
     gamma_data = gamma_tensor.data;
-
-    if (input_requires_grad) {
+    auto capture = [&](Tensor& x, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+        x.require("RMSNormGradFn::capture");
+        producer.reset();
+        leaf = nullptr;
+        if (!x.requires_grad) return;
         if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("RMSNormGradFn::capture: leaf has a producer");
             x.ensure_grad();
-            input_grad = x.grad_data();
+            leaf = x.grad_.get();
+            if (!leaf) throw std::runtime_error("RMSNormGradFn::capture: missing leaf gradient");
         } else {
-            const size_t grad_size = x.shape.total_elements();
-            float* buf = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), grad_size * sizeof(float), "RMSNormGradFn_input_grad", GRIM::MemoryAccounting::Kind::Gradient);
-            {
-                const cudaError_t ms_err =
-                    cudaMemsetAsync(buf, 0, grad_size * sizeof(float), stream);
-                if (ms_err != cudaSuccess) {
-                    throw std::runtime_error(std::string("RMSNormGradFn::capture_inputs: cudaMemsetAsync(input_grad) failed: ") +
-                                             cudaGetErrorString(ms_err));
-                }
-            }
-            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
+            if (!x.grad_fn) throw std::runtime_error("RMSNormGradFn::capture: non-leaf has no producer");
+            producer = x.grad_fn;
+            register_input(producer);
         }
-    }
-
-    if (gamma_requires_grad) {
-        gamma_tensor.ensure_grad();
-        gamma_grad_ptr = gamma_tensor.grad_data();
-    }
+    };
+    capture(x, input_grad_fn, leaf_input_gradient);
+    capture(gamma_tensor, gamma_grad_fn, leaf_gamma_gradient);
 }
 
 void RMSNormGradFn::set_cache_copy(const float* external_cache, size_t size, int d, float e, cudaStream_t stream) {
@@ -245,7 +237,8 @@ void RMSNormGradFn::apply_impl(const Tensor& grad_output,
     if (applied) {
         return;
     }
-    applied = true;
+    if (!stream) throw std::runtime_error("RMSNormGradFn::apply: stream is NULL");
+    grad_output.require("RMSNormGradFn::apply grad_output");
 
 #if TENSOR_VERBOSE_DEBUG
     fprintf(stderr, "[RMSNormGradFn::apply] ENTRY - this=%p grad_output.data=%p stream=%p\n",
@@ -260,39 +253,57 @@ void RMSNormGradFn::apply_impl(const Tensor& grad_output,
         throw std::runtime_error("RMSNormGradFn::apply: d_model is " + std::to_string(d_model) + " - must be > 0");
     }
 
+    if (!gamma_data || cached_size != input_shape.total_elements() ||
+        cached_size % static_cast<size_t>(d_model) != 0 ||
+        gamma_shape.total_elements() != static_cast<size_t>(d_model) ||
+        grad_output.numel() != cached_size) {
+        throw std::runtime_error("RMSNormGradFn::apply: invalid cache or gradient dimensions");
+    }
+    auto destination = [&](bool required, const std::shared_ptr<GradFn>& producer,
+                           Tensor* leaf, const TensorContract::TensorShape& shape) -> Tensor* {
+        if (!required) return nullptr;
+        if (producer) return &producer->gradient_destination(shape, stream);
+        if (!leaf) throw std::runtime_error("RMSNormGradFn::apply: missing leaf destination");
+        leaf->require("RMSNormGradFn::apply leaf");
+        return leaf;
+    };
+    Tensor* input_gradient = destination(input_requires_grad, input_grad_fn, leaf_input_gradient, input_shape);
+    Tensor* gamma_gradient = destination(gamma_requires_grad, gamma_grad_fn, leaf_gamma_gradient, gamma_shape);
+    applied = true;
+    if (!input_gradient && !gamma_gradient) return;
     const int tokens = static_cast<int>(cached_size / d_model);
     const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32) * sizeof(float);
-
-    const bool need_dx = input_requires_grad && input_grad != nullptr;
-    const bool need_dgamma = gamma_requires_grad && gamma_grad_ptr != nullptr;
-    if (!need_dx && !need_dgamma) {
-        return;
-    }
-
     kernel_rmsnorm_backward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
         grad_output.data, cached_input, gamma_data,
-        need_dx ? input_grad : nullptr,
-        need_dgamma ? gamma_grad_ptr : nullptr,
+        input_gradient ? input_gradient->data : nullptr,
+        gamma_gradient ? gamma_gradient->data : nullptr,
         tokens, d_model, eps);
     trackKernelLaunch("kernel_rmsnorm_backward", stream);
 
-    if (need_dx && input_grad_fn && input_grad_fn->op_name) {
-        Tensor view;
-        view.data = input_grad;
-        view.shape = input_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    if (input_requires_grad && !input_grad_fn) leaf_input_gradient->record_leaf_gradient_delivery();
+    if (gamma_requires_grad && !gamma_grad_fn) leaf_gamma_gradient->record_leaf_gradient_delivery();
+    // Complete both writes before notifying each deduplicated producer edge.
+    auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+        if (!producer) return;
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(producer.get());
+        } else {
+            producer->apply(producer->pending_gradient("RMSNormGradFn::apply producer"),
+                            stream, backward_payload, backward_bindings);
+        }
+    };
+    notify(input_grad_fn);
+    if (gamma_grad_fn != input_grad_fn) notify(gamma_grad_fn);
 }
 
 void RMSNormGradFn::release_saved() {
     GradFn::release_saved();
     cached_input = nullptr;
     cached_size = 0;
-    owned_input_grad.reset();
-    input_grad = nullptr;
-    gamma_grad_ptr = nullptr;
+    leaf_input_gradient = nullptr;
+    leaf_gamma_gradient = nullptr;
+    gamma_data = nullptr;
+    gamma_grad_fn.reset();
     input_grad_fn.reset();
 }
 

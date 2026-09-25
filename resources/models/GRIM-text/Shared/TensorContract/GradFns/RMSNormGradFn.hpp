@@ -16,13 +16,15 @@ namespace autograd {
 struct RMSNormGradFn : public GradFn {
     bool input_requires_grad = false;
     bool gamma_requires_grad = false;
-    float* input_grad = nullptr;
-    float* gamma_grad_ptr = nullptr;
+    // Borrow leaf destinations; non-leaf gradients live in producer accumulators.
+    Tensor* leaf_input_gradient = nullptr;
+    Tensor* leaf_gamma_gradient = nullptr;
     float* gamma_data = nullptr;
     TensorContract::TensorShape input_shape;
+    TensorContract::TensorShape gamma_shape;
     std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<GradFn> gamma_grad_fn;
     std::shared_ptr<float> owned_cache;
-    std::shared_ptr<float> owned_input_grad;
     const float* cached_input = nullptr;
     std::size_t cached_size = 0;
     int d_model = 0;

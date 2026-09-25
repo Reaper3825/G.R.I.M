@@ -9,8 +9,8 @@
 //======================================================//
 
 #include "BroadcastRowMulGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -76,8 +76,6 @@ __global__ void kernel_broadcast_row_mul_backward_scale(
 
 namespace GRIM {
 
-using MemoryAccounting::cudaMallocOrThrow;
-
 namespace autograd {
 
 BroadcastRowMulGradFn::BroadcastRowMulGradFn() {
@@ -85,17 +83,29 @@ BroadcastRowMulGradFn::BroadcastRowMulGradFn() {
 }
 
 void BroadcastRowMulGradFn::capture_inputs(Tensor& s, Tensor& x, cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("BroadcastRowMulGradFn::capture: stream is NULL");
     scale_requires_grad = s.requires_grad;
     x_requires_grad = x.requires_grad;
-
-    if (scale_requires_grad) {
-        scale_gradient = capture_input_gradient(
-            s, stream, "BroadcastRowMulGradFn::capture_inputs scale");
-    }
-    if (x_requires_grad) {
-        x_gradient = capture_input_gradient(
-            x, stream, "BroadcastRowMulGradFn::capture_inputs x");
-    }
+    scale_shape = s.shape;
+    x_shape = x.shape;
+    auto capture = [&](Tensor& x, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+        x.require("BroadcastRowMulGradFn::capture");
+        producer.reset();
+        leaf = nullptr;
+        if (!x.requires_grad) return;
+        if (x.is_leaf) {
+            if (x.grad_fn) throw std::runtime_error("BroadcastRowMulGradFn::capture: leaf has a producer");
+            x.ensure_grad();
+            leaf = x.grad_.get();
+            if (!leaf) throw std::runtime_error("BroadcastRowMulGradFn::capture: missing leaf gradient");
+        } else {
+            if (!x.grad_fn) throw std::runtime_error("BroadcastRowMulGradFn::capture: non-leaf has no producer");
+            producer = x.grad_fn;
+            register_input(producer);
+        }
+    };
+    capture(s, scale_grad_fn, leaf_scale_gradient);
+    capture(x, x_grad_fn, leaf_x_gradient);
 }
 
 void BroadcastRowMulGradFn::set_cache_refs(const float* scale_data, const float* x_data, int r, int c) {
@@ -113,8 +123,25 @@ void BroadcastRowMulGradFn::apply_impl(const Tensor& grad_output,
                                        const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("broadcast_row_mul", this);
     if (applied) return;
+    if (!stream) throw std::runtime_error("BroadcastRowMulGradFn::apply: stream is NULL");
+    grad_output.require("BroadcastRowMulGradFn::apply grad_output");
+    if (rows <= 0 || cols <= 0 || !cached_scale || !cached_x ||
+        scale_shape.total_elements() != static_cast<size_t>(rows) ||
+        x_shape.total_elements() != static_cast<size_t>(rows) * cols ||
+        grad_output.numel() != x_shape.total_elements()) {
+        throw std::runtime_error("BroadcastRowMulGradFn::apply: invalid cache or gradient dimensions");
+    }
+    auto destination = [&](bool required, const std::shared_ptr<GradFn>& producer,
+                           Tensor* leaf, const TensorContract::TensorShape& shape) -> Tensor* {
+        if (!required) return nullptr;
+        if (producer) return &producer->gradient_destination(shape, stream);
+        if (!leaf) throw std::runtime_error("BroadcastRowMulGradFn::apply: missing leaf destination");
+        leaf->require("BroadcastRowMulGradFn::apply leaf");
+        return leaf;
+    };
+    Tensor* x_gradient = destination(x_requires_grad, x_grad_fn, leaf_x_gradient, x_shape);
+    Tensor* scale_gradient = destination(scale_requires_grad, scale_grad_fn, leaf_scale_gradient, scale_shape);
     applied = true;
-
     const int total = rows * cols;
 
     if (x_requires_grad) {
@@ -131,24 +158,30 @@ void BroadcastRowMulGradFn::apply_impl(const Tensor& grad_output,
         trackKernelLaunch("kernel_broadcast_row_mul_backward_scale", stream);
     }
 
-    if (x_requires_grad) {
-        propagate_input_gradient(
-            x_gradient, stream, backward_payload, backward_bindings,
-            "BroadcastRowMulGradFn::apply x");
-    }
-    if (scale_requires_grad) {
-        propagate_input_gradient(
-            scale_gradient, stream, backward_payload, backward_bindings,
-            "BroadcastRowMulGradFn::apply scale");
-    }
+    if (x_requires_grad && !x_grad_fn) leaf_x_gradient->record_leaf_gradient_delivery();
+    if (scale_requires_grad && !scale_grad_fn) leaf_scale_gradient->record_leaf_gradient_delivery();
+    // Complete both writes before notifying each deduplicated producer edge.
+    auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+        if (!producer) return;
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(producer.get());
+        } else {
+            producer->apply(producer->pending_gradient("BroadcastRowMulGradFn::apply producer"),
+                            stream, backward_payload, backward_bindings);
+        }
+    };
+    notify(x_grad_fn);
+    if (scale_grad_fn != x_grad_fn) notify(scale_grad_fn);
 }
 
 void BroadcastRowMulGradFn::release_saved() {
     GradFn::release_saved();
     cached_scale = nullptr;
     cached_x = nullptr;
-    scale_gradient.reset();
-    x_gradient.reset();
+    scale_grad_fn.reset();
+    x_grad_fn.reset();
+    leaf_scale_gradient = nullptr;
+    leaf_x_gradient = nullptr;
 }
 
 Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream) {

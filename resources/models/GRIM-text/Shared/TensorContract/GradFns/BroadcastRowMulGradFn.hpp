@@ -29,8 +29,13 @@ namespace autograd {
 struct BroadcastRowMulGradFn : public GradFn {
     bool scale_requires_grad = false;
     bool x_requires_grad = false;
-    std::shared_ptr<Tensor> scale_gradient;
-    std::shared_ptr<Tensor> x_gradient;
+    // Borrow leaf destinations; non-leaf gradients live in producer accumulators.
+    Tensor* leaf_scale_gradient = nullptr;
+    Tensor* leaf_x_gradient = nullptr;
+    std::shared_ptr<GradFn> scale_grad_fn;
+    std::shared_ptr<GradFn> x_grad_fn;
+    TensorContract::TensorShape scale_shape;
+    TensorContract::TensorShape x_shape;
     const float* cached_scale = nullptr;
     const float* cached_x = nullptr;
     int rows = 0;
