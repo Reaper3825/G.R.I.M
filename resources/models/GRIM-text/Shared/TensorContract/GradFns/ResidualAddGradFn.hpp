@@ -29,10 +29,9 @@ namespace autograd {
 struct ResidualAddGradFn : public GradFn {
     bool input_requires_grad = false;
     bool residual_requires_grad = false;
-    float* input_grad = nullptr;
-    float* residual_grad = nullptr;
-    std::shared_ptr<float> owned_input_grad;
-    std::shared_ptr<float> owned_residual_grad;
+    // Borrow leaf destinations; producers own non-leaf accumulators.
+    Tensor* leaf_input_gradient = nullptr;
+    Tensor* leaf_residual_gradient = nullptr;
     TensorContract::TensorShape input_shape;
     TensorContract::TensorShape residual_shape;
     std::shared_ptr<GradFn> input_grad_fn;

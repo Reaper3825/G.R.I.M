@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "ConcatGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include <cuda_runtime.h>
 #include <stdexcept>
 #include <string>
@@ -64,30 +65,30 @@ ConcatGradFn::ConcatGradFn() {
 }
 
 void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
-    (void)stream;
+    if (!stream) throw std::runtime_error("ConcatGradFn::capture: stream is NULL");
+    a.require("ConcatGradFn::capture a");
+    b.require("ConcatGradFn::capture b");
     a_requires_grad = a.requires_grad;
     b_requires_grad = b.requires_grad;
-    a_is_leaf = a.is_leaf;
-    b_is_leaf = b.is_leaf;
     a_shape = a.shape;
     b_shape = b.shape;
-    a_grad_fn = a.grad_fn;
-    b_grad_fn = b.grad_fn;
-    register_input(a.grad_fn);
-    register_input(b.grad_fn);
-
-    if (a_requires_grad) {
-        if (a_is_leaf) {
-            a.ensure_grad();
-            grad_a = a.grad_;
+    auto capture = [&](Tensor& input, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+        producer.reset();
+        leaf = nullptr;
+        if (!input.requires_grad) return;
+        if (input.is_leaf) {
+            if (input.grad_fn) throw std::runtime_error("ConcatGradFn::capture: leaf has a producer");
+            input.ensure_grad();
+            leaf = input.grad_.get();
+            if (!leaf) throw std::runtime_error("ConcatGradFn::capture: missing leaf gradient");
+        } else {
+            if (!input.grad_fn) throw std::runtime_error("ConcatGradFn::capture: non-leaf has no producer");
+            producer = input.grad_fn;
+            register_input(producer);
         }
-    }
-    if (b_requires_grad) {
-        if (b_is_leaf) {
-            b.ensure_grad();
-            grad_b = b.grad_;
-        }
-    }
+    };
+    capture(a, a_grad_fn, leaf_grad_a);
+    capture(b, b_grad_fn, leaf_grad_b);
 }
 
 void ConcatGradFn::apply_impl(const Tensor& grad_output,
@@ -96,7 +97,8 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output,
                               const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("concat", this);
     if (applied) return;
-    applied = true;
+    if (!stream) throw std::runtime_error("ConcatGradFn::apply: stream is NULL");
+    grad_output.require("ConcatGradFn::apply grad_output");
 
     const int D_total = D1 + D2;
     const auto expected_output = TensorContract::TensorShape::make_BSM(rows, D_total);
@@ -106,27 +108,17 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output,
             "ConcatGradFn::apply: grad_output shape does not match captured concat output");
     }
 
-    // Non-leaf input gradients are real Tensor-owned contributions. Allocate
-    // them lazily at backward time instead of keeping anonymous float buffers
-    // alive from forward capture through the whole graph lifetime.
-    if (a_requires_grad && !grad_a) {
-        grad_a = std::make_shared<Tensor>(Tensor::zeros(
-            a_shape, false, stream, "ConcatGradFn_grad_a"));
-        MemoryAccounting::classify(grad_a->data, MemoryAccounting::Kind::Gradient);
-    }
-    if (b_requires_grad && !grad_b) {
-        if (a_grad_fn && b_grad_fn == a_grad_fn) {
-            if (a_shape.layout != b_shape.layout || a_shape.as_2d() != b_shape.as_2d()) {
-                throw std::runtime_error(
-                    "ConcatGradFn::apply: inputs sharing one producer must have identical shapes");
-            }
-            grad_b = grad_a;
-        } else {
-            grad_b = std::make_shared<Tensor>(Tensor::zeros(
-                b_shape, false, stream, "ConcatGradFn_grad_b"));
-            MemoryAccounting::classify(grad_b->data, MemoryAccounting::Kind::Gradient);
-        }
-    }
+    auto destination = [&](bool required, const std::shared_ptr<GradFn>& producer,
+                           Tensor* leaf, const TensorContract::TensorShape& shape) -> Tensor* {
+        if (!required) return nullptr;
+        if (producer) return &producer->gradient_destination(shape, stream);
+        if (!leaf) throw std::runtime_error("ConcatGradFn::apply: missing leaf destination");
+        leaf->require("ConcatGradFn::apply leaf");
+        return leaf;
+    };
+    Tensor* grad_a = destination(a_requires_grad, a_grad_fn, leaf_grad_a, a_shape);
+    Tensor* grad_b = destination(b_requires_grad, b_grad_fn, leaf_grad_b, b_shape);
+    applied = true;
 
     if (a_requires_grad) {
         if (!grad_a) {
@@ -157,21 +149,27 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output,
         }
     }
 
-    // Both split kernels must be enqueued before propagation. When both inputs
-    // share one producer, grad_a and grad_b alias the same Tensor and the two
-    // slices are accumulated before sending exactly one scheduler contribution.
-    if (a_grad_fn) {
-        a_grad_fn->apply(*grad_a, stream, backward_payload, backward_bindings);
-    }
-    if (b_grad_fn && b_grad_fn != a_grad_fn) {
-        b_grad_fn->apply(*grad_b, stream, backward_payload, backward_bindings);
-    }
+    // Finish both writes before notifying each deduplicated producer edge.
+    // The engine destination already contains these contributions.
+    if (a_requires_grad && !a_grad_fn) leaf_grad_a->record_leaf_gradient_delivery();
+    if (b_requires_grad && !b_grad_fn) leaf_grad_b->record_leaf_gradient_delivery();
+    auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+        if (!producer) return;
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(producer.get());
+        } else {
+            producer->apply(producer->pending_gradient("ConcatGradFn::apply producer"),
+                            stream, backward_payload, backward_bindings);
+        }
+    };
+    notify(a_grad_fn);
+    if (b_grad_fn != a_grad_fn) notify(b_grad_fn);
 }
 
 void ConcatGradFn::release_saved() {
     GradFn::release_saved();
-    grad_a.reset();
-    grad_b.reset();
+    leaf_grad_a = nullptr;
+    leaf_grad_b = nullptr;
     a_grad_fn.reset();
     b_grad_fn.reset();
 }

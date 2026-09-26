@@ -1,141 +1,130 @@
 //======================================================//
 //  ResidualAddGradFn.cu
-//  Residual / skip-connection add forward + autograd backward.
-//
-//  Forward: y = x + residual  (delegates to TensorContract::add)
-//  Backward: both inputs receive grad_output unchanged
-//    (d(x + residual)/dx = 1, d(x + residual)/d(residual) = 1)
-//
-//  Distinct from AddGradFn purely so "residual_add" surfaces in op_name
-//  traces; gradient math is identical.
+//  Residual add delivers gradients directly to producer accumulators or leaf buffers.
 //======================================================//
 
 #include "ResidualAddGradFn.hpp"
+#include "../AutogradEngine.hpp"
 #include "../GradientAccumulation.hpp"
-#include "../TensorContract_GPU.hpp"
-#include "../../Diagnostics/MemoryAllocationTracker.hpp"
 
-#include <cuda_runtime.h>
-#include <cstdio>
-#include <cstdint>
 #include <stdexcept>
-#include <string>
 
-#define AG_TRACE(...) do { if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
+namespace GRIM::autograd {
+namespace {
 
-namespace GRIM {
-
-using MemoryAccounting::cudaMallocOrThrow;
-
-namespace autograd {
-
-ResidualAddGradFn::ResidualAddGradFn() {
-    op_name = "residual_add";
+// Leaf storage remains owned by the input tensor. Non-leaf captures keep only
+// the producer alive; its pending gradient is created on first delivery.
+void captureResidualInput(Tensor& input, std::shared_ptr<GradFn>& producer,
+                     Tensor*& leaf_gradient, cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("ResidualAddGradFn::capture: stream is NULL");
+    input.require("ResidualAddGradFn::capture");
+    producer.reset();
+    leaf_gradient = nullptr;
+    if (!input.requires_grad) return;
+    if (input.is_leaf) {
+        if (input.grad_fn) throw std::runtime_error("ResidualAddGradFn::capture: leaf has a producer");
+        input.ensure_grad();
+        leaf_gradient = input.grad_.get();
+        if (!leaf_gradient) throw std::runtime_error("ResidualAddGradFn::capture: missing leaf gradient");
+    } else {
+        if (!input.grad_fn) throw std::runtime_error("ResidualAddGradFn::capture: non-leaf has no producer");
+        producer = input.grad_fn;
+    }
 }
 
-void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream) {
-    input_requires_grad = x.requires_grad;
-    residual_requires_grad = r.requires_grad;
-    input_shape = x.shape;
-    residual_shape = r.shape;
+} // namespace
 
-    input_grad_fn = x.grad_fn;
-    residual_grad_fn = r.grad_fn;
-    register_input(x.grad_fn);
-    register_input(r.grad_fn);
+ResidualAddGradFn::ResidualAddGradFn() { op_name = "residual_add"; }
 
-    element_count = x.numel();
-
-    if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-        } else {
-            const size_t x_numel = x.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "ResidualAddGradFn_input_grad", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
-            owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
-        }
-    }
-    if (residual_requires_grad) {
-        if (r.is_leaf) {
-            r.ensure_grad();
-            residual_grad = r.grad_data();
-        } else {
-            const size_t r_numel = r.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), r_numel * sizeof(float), "ResidualAddGradFn_residual_grad", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(buffer, 0, r_numel * sizeof(float), stream);
-            owned_residual_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            residual_grad = owned_residual_grad.get();
-        }
-    }
+void ResidualAddGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
+    input_requires_grad = a.requires_grad;
+    residual_requires_grad = b.requires_grad;
+    input_shape = a.shape;
+    residual_shape = b.shape;
+    element_count = a.numel();
+    captureResidualInput(a, input_grad_fn, leaf_input_gradient, stream);
+    captureResidualInput(b, residual_grad_fn, leaf_residual_gradient, stream);
+    register_input(input_grad_fn);
+    register_input(residual_grad_fn);
 }
 
 void ResidualAddGradFn::apply_impl(const Tensor& grad_output,
-                                   cudaStream_t stream,
-                                   const Batching::BatchPayload* backward_payload,
-                                   const Batching::BatchDeviceBindings* backward_bindings) {
+                         cudaStream_t stream,
+                         const Batching::BatchPayload* backward_payload,
+                         const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("residual_add", this);
-
-    if (applied) {
-        return;
+    if (applied) return;
+    grad_output.require("ResidualAddGradFn::apply grad_output");
+    if (!stream || grad_output.numel() != element_count) {
+        throw std::runtime_error("ResidualAddGradFn::apply: invalid stream or gradient size");
     }
     applied = true;
 
-    const size_t count = grad_output.numel();
+    auto deliver = [&](bool required, const TensorContract::TensorShape& shape,
+                       const std::shared_ptr<GradFn>& producer, Tensor* leaf) {
+        if (!required) return;
+        // Preserve the input's shape for same-numel views. This view borrows
+        // grad_output only for delivery; receive_gradient copies into its own
+        // accumulator and never adopts this pointer.
+        Tensor contribution;
+        contribution.data = grad_output.data;
+        contribution.shape = shape;
+        contribution.owns_data = false;
+        contribution.stream = stream;
+        if (producer) {
+            producer->receive_gradient(contribution, stream);
+        } else {
+            if (!leaf) throw std::runtime_error("ResidualAddGradFn::apply: missing leaf destination");
+            accumulate_grad(*leaf, contribution, 1.0f, stream, "ResidualAddGradFn::apply leaf");
+            leaf->record_leaf_gradient_delivery();
+        }
+    };
 
-    if (input_requires_grad && input_grad) {
-        accumulate_grad(input_grad, grad_output.data, count, 1.0f, stream, "ResidualAddGradFn::apply input_grad");
-    }
-
-    if (residual_requires_grad && residual_grad) {
-        accumulate_grad(residual_grad, grad_output.data, count, 1.0f, stream, "ResidualAddGradFn::apply residual_grad");
-    }
-
-    if (input_requires_grad && input_grad_fn) {
-        Tensor view;
-        view.data = input_grad; view.shape = input_shape;
-        view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
-    if (residual_requires_grad && residual_grad_fn && residual_grad_fn != input_grad_fn) {
-        Tensor view;
-        view.data = residual_grad; view.shape = residual_shape;
-        view.owns_data = false; view.stream = stream;
-        residual_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    // Both mathematical inputs contribute, including residual_add(x, x). Finish both
+    // writes before issuing one notification per deduplicated producer edge.
+    deliver(input_requires_grad, input_shape, input_grad_fn, leaf_input_gradient);
+    deliver(residual_requires_grad, residual_shape, residual_grad_fn, leaf_residual_gradient);
+    auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+        if (!producer) return;
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(producer.get());
+        } else {
+            // Preserve the legacy recursive path without re-accumulating the
+            // contribution through apply() while an engine is active.
+            producer->apply(producer->pending_gradient("ResidualAddGradFn::apply producer"),
+                            stream, backward_payload, backward_bindings);
+        }
+    };
+    notify(input_grad_fn);
+    if (residual_grad_fn != input_grad_fn) notify(residual_grad_fn);
 }
 
 void ResidualAddGradFn::release_saved() {
     GradFn::release_saved();
-    input_grad = nullptr;
-    residual_grad = nullptr;
+    leaf_input_gradient = nullptr;
+    leaf_residual_gradient = nullptr;
     input_grad_fn.reset();
     residual_grad_fn.reset();
 }
 
-Tensor residual_add(const Tensor& x, const Tensor& residual, cudaStream_t stream) {
-    if (x.numel() != residual.numel()) {
+Tensor residual_add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
+    if (a.numel() != b.numel()) {
         throw std::invalid_argument("autograd::residual_add: tensor size mismatch");
     }
 
-    Tensor result = Tensor::empty(x.shape, x.requires_grad || residual.requires_grad, stream, "residual_add_result");
+    Tensor result = Tensor::empty(a.shape, a.requires_grad || b.requires_grad, stream, "residual_add_result");
 
-    // Forward: y = x + residual
-    TensorContract::add(x, residual, result, stream);
+    // c = a + b — use TensorContract::add for the forward
+    TensorContract::add(a, b, result, stream);
 
     if (result.requires_grad) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<ResidualAddGradFn>();
-        grad_fn->capture_inputs(const_cast<Tensor&>(x), const_cast<Tensor&>(residual), stream);
+        grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
         result.grad_fn = grad_fn;
     }
 
     return result;
 }
 
-}  // namespace autograd
-}  // namespace GRIM
+}  // namespace GRIM::autograd

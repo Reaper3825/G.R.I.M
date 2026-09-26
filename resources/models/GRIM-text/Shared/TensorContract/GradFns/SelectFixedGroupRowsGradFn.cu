@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "SelectFixedGroupRowsGradFn.hpp"
+#include "../AutogradEngine.hpp"
 
 #include <cuda_runtime.h>
 
@@ -108,11 +109,22 @@ SelectFixedGroupRowsGradFn::SelectFixedGroupRowsGradFn() {
 void SelectFixedGroupRowsGradFn::captureInput(
     Tensor& input,
     cudaStream_t stream) {
-    if (input.requires_grad) {
-        input_gradient = capture_input_gradient(
-            input,
-            stream,
-            "SelectFixedGroupRowsGradFn::captureInput");
+    if (!stream) throw std::runtime_error("SelectFixedGroupRowsGradFn::captureInput: stream is NULL");
+    input.require("SelectFixedGroupRowsGradFn::captureInput");
+    input_requires_grad = input.requires_grad;
+    input_shape = input.shape;
+    input_producer.reset();
+    leaf_input_gradient = nullptr;
+    if (!input_requires_grad) return;
+    if (input.is_leaf) {
+        if (input.grad_fn) throw std::runtime_error("SelectFixedGroupRowsGradFn::captureInput: leaf has a producer");
+        input.ensure_grad();
+        leaf_input_gradient = input.grad_.get();
+        if (!leaf_input_gradient) throw std::runtime_error("SelectFixedGroupRowsGradFn::captureInput: missing leaf gradient");
+    } else {
+        if (!input.grad_fn) throw std::runtime_error("SelectFixedGroupRowsGradFn::captureInput: non-leaf has no producer");
+        input_producer = input.grad_fn;
+        register_input(input_producer);
     }
 }
 
@@ -125,11 +137,11 @@ void SelectFixedGroupRowsGradFn::apply_impl(
     if (applied) {
         return;
     }
-    applied = true;
-    if (!input_gradient) {
+    if (!input_requires_grad) {
         return;
     }
 
+    if (!stream) throw std::runtime_error("SelectFixedGroupRowsGradFn::apply: stream is NULL");
     grad_output.require("SelectFixedGroupRowsGradFn::apply grad_output");
     if (!grad_output.shape.is_2d_layout()) {
         throw std::runtime_error(
@@ -145,6 +157,13 @@ void SelectFixedGroupRowsGradFn::apply_impl(
 
     const std::size_t output_count =
         static_cast<std::size_t>(expected_rows) * feature_count;
+    Tensor* input_gradient = input_producer
+        ? &input_producer->gradient_destination(input_shape, stream) : leaf_input_gradient;
+    if (!input_gradient) {
+        throw std::runtime_error("SelectFixedGroupRowsGradFn::apply: missing input destination");
+    }
+    input_gradient->require("SelectFixedGroupRowsGradFn::apply input gradient");
+    applied = true;
     kernelSelectFixedGroupRowsBackward<<<
         blocksFor(output_count, "SelectFixedGroupRowsGradFn::apply"),
         kBlockSize,
@@ -161,17 +180,24 @@ void SelectFixedGroupRowsGradFn::apply_impl(
         cudaGetLastError(),
         "SelectFixedGroupRowsGradFn::apply backward launch");
 
-    propagate_input_gradient(
-        input_gradient,
-        stream,
-        backward_payload,
-        backward_bindings,
-        "SelectFixedGroupRowsGradFn::apply");
+    // The scatter adds directly into the destination, preserving other consumers.
+    if (input_producer) {
+        if (auto* engine = AutogradEngine::active()) {
+            engine->contribute(input_producer.get());
+        } else {
+            input_producer->apply(
+                input_producer->pending_gradient("SelectFixedGroupRowsGradFn::apply producer"),
+                stream, backward_payload, backward_bindings);
+        }
+    } else {
+        leaf_input_gradient->record_leaf_gradient_delivery();
+    }
 }
 
 void SelectFixedGroupRowsGradFn::release_saved() {
     GradFn::release_saved();
-    input_gradient.reset();
+    input_producer.reset();
+    leaf_input_gradient = nullptr;
 }
 
 Tensor select_fixed_group_rows(

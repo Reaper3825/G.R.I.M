@@ -12,7 +12,11 @@
 namespace GRIM::autograd {
 
 struct SelectFixedGroupRowsGradFn final : public GradFn {
-    std::shared_ptr<Tensor> input_gradient;
+    bool input_requires_grad = false;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_producer;
+    // Input tensor owns leaf storage; producer owns the non-leaf destination.
+    Tensor* leaf_input_gradient = nullptr;
     int group_count = 0;
     int rows_per_group = 0;
     int row_offset = 0;
