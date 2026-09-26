@@ -7,7 +7,7 @@
 // No ownership, resets at phase boundaries, or CUDA synchronization is added.
 namespace GRIM::MemoryAccounting {
 
-inline constexpr bool Enabled = true;
+inline constexpr bool Enabled = false;
 
 enum class Kind { Storage, Gradient, EngineGradient, LeafGradient, Saved, Attention };
 
