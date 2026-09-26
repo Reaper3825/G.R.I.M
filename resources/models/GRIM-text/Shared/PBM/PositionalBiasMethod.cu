@@ -305,7 +305,8 @@ __global__ void ropeRotationGQABackwardKernel(
     int head_dim,
     int rotary_dim,
     bool is_q_pass,
-    int pos_offset
+    int pos_offset,
+    const float* source
 ) {
     const int pos_idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int head_idx = blockIdx.y;
@@ -319,6 +320,7 @@ __global__ void ropeRotationGQABackwardKernel(
     const int bhsd_offset = ((batch_idx * num_heads + head_idx) * seq_len + pos_idx) * head_dim;
     float* tensor = is_q_pass ? grad_Q : grad_K;
     
+    const float* input = source ? source : tensor;
     const int num_pairs = rotary_dim / 2;
     for (int pair_idx = 0; pair_idx < num_pairs; ++pair_idx) {
         const int dim_i = pair_idx * 2;
@@ -329,11 +331,22 @@ __global__ void ropeRotationGQABackwardKernel(
         const float cos_val = cosf(theta);
         const float sin_val = sinf(theta);
         
-        float x_i = tensor[bhsd_offset + dim_i];
-        float x_j = tensor[bhsd_offset + dim_j];
+        float x_i = input[bhsd_offset + dim_i];
+        float x_j = input[bhsd_offset + dim_j];
         applyInverseRotation(x_i, x_j, cos_val, sin_val);
-        tensor[bhsd_offset + dim_i] = x_i;
-        tensor[bhsd_offset + dim_j] = x_j;
+        if (source) {
+            tensor[bhsd_offset + dim_i] += x_i;
+            tensor[bhsd_offset + dim_j] += x_j;
+        } else {
+            tensor[bhsd_offset + dim_i] = x_i;
+            tensor[bhsd_offset + dim_j] = x_j;
+        }
+    }
+    // Dimensions outside the rotated pairs pass through unchanged.
+    if (source) {
+        for (int d = 2 * num_pairs; d < head_dim; ++d) {
+            tensor[bhsd_offset + d] += input[bhsd_offset + d];
+        }
     }
 }
 
@@ -446,8 +459,15 @@ void launchRoPERotationGQA_backward(
     const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     int rotary_dim,
     cudaStream_t stream,
-    int pos_offset
+    int pos_offset,
+    const float* source_Q,
+    const float* source_K
 ) {
+    if (!stream) throw std::runtime_error("RoPE backward: stream is NULL");
+    if ((source_Q && (!grad_Q || source_Q == grad_Q)) ||
+        (source_K && (!grad_K || source_K == grad_K))) {
+        throw std::runtime_error("RoPE backward: invalid accumulation source/destination");
+    }
     // ISSUE rgb(9, 255, 0) FIX: The caller (RoPEGradFn in TensorContract_GPU.cu) intentionally
     // passes nullptr for one of grad_Q or grad_K because Q and K have independent
     // gradient paths in the autograd system. We should allow processing either one
@@ -495,7 +515,7 @@ void launchRoPERotationGQA_backward(
             grad_Q, grad_K, inv_freq,
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
             true,  // grad_Q pass
-            pos_offset
+            pos_offset, source_Q
         );
         
         cudaError_t err = cudaGetLastError();
@@ -514,7 +534,7 @@ void launchRoPERotationGQA_backward(
             grad_Q, grad_K, inv_freq,
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
             false,  // grad_K pass
-            pos_offset
+            pos_offset, source_K
         );
         
         cudaError_t err = cudaGetLastError();

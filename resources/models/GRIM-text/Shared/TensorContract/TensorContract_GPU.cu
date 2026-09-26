@@ -842,6 +842,26 @@ void GradFn::run_backward(
     apply_impl(grad_output, stream, backward_payload, backward_bindings);
 }
 
+void GradFn::release_consumed_gradient(cudaStream_t stream) {
+    if (!stream) throw std::runtime_error("GradFn::release_consumed_gradient: stream is NULL");
+    if (!pending_gradient_) return;
+    Tensor& gradient = *pending_gradient_;
+    // Pending accumulators are exclusively owned; consumers must copy or enqueue
+    // their reads on the engine stream before returning from apply_impl().
+    if (pending_gradient_.use_count() != 1 || !gradient.owns_data || !gradient.data ||
+        gradient.stream != stream) {
+        throw std::runtime_error("GradFn::release_consumed_gradient: invalid accumulator ownership or stream");
+    }
+    const cudaError_t status = MemoryAccounting::freeAsync(gradient.data, stream);
+    if (status != cudaSuccess) {
+        throw std::runtime_error(std::string("GradFn::release_consumed_gradient: ") + cudaGetErrorString(status));
+    }
+    // cudaFreeAsync owns the queued release; prevent Tensor::~Tensor from freeing twice.
+    gradient.owns_data = false;
+    gradient.data = nullptr;
+    pending_gradient_.reset();
+}
+
 //======================================================//
 //  CUDA Kernels for Tensor Operations
 //======================================================//

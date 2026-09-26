@@ -684,7 +684,7 @@ __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
         sum += __bfloat162float(src[src_idx]);
     }
 
-    dst[idx] = sum;
+    dst[idx] += sum;
 }
 
 /**
@@ -692,31 +692,17 @@ __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
  * Forward: O = softmax(Q @ K^T / sqrt(d)) @ V
  * Uses FlashAttention v2 for memory-efficient backward.
  *
- * DOES NOT store Tensor* - stores stable data instead.
+ * Retains producers and borrows persistent leaf gradient destinations.
  * Requires saving: Q, K, V, O, and softmax_lse from forward.
  * Backward computes: grad_Q, grad_K, grad_V
  */
 struct ScaledDotProductAttentionGradFn : public GradFn {
-    // ISSUE #48: Store stable data, NOT Tensor* pointers
     bool q_requires_grad = false;
     bool k_requires_grad = false;
     bool v_requires_grad = false;
-    float* q_grad = nullptr;
-    float* k_grad = nullptr;
-    float* v_grad = nullptr;
-    // Q/K/V are non-leaf activations (outputs of split_and_reshape_qkv / rope_rotation),
-    // so dQ/dK/dV are carried in GradFn-owned scratch buffers — the same Issue #55/#56
-    // ownership model every other node uses (MatMulGradFn, AddGradFn, …). We must NOT
-    // repurpose the input activation tensors' grad_ buffers as backward scratch: a
-    // non-leaf's grad_ is transient, is never zeroed by the leaf zero_grad sweep, and
-    // is not part of the gradient carrier contract. The leaf branch (unused in this
-    // pipeline) falls back to the persistent grad buffer like the other nodes.
-    bool q_is_leaf = false;
-    bool k_is_leaf = false;
-    bool v_is_leaf = false;
-    std::shared_ptr<float> owned_q_grad;  // dQ scratch (non-leaf carrier)
-    std::shared_ptr<float> owned_k_grad;  // dK scratch (non-leaf carrier)
-    std::shared_ptr<float> owned_v_grad;  // dV scratch (non-leaf carrier)
+    Tensor* leaf_q_gradient = nullptr;
+    Tensor* leaf_k_gradient = nullptr;
+    Tensor* leaf_v_gradient = nullptr;
     TensorContract::TensorShape q_shape, k_shape, v_shape;
     std::shared_ptr<GradFn> q_grad_fn;
     std::shared_ptr<GradFn> k_grad_fn;
@@ -771,25 +757,25 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         k_shape = k.shape;
         v_shape = v.shape;
         
-        // Copy shared_ptrs to captured grad_fns
-        q_grad_fn = q.grad_fn;
-        k_grad_fn = k.grad_fn;
-        v_grad_fn = v.grad_fn;
-        register_input(q.grad_fn);
-        register_input(k.grad_fn);
-        register_input(v.grad_fn);
-        
-        q_is_leaf = q.is_leaf;
-        k_is_leaf = k.is_leaf;
-        v_is_leaf = v.is_leaf;
-
-        // Leaf inputs (weights) own a persistent grad buffer — accumulate into it
-        // directly, exactly like AddGradFn/MatMulGradFn. Non-leaf activations (the
-        // real path here) get a GradFn-owned scratch carrier allocated in apply()
-        // once dimensions are known; we never call alloc_grad() on a transient.
-        if (q_requires_grad && q_is_leaf) { q.ensure_grad(); q_grad = q.grad_data(); }
-        if (k_requires_grad && k_is_leaf) { k.ensure_grad(); k_grad = k.grad_data(); }
-        if (v_requires_grad && v_is_leaf) { v.ensure_grad(); v_grad = v.grad_data(); }
+        auto capture = [&](Tensor& input, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+            input.require("ScaledDotProductAttentionGradFn::capture");
+            producer.reset();
+            leaf = nullptr;
+            if (!input.requires_grad) return;
+            if (input.is_leaf) {
+                if (input.grad_fn) throw std::runtime_error("SDPA capture: leaf has a producer");
+                input.ensure_grad();
+                leaf = input.grad_.get();
+                if (!leaf) throw std::runtime_error("SDPA capture: missing leaf gradient");
+            } else {
+                if (!input.grad_fn) throw std::runtime_error("SDPA capture: non-leaf has no producer");
+                producer = input.grad_fn;
+                register_input(producer);
+            }
+        };
+        capture(q, q_grad_fn, leaf_q_gradient);
+        capture(k, k_grad_fn, leaf_k_gradient);
+        capture(v, v_grad_fn, leaf_v_gradient);
     }
     
     void apply_impl(const Tensor& grad_output,
@@ -802,6 +788,11 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
             return;
+        }
+        if (!stream) throw std::runtime_error("SDPA backward: stream is NULL");
+        grad_output.require("SDPA backward gradient");
+        if (grad_output.shape.layout != q_shape.layout || grad_output.shape.as_4d() != q_shape.as_4d()) {
+            throw std::runtime_error("SDPA backward: gradient shape mismatch");
         }
         applied = true;
         
@@ -903,99 +894,48 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         // DISABLED Issue #83 normalization - use scale=1.0 for all gradients.
         // =========================================================================
         
-        // Convert gradients back to FP32 BHSD and accumulate WITHOUT normalization.
-        // Non-leaf inputs receive a freshly zeroed GradFn-owned carrier here (Issue
-        // #55/#56 model); leaf inputs accumulate into their persistent grad buffer.
-        if (q_requires_grad) {
-            if (!q_is_leaf && !owned_q_grad) {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), q_elems * sizeof(float), "sdpa_owned_q_grad", GRIM::MemoryAccounting::Kind::Gradient);
-                cudaMemsetAsync(buf, 0, q_elems * sizeof(float), stream);
-                owned_q_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-                q_grad = buf;
-            }
-            float* grad_q_fp32 = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_q_fp32), q_elems * sizeof(float), "sdpa_grad_q_fp32", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(grad_q_fp32, 0, q_elems * sizeof(float), stream);
-            
-            TensorConversion::convert_BSHD_bf16_to_BHSD(
-                dq_bf16, grad_q_fp32, batch_size, seq_len, num_heads, head_dim, stream);
-            logGradFlowTensorStats("SDPA.apply grad_q_fp32", grad_q_fp32, q_elems, stream);
-            
-            // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            accumulate_grad(q_grad, grad_q_fp32, q_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply q_grad");
-            logGradFlowTensorStats("SDPA.apply q_grad_accum", q_grad, q_elems, stream);
-            GRIM::MemoryAccounting::freeAsync(grad_q_fp32, stream);
+        // Convert/reduce directly into producer accumulators or persistent leaf gradients.
+        auto destination = [&](bool required, const std::shared_ptr<GradFn>& producer,
+                               Tensor* leaf, const TensorContract::TensorShape& shape) -> Tensor* {
+            if (!required) return nullptr;
+            if (producer) return &producer->gradient_destination(shape, stream);
+            if (!leaf) throw std::runtime_error("SDPA backward: missing leaf destination");
+            leaf->require("SDPA backward leaf");
+            return leaf;
+        };
+        Tensor* dq = destination(q_requires_grad, q_grad_fn, leaf_q_gradient, q_shape);
+        Tensor* dk = destination(k_requires_grad, k_grad_fn, leaf_k_gradient, k_shape);
+        Tensor* dv = destination(v_requires_grad, v_grad_fn, leaf_v_gradient, v_shape);
+        if (dq) {
+            TensorConversion::accumulate_BSHD_bf16_to_BHSD(
+                dq_bf16, dq->data, batch_size, seq_len, num_heads, head_dim, stream);
+            throwIfCudaFailed(cudaGetLastError(), "SDPA backward: dQ accumulation failed");
         }
-        
-        if (k_requires_grad) {
-            if (!k_is_leaf && !owned_k_grad) {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_k_grad", GRIM::MemoryAccounting::Kind::Gradient);
-                cudaMemsetAsync(buf, 0, kv_elems * sizeof(float), stream);
-                owned_k_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-                k_grad = buf;
-            }
-            float* grad_k_fp32 = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_k_fp32), kv_elems * sizeof(float), "sdpa_grad_k_fp32", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(grad_k_fp32, 0, kv_elems * sizeof(float), stream);
-            // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
-            // dk_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
+        if (dk) {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
-                dk_bf16, grad_k_fp32, batch_size, num_heads, num_kv_heads, heads_per_kv_group, seq_len, head_dim);
-            logGradFlowTensorStats("SDPA.apply grad_k_fp32", grad_k_fp32, kv_elems, stream);
-            // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            accumulate_grad(k_grad, grad_k_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply k_grad");
-            logGradFlowTensorStats("SDPA.apply k_grad_accum", k_grad, kv_elems, stream);
-            GRIM::MemoryAccounting::freeAsync(grad_k_fp32, stream);
+                dk_bf16, dk->data, batch_size, num_heads, num_kv_heads, heads_per_kv_group, seq_len, head_dim);
+            throwIfCudaFailed(cudaGetLastError(), "SDPA backward: dK accumulation failed");
         }
-        
-        if (v_requires_grad) {
-            if (!v_is_leaf && !owned_v_grad) {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_v_grad", GRIM::MemoryAccounting::Kind::Gradient);
-                cudaMemsetAsync(buf, 0, kv_elems * sizeof(float), stream);
-                owned_v_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-                v_grad = buf;
-            }
-            float* grad_v_fp32 = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_v_fp32), kv_elems * sizeof(float), "sdpa_grad_v_fp32", GRIM::MemoryAccounting::Kind::Gradient);
-            cudaMemsetAsync(grad_v_fp32, 0, kv_elems * sizeof(float), stream);
-            // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
-            // dv_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
+        if (dv) {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
-                dv_bf16, grad_v_fp32, batch_size, num_heads, num_kv_heads, heads_per_kv_group, seq_len, head_dim);
-            logGradFlowTensorStats("SDPA.apply grad_v_fp32", grad_v_fp32, kv_elems, stream);
-            // Scale = 1.0 (no normalization needed)
-            accumulate_grad(v_grad, grad_v_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply v_grad");
-            logGradFlowTensorStats("SDPA.apply v_grad_accum", v_grad, kv_elems, stream);
-            GRIM::MemoryAccounting::freeAsync(grad_v_fp32, stream);
+                dv_bf16, dv->data, batch_size, num_heads, num_kv_heads, heads_per_kv_group, seq_len, head_dim);
+            throwIfCudaFailed(cudaGetLastError(), "SDPA backward: dV accumulation failed");
         }
-        
-        // CONTINUE AUTOGRAD CHAIN - call grad_fns for Q, K, V
-        if (q_requires_grad && q_grad_fn) {
-            Tensor q_view;
-            q_view.data = q_grad; q_view.shape = q_shape;
-            q_view.owns_data = false; q_view.stream = stream;
-            q_grad_fn->apply(q_view, stream, backward_payload, backward_bindings);
-            // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
-        }
-        if (k_requires_grad && k_grad_fn) {
-            Tensor k_view;
-            k_view.data = k_grad; k_view.shape = k_shape;
-            k_view.owns_data = false; k_view.stream = stream;
-            k_grad_fn->apply(k_view, stream, backward_payload, backward_bindings);
-            // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
-        }
-        if (v_requires_grad && v_grad_fn) {
-            Tensor v_view;
-            v_view.data = v_grad; v_view.shape = v_shape;
-            v_view.owns_data = false; v_view.stream = stream;
-            v_grad_fn->apply(v_view, stream, backward_payload, backward_bindings);
-            // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
-        }
+        if (dq && !q_grad_fn) dq->record_leaf_gradient_delivery();
+        if (dk && !k_grad_fn) dk->record_leaf_gradient_delivery();
+        if (dv && !v_grad_fn) dv->record_leaf_gradient_delivery();
+        // Finish every write before notifying each unique producer, including aliased Q/K/V.
+        auto notify = [&](const std::shared_ptr<GradFn>& producer) {
+            if (!producer) return;
+            if (auto* engine = AutogradEngine::active()) engine->contribute(producer.get());
+            else producer->apply(producer->pending_gradient("SDPA backward producer"),
+                                 stream, backward_payload, backward_bindings);
+        };
+        notify(q_grad_fn);
+        if (k_grad_fn != q_grad_fn) notify(k_grad_fn);
+        if (v_grad_fn != q_grad_fn && v_grad_fn != k_grad_fn) notify(v_grad_fn);
     }
-    
+
     void release_saved() override {
         GradFn::release_saved();
         if (saved_q_bf16) { GRIM::MemoryAccounting::free(saved_q_bf16); saved_q_bf16 = nullptr; }
@@ -1009,10 +949,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (dk_bf16) { GRIM::MemoryAccounting::free(dk_bf16); dk_bf16 = nullptr; }
         if (dv_bf16) { GRIM::MemoryAccounting::free(dv_bf16); dv_bf16 = nullptr; }
         if (dout_bf16) { GRIM::MemoryAccounting::free(dout_bf16); dout_bf16 = nullptr; }
-        q_grad = nullptr; k_grad = nullptr; v_grad = nullptr;
-        owned_q_grad.reset();
-        owned_k_grad.reset();
-        owned_v_grad.reset();
+        leaf_q_gradient = nullptr;
+        leaf_k_gradient = nullptr;
+        leaf_v_gradient = nullptr;
         q_grad_fn.reset();
         k_grad_fn.reset();
         v_grad_fn.reset();
@@ -1478,190 +1417,70 @@ Tensor reshape_bhsd_to_flat(
  * Backward: grad_Q_bhsd, grad_K_bhsd, grad_V_bhsd -> grad_qkv_out -> W_qkv gradients
  */
 struct SplitAndReshapeQKVGradFn : public GradFn {
-    // Which output this GradFn is attached to (Q, K, or V)
     enum class OutputType { Q, K, V };
     OutputType output_type = OutputType::Q;
-    
-    // Shared state for all three outputs (only one instance owns the upstream chain)
     struct SharedState {
-        std::shared_ptr<GradFn> qkv_grad_fn;       // Grad fn of qkv_out (the matmul result)
+        std::shared_ptr<GradFn> qkv_grad_fn;
         TensorContract::TensorShape qkv_shape;
-        bool qkv_requires_grad = false;
-        bool qkv_input_is_leaf = false;
-        size_t qkv_numel = 0;
-        float* qkv_leaf_grad = nullptr;            // Persistent leaf grad buffer, if qkv_out is a leaf
-        float* merged_qkv_grad = nullptr;          // Owned local Jacobian result [tokens, qkv_dim]
-        std::shared_ptr<float> owned_merged_qkv_grad;
-        
-        // BHSD gradient pointers from Q, K, V backward passes
-        // Stored from owned copies of grad_output.data — no intermediate BSM buffers needed.
-        // TensorConversion reads these in BHSD layout and writes flat QKV grad.
-        const float* grad_Q_bhsd = nullptr;  // [batch, num_heads, seq, head_dim]
-        const float* grad_K_bhsd = nullptr;  // [batch, num_kv_heads, seq, head_dim]
-        const float* grad_V_bhsd = nullptr;  // [batch, num_kv_heads, seq, head_dim]
-        
-        // Owned references that keep the gradient buffers alive until the merge
-        // kernel has been submitted. Without these, an upstream GradFn's
-        // release_saved() can free the buffer before the 3rd apply() fires the
-        // merge that reads all three pointers.
-        std::shared_ptr<float> owned_grad_Q;
-        std::shared_ptr<float> owned_grad_K;
-        std::shared_ptr<float> owned_grad_V;
-        
-        // Dimensions
-        int tokens = 0;
+        Tensor* qkv_leaf_gradient = nullptr;
         int batch = 0;
         int seq = 0;
         int num_heads = 0;
         int num_kv_heads = 0;
         int head_dim = 0;
-        
-        // Count of how many outputs have been processed
-        std::atomic<int> apply_count{0};
-        
-        ~SharedState() {
-            // shared_ptr members destruct automatically
-        }
+        // Only used by the recursive fallback; the engine counts discovered edges.
+        int completed_outputs = 0;
     };
-    
     std::shared_ptr<SharedState> shared;
-    
+
     SplitAndReshapeQKVGradFn() { op_name = "split_and_reshape_qkv"; }
 
-    // Engine topology: the three Q/K/V instances share one upstream (qkv_out).
-    // The merge that calls qkv_grad_fn->apply() fires exactly once (on whichever
-    // instance runs third), so exactly ONE instance must report the edge for the
-    // in-degree count to match. We designate the Q instance. When qkv_out is a
-    // leaf, the merge accumulates terminally into its registry grad buffer and
-    // there is no upstream edge.
+    // Each reachable output writes its own slice and contributes its own edge.
+    // This also supports engine graphs that consume only a subset of Q/K/V.
     void collect_input_edges(std::vector<GradFn*>& out) const override {
         out.clear();
-        if (output_type == OutputType::Q && shared && shared->qkv_grad_fn) {
-            out.push_back(shared->qkv_grad_fn.get());
-        }
+        if (shared && shared->qkv_grad_fn) out.push_back(shared->qkv_grad_fn.get());
     }
-    
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
+
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream,
                     const Batching::BatchPayload* backward_payload,
                     const Batching::BatchDeviceBindings* backward_bindings) override {
-        const char* type_str = (output_type == OutputType::Q) ? "Q" : 
-                               (output_type == OutputType::K) ? "K" : "V";
-        
-        if (!shared) {
-            throw std::runtime_error(std::string("[SplitQKV-") + type_str + "] shared is null");
-        }
-        if (applied) {
-            return;
-        }
-        applied = true;
-        
+        setCurrentGradFnOp("split_and_reshape_qkv", this);
+        if (applied) return;
+        if (!shared || !stream) throw std::runtime_error("SplitQKV backward: missing state or stream");
         auto& state = *shared;
-        
-        // Copy grad_output into an owned buffer.  The upstream GradFn (e.g.
-        // RoPEGradFn) may call release_saved() which frees its buffer BEFORE
-        // the 3rd apply() fires the fused kernel that reads all three pointers.
-        // Owning a copy here guarantees the data survives.
-        const std::size_t n_bytes = grad_output.numel() * sizeof(float);
-        float* owned_buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&owned_buf), n_bytes, "SplitQKV_owned_grad", GRIM::MemoryAccounting::Kind::Gradient);
-        cudaMemcpyAsync(owned_buf, grad_output.data, n_bytes, cudaMemcpyDeviceToDevice, stream);
-        
-        if (output_type == OutputType::Q) {
-            state.owned_grad_Q.reset(owned_buf, [](float* p) { queueForDeferredCleanup(p); });
-            state.grad_Q_bhsd = owned_buf;
-        } else if (output_type == OutputType::K) {
-            state.owned_grad_K.reset(owned_buf, [](float* p) { queueForDeferredCleanup(p); });
-            state.grad_K_bhsd = owned_buf;
-        } else {  // V
-            state.owned_grad_V.reset(owned_buf, [](float* p) { queueForDeferredCleanup(p); });
-            state.grad_V_bhsd = owned_buf;
+        grad_output.require("SplitQKV backward gradient");
+        const int heads = output_type == OutputType::Q ? state.num_heads : state.num_kv_heads;
+        const auto expected = TensorContract::TensorShape::make_BHSD(
+            state.batch, heads, state.seq, state.head_dim);
+        if (grad_output.shape.layout != expected.layout || grad_output.shape.as_4d() != expected.as_4d()) {
+            throw std::runtime_error("SplitQKV backward: gradient shape mismatch");
         }
-        
-        // Check if all three outputs have been processed
-        const int count = state.apply_count.fetch_add(1) + 1;
-        
-        if (count == 3) {
-            if (!state.qkv_requires_grad) {
-                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: qkv_out does not require grad but SplitQKV GradFn was invoked");
+        Tensor* destination = state.qkv_grad_fn
+            ? &state.qkv_grad_fn->gradient_destination(state.qkv_shape, stream) : state.qkv_leaf_gradient;
+        if (!destination) throw std::runtime_error("SplitQKV backward: missing destination");
+        destination->require("SplitQKV backward destination");
+        applied = true;
+        TensorConversion::accumulate_qkv_grad_gqa(
+            grad_output.data, destination->data,
+            state.batch, state.num_heads, state.num_kv_heads, state.seq, state.head_dim,
+            static_cast<int>(output_type), stream);
+        throwIfCudaFailed(cudaGetLastError(), "SplitQKV backward: slice accumulation failed");
+        if (state.qkv_grad_fn) {
+            if (auto* engine = AutogradEngine::active()) {
+                engine->contribute(state.qkv_grad_fn.get());
+            } else if (++state.completed_outputs == 3) {
+                state.qkv_grad_fn->apply(state.qkv_grad_fn->pending_gradient("SplitQKV backward producer"),
+                                         stream, backward_payload, backward_bindings);
             }
-            if (!state.grad_Q_bhsd || !state.grad_K_bhsd || !state.grad_V_bhsd) {
-                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: missing Q/K/V gradient before merge");
-            }
-            if (!state.merged_qkv_grad) {
-                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: merged_qkv_grad is NULL - forward capture failed");
-            }
-
-            // All three BHSD gradient pointers collected. Delegate the BHSD -> flat
-            // merge to TensorConversion, the single source of truth for QKV layout.
-            TensorConversion::merge_qkv_grads_gqa(
-                state.grad_Q_bhsd, state.grad_K_bhsd, state.grad_V_bhsd,
-                state.merged_qkv_grad,
-                state.batch, state.num_heads, state.num_kv_heads, state.seq, state.head_dim,
-                stream);
-            {
-                cudaError_t err = cudaGetLastError();
-                if (err != cudaSuccess) {
-                    throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: merge_qkv_grads_gqa launch failed: " +
-                        std::string(cudaGetErrorString(err)));
-                }
-            }
-
-            logGradFlowTensorStats("SplitQKV.merge grad_Q_bhsd",
-                                   state.grad_Q_bhsd,
-                                   static_cast<std::size_t>(state.batch) * state.num_heads * state.seq * state.head_dim,
-                                   stream);
-            logGradFlowTensorStats("SplitQKV.merge grad_K_bhsd",
-                                   state.grad_K_bhsd,
-                                   static_cast<std::size_t>(state.batch) * state.num_kv_heads * state.seq * state.head_dim,
-                                   stream);
-            logGradFlowTensorStats("SplitQKV.merge grad_V_bhsd",
-                                   state.grad_V_bhsd,
-                                   static_cast<std::size_t>(state.batch) * state.num_kv_heads * state.seq * state.head_dim,
-                                   stream);
-            logGradFlowTensorStats("SplitQKV.merge merged_qkv_grad",
-                                   state.merged_qkv_grad,
-                                   state.qkv_numel,
-                                   stream);
-
-            if (state.qkv_input_is_leaf) {
-                if (!state.qkv_leaf_grad) {
-                    throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: qkv_out is leaf but qkv_leaf_grad is NULL");
-                }
-                accumulate_grad(state.qkv_leaf_grad,
-                                state.merged_qkv_grad,
-                                state.qkv_numel,
-                                1.0f,
-                                stream,
-                                "SplitAndReshapeQKVGradFn::apply qkv_leaf_grad");
-                cudaError_t err = cudaGetLastError();
-                if (err != cudaSuccess) {
-                    throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: leaf qkv gradient accumulation failed: " +
-                        std::string(cudaGetErrorString(err)));
-                }
-                return;
-            }
-
-            // Continue the chain to qkv_out -> W_qkv / b_qkv. Non-leaf qkv_out
-            // gradients are local scratch owned by this GradFn, not qkv_out.grad().
-            if (state.qkv_grad_fn) {
-                Tensor qkv_grad_tensor;
-                qkv_grad_tensor.data = state.merged_qkv_grad;
-                qkv_grad_tensor.shape = state.qkv_shape;
-                qkv_grad_tensor.owns_data = false;
-                qkv_grad_tensor.stream = stream;
-                
-                state.qkv_grad_fn->apply(qkv_grad_tensor, stream, backward_payload, backward_bindings);
-                // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
-            } else {
-                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: non-leaf qkv_out has NULL upstream grad_fn");
-            }
+        } else {
+            destination->record_leaf_gradient_delivery();
         }
     }
-    
+
     void release_saved() override {
         GradFn::release_saved();
-        // SharedState cleanup happens via shared_ptr destructor
+        shared.reset();
     }
 };
 
@@ -1741,31 +1560,17 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     if (requires_grad) {
         // Create shared state for all three outputs
         auto shared = std::make_shared<SplitAndReshapeQKVGradFn::SharedState>();
-        shared->tokens = tokens;
         shared->batch = batch;
         shared->seq = seq;
         shared->num_heads = num_heads;
         shared->num_kv_heads = num_kv_heads;
         shared->head_dim = head_dim;
         shared->qkv_shape = qkv_out.shape;
-        shared->qkv_requires_grad = qkv_out.requires_grad;
-        shared->qkv_input_is_leaf = qkv_out.is_leaf;
-        shared->qkv_numel = qkv_out.numel();
-        
-        float* merged_qkv_grad = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&merged_qkv_grad),
-                          shared->qkv_numel * sizeof(float),
-                          "SplitQKV_merged_qkv_grad", GRIM::MemoryAccounting::Kind::Gradient);
-        cudaMemsetAsync(merged_qkv_grad, 0, shared->qkv_numel * sizeof(float), stream);
-        shared->owned_merged_qkv_grad.reset(merged_qkv_grad, [](float* p) {
-            queueForDeferredCleanup(p);
-        });
-        shared->merged_qkv_grad = merged_qkv_grad;
-
         if (qkv_out.is_leaf) {
+            if (qkv_out.grad_fn) throw std::runtime_error("split_and_reshape_qkv: leaf has a producer");
             qkv_out.ensure_grad();
-            shared->qkv_leaf_grad = qkv_out.grad_data();
-            if (!shared->qkv_leaf_grad) {
+            shared->qkv_leaf_gradient = qkv_out.grad_.get();
+            if (!shared->qkv_leaf_gradient) {
                 throw std::runtime_error("split_and_reshape_qkv: qkv_out leaf grad_data is NULL after ensure_grad");
             }
         } else {
@@ -1805,162 +1610,77 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
 
 
 struct RoPEGradFn : public GradFn {
-    /**
-     * OutputType identifies which tensor (Q or K) this GradFn is attached to.
-     */
     enum class OutputType { Q, K };
     OutputType output_type = OutputType::Q;
-    
-    /**
-     * SharedState holds the common data for coordinating Q and K backward passes.
-     * - Stores upstream grad_fns for Q and K (from split_and_reshape_qkv)
-     * - Stores RoPE parameters (inv_freq, dimensions)
-     * - Uses atomic counter to detect when both Q and K backward are complete
-     */
     struct SharedState {
-        // Upstream grad_fns for Q and K (from split_and_reshape_qkv output)
         std::shared_ptr<GradFn> q_upstream_grad_fn;
         std::shared_ptr<GradFn> k_upstream_grad_fn;
-        
-        // ISSUE #48 FIX: Don't store Tensor by value - operator= is deleted
-        // Instead, store only what we need for backward: requires_grad flags
+        Tensor* leaf_q_gradient = nullptr;
+        Tensor* leaf_k_gradient = nullptr;
+        TensorContract::TensorShape q_shape, k_shape;
         bool q_requires_grad = false;
         bool k_requires_grad = false;
-        
-        // RoPE parameters (captured at forward time)
         GRIM::HyperParameters::EncoderSelfAttentionHP hp{};
         const float* inv_freq = nullptr;
         int rotary_dim = 0;
         int pos_offset = 0;
-        
-        // Atomic counter: when reaches 2, both Q and K backward complete
-        std::atomic<int> apply_count{0};
-        
-        ~SharedState() {
-            // shared_ptr members destruct automatically
-        }
     };
-    
     std::shared_ptr<SharedState> shared;
-    
-    // Owned buffer for the inverse-rotated gradient.
-    // Keeps the data alive until release_saved(), which prevents
-    // SplitAndReshapeQKVGradFn from reading a dangling pointer.
-    std::shared_ptr<float> owned_grad_buf;
-
     RoPEGradFn() { op_name = "rope_rotation"; }
 
-    // Engine topology: Q and K are independent 1-in/1-out instances (the atomic
-    // apply_count is vestigial). Each reports only its own upstream edge.
     void collect_input_edges(std::vector<GradFn*>& out) const override {
         out.clear();
-        if (!shared) {
-            return;
-        }
-        if (output_type == OutputType::Q) {
-            if (shared->q_requires_grad && shared->q_upstream_grad_fn) {
-                out.push_back(shared->q_upstream_grad_fn.get());
-            }
-        } else {
-            if (shared->k_requires_grad && shared->k_upstream_grad_fn) {
-                out.push_back(shared->k_upstream_grad_fn.get());
-            }
-        }
+        if (!shared) return;
+        const auto& producer = output_type == OutputType::Q
+            ? shared->q_upstream_grad_fn : shared->k_upstream_grad_fn;
+        if (producer) out.push_back(producer.get());
     }
 
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream,
                     const Batching::BatchPayload* backward_payload,
                     const Batching::BatchDeviceBindings* backward_bindings) override {
-        (void)backward_bindings;
-        if (!shared) {
-            throw std::runtime_error("RoPEGradFn::apply: shared state is NULL - RoPE forward must initialize shared state");
+        setCurrentGradFnOp("rope_rotation", this);
+        if (applied) return;
+        if (!shared || !stream || !backward_payload) {
+            throw std::runtime_error("RoPE backward: missing state, stream or payload");
         }
         auto& state = *shared;
-        
-        const char* type_str = (output_type == OutputType::Q) ? "Q" : "K";
-        // Shape is 4D (BHSD layout) - use as_4d() accessor
-        const auto& s4d = grad_output.shape.as_4d();
-        AG_TRACE("[RoPEGradFn-%s] apply() ENTER grad_output.data=%p shape=[%d,%d,%d,%d]\n",
-                 type_str, grad_output.data, 
-                 s4d.batch, s4d.heads, s4d.seq, s4d.head_dim);
-        
-        // Allocate a separate buffer and copy grad_output into it.
-        // Inverse RoPE rotation is applied to this copy — grad_output is NOT mutated.
-        const std::size_t n_elems = grad_output.numel();
-        float* grad_buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_buf), n_elems * sizeof(float), "RoPEGradFn_grad_buf", GRIM::MemoryAccounting::Kind::Gradient);
-        cudaMemcpyAsync(grad_buf, grad_output.data, n_elems * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        owned_grad_buf.reset(grad_buf, [](float* p) { queueForDeferredCleanup(p); });
-
-        if (!backward_payload) {
-            throw std::runtime_error("RoPEGradFn::apply: backward_payload is NULL - orchestration MUST pass the active BatchPayload into backward()");
+        const bool is_q = output_type == OutputType::Q;
+        if (!(is_q ? state.q_requires_grad : state.k_requires_grad)) return;
+        const auto& shape = is_q ? state.q_shape : state.k_shape;
+        const auto& producer = is_q ? state.q_upstream_grad_fn : state.k_upstream_grad_fn;
+        Tensor* leaf = is_q ? state.leaf_q_gradient : state.leaf_k_gradient;
+        grad_output.require("RoPE backward gradient");
+        if (grad_output.shape.layout != shape.layout || grad_output.shape.as_4d() != shape.as_4d()) {
+            throw std::runtime_error("RoPE backward: gradient shape mismatch");
         }
-        backward_payload->validate("RoPEGradFn::apply");
-        
-        if (output_type == OutputType::Q) {
-            // Inverse-rotate dQ only - K gradients handled by K's GradFn
-            PBM::launchRoPERotationGQA_backward(
-                grad_buf,         // dQ copy - modified in-place
-                nullptr,          // dK = nullptr, handle separately
-                state.inv_freq,
-                *backward_payload,
-                state.hp,
-                state.rotary_dim,
-                stream,
-                state.pos_offset
-            );
-            AG_TRACE("[RoPEGradFn-Q] Inverse RoPE applied to dQ copy\n");
+        backward_payload->validate("RoPE backward");
+        if (backward_payload->batch_size != shape.as_4d().batch ||
+            backward_payload->max_seq_len != shape.as_4d().seq) {
+            throw std::runtime_error("RoPE backward: payload geometry differs from forward");
+        }
+        Tensor* destination = producer ? &producer->gradient_destination(shape, stream) : leaf;
+        if (!destination) throw std::runtime_error("RoPE backward: missing destination");
+        destination->require("RoPE backward destination");
+        applied = true;
+        // Inverse-rotate the immutable incoming contribution, adding into the destination.
+        // Rotating the destination itself would corrupt contributions from other consumers.
+        PBM::launchRoPERotationGQA_backward(
+            is_q ? destination->data : nullptr, is_q ? nullptr : destination->data,
+            state.inv_freq, *backward_payload, state.hp, state.rotary_dim, stream, state.pos_offset,
+            is_q ? grad_output.data : nullptr, is_q ? nullptr : grad_output.data);
+        if (producer) {
+            if (auto* engine = AutogradEngine::active()) engine->contribute(producer.get());
+            else producer->apply(producer->pending_gradient("RoPE backward producer"),
+                                 stream, backward_payload, backward_bindings);
         } else {
-            // Inverse-rotate dK only - Q gradients handled by Q's GradFn
-            PBM::launchRoPERotationGQA_backward(
-                nullptr,          // dQ = nullptr, handle separately
-                grad_buf,         // dK copy - modified in-place
-                state.inv_freq,
-                *backward_payload,
-                state.hp,
-                state.rotary_dim,
-                stream,
-                state.pos_offset
-            );
-            AG_TRACE("[RoPEGradFn-K] Inverse RoPE applied to dK copy\n");
+            leaf->record_leaf_gradient_delivery();
         }
-        
-        // Build a tensor view over the owned copy for downstream propagation
-        Tensor rotated_grad;
-        rotated_grad.data = grad_buf;
-        rotated_grad.shape = grad_output.shape;
-        rotated_grad.owns_data = false;  // owned_grad_buf controls lifetime
-        rotated_grad.stream = stream;
-        
-        // Increment counter to track completion
-        const int count = state.apply_count.fetch_add(1) + 1;
-        AG_TRACE("[RoPEGradFn-%s] apply_count = %d/2\n", type_str, count);
-        
-        // Continue upstream chain for THIS output immediately
-        // (Unlike SplitAndReshapeQKV, we don't need to wait for both because
-        //  Q and K have independent upstream paths after split_and_reshape_qkv)
-        if (output_type == OutputType::Q) {
-            if (state.q_requires_grad && state.q_upstream_grad_fn) {
-                AG_TRACE("[RoPEGradFn-Q] Continuing to q_upstream_grad_fn...\n");
-                state.q_upstream_grad_fn->apply(rotated_grad, stream, backward_payload, backward_bindings);
-                // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
-            }
-        } else {
-            if (state.k_requires_grad && state.k_upstream_grad_fn) {
-                AG_TRACE("[RoPEGradFn-K] Continuing to k_upstream_grad_fn...\n");
-                state.k_upstream_grad_fn->apply(rotated_grad, stream, backward_payload, backward_bindings);
-                // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
-            }
-        }
-        
-        AG_TRACE("[RoPEGradFn-%s] apply() EXIT\n", type_str);
     }
-    
+
     void release_saved() override {
         GradFn::release_saved();
-        owned_grad_buf.reset();
-        // SharedState cleanup happens via shared_ptr destructor
+        shared.reset();
     }
 };
 
@@ -2055,17 +1775,25 @@ std::pair<Tensor, Tensor> rope_rotation(
         // Create shared state for coordinating Q and K backward
         auto shared = std::make_shared<RoPEGradFn::SharedState>();
         
-        // Chain to the INPUT tensors' grad_fns (not the outputs')
-        if (Q.grad_fn) {
-            shared->q_upstream_grad_fn = Q.grad_fn;
-        }
-        if (K.grad_fn) {
-            shared->k_upstream_grad_fn = K.grad_fn;
-        }
-        
+        auto capture = [&](const Tensor& input, std::shared_ptr<GradFn>& producer, Tensor*& leaf) {
+            if (!input.requires_grad) return;
+            if (input.is_leaf) {
+                if (input.grad_fn) throw std::runtime_error("RoPE capture: leaf has a producer");
+                const_cast<Tensor&>(input).ensure_grad();
+                leaf = input.grad_.get();
+                if (!leaf) throw std::runtime_error("RoPE capture: missing leaf gradient");
+            } else {
+                if (!input.grad_fn) throw std::runtime_error("RoPE capture: non-leaf has no producer");
+                producer = input.grad_fn;
+            }
+        };
+        capture(Q, shared->q_upstream_grad_fn, shared->leaf_q_gradient);
+        capture(K, shared->k_upstream_grad_fn, shared->leaf_k_gradient);
         shared->q_requires_grad = Q.requires_grad;
         shared->k_requires_grad = K.requires_grad;
-        
+        shared->q_shape = Q.shape;
+        shared->k_shape = K.shape;
+
         // Capture RoPE parameters
         shared->hp = hp;
         shared->inv_freq = inv_freq;

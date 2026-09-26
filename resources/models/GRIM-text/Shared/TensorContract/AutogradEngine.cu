@@ -153,6 +153,10 @@ void AutogradEngine::run(GradFn* root) {
             if (syncEachNodeForDiagnostics()) {
                 synchronizeAfterNodeOrThrow(stream_, node);
             }
+            // All reads of this node's incoming gradient have been enqueued on
+            // stream_. Release its storage in stream order without clearing the
+            // graph edges or forward state that other backward nodes may borrow.
+            node->release_consumed_gradient(stream_);
         }
 
         // Topology invariant: every discovered node must have fired exactly once
@@ -171,8 +175,8 @@ void AutogradEngine::run(GradFn* root) {
     }
     t_active_engine = nullptr;
 
-    // Gradient tensors remain owned by their GradFns. The engine has only
-    // scheduling state to destroy.
+    // Consumed gradient tensors have been retired in stream order. The engine
+    // still owns only scheduling state; forward state is cleared with the graph.
 }
 
 }  // namespace autograd

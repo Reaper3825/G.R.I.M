@@ -147,4 +147,11 @@ void merge_qkv_grads_gqa(
     int batch, int num_heads, int num_kv_heads, int seq, int head_dim,
     cudaStream_t stream = nullptr);
 
+// Add one BHSD output gradient into its flat QKV slice (output_index: Q=0, K=1, V=2).
+// Other slices and contributions already in the destination remain untouched.
+void accumulate_qkv_grad_gqa(
+    const float* gradient, float* grad_qkv,
+    int batch, int num_heads, int num_kv_heads, int seq, int head_dim,
+    int output_index, cudaStream_t stream);
+
 } // namespace TensorConversion

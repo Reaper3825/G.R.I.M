@@ -377,6 +377,23 @@ __global__ void kernel_merge_qkv_grads_gqa(
     grad_qkv[idx] = value;
 }
 
+// Each output contributes independently; no Q/K/V staging buffers are needed.
+__global__ void kernel_accumulate_qkv_grad_gqa(
+    const float* __restrict__ gradient, float* __restrict__ grad_qkv,
+    int batch, int heads, int seq, int head_dim, int qkv_dim, int feature_offset)
+{
+    const std::size_t idx = globalLinearIndex();
+    const std::size_t count = static_cast<std::size_t>(batch) * heads * seq * head_dim;
+    if (idx >= count) return;
+    const int d = idx % head_dim;
+    const int s = (idx / head_dim) % seq;
+    const int h = (idx / (static_cast<std::size_t>(head_dim) * seq)) % heads;
+    const int b = idx / (static_cast<std::size_t>(head_dim) * seq * heads);
+    const std::size_t dst = (static_cast<std::size_t>(b) * seq + s) * qkv_dim
+                          + feature_offset + h * head_dim + d;
+    grad_qkv[dst] += gradient[idx];
+}
+
 // ============================================================================
 // Host Wrapper Functions
 // ============================================================================
@@ -529,6 +546,28 @@ void merge_qkv_grads_gqa(
         kernel_merge_qkv_grads_gqa<<<blocks, BLOCK_SIZE, 0, stream>>>(
             grad_Q, grad_K, grad_V, grad_qkv, batch, num_heads, num_kv_heads, seq, head_dim);
     }
+}
+
+void accumulate_qkv_grad_gqa(
+    const float* gradient, float* grad_qkv,
+    int batch, int num_heads, int num_kv_heads, int seq, int head_dim,
+    int output_index, cudaStream_t stream)
+{
+    if (!gradient || !grad_qkv || !stream) {
+        throw std::runtime_error("accumulate_qkv_grad_gqa: null input, destination or stream");
+    }
+    if (batch <= 0 || num_heads <= 0 || num_kv_heads <= 0 || seq <= 0 || head_dim <= 0 ||
+        output_index < 0 || output_index > 2) {
+        throw std::runtime_error("accumulate_qkv_grad_gqa: invalid geometry or output index");
+    }
+    const int heads = output_index == 0 ? num_heads : num_kv_heads;
+    const int offset = output_index == 0 ? 0 :
+        (num_heads + (output_index - 1) * num_kv_heads) * head_dim;
+    const std::size_t count = static_cast<std::size_t>(batch) * heads * seq * head_dim;
+    const int blocks = static_cast<int>((count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    kernel_accumulate_qkv_grad_gqa<<<blocks, BLOCK_SIZE, 0, stream>>>(
+        gradient, grad_qkv, batch, heads, seq, head_dim,
+        (num_heads + 2 * num_kv_heads) * head_dim, offset);
 }
 
 } // namespace TensorConversion

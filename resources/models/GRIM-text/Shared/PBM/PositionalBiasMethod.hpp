@@ -102,7 +102,9 @@ void launchRoPERotationGQA(
 // GQA-aware RoPE backward (inverse rotation for gradients)
 // grad_Q: [batch, num_q_heads, seq_len, head_dim] - gradients in rotated space
 // grad_K: [batch, num_kv_heads, seq_len, head_dim] - gradients in rotated space
-// After call: grad_Q, grad_K are in original (unrotated) space
+// Without sources: inverse-rotate grad_Q/grad_K in place. With sources: add the
+// inverse-rotated sources into destinations, preserving existing contributions.
+// Source and destination storage must not alias.
 void launchRoPERotationGQA_backward(
     float* grad_Q,                      // Query gradient tensor (in-place)
     float* grad_K,                      // Key gradient tensor (in-place)
@@ -111,7 +113,9 @@ void launchRoPERotationGQA_backward(
     const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     int rotary_dim,
     cudaStream_t stream = nullptr,
-    int pos_offset = 0                  // Position offset (MUST match forward pass)
+    int pos_offset = 0,                // Must match forward
+    const float* source_Q = nullptr,   // If supplied: grad_Q += inverse_rotate(source_Q)
+    const float* source_K = nullptr    // If supplied: grad_K += inverse_rotate(source_K)
 );
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -706,6 +706,10 @@ struct GradFn {
      */
     std::shared_ptr<Tensor> pending_gradient_;
 
+    // Retire only the consumed engine accumulator, preserving saved activations
+    // and producer references needed by the rest of the graph.
+    void release_consumed_gradient(cudaStream_t stream);
+
     /**
      * Record an upstream producer edge. Null (leaf) producers are ignored;
      * duplicates collapse to one edge so contribute-count == edge-count.
