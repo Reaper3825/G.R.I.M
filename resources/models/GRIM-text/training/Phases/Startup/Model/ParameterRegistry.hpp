@@ -85,6 +85,11 @@ struct AttentionResidualGateParameterTensors {
     Tensor b_gate;  // [1] when config.attention_residual_gate_enabled=true
 };
 
+struct AttentionHeadGateParameterTensors {
+    Tensor W_gate;  // [d_model, num_heads] when config.attention_head_gate_enabled=true
+    Tensor b_gate;  // [num_heads] when config.attention_head_gate_enabled=true
+};
+
 struct EncodingLayerParameterTensors {
     Tensor rms1_gamma;     // [d_model]
     Tensor rms2_gamma;     // [d_model]
@@ -95,6 +100,7 @@ struct EncodingLayerParameterTensors {
     Tensor layer_scale1;   // [1, d_model] when config.use_layer_scale=true
     Tensor layer_scale2;   // [1, d_model] when config.use_layer_scale=true
     AttentionResidualGateParameterTensors attention_residual_gate;
+    AttentionHeadGateParameterTensors attention_head_gate;
 };
 
 struct FeedForwardParameterTensors {
@@ -278,6 +284,34 @@ struct StartupParameterRegistry {
                 std::string(caller) + ": attention residual gate parameters are unavailable for layer " +
                 std::to_string(layer) +
                 " (config.attention_residual_gate_enabled=false or startup initialization incomplete)");
+        }
+        return gate_parameters;
+    }
+
+    GRIM::AttentionHeadGateParameterTensors& requireAttentionHeadGateParameters(
+        int layer,
+        const char* caller) {
+        auto& encoding_parameters = requireEncodingLayerParameters(layer, caller);
+        auto& gate_parameters = encoding_parameters.attention_head_gate;
+        if (!gate_parameters.W_gate.data || !gate_parameters.b_gate.data) {
+            throw std::runtime_error(
+                std::string(caller) + ": attention head gate parameters are unavailable for layer " +
+                std::to_string(layer) +
+                " (config.attention_head_gate_enabled=false or startup initialization incomplete)");
+        }
+        return gate_parameters;
+    }
+
+    const GRIM::AttentionHeadGateParameterTensors& requireAttentionHeadGateParameters(
+        int layer,
+        const char* caller) const {
+        const auto& encoding_parameters = requireEncodingLayerParameters(layer, caller);
+        const auto& gate_parameters = encoding_parameters.attention_head_gate;
+        if (!gate_parameters.W_gate.data || !gate_parameters.b_gate.data) {
+            throw std::runtime_error(
+                std::string(caller) + ": attention head gate parameters are unavailable for layer " +
+                std::to_string(layer) +
+                " (config.attention_head_gate_enabled=false or startup initialization incomplete)");
         }
         return gate_parameters;
     }
@@ -482,6 +516,9 @@ using EncodingLayerTensorParameterSpec =
 using AttentionResidualGateTensorParameterSpec =
     TensorParameterSpec<GRIM::AttentionResidualGateParameterTensors>;
 
+using AttentionHeadGateTensorParameterSpec =
+    TensorParameterSpec<GRIM::AttentionHeadGateParameterTensors>;
+
 using FeedForwardTensorParameterSpec =
     TensorParameterSpec<GRIM::FeedForwardParameterTensors>;
 
@@ -551,6 +588,14 @@ inline constexpr std::array<AttentionResidualGateTensorParameterSpec, 2>
         {"attention_residual_gate_weight", &GRIM::AttentionResidualGateParameterTensors::W_gate,
          GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
         {"attention_residual_gate_bias", &GRIM::AttentionResidualGateParameterTensors::b_gate,
+         GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
+    }};
+
+inline constexpr std::array<AttentionHeadGateTensorParameterSpec, 2>
+    kAttentionHeadGateTensorParameters = {{
+        {"attention_head_gate_weight", &GRIM::AttentionHeadGateParameterTensors::W_gate,
+         GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
+        {"attention_head_gate_bias", &GRIM::AttentionHeadGateParameterTensors::b_gate,
          GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
     }};
 
@@ -627,6 +672,7 @@ inline void registerEncodingLayerParameters(
     bool freeze_learned_rms_gammas,
     bool use_layer_scale,
     bool attention_residual_gate_enabled,
+    bool attention_head_gate_enabled,
     RegistrarT& registrar) {
     if (layer_index < 0) {
         throw std::runtime_error("registerEncodingLayerParameters: layer_index must be non-negative");
@@ -684,6 +730,17 @@ inline void registerEncodingLayerParameters(
             layer_index,
             attention_residual_gate_enabled,
             "config.attention_residual_gate_enabled=false");
+    }
+
+    for (const auto& spec : kAttentionHeadGateTensorParameters) {
+        registrar.addConfigGatedTensor(
+            prefix + spec.name,
+            encoding_parameters.attention_head_gate.*(spec.tensor_member),
+            spec.type,
+            spec.stats_bucket,
+            layer_index,
+            attention_head_gate_enabled,
+            "config.attention_head_gate_enabled=false");
     }
 }
 

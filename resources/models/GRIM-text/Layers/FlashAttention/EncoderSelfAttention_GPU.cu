@@ -101,6 +101,37 @@ namespace {
         }
     }
 
+    // Shared by training/full forward and cached prefill/decode. All data
+    // borrowed by backward lives in the registry or the forward-owned sink.
+    void applyHeadGateAndFlattenAttention(
+        const GRIM::Tensor& norm_input,
+        const GRIM::Tensor& W_head_gate,
+        const GRIM::Tensor& b_head_gate,
+        const GRIM::Attention::EncoderSelfAttentionForwardRequest& request,
+        GRIM::Forward::ModelForwardOutputs& outputs) {
+        const size_t layer = static_cast<size_t>(request.layer_idx);
+        auto& raw = outputs.attn_out_bhsd_per_layer[layer];
+        auto& flat = outputs.attn_out_per_layer[layer];
+        if (!request.hp.attention_head_gate_enabled) {
+            if (W_head_gate.data || b_head_gate.data)
+                throw std::runtime_error("head gate disabled but registry tensors are allocated");
+            flat = GRIM::autograd::reshape_bhsd_to_flat(
+                raw, request.payload, request.hp, request.stream);
+            return;
+        }
+        if (!W_head_gate.data || !b_head_gate.data)
+            throw std::runtime_error("head gate enabled but registry tensors are unavailable");
+        // Matmul/broadcast validate input compatibility; gated flatten validates
+        // that the output gates match query-head geometry, including GQA.
+        auto& logits = outputs.attention_head_gate_logits_per_layer[layer];
+        auto& multiplier = outputs.attention_head_gate_multiplier_per_layer[layer];
+        logits = GRIM::autograd::matmul(norm_input, W_head_gate, request.stream);
+        logits = GRIM::autograd::broadcast_add(logits, b_head_gate, request.stream);
+        GRIM::Tensor probability = GRIM::autograd::sigmoid(logits, request.stream, logits.data);
+        multiplier = GRIM::autograd::mul_scalar(probability, 2.0f, request.stream);
+        flat = GRIM::autograd::head_gate_bhsd_to_flat(multiplier, raw, request.stream);
+    }
+
     std::uint64_t attentionDropoutSeed(const GRIM::Attention::EncoderSelfAttentionForwardRequest& request) {
         const float attention_dropout_p = request.hp.dropout_enabled ? request.hp.attention_dropout : 0.0f;
         if (attention_dropout_p <= 0.0f) {
@@ -119,6 +150,8 @@ void encoderSelfAttentionForward(
     const Tensor& b_qkv,
     const Tensor& W_o,
     const Tensor& b_o,
+    const Tensor& W_head_gate,
+    const Tensor& b_head_gate,
     const GRIM::PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     Forward::ModelForwardOutputs& forward_outputs) {
@@ -321,8 +354,7 @@ void encoderSelfAttentionForward(
         }
     }
 
-    attn_out = autograd::reshape_bhsd_to_flat(
-        attn_out_bhsd, request.payload, request.hp, request.stream);
+    applyHeadGateAndFlattenAttention(norm_input, W_head_gate, b_head_gate, request, forward_outputs);
 
     if (!attn_out.data) {
         throw std::runtime_error("encoderSelfAttentionForward: attn_out.data is NULL before output projection matmul");
@@ -357,6 +389,8 @@ void encoderSelfAttentionForwardCached(
     const Tensor& b_qkv,
     const Tensor& W_o,
     const Tensor& b_o,
+    const Tensor& W_head_gate,
+    const Tensor& b_head_gate,
     const GRIM::PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     const KvCacheLayerView& cache,
@@ -502,8 +536,7 @@ void encoderSelfAttentionForwardCached(
         cache.scratch_out, attn_out_bhsd.data, 1, q_len, n_heads, head_dim, request.stream);
 
     // 7. Flatten BHSD -> [q_len, d_model] and project (identical to training facade).
-    attn_out = autograd::reshape_bhsd_to_flat(
-        attn_out_bhsd, request.payload, request.hp, request.stream);
+    applyHeadGateAndFlattenAttention(norm_input, W_head_gate, b_head_gate, request, forward_outputs);
     if (!attn_out.data) {
         throw std::runtime_error("encoderSelfAttentionForwardCached: attn_out.data is NULL before output projection");
     }

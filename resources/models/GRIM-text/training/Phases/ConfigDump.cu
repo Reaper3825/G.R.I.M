@@ -215,7 +215,8 @@ const char* classifyConfigSection(const std::string& key) {
             "layer_scale_init",
             "qk_norm_enabled",
             "attention_off_by_one",
-            "attention_residual_gate_enabled"
+            "attention_residual_gate_enabled",
+            "attention_head_gate_enabled"
         })) {
         return "Encoder residual / attention controls";
     }

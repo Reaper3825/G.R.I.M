@@ -26,8 +26,8 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 8;
-constexpr std::uint32_t kSemanticVersion = 10;
+constexpr std::uint32_t kSchemaVersion = 9;
+constexpr std::uint32_t kSemanticVersion = 11;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -69,6 +69,7 @@ struct EffectiveConfig {
     bool qk_norm = false;
     bool attention_off_by_one = false;
     bool attention_residual_gate = false;
+    bool attention_head_gate = false;
 
     bool use_rope = false;
     bool use_alibi = false;
@@ -479,6 +480,7 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     c.qk_norm = required<bool>(j, "qk_norm_enabled");
     c.attention_off_by_one = required<bool>(j, "attention_off_by_one");
     c.attention_residual_gate = required<bool>(j, "attention_residual_gate_enabled");
+    c.attention_head_gate = required<bool>(j, "attention_head_gate_enabled");
 
     c.use_rope = required<bool>(j, "use_rope");
     c.use_alibi = required<bool>(j, "use_alibi");
@@ -596,6 +598,7 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     addCapability(c.local_atom_retrieval_enabled,
                   GRIMConfig::ModelCapability_LocalAtomRetrieval);
     addCapability(c.lora_model, GRIMConfig::ModelCapability_LoRA);
+    addCapability(c.attention_head_gate, GRIMConfig::ModelCapability_AttentionHeadGate);
     std::sort(c.capabilities.begin(), c.capabilities.end(), [](auto a, auto b) {
         return static_cast<std::uint16_t>(a) < static_cast<std::uint16_t>(b);
     });
@@ -644,7 +647,7 @@ std::vector<std::uint8_t> buildArtifact(
         c.ffn_output_bias, c.lm_head_bias);
     const auto attention = GRIMConfig::CreateAttentionConfig(
         builder, c.causal_mask, c.use_pre_norm, c.fuse_qkv, c.qk_norm,
-        c.attention_off_by_one, c.attention_residual_gate);
+        c.attention_off_by_one, c.attention_residual_gate, c.attention_head_gate);
     const auto positional = GRIMConfig::CreatePositionalEncodingConfig(
         builder, c.positional_kind, c.rope_base_seq_len, c.alibi_min_locality_distance,
         c.alibi_slope_exponent, c.alibi_max_bias, c.rope_theta, c.rope_scaling);

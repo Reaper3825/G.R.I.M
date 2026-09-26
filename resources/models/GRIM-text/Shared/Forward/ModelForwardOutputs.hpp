@@ -79,6 +79,8 @@ private:
         requireSize(proj_out_per_layer, "proj_out_per_layer");
         requireSize(attention_residual_gate_logits_per_layer, "attention_residual_gate_logits_per_layer");
         requireSize(attention_residual_gate_multiplier_per_layer, "attention_residual_gate_multiplier_per_layer");
+        requireSize(attention_head_gate_logits_per_layer, "attention_head_gate_logits_per_layer");
+        requireSize(attention_head_gate_multiplier_per_layer, "attention_head_gate_multiplier_per_layer");
         requireSize(attention_residual_branch_per_layer, "attention_residual_branch_per_layer");
         requireSize(scaled_proj_per_layer, "scaled_proj_per_layer");
         requireSize(residual1_per_layer, "residual1_per_layer");
@@ -152,6 +154,10 @@ public:
     // through the complete backward window.
     std::vector<Tensor> attention_residual_gate_logits_per_layer;
     std::vector<Tensor> attention_residual_gate_multiplier_per_layer;
+    // Per-query-head gate. Sigmoid borrows logits; HeadGateGradFn borrows
+    // multiplier + raw attn_out_bhsd. The gated flat output lives in attn_out.
+    std::vector<Tensor> attention_head_gate_logits_per_layer;
+    std::vector<Tensor> attention_head_gate_multiplier_per_layer;
     // Actual attention branch after optional token gate and fixed depth scale,
     // before optional LayerScale.
     std::vector<Tensor> attention_residual_branch_per_layer;
@@ -184,6 +190,8 @@ public:
         proj_out_per_layer.reserve(num_layers);
         attention_residual_gate_logits_per_layer.reserve(num_layers);
         attention_residual_gate_multiplier_per_layer.reserve(num_layers);
+        attention_head_gate_logits_per_layer.reserve(num_layers);
+        attention_head_gate_multiplier_per_layer.reserve(num_layers);
         attention_residual_branch_per_layer.reserve(num_layers);
         scaled_proj_per_layer.reserve(num_layers);
         residual1_per_layer.reserve(num_layers);
@@ -210,6 +218,8 @@ public:
         proj_out_per_layer.emplace_back();
         attention_residual_gate_logits_per_layer.emplace_back();
         attention_residual_gate_multiplier_per_layer.emplace_back();
+        attention_head_gate_logits_per_layer.emplace_back();
+        attention_head_gate_multiplier_per_layer.emplace_back();
         attention_residual_branch_per_layer.emplace_back();
         scaled_proj_per_layer.emplace_back();
         residual1_per_layer.emplace_back();
@@ -320,6 +330,8 @@ public:
         clearTensorVector(proj_out_per_layer);
         clearTensorVector(attention_residual_gate_logits_per_layer);
         clearTensorVector(attention_residual_gate_multiplier_per_layer);
+        clearTensorVector(attention_head_gate_logits_per_layer);
+        clearTensorVector(attention_head_gate_multiplier_per_layer);
         clearTensorVector(attention_residual_branch_per_layer);
         clearTensorVector(scaled_proj_per_layer);
         clearTensorVector(residual1_per_layer);
@@ -349,6 +361,8 @@ public:
         count += countGradFns(proj_out_per_layer);
         count += countGradFns(attention_residual_gate_logits_per_layer);
         count += countGradFns(attention_residual_gate_multiplier_per_layer);
+        count += countGradFns(attention_head_gate_logits_per_layer);
+        count += countGradFns(attention_head_gate_multiplier_per_layer);
         count += countGradFns(attention_residual_branch_per_layer);
         count += countGradFns(scaled_proj_per_layer);
         count += countGradFns(residual1_per_layer);
@@ -554,6 +568,8 @@ public:
         reportVector("proj_out_per_layer", proj_out_per_layer);
         reportVector("attention_residual_gate_logits_per_layer", attention_residual_gate_logits_per_layer);
         reportVector("attention_residual_gate_multiplier_per_layer", attention_residual_gate_multiplier_per_layer);
+        reportVector("attention_head_gate_logits_per_layer", attention_head_gate_logits_per_layer);
+        reportVector("attention_head_gate_multiplier_per_layer", attention_head_gate_multiplier_per_layer);
         reportVector("attention_residual_branch_per_layer", attention_residual_branch_per_layer);
         reportVector("scaled_proj_per_layer", scaled_proj_per_layer);
         reportVector("residual1_per_layer", residual1_per_layer);

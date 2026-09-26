@@ -592,6 +592,7 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
             freeze_learned_rms_gammas,
             use_layer_scale,
             encoder_hp.attention_residual_gate_enabled,
+            encoder_hp.attention_head_gate_enabled,
             registrar);
 
         auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer, "registerEncoderParameters");
@@ -714,6 +715,10 @@ void validateBaseParametersFrozen(
         }
         for (const auto& spec : ParameterRegistry::kAttentionResidualGateTensorParameters) {
             require_frozen(tensors.attention_residual_gate.*(spec.tensor_member),
+                           prefix + spec.name);
+        }
+        for (const auto& spec : ParameterRegistry::kAttentionHeadGateTensorParameters) {
+            require_frozen(tensors.attention_head_gate.*(spec.tensor_member),
                            prefix + spec.name);
         }
     }
@@ -1153,6 +1158,24 @@ void initializeEncodingLayerParameterTensors(
             if (requires_grad) {
                 tensors.attention_residual_gate.b_gate.requires_grad_();
                 tensors.attention_residual_gate.b_gate.alloc_grad();
+            }
+        }
+
+        if (encoder_hp.attention_head_gate_enabled) {
+            // The forward gate will use 2 * sigmoid(logit), so zero logits
+            // initialize the head multiplier to exactly 1.0.
+            tensors.attention_head_gate.W_gate = GRIM::Tensor::zeros(
+                {encoder_hp.d_model, encoder_hp.num_heads}, init_stream, "enc_attention_head_gate_W");
+            if (requires_grad) {
+                tensors.attention_head_gate.W_gate.requires_grad_();
+                tensors.attention_head_gate.W_gate.alloc_grad();
+            }
+
+            tensors.attention_head_gate.b_gate = GRIM::Tensor::zeros(
+                {encoder_hp.num_heads}, init_stream, "enc_attention_head_gate_b");
+            if (requires_grad) {
+                tensors.attention_head_gate.b_gate.requires_grad_();
+                tensors.attention_head_gate.b_gate.alloc_grad();
             }
         }
 

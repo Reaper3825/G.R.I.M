@@ -268,6 +268,11 @@ GradientVerificationSession::GradientVerificationSession(
                         0, "GradientVerificationSession");
                     capture(gate.W_gate, "layer 0 attentionResidualGateW");
                 }
+                if (model_hp.encoder_attention_head_gate_enabled) {
+                    auto& gate = ctx.parameter_registry->requireAttentionHeadGateParameters(
+                        0, "GradientVerificationSession");
+                    capture(gate.W_gate, "layer 0 attentionHeadGateW");
+                }
             } else if (!Ablation::kZeroFfnResidual) {
                 auto& ffn = ctx.parameter_registry->requireFeedForwardParameters(
                     0, "GradientVerificationSession");
@@ -598,6 +603,12 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
             check(gate.W_gate, "attentionResidualGateW");
             check(gate.b_gate, "attentionResidualGateB");
         }
+        if (model_hp.encoder_attention_head_gate_enabled) {
+            auto& gate = ctx.parameter_registry->requireAttentionHeadGateParameters(
+                layer, "GradientVerificationSession::verify");
+            check(gate.W_gate, "attentionHeadGateW");
+            check(gate.b_gate, "attentionHeadGateB");
+        }
         auto& ffn = ctx.parameter_registry->requireFeedForwardParameters(
             layer, "GradientVerificationSession::verify");
         check(ffn.W_gate, "ffnWGate");
@@ -618,6 +629,12 @@ bool GradientVerificationSession::verify(AutogradContext& ctx) const {
                     0, "GradientVerificationSession::verify");
                 requireReceivedGradient(
                     gate.W_gate, "layer 0 attentionResidualGateW");
+            }
+            if (model_hp.encoder_attention_head_gate_enabled) {
+                auto& gate = ctx.parameter_registry->requireAttentionHeadGateParameters(
+                    0, "GradientVerificationSession::verify");
+                requireReceivedGradient(
+                    gate.W_gate, "layer 0 attentionHeadGateW");
             }
         } else if (!Ablation::kZeroFfnResidual) {
             auto& ffn = ctx.parameter_registry->requireFeedForwardParameters(

@@ -127,6 +127,7 @@ public:
             {"qk_norm_enabled", "AttentionConfig"},
             {"attention_off_by_one", "AttentionConfig"},
             {"attention_residual_gate_enabled", "AttentionConfig"},
+            {"attention_head_gate_enabled", "AttentionConfig"},
 
             {"use_rope", "PositionalEncodingConfig"},
             {"use_alibi", "PositionalEncodingConfig"},

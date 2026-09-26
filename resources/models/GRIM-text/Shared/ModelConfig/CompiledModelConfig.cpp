@@ -20,8 +20,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 8;
-constexpr std::uint32_t kSupportedSemanticVersion = 10;
+constexpr std::uint32_t kSupportedSchemaVersion = 9;
+constexpr std::uint32_t kSupportedSemanticVersion = 11;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -385,6 +385,7 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     add(f.local_atom_retrieval_enabled,
         CompiledModelCapability::LocalAtomRetrieval);
     add(f.lora_model, CompiledModelCapability::LoRA);
+    add(f.attention.head_gate_enabled, CompiledModelCapability::AttentionHeadGate);
     if (expected != c.required_capabilities) {
         throw std::runtime_error("compiled required-capability vector does not match model features");
     }
@@ -516,7 +517,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     capability_bytes.reserve(capabilities->size() * 2u);
     for (const auto raw : *capabilities) {
         if (raw == 0 || raw > static_cast<std::uint16_t>(
-                                  CompiledModelCapability::LoRA)) {
+                                  CompiledModelCapability::AttentionHeadGate)) {
             throw std::runtime_error("model config contains an unknown required capability");
         }
         result.required_capabilities.push_back(static_cast<CompiledModelCapability>(raw));
@@ -560,7 +561,8 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         f->bias()->attention_output(), f->bias()->ffn_output(), f->bias()->lm_head()};
     result.features.attention = {f->attention()->causal_mask(), f->attention()->use_pre_norm(),
         f->attention()->fuse_qkv(), f->attention()->qk_norm_enabled(),
-        f->attention()->off_by_one_enabled(), f->attention()->residual_gate_enabled()};
+        f->attention()->off_by_one_enabled(), f->attention()->residual_gate_enabled(),
+        f->attention()->head_gate_enabled()};
     result.features.positional_encoding = {
         static_cast<CompiledPositionalEncoding>(f->positional_encoding()->kind()),
         f->positional_encoding()->rope_base_seq_len(),

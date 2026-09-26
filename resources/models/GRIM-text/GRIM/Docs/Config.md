@@ -103,3 +103,7 @@ Required. See [Encoder.md](Encoder.md).
 
 ## LM head centering
 `training.config.freeze_learned_rms_gammas=true` — see [LMHead.md](LMHead.md).
+
+### Attention head gate
+
+`attention_head_gate_enabled` is a required direct model JSON boolean, independent of `attention_residual_gate_enabled`. It flows through the config compiler, `AttentionConfig.head_gate_enabled`, compiled features, finalized config, model/encoder HP, and `EncoderSelfAttentionHP`. Enabled artifacts advertise `AttentionHeadGate = 17`; schema version is 9 and semantic version is 11. Checkpoint compatibility includes the flag and the registry-owned head-gate parameter manifests. Recompile model artifacts with the matching host-only compiler after updating the source JSON; existing checkpoints are not automatically migrated. The root experiment config enables this gate; other model-store source configs explicitly leave it disabled.

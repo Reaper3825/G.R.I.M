@@ -254,6 +254,7 @@ std::vector<CompatibilityFactValue> buildCompatibilityFacts(
     addBool("qk_norm_enabled");
     addBool("attention_off_by_one");
     addBool("attention_residual_gate_enabled");
+    addBool("attention_head_gate_enabled");
     addBool("use_layer_scale");
     addBool("use_atom_data");
     addBool("selector_enabled");

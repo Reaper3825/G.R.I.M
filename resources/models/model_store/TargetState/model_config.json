@@ -18,6 +18,7 @@
     "qk_norm_enabled": false,
     "attention_off_by_one": true,
     "attention_residual_gate_enabled": true,
+    "attention_head_gate_enabled": false,
     "use_rope": true,
     "use_alibi": true,
     "rope_base_seq_len": 256,

@@ -65,7 +65,8 @@ enum ModelCapability : ushort {
   AtomData = 13,
   AtomInsertion = 14,
   LocalAtomRetrieval = 15,
-  LoRA = 16
+  LoRA = 16,
+  AttentionHeadGate = 17
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,7 @@ table AttentionConfig {
   qk_norm_enabled:bool;
   off_by_one_enabled:bool;
   residual_gate_enabled:bool;
+  head_gate_enabled:bool;
 }
 
 table PositionalEncodingConfig {

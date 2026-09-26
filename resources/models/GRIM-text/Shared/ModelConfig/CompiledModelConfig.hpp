@@ -50,6 +50,7 @@ enum class CompiledModelCapability : std::uint16_t {
     AtomInsertion = 14,
     LocalAtomRetrieval = 15,
     LoRA = 16,
+    AttentionHeadGate = 17,
 };
 
 struct CompiledConfigIntegrity {
@@ -97,6 +98,7 @@ struct CompiledAttentionConfig {
     bool qk_norm_enabled = false;
     bool off_by_one_enabled = false;
     bool residual_gate_enabled = false;
+    bool head_gate_enabled = false;
 };
 
 struct CompiledPositionalEncodingConfig {

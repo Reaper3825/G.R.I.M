@@ -24,6 +24,18 @@ The attention residual branch is `attention_residual_branch = residual_scale * b
 
 The gate belongs to the encoder residual boundary, not `EncoderSelfAttentionHP` or the FlashAttention implementation. Disabled configurations must leave both gate tensors absent; callers must not silently substitute unregistered tensors.
 
+## Per-query-head attention gate
+
+`attention_head_gate_enabled` adds a separate registry-owned `AttentionHeadGateParameterTensors` bundle to each encoder layer: `W_gate[d_model,num_heads]` and `b_gate[num_heads]`. Both start at zero, so `2 * sigmoid(ln1_out @ W_gate + b_gate)` starts at one. With 12 query heads and four KV heads there are 12 independent gates per token; K/V remain shared and the KV cache geometry is unchanged. The existing scalar residual gate remains independent and continues to scale the post-projection branch, including the output bias.
+
+The attention facade accepts `const Tensor& W_head_gate` and `const Tensor& b_head_gate`, matching its individual QKV/output tensor arguments. The registry retains the owning bundle; the facade has no registry dependency. Both regular attention and cached prefill/decode pass through `applyHeadGateAndFlattenAttention`. `autograd::head_gate_bhsd_to_flat` combines head multiplication with the existing BHSD-to-flat copy before `W_o` (including its LoRA path), avoiding another full-size saved activation. TensorConversion owns the CUDA layout/multiply kernels; `HeadGateGradFn` owns the two autograd edges. Its backward accumulates `d_raw += d_flat * gate` and `d_gate += sum_head_dim(d_flat * raw)`, with no extra token normalization. Either input may be frozen independently.
+
+`ModelForwardOutputs` retains head logits, multipliers, raw BHSD attention, and the gated flat attention through backward. Sigmoid borrows logits, the head-gate GradFn borrows raw attention and multipliers, and the output projection borrows the gated flat result. Do not overwrite these caches in place or replace the raw attention sink with a gated value. The small sigmoid probability temporary is consumed by `mul_scalar`, whose backward does not borrow its input data. All new sink vectors participate in reserve/append/validation/clear/GradFn-count/memory-report hooks. ModelForward passes durable registry tensors during training and detached registry views during inference.
+
+The head gate is attention-owned and its flag is sliced into `EncoderSelfAttentionHP`. Parameters are registered under `layerN_attention_head_gate_weight` / `layerN_attention_head_gate_bias`, including optimizer, checkpoint, frozen-model, and gradient-connectivity plumbing. Disabled gates have no parameter tensors. Config schema 9 / semantic version 11 includes a distinct capability and checkpoint compatibility fact: older artifacts must be recompiled, and old checkpoints require an explicit migration before loading with additional gate parameters; ordinary loading never silently initializes missing groups.
+
+Focused checks: `Tests/test_head_gate_gradfn_host.py` runs production GradFn and scheduler code with host storage; `Tests/test_head_gate_cuda.py` builds only the standalone production-kernel test. These cover geometry, independent query heads, frozen inputs, shared ancestors, accumulation, cache release, identity gating, and CUDA finite differences. They do not substitute for a complete model training or cached/full-model parity run.
+
 ## Bias additions through autograd
 Use `autograd::broadcast_add()` for **all** biases (`b_qkv`, `b_o`, `b1`, `b2`). Raw `launchFFNBiasAdd` bypasses autograd → zero bias gradients.
 

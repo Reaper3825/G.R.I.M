@@ -122,6 +122,7 @@ GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
     bool output_bias_enabled,
     bool use_layer_scale,
     bool attention_residual_gate_enabled,
+    bool attention_head_gate_enabled,
     cudaStream_t stream) {
     GRIM::EncodingLayerParameterTensors detached{};
     detached.rms1_gamma = parameters.rms1_gamma.detach(stream);
@@ -143,6 +144,12 @@ GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
             parameters.attention_residual_gate.W_gate.detach(stream);
         detached.attention_residual_gate.b_gate =
             parameters.attention_residual_gate.b_gate.detach(stream);
+    }
+    if (attention_head_gate_enabled) {
+        detached.attention_head_gate.W_gate =
+            parameters.attention_head_gate.W_gate.detach(stream);
+        detached.attention_head_gate.b_gate =
+            parameters.attention_head_gate.b_gate.detach(stream);
     }
     return detached;
 }
@@ -509,6 +516,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 request.parameter_registry->requireAttentionResidualGateParameters(
                     layer_idx, "executeModelForward(no_grad)");
             }
+            if (encoder_hp.attention_head_gate_enabled) {
+                request.parameter_registry->requireAttentionHeadGateParameters(
+                    layer_idx, "executeModelForward(no_grad)");
+            }
             const auto& ffn_parameters = request.parameter_registry->requireFeedForwardParameters(
                 layer_idx,
                 "executeModelForward(no_grad)");
@@ -523,6 +534,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     encoder_hp.attention_output_bias_enabled,
                     use_layer_scale,
                     encoder_hp.attention_residual_gate_enabled,
+                    encoder_hp.attention_head_gate_enabled,
                     request.stream);
                 detached_ffn_parameters = detachFeedForwardParameters(
                     ffn_parameters,
@@ -627,6 +639,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "executeModelForward(retained_graph)");
             if (encoder_hp.attention_residual_gate_enabled) {
                 request.parameter_registry->requireAttentionResidualGateParameters(
+                    layer_idx, "executeModelForward(retained_graph)");
+            }
+            if (encoder_hp.attention_head_gate_enabled) {
+                request.parameter_registry->requireAttentionHeadGateParameters(
                     layer_idx, "executeModelForward(retained_graph)");
             }
             const auto& ffn_parameters = request.parameter_registry->requireFeedForwardParameters(

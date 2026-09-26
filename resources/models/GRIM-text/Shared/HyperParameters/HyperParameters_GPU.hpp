@@ -338,6 +338,7 @@ struct LanguageModelConfig {
     // owned by the encoder boundary rather than the FlashAttention sublayer:
     // each token decides how much of proj_out enters its residual stream.
     bool attention_residual_gate_enabled = false;
+    bool attention_head_gate_enabled = false;
 
     // LayerScale - per-channel learnable residual scaling vectors [1, d_model]
     bool use_layer_scale = false;
@@ -1696,6 +1697,7 @@ inline void applyCompiledModelConfig(
     params.qk_norm_enabled = f.attention.qk_norm_enabled;
     params.attention_off_by_one = f.attention.off_by_one_enabled;
     params.attention_residual_gate_enabled = f.attention.residual_gate_enabled;
+    params.attention_head_gate_enabled = f.attention.head_gate_enabled;
 
     params.positional_encoding = compiledPositionalEncoding(p.kind);
     params.rope_base_seq_len = compiledU32ToInt(p.rope_base_seq_len, "positional.rope_base_seq_len");
@@ -2329,6 +2331,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(qk_norm_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_off_by_one);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_residual_gate_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(attention_head_gate_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_layer_scale);
     GRIM_WRITE_FINAL_CONFIG_FIELD(layer_scale_init);
     GRIM_WRITE_FINAL_CONFIG_FIELD(data_path);

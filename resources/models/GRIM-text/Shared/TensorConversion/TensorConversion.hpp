@@ -95,6 +95,16 @@ void convert_BHSD_to_BSM(const float* src, float* dst,
                          int B, int H, int S, int D,
                          cudaStream_t stream = nullptr);
 
+// Fused per-query-head gate and flatten. Gates are [B*S,H], never KV-head
+// indexed. Inputs and destinations must not overlap. Backward adds into each
+// non-null destination; either destination may be omitted for frozen inputs.
+void head_gate_BHSD_to_BSM(const float* src, const float* gates, float* dst,
+                          int B, int H, int S, int D, cudaStream_t stream);
+void head_gate_BHSD_to_BSM_backward(
+    const float* grad_flat, const float* src, const float* gates,
+    float* grad_src, float* grad_gates,
+    int B, int H, int S, int D, cudaStream_t stream);
+
 /**
  * Convert BSM to BHSD (merged embedding to separate heads)
  * Used for: Converting embedding format to multi-head attention format

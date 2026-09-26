@@ -465,6 +465,73 @@ void convert_BHSD_to_BSM(const float* src, float* dst,
     kernel_BHSD_to_BSM<<<blocks, BLOCK_SIZE, 0, stream>>>(src, dst, B, H, S, D);
 }
 
+// Each flat index is [b,s,h,d]; the retained attention input is [b,h,s,d].
+__global__ void kernel_head_gate_flatten(
+    const float* src, const float* gates, float* dst,
+    int B, int H, int S, int D)
+{
+    const size_t i = globalLinearIndex();
+    if (i >= static_cast<size_t>(B) * S * H * D) return;
+    const size_t th = i / D;
+    const size_t t = th / H;
+    const size_t raw = ((t / S * H + th % H) * S + t % S) * D + i % D;
+    dst[i] = src[raw] * gates[th];
+}
+
+__global__ void kernel_head_gate_backward_input(
+    const float* dy, const float* gates, float* dx,
+    int B, int H, int S, int D)
+{
+    const size_t i = globalLinearIndex();
+    if (i >= static_cast<size_t>(B) * S * H * D) return;
+    const size_t th = i / D;
+    const size_t t = th / H;
+    const size_t raw = ((t / S * H + th % H) * S + t % S) * D + i % D;
+    dx[raw] += dy[i] * gates[th];
+}
+
+// One warp per token/head, reducing only its D channels. No atomics or
+// temporary reduction buffers; existing destination contributions survive.
+__global__ void kernel_head_gate_backward_gate(
+    const float* dy, const float* src, float* dg,
+    int B, int H, int S, int D)
+{
+    const size_t th = globalLinearIndex() / 32;
+    if (th >= static_cast<size_t>(B) * S * H) return;
+    const int lane = threadIdx.x % 32;
+    const size_t t = th / H;
+    const size_t raw = ((t / S * H + th % H) * S + t % S) * D;
+    float sum = 0.0f;
+    for (int d = lane; d < D; d += 32) sum += dy[th * D + d] * src[raw + d];
+    for (int offset = 16; offset > 0; offset /= 2)
+        sum += __shfl_down_sync(0xffffffff, sum, offset);
+    if (lane == 0) dg[th] += sum;
+}
+
+void head_gate_BHSD_to_BSM(const float* src, const float* gates, float* dst,
+                          int B, int H, int S, int D, cudaStream_t stream)
+{
+    if (!src || !gates || !dst || !stream || B <= 0 || H <= 0 || S <= 0 || D <= 0)
+        throw std::runtime_error("head_gate_BHSD_to_BSM: invalid input or geometry");
+    kernel_head_gate_flatten<<<gridForCount(static_cast<size_t>(B) * S * H * D), BLOCK_SIZE, 0, stream>>>(
+        src, gates, dst, B, H, S, D);
+}
+
+void head_gate_BHSD_to_BSM_backward(
+    const float* grad_flat, const float* src, const float* gates,
+    float* grad_src, float* grad_gates,
+    int B, int H, int S, int D, cudaStream_t stream)
+{
+    if (!grad_flat || !src || !gates || !stream || B <= 0 || H <= 0 || S <= 0 || D <= 0)
+        throw std::runtime_error("head_gate_BHSD_to_BSM_backward: invalid input or geometry");
+    if (grad_src)
+        kernel_head_gate_backward_input<<<gridForCount(static_cast<size_t>(B) * S * H * D), BLOCK_SIZE, 0, stream>>>(
+            grad_flat, gates, grad_src, B, H, S, D);
+    if (grad_gates)
+        kernel_head_gate_backward_gate<<<gridForCount(static_cast<size_t>(B) * S * H * 32), BLOCK_SIZE, 0, stream>>>(
+            grad_flat, src, grad_gates, B, H, S, D);
+}
+
 void convert_BSM_to_BHSD(const float* src, float* dst,
                          int B, int S, int H, int D,
                          cudaStream_t stream, bool accumulate)

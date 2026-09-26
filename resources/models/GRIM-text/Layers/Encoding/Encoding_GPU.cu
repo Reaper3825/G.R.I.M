@@ -245,6 +245,8 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     const Tensor& rms2_gamma = encoding_parameters->rms2_gamma;
     const Tensor& W_qkv = encoding_parameters->W_qkv;
     const Tensor& W_o = encoding_parameters->W_o;
+    const Tensor& W_head_gate = encoding_parameters->attention_head_gate.W_gate;
+    const Tensor& b_head_gate = encoding_parameters->attention_head_gate.b_gate;
     const Tensor* b_qkv = hp.attention_qkv_bias_enabled ? &encoding_parameters->b_qkv : nullptr;
     const Tensor* b_o = hp.attention_output_bias_enabled ? &encoding_parameters->b_o : nullptr;
     const Tensor* layer_scale1 = hp.use_layer_scale ? &encoding_parameters->layer_scale1 : nullptr;
@@ -346,6 +348,8 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
             b_qkv_ref,
             W_o,
             b_o_ref,
+            W_head_gate,
+            b_head_gate,
             pos_encoding,
             attention_request,
             *kv_cache_view,
@@ -357,6 +361,8 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
             b_qkv_ref,
             W_o,
             b_o_ref,
+            W_head_gate,
+            b_head_gate,
             pos_encoding,
             attention_request,
             forward_outputs);

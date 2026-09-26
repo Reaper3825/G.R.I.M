@@ -1641,6 +1641,10 @@ Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
  */
 Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream = nullptr);
 
+// Gates [B*S,H] multiply raw [B,H,S,D] attention while flattening to [B*S,H*D].
+// Both inputs must remain live through backward. H is the query-head count.
+Tensor head_gate_bhsd_to_flat(const Tensor& scale, const Tensor& x, cudaStream_t stream);
+
 /**
  * Place a [rows, cols] tensor at row_offset inside a zero-padded [total_rows, cols] output.
  * Creates ZeroPadGradFn if input.requires_grad.

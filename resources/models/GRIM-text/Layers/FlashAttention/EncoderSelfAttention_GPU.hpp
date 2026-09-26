@@ -40,6 +40,8 @@ void encoderSelfAttentionForward(
     const Tensor& b_qkv,
     const Tensor& W_o,
     const Tensor& b_o,
+    const Tensor& W_head_gate,
+    const Tensor& b_head_gate,
     const PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     Forward::ModelForwardOutputs& forward_outputs);
@@ -58,6 +60,8 @@ void encoderSelfAttentionForwardCached(
     const Tensor& b_qkv,
     const Tensor& W_o,
     const Tensor& b_o,
+    const Tensor& W_head_gate,
+    const Tensor& b_head_gate,
     const PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     const KvCacheLayerView& cache,
