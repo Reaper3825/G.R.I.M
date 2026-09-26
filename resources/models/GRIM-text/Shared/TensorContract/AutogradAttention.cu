@@ -1282,7 +1282,10 @@ Tensor scaled_dot_product_attention(
 struct ReshapeFromBHSDGradFn : public GradFn {
     // Input tensor info
     bool input_requires_grad = false;
-    std::shared_ptr<Tensor> input_gradient;
+    // Borrow leaf storage or retain the producer; no private gradient buffer.
+    Tensor* leaf_input_gradient = nullptr;
+    std::shared_ptr<GradFn> input_producer;
+    TensorContract::TensorShape input_shape;
     
     // Dimensions for reshape
     int batch_size = 0;
@@ -1299,8 +1302,20 @@ struct ReshapeFromBHSDGradFn : public GradFn {
     void capture_input(Tensor& bhsd_input, cudaStream_t stream) {
         input_requires_grad = bhsd_input.requires_grad;
         if (input_requires_grad) {
-            input_gradient = capture_input_gradient(
-                bhsd_input, stream, "ReshapeFromBHSDGradFn::capture_input");
+            if (!stream) throw std::runtime_error("ReshapeFromBHSDGradFn::capture: stream is NULL");
+            bhsd_input.require("ReshapeFromBHSDGradFn::capture");
+            input_shape = bhsd_input.shape;
+            if (!input_shape.is_4d()) throw std::runtime_error("ReshapeFromBHSDGradFn::capture: expected BHSD input");
+            if (bhsd_input.is_leaf) {
+                if (bhsd_input.grad_fn) throw std::runtime_error("ReshapeFromBHSDGradFn::capture: leaf has a producer");
+                bhsd_input.ensure_grad();
+                leaf_input_gradient = bhsd_input.grad_.get();
+                if (!leaf_input_gradient) throw std::runtime_error("ReshapeFromBHSDGradFn::capture: missing leaf gradient");
+            } else {
+                if (!bhsd_input.grad_fn) throw std::runtime_error("ReshapeFromBHSDGradFn::capture: non-leaf has no producer");
+                input_producer = bhsd_input.grad_fn;
+                register_input(input_producer);
+            }
         }
     }
     
@@ -1311,19 +1326,37 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         setCurrentGradFnOp("reshape_bhsd_to_flat", this);
         
         if (applied) return;
-        applied = true;
         
         if (!input_requires_grad) {
+            applied = true;
             return;
         }
+        if (!stream) throw std::runtime_error("ReshapeFromBHSDGradFn::apply: stream is NULL");
+        grad_output.require("ReshapeFromBHSDGradFn::apply grad_output");
+        const auto& dims = input_shape.as_4d();
+        if (batch_size <= 0 || seq_len <= 0 || num_heads <= 0 || head_dim <= 0 ||
+            dims.batch != batch_size || dims.heads != num_heads ||
+            dims.seq != seq_len || dims.head_dim != head_dim ||
+            !grad_output.shape.is_2d_layout()) {
+            throw std::runtime_error("ReshapeFromBHSDGradFn::apply: invalid reshape dimensions");
+        }
+        const auto& flat = grad_output.shape.as_2d();
+        if (static_cast<size_t>(flat.rows) != static_cast<size_t>(batch_size) * seq_len ||
+            static_cast<size_t>(flat.cols) != static_cast<size_t>(num_heads) * head_dim) {
+            throw std::runtime_error("ReshapeFromBHSDGradFn::apply: gradient shape mismatch");
+        }
+        Tensor* input_gradient = input_producer
+            ? &input_producer->gradient_destination(input_shape, stream) : leaf_input_gradient;
         if (!input_gradient) {
             throw std::runtime_error("ReshapeFromBHSDGradFn::apply: input gradient Tensor is NULL");
         }
         
+        applied = true;
+        // Add the reshaped contribution without overwriting earlier deliveries.
         // Reshape gradient from flat [tokens, d_model] to BHSD [B, H, S, D]
         // via TensorConversion's single source of truth geometry kernel.
         TensorConversion::convert_BSM_to_BHSD(
-            grad_output.data, input_gradient->data, batch_size, seq_len, num_heads, head_dim, stream);
+            grad_output.data, input_gradient->data, batch_size, seq_len, num_heads, head_dim, stream, true);
         {
             cudaError_t err = cudaGetLastError();
             if (err != cudaSuccess) {
@@ -1332,17 +1365,23 @@ struct ReshapeFromBHSDGradFn : public GradFn {
             }
         }
         
-        propagate_input_gradient(
-            input_gradient,
-            stream,
-            backward_payload,
-            backward_bindings,
-            "ReshapeFromBHSDGradFn::apply");
+        // The contribution is already in its destination; notify without copying.
+        if (input_producer) {
+            if (auto* engine = AutogradEngine::active()) {
+                engine->contribute(input_producer.get());
+            } else {
+                input_producer->apply(input_producer->pending_gradient("ReshapeFromBHSDGradFn::apply producer"),
+                                      stream, backward_payload, backward_bindings);
+            }
+        } else {
+            leaf_input_gradient->record_leaf_gradient_delivery();
+        }
     }
     
     void release_saved() override {
         GradFn::release_saved();
-        input_gradient.reset();
+        input_producer.reset();
+        leaf_input_gradient = nullptr;
     }
 };
 

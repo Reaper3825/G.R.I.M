@@ -156,7 +156,7 @@ __global__ void kernel_BHSD_to_BSM(
 __global__ void kernel_BSM_to_BHSD(
     const float* __restrict__ src,
     float* __restrict__ dst,
-    int B, int S, int H, int D)
+    int B, int S, int H, int D, bool accumulate)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int M = H * D;
@@ -177,7 +177,8 @@ __global__ void kernel_BSM_to_BHSD(
     // Dest:   [b,h,s,d] at index (((b*H + h)*S + s)*D + d)
     int dstIdx = ((b * H + h) * S + s) * D + d;
     
-    dst[dstIdx] = src[idx];
+    if (accumulate) dst[dstIdx] += src[idx];
+    else dst[dstIdx] = src[idx];
 }
 
 // ----------------------------------------------------------------------------
@@ -449,12 +450,12 @@ void convert_BHSD_to_BSM(const float* src, float* dst,
 
 void convert_BSM_to_BHSD(const float* src, float* dst,
                          int B, int S, int H, int D,
-                         cudaStream_t stream)
+                         cudaStream_t stream, bool accumulate)
 {
     int M = H * D;
     int total = B * S * M;
     int blocks = (total + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    kernel_BSM_to_BHSD<<<blocks, BLOCK_SIZE, 0, stream>>>(src, dst, B, S, H, D);
+    kernel_BSM_to_BHSD<<<blocks, BLOCK_SIZE, 0, stream>>>(src, dst, B, S, H, D, accumulate);
 }
 
 // ----------------------------------------------------------------------------

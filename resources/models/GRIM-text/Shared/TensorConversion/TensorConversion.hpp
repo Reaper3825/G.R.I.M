@@ -99,10 +99,12 @@ void convert_BHSD_to_BSM(const float* src, float* dst,
  * Convert BSM to BHSD (merged embedding to separate heads)
  * Used for: Converting embedding format to multi-head attention format
  * src: [B, S, M] -> dst: [B, H, S, D] where M = H * D
+ * accumulate=true adds into an existing gradient destination; default overwrites.
+ * Source and destination must not overlap. Shared destinations require ordered streams.
  */
 void convert_BSM_to_BHSD(const float* src, float* dst,
                          int B, int S, int H, int D,
-                         cudaStream_t stream = nullptr);
+                         cudaStream_t stream = nullptr, bool accumulate = false);
 
 // ============================================================================
 // QKV Split/Merge Operations (GQA-Aware)
