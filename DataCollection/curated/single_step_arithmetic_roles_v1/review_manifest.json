@@ -1,0 +1,362 @@
+[
+  {
+    "id": "ssat_roles_v1_tank_0",
+    "split": "train",
+    "scenario": "tank",
+    "relationship": "decrease",
+    "requested_role": "starting volume",
+    "operator": "+",
+    "expected_value": "120",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_tank_1",
+    "split": "train",
+    "scenario": "tank",
+    "relationship": "decrease",
+    "requested_role": "volume used",
+    "operator": "-",
+    "expected_value": "36",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_tank_2",
+    "split": "train",
+    "scenario": "tank",
+    "relationship": "decrease",
+    "requested_role": "volume remaining",
+    "operator": "-",
+    "expected_value": "84",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_library_0",
+    "split": "train",
+    "scenario": "library",
+    "relationship": "decrease",
+    "requested_role": "original number of books",
+    "operator": "+",
+    "expected_value": "95",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_library_1",
+    "split": "train",
+    "scenario": "library",
+    "relationship": "decrease",
+    "requested_role": "number of books borrowed",
+    "operator": "-",
+    "expected_value": "28",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_library_2",
+    "split": "train",
+    "scenario": "library",
+    "relationship": "decrease",
+    "requested_role": "number of books still on the shelf",
+    "operator": "-",
+    "expected_value": "67",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_rope_0",
+    "split": "train",
+    "scenario": "rope",
+    "relationship": "decrease",
+    "requested_role": "original rope length",
+    "operator": "+",
+    "expected_value": "18.5",
+    "expected_unit": "meters"
+  },
+  {
+    "id": "ssat_roles_v1_rope_1",
+    "split": "train",
+    "scenario": "rope",
+    "relationship": "decrease",
+    "requested_role": "length cut off",
+    "operator": "-",
+    "expected_value": "6.25",
+    "expected_unit": "meters"
+  },
+  {
+    "id": "ssat_roles_v1_rope_2",
+    "split": "train",
+    "scenario": "rope",
+    "relationship": "decrease",
+    "requested_role": "length left",
+    "operator": "-",
+    "expected_value": "12.25",
+    "expected_unit": "meters"
+  },
+  {
+    "id": "ssat_roles_v1_tickets_0",
+    "split": "train",
+    "scenario": "tickets",
+    "relationship": "decrease",
+    "requested_role": "initial number of tickets",
+    "operator": "+",
+    "expected_value": "240",
+    "expected_unit": "tickets"
+  },
+  {
+    "id": "ssat_roles_v1_tickets_1",
+    "split": "train",
+    "scenario": "tickets",
+    "relationship": "decrease",
+    "requested_role": "number of tickets sold",
+    "operator": "-",
+    "expected_value": "175",
+    "expected_unit": "tickets"
+  },
+  {
+    "id": "ssat_roles_v1_tickets_2",
+    "split": "train",
+    "scenario": "tickets",
+    "relationship": "decrease",
+    "requested_role": "number of unsold tickets",
+    "operator": "-",
+    "expected_value": "65",
+    "expected_unit": "tickets"
+  },
+  {
+    "id": "ssat_roles_v1_marbles_0",
+    "split": "train",
+    "scenario": "marbles",
+    "relationship": "increase",
+    "requested_role": "original number of marbles",
+    "operator": "-",
+    "expected_value": "23",
+    "expected_unit": "marbles"
+  },
+  {
+    "id": "ssat_roles_v1_marbles_1",
+    "split": "train",
+    "scenario": "marbles",
+    "relationship": "increase",
+    "requested_role": "number of marbles received",
+    "operator": "-",
+    "expected_value": "19",
+    "expected_unit": "marbles"
+  },
+  {
+    "id": "ssat_roles_v1_marbles_2",
+    "split": "train",
+    "scenario": "marbles",
+    "relationship": "increase",
+    "requested_role": "final number of marbles",
+    "operator": "+",
+    "expected_value": "42",
+    "expected_unit": "marbles"
+  },
+  {
+    "id": "ssat_roles_v1_refill_0",
+    "split": "train",
+    "scenario": "refill",
+    "relationship": "increase",
+    "requested_role": "volume before the refill",
+    "operator": "-",
+    "expected_value": "84",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_refill_1",
+    "split": "train",
+    "scenario": "refill",
+    "relationship": "increase",
+    "requested_role": "volume added",
+    "operator": "-",
+    "expected_value": "36",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_refill_2",
+    "split": "train",
+    "scenario": "refill",
+    "relationship": "increase",
+    "requested_role": "volume after the refill",
+    "operator": "+",
+    "expected_value": "120",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_boxes_0",
+    "split": "train",
+    "scenario": "boxes",
+    "relationship": "groups",
+    "requested_role": "number of boxes",
+    "operator": "/",
+    "expected_value": "7",
+    "expected_unit": "boxes"
+  },
+  {
+    "id": "ssat_roles_v1_boxes_1",
+    "split": "train",
+    "scenario": "boxes",
+    "relationship": "groups",
+    "requested_role": "number of books per box",
+    "operator": "/",
+    "expected_value": "12",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_boxes_2",
+    "split": "train",
+    "scenario": "boxes",
+    "relationship": "groups",
+    "requested_role": "total number of books",
+    "operator": "*",
+    "expected_value": "84",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_bottles_0",
+    "split": "train",
+    "scenario": "bottles",
+    "relationship": "groups",
+    "requested_role": "number of bottles",
+    "operator": "/",
+    "expected_value": "6",
+    "expected_unit": "bottles"
+  },
+  {
+    "id": "ssat_roles_v1_bottles_1",
+    "split": "train",
+    "scenario": "bottles",
+    "relationship": "groups",
+    "requested_role": "volume per bottle",
+    "operator": "/",
+    "expected_value": "1.5",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_bottles_2",
+    "split": "train",
+    "scenario": "bottles",
+    "relationship": "groups",
+    "requested_role": "total volume of juice",
+    "operator": "*",
+    "expected_value": "9",
+    "expected_unit": "liters"
+  },
+  {
+    "id": "ssat_roles_v1_collections_0",
+    "split": "train",
+    "scenario": "collections",
+    "relationship": "comparison",
+    "requested_role": "number of books Ben owns",
+    "operator": "-",
+    "expected_value": "28",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_collections_1",
+    "split": "train",
+    "scenario": "collections",
+    "relationship": "comparison",
+    "requested_role": "number of extra books Ada owns",
+    "operator": "-",
+    "expected_value": "15",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_collections_2",
+    "split": "train",
+    "scenario": "collections",
+    "relationship": "comparison",
+    "requested_role": "number of books Ada owns",
+    "operator": "+",
+    "expected_value": "43",
+    "expected_unit": "books"
+  },
+  {
+    "id": "ssat_roles_v1_ribbons_0",
+    "split": "train",
+    "scenario": "ribbons",
+    "relationship": "comparison",
+    "requested_role": "blue ribbon length",
+    "operator": "-",
+    "expected_value": "32",
+    "expected_unit": "centimeters"
+  },
+  {
+    "id": "ssat_roles_v1_ribbons_1",
+    "split": "train",
+    "scenario": "ribbons",
+    "relationship": "comparison",
+    "requested_role": "difference in ribbon lengths",
+    "operator": "-",
+    "expected_value": "18",
+    "expected_unit": "centimeters"
+  },
+  {
+    "id": "ssat_roles_v1_ribbons_2",
+    "split": "train",
+    "scenario": "ribbons",
+    "relationship": "comparison",
+    "requested_role": "red ribbon length",
+    "operator": "+",
+    "expected_value": "50",
+    "expected_unit": "centimeters"
+  },
+  {
+    "id": "ssat_roles_v1_flour_0",
+    "split": "eval",
+    "scenario": "flour",
+    "relationship": "decrease",
+    "requested_role": "original flour mass",
+    "operator": "+",
+    "expected_value": "22.5",
+    "expected_unit": "kilograms"
+  },
+  {
+    "id": "ssat_roles_v1_flour_1",
+    "split": "eval",
+    "scenario": "flour",
+    "relationship": "decrease",
+    "requested_role": "flour mass used",
+    "operator": "-",
+    "expected_value": "8.75",
+    "expected_unit": "kilograms"
+  },
+  {
+    "id": "ssat_roles_v1_flour_2",
+    "split": "eval",
+    "scenario": "flour",
+    "relationship": "decrease",
+    "requested_role": "flour mass left",
+    "operator": "-",
+    "expected_value": "13.75",
+    "expected_unit": "kilograms"
+  },
+  {
+    "id": "ssat_roles_v1_chairs_0",
+    "split": "eval",
+    "scenario": "chairs",
+    "relationship": "groups",
+    "requested_role": "number of rows",
+    "operator": "/",
+    "expected_value": "8",
+    "expected_unit": "rows"
+  },
+  {
+    "id": "ssat_roles_v1_chairs_1",
+    "split": "eval",
+    "scenario": "chairs",
+    "relationship": "groups",
+    "requested_role": "number of chairs per row",
+    "operator": "/",
+    "expected_value": "9",
+    "expected_unit": "chairs"
+  },
+  {
+    "id": "ssat_roles_v1_chairs_2",
+    "split": "eval",
+    "scenario": "chairs",
+    "relationship": "groups",
+    "requested_role": "total number of chairs",
+    "operator": "*",
+    "expected_value": "72",
+    "expected_unit": "chairs"
+  }
+]

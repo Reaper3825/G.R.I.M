@@ -1,0 +1,4 @@
+# Large generated copies and local recovery snapshots; retain manifests/audits.
+/concept_blocks.jsonl
+/curriculum_registry.json
+/backups/

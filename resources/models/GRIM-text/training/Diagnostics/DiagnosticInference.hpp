@@ -26,9 +26,11 @@ namespace GRIMText::Training {
 
 /// Run a diagnostic inference sample if the current optimizer step
 /// matches the configured sample interval.  This function is fully
-/// self-contained: it sends the tank prompt plus a filled reasoning state
-/// through executePhase2TextInference()
-/// and logs the decoded result.
+/// self-contained: it rotates through twelve single-operation arithmetic probes
+/// with empty persisted state and the curriculum's generic goal, then sends the
+/// rendered prefix through executePhase2TextInference() and logs the result.
+/// GRIM_SAMPLE_PROMPT overrides the probe; GRIM_SAMPLE_TOKENS (default 256) and
+/// GRIM_SAMPLE_MAX_CHARS (default 2048) control generation and display limits.
 ///
 /// SAFETY: This function does NOT modify any model weight tensors,
 /// gradient buffers, or optimizer state. Inference paths use no training

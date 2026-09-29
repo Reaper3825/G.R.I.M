@@ -15,11 +15,17 @@ import collections
 import hashlib
 import json
 import os
+import re
 import tempfile
-from dataclasses import dataclass
+from functools import lru_cache
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
+
+try:
+    from .single_step_arithmetic_scenarios import STORIES, RELATIONSHIPS, TARGETS, make_case, render_case
+except ImportError:  # Direct script execution and unittest discovery.
+    from single_step_arithmetic_scenarios import STORIES, RELATIONSHIPS, TARGETS, make_case, render_case
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -44,51 +50,6 @@ OP_WORDS = {
     "div": "division",
 }
 
-
-@dataclass(frozen=True)
-class UnitSpec:
-    unit: str
-    slug: str
-    subject: str
-
-
-UNITS: dict[str, tuple[UnitSpec, ...]] = {
-    "metric": (
-        UnitSpec("millimeters", "millimeters", "measurement"),
-        UnitSpec("centimeters", "centimeters", "measurement"),
-        UnitSpec("meters", "meters", "cable"),
-        UnitSpec("kilometers", "kilometers", "route"),
-        UnitSpec("milligrams", "milligrams", "sample"),
-        UnitSpec("grams", "grams", "shipment"),
-        UnitSpec("kilograms", "kilograms", "shipment"),
-        UnitSpec("milliliters", "milliliters", "tank"),
-        UnitSpec("liters", "liters", "tank"),
-    ),
-    "imperial": (
-        UnitSpec("inches", "inches", "board"),
-        UnitSpec("feet", "feet", "rope"),
-        UnitSpec("yards", "yards", "fabric roll"),
-        UnitSpec("miles", "miles", "route"),
-        UnitSpec("ounces", "ounces", "package"),
-        UnitSpec("pounds", "pounds", "shipment"),
-        UnitSpec("fluid ounces", "fluid_ounces", "container"),
-        UnitSpec("gallons", "gallons", "tank"),
-    ),
-    "count": (
-        UnitSpec("apples", "apples", "basket"),
-        UnitSpec("places", "places", "travel guide"),
-        UnitSpec("people", "people", "event"),
-        UnitSpec("books", "books", "shelf"),
-        UnitSpec("tickets", "tickets", "ticket office"),
-        UnitSpec("chairs", "chairs", "hall"),
-        UnitSpec("boxes", "boxes", "warehouse"),
-        UnitSpec("packages", "packages", "depot"),
-        UnitSpec("students", "students", "class"),
-        UnitSpec("vehicles", "vehicles", "parking area"),
-        UnitSpec("marbles", "marbles", "bag"),
-        UnitSpec("tools", "tools", "workshop"),
-    ),
-}
 
 DIRECT_TEMPLATES = {
     "add": (
@@ -117,34 +78,6 @@ DIRECT_TEMPLATES = {
     ),
 }
 
-CONTEXT_TEMPLATES = {
-    "add": (
-        "A {subject} has {a} {unit}. Another {b} {unit} are added. How many {unit} are there altogether?",
-        "During the first period, {a} {unit} were recorded. The next period added {b} {unit}. What is the combined amount?",
-        "A project used {a} {unit} and then used another {b} {unit}. How many {unit} did it use in total?",
-        "One allocation contains {a} {unit}, and a second contains {b} {unit}. How many {unit} do both allocations contain?",
-    ),
-    "sub": (
-        "A {subject} starts with {a} {unit}. After {b} {unit} are used, how many {unit} remain?",
-        "A recorded total is {a} {unit}, of which {b} {unit} are removed. What amount remains?",
-        "A project has an allowance of {a} {unit} and consumes {b} {unit}. How many {unit} are left?",
-        "There are {a} {unit} available. If {b} {unit} are taken away, how many remain?",
-    ),
-    "mul": (
-        "A project needs {a} equal groups with {b} {unit} in each group. How many {unit} are needed altogether?",
-        "Each of {a} batches contains {b} {unit}. What is the total number of {unit}?",
-        "A plan repeats an allocation of {b} {unit} across {a} groups. How many {unit} does the plan allocate?",
-        "There are {a} sections, each accounting for {b} {unit}. What is their combined amount?",
-    ),
-    "div": (
-        "A total of {a} {unit} is divided into {b} equal groups. How many {unit} are in each group?",
-        "A {subject} accounts for {a} {unit} across {b} equal sections. What is the amount per section?",
-        "A project distributes {a} {unit} evenly among {b} groups. How many {unit} does each group receive?",
-        "There are {a} {unit} to be shared equally across {b} allocations. How many {unit} belong to each allocation?",
-    ),
-}
-
-
 def format_decimal(value: Decimal) -> str:
     rendered = format(value, "f")
     if "." in rendered:
@@ -159,7 +92,7 @@ def variable_reference(name: str) -> str:
 def arithmetic_values(operation: str, occurrence: int, decimal_values: bool) -> tuple[Decimal, Decimal, Decimal]:
     first = 10 + (occurrence * 37) % 490
     second = 2 + (occurrence * 53) % 97
-    # Coprime periods keep all 2,500 rows in each operation/mode/category
+    # Coprime periods keep all 1,000 rows in each direct operation/category
     # stratum prompt-unique without injecting artificial row identifiers.
     group_count = 2 + (occurrence * 11) % 97
     per_group = 2 + (occurrence * 29) % 499
@@ -186,9 +119,9 @@ def arithmetic_values(operation: str, occurrence: int, decimal_values: bool) -> 
 
 def variable_names(operation: str, slug: str) -> tuple[str, str, str]:
     if operation == "add":
-        return f"start_{slug}", f"change_{slug}", f"total_{slug}"
+        return f"base_{slug}", f"quantity_{slug}", f"total_{slug}"
     if operation == "sub":
-        return f"start_{slug}", f"change_{slug}", f"remainder_{slug}"
+        return f"base_{slug}", f"change_{slug}", f"difference_{slug}"
     if operation == "mul":
         return "group_count", f"quantity_{slug}", f"total_{slug}"
     if operation == "div":
@@ -206,8 +139,8 @@ def local_definitions(names: tuple[str, str, str], lhs: str, rhs: str) -> str:
 
 
 DETERMINE = {
-    "add": "Add the starting and additional quantities to find the combined amount.",
-    "sub": "Subtract the quantity used from the starting quantity to find the amount remaining.",
+    "add": "Add the two stated quantities to find their sum.",
+    "sub": "Compute the stated subtraction to find the difference.",
     "mul": "Multiply the number of groups by the quantity in each group to find the total amount.",
     "div": "Divide the total quantity by the number of equal groups to find the amount per group.",
 }
@@ -217,91 +150,98 @@ def answer_text(operation: str, result: str, unit: str) -> str:
     if operation == "add":
         return f"There are {result} {unit} altogether."
     if operation == "sub":
-        return f"There are {result} {unit} remaining."
+        return f"The difference is {result} {unit}."
     if operation == "mul":
         return f"The total is {result} {unit}."
     return f"Each group receives {result} {unit}."
 
 
 def make_entry(index: int, seed: int = DEFAULT_SEED) -> tuple[dict[str, Any], dict[str, Any]]:
-    del seed  # Reserved so future versions can add seeded wording without changing the CLI.
-    stratum_count = len(MODES) * len(OPERATIONS) * len(CATEGORIES)
-    stratum = index % stratum_count
-    occurrence = index // stratum_count
-    mode_index = stratum // (len(OPERATIONS) * len(CATEGORIES))
-    remainder = stratum % (len(OPERATIONS) * len(CATEGORIES))
-    operation_index = remainder // len(CATEGORIES)
-    category_index = remainder % len(CATEGORIES)
-    mode = MODES[mode_index]
-    operation = OPERATIONS[operation_index]
-    category = CATEGORIES[category_index]
-    unit_specs = UNITS[category]
-    spec = unit_specs[(occurrence * 7 + operation_index * 3) % len(unit_specs)]
-    decimal_values = category != "count" and occurrence % 4 == 1
-    lhs_value, rhs_value, result_value = arithmetic_values(
-        operation, occurrence, decimal_values)
-    lhs = format_decimal(lhs_value)
-    rhs = format_decimal(rhs_value)
-    result = format_decimal(result_value)
-    symbol = SYMBOLS[operation]
-    parenthesized = occurrence % 2 == 0
-    names = variable_names(operation, spec.slug)
+    if not 0 <= index < DEFAULT_COUNT:
+        raise ValueError(f"entry index out of range: {index}")
+    cycle, slot = divmod(index, 5)
+    if slot == 0:
+        mode = "direct"
+        occurrence, stratum = divmod(cycle, 12)
+        operation = OPERATIONS[stratum // 3]
+        category = CATEGORIES[stratum % 3]
+        story = STORIES[category][occurrence % len(STORIES[category])]
+        lhs_value, rhs_value, result_value = arithmetic_values(
+            operation, occurrence + seed, category != "count" and occurrence % 4 == 1)
+        names = variable_names(operation, story.suffix)
+        prompt = DIRECT_TEMPLATES[operation][(occurrence // len(STORIES[category])) % 4].format(
+            a=format_decimal(lhs_value), b=format_decimal(rhs_value), unit=story.unit)
+        result_ref = variable_reference(names[2])
+        answer = answer_text(operation, result_ref, story.unit)
+        metadata = dict(operation=operation, category=category, unit=story.unit,
+                        input_unit=story.unit, names=names, lhs=lhs_value, rhs=rhs_value,
+                        result=result_value, prompt=prompt, determine=DETERMINE[operation],
+                        answer=answer, relationship="direct", target_role=operation,
+                        wording=(occurrence // len(STORIES[category])) % 4,
+                        question_first=False, reverse_facts=False)
+    else:
+        mode = "contextual"
+        occurrence, stratum = divmod(cycle * 4 + slot - 1, 12)
+        relationship = RELATIONSHIPS[stratum // 3]
+        target = stratum % 3
+        metadata = render_case(make_case(relationship, occurrence, seed), target)
+        metadata["case_id"] = f"{relationship}:{occurrence}"
+    metadata["mode"] = mode
+    metadata["parenthesized"] = index % 2 == 0
+    operation, category = metadata["operation"], metadata["category"]
+    names = metadata["names"]
     lhs_name, rhs_name, result_name = names
     expression = (
-        f"{variable_reference(lhs_name)} {symbol} "
+        f"{variable_reference(lhs_name)} {SYMBOLS[operation]} "
         f"{variable_reference(rhs_name)}"
     )
-    tool_expression = f"({expression})" if parenthesized else expression
+    tool_expression = f"({expression})" if metadata["parenthesized"] else expression
     result_reference = variable_reference(result_name)
-    templates = DIRECT_TEMPLATES if mode == "direct" else CONTEXT_TEMPLATES
-    prompt = templates[operation][occurrence % len(templates[operation])].format(
-        a=lhs, b=rhs, unit=spec.unit, subject=spec.subject)
-    evidence = {
-        "add": "The two stated quantities provide the addends for one addition.",
-        "sub": "The stated available and used quantities provide the operands for one subtraction.",
-        "mul": "The stated group count and amount per group provide the factors for one multiplication.",
-        "div": "The stated total and group count provide the operands for one division.",
-    }[operation]
 
     entry = {
         "id": f"{ENTRY_PREFIX}{index:06d}",
-        "name": f"Single-step arithmetic tool: {mode} {OP_WORDS[operation]} {category}",
-        "prompt": prompt,
+        "name": f"Single-step arithmetic tool: {mode} {metadata['relationship']} {metadata['target_role']} {OP_WORDS[operation]} {category}",
+        "prompt": metadata["prompt"],
         "knowns": [],
         "unknowns": [],
-        "determine": DETERMINE[operation],
-        "define": local_definitions(names, lhs, rhs),
+        "determine": metadata["determine"],
+        "define": local_definitions(names, format_decimal(metadata["lhs"]), format_decimal(metadata["rhs"])),
         "execute": f"<TOOL>{tool_expression}</TOOL> -> {result_reference}",
         "update": "",
-        "answer": answer_text(operation, result_reference, spec.unit),
+        "answer": metadata["answer"],
         "goal": {
-            "target_state": f"{result_name} is correctly determined",
+            "target_state": "The quantity requested in the question is correctly reported.",
             "success_criteria": [{
-                "criterion": f"{result_name} is derived from the quantities stated in the problem",
-                "evidence": evidence,
+                "criterion": "The response answers the question using the stated quantities.",
+                "evidence": "",
             }],
             "constraints": [
                 "Use only the quantities stated in the problem.",
-                f"Preserve the unit {spec.unit}.",
+                "Report the quantity in the unit requested by the question.",
                 "Use exactly one single-step arithmetic tool call.",
             ],
         },
         "format_type": "derivation",
-        "source_sequence_id": f"synthetic_single_step_arithmetic_tool_v1:{mode}:{operation}:{category}",
+        "source_sequence_id": f"synthetic_single_step_arithmetic_tool_v1_roles:{mode}:{metadata.get('case_id', str(index))}",
         "timestamp": 0,
     }
-    metadata = {
-        "mode": mode,
-        "operation": operation,
-        "category": category,
-        "unit": spec.unit,
-        "parenthesized": parenthesized,
-        "names": names,
-        "lhs": lhs_value,
-        "rhs": rhs_value,
-        "result": result_value,
-    }
     return entry, metadata
+
+
+@lru_cache(maxsize=1)
+def manual_variable_stems() -> frozenset[str]:
+    tokens = json.loads(MANUAL_VOCAB_PATH.read_text(encoding="utf-8"))["tokens"]
+    return frozenset(token[:-1] for token in tokens if re.fullmatch(r"[a-z]+_", token))
+
+
+def validate_variable_names(names: tuple[str, str, str]) -> None:
+    stems = manual_variable_stems()
+    if len(set(names)) != 3:
+        raise ValueError("local names must be distinct")
+    for name in names:
+        parts = name.split("_")
+        if len(parts) != 2 or any(part not in stems for part in parts):
+            raise ValueError(f"variable must pair two manual-vocabulary stems: {name}")
 
 
 def validate_entry(entry: dict[str, Any], metadata: dict[str, Any], seen_ids: set[str], seen_prompts: set[str]) -> None:
@@ -323,8 +263,11 @@ def validate_entry(entry: dict[str, Any], metadata: dict[str, Any], seen_ids: se
     if entry["define"] != local_definitions(
             metadata["names"], format_decimal(metadata["lhs"]), format_decimal(metadata["rhs"])):
         raise ValueError(f"{block_id}: invalid local definitions")
-    if entry["determine"] != DETERMINE[metadata["operation"]]:
+    validate_variable_names(metadata["names"])
+    if entry["determine"] != metadata["determine"] or re.search(r"\d|\$\{|_", entry["determine"]):
         raise ValueError(f"{block_id}: invalid natural-language determine")
+    if entry["prompt"] != metadata["prompt"] or entry["answer"] != metadata["answer"]:
+        raise ValueError(f"{block_id}: prompt/answer role mismatch")
     if entry["update"] != "":
         raise ValueError(f"{block_id}: Update must remain empty")
     if entry["execute"].count("<TOOL>") != 1 or entry["execute"].count("</TOOL>") != 1:
@@ -423,11 +366,8 @@ def generate_dataset(output_dir: Path, count: int, seed: int) -> dict[str, Any]:
         raise ValueError(f"this course requires exactly {DEFAULT_COUNT:,} entries")
     vocab_bytes = MANUAL_VOCAB_PATH.read_bytes()
     vocab = json.loads(vocab_bytes)["tokens"]
-    # Reuse exact identifier prefix pieces; unit suffixes retain their natural spelling.
-    prefixes = {name.split("_", 1)[0] + "_"
-                for operation in OPERATIONS for name in variable_names(operation, "liters")}
-    if missing := prefixes - vocab.keys():
-        raise ValueError(f"manual vocabulary is missing identifier pieces: {sorted(missing)}")
+    manual_variable_stems.cache_clear()
+    pieces: set[str] = set()
     jsonl_path = output_dir / "concept_blocks.jsonl"
     registry_path = output_dir / "curriculum_registry.json"
     manifest_path = output_dir / "single_step_arithmetic_tool_v1_manifest.json"
@@ -435,6 +375,10 @@ def generate_dataset(output_dir: Path, count: int, seed: int) -> dict[str, Any]:
     seen_prompts: set[str] = set()
     family_counts: collections.Counter[str] = collections.Counter()
     unit_counts: collections.Counter[str] = collections.Counter()
+    operation_counts: collections.Counter[str] = collections.Counter()
+    role_counts: collections.Counter[str] = collections.Counter()
+    wording_counts: collections.Counter[str] = collections.Counter()
+    shape_counts: collections.Counter[str] = collections.Counter()
     parenthesized_count = 0
     ids: list[str] = []
     digest = hashlib.sha256()
@@ -451,25 +395,34 @@ def generate_dataset(output_dir: Path, count: int, seed: int) -> dict[str, Any]:
                 digest.update(encoded_line)
                 ids.append(entry["id"])
                 family_counts[
-                    f"{metadata['mode']}:{metadata['operation']}:{metadata['category']}"
+                    f"{metadata['mode']}:{metadata['relationship']}:{metadata['target_role']}:{metadata['category']}"
                 ] += 1
-                unit_counts[metadata["unit"]] += 1
+                unit_counts[metadata["input_unit"]] += 1
+                operation_counts[metadata["operation"]] += 1
+                role_counts[f"{metadata['relationship']}:{metadata['target_role']}"] += 1
+                wording_counts[f"{metadata['relationship']}:{metadata['wording']}"] += 1
+                shape_counts[f"question_first:{metadata['question_first']}"] += 1
+                shape_counts[f"reverse_facts:{metadata['reverse_facts']}"] += 1
+                pieces.update(part + "_" for name in metadata["names"] for part in name.split("_"))
                 parenthesized_count += int(metadata["parenthesized"])
+            expected_roles = {f"direct:{op}": 3_000 for op in OPERATIONS}
+            expected_roles.update({f"{rel}:{role}": 4_000 for rel in RELATIONSHIPS for role in TARGETS[rel]})
+            if dict(role_counts) != expected_roles:
+                raise ValueError(f"role balance failed: {dict(role_counts)}")
+            if parenthesized_count != count // 2:
+                raise ValueError(f"parenthesis balance failed: {parenthesized_count}")
+            if missing := pieces - vocab.keys():
+                raise ValueError(f"missing manual-vocabulary pieces: {sorted(missing)}")
             output.flush()
             os.fsync(output.fileno())
         os.replace(stage, jsonl_path)
     finally:
         stage.unlink(missing_ok=True)
 
-    expected_family_count = count // (len(MODES) * len(OPERATIONS) * len(CATEGORIES))
-    if len(family_counts) != 24 or set(family_counts.values()) != {expected_family_count}:
-        raise ValueError(f"family balance failed: {dict(family_counts)}")
-    if parenthesized_count != count // 2:
-        raise ValueError(f"parenthesis balance failed: {parenthesized_count}")
-
     write_json_atomic(registry_path, generated_registry(ids))
     manifest = {
         "dataset_id": "single_step_arithmetic_tool_v1",
+        "revision": "semantic_roles_v2",
         "curriculum_id": CURRICULUM_ID,
         "course_id": COURSE_ID,
         "generator": "scripts/generate_single_step_arithmetic_tool_curriculum.py",
@@ -478,15 +431,16 @@ def generate_dataset(output_dir: Path, count: int, seed: int) -> dict[str, Any]:
         "definition_policy": "two ${variable} -> value; bindings and one ${variable}; declaration; persisted knowns/unknowns empty",
         "manual_vocab": str(MANUAL_VOCAB_PATH.relative_to(ROOT_DIR)),
         "manual_vocab_sha256": hashlib.sha256(vocab_bytes).hexdigest(),
-        "variable_prefix_pieces": sorted(prefixes),
+        "variable_name_policy": "exactly two stems, each backed by an existing manual-vocabulary stem_ entry",
+        "variable_pieces": sorted(pieces),
         "mode_counts": {
             mode: sum(value for family, value in family_counts.items() if family.startswith(mode + ":"))
             for mode in MODES
         },
-        "operation_counts": {
-            operation: sum(value for family, value in family_counts.items() if f":{operation}:" in family)
-            for operation in OPERATIONS
-        },
+        "operation_counts": dict(sorted(operation_counts.items())),
+        "role_counts": dict(sorted(role_counts.items())),
+        "wording_counts": dict(sorted(wording_counts.items())),
+        "prompt_shape_counts": dict(sorted(shape_counts.items())),
         "unit_category_counts": {
             category: sum(value for family, value in family_counts.items() if family.endswith(":" + category))
             for category in CATEGORIES
@@ -517,6 +471,8 @@ def replace_one(items: list[dict[str, Any]], replacement: dict[str, Any], item_i
 
 
 def merge_into_existing_dataset(source_dir: Path, data_dir: Path) -> tuple[int, int]:
+    if source_dir.resolve() == data_dir.resolve():
+        raise ValueError("generation and merge directories must be different")
     source_jsonl = source_dir / "concept_blocks.jsonl"
     source_registry_path = source_dir / "curriculum_registry.json"
     target_jsonl = data_dir / "concept_blocks.jsonl"
@@ -544,7 +500,6 @@ def merge_into_existing_dataset(source_dir: Path, data_dir: Path) -> tuple[int, 
     jsonl_stage, jsonl_output = atomic_text_path(target_jsonl)
     kept = 0
     removed = 0
-    owned_marker = f'"id":"{ENTRY_PREFIX}'.encode("ascii")
     try:
         with registry_output:
             json.dump(target_registry, registry_output, ensure_ascii=False, indent=2)
@@ -558,11 +513,11 @@ def merge_into_existing_dataset(source_dir: Path, data_dir: Path) -> tuple[int, 
             for line_number, line in enumerate(existing, 1):
                 if not line.strip():
                     raise ValueError(f"{target_jsonl}:{line_number}: blank JSONL row")
-                if owned_marker in line:
-                    row = json.loads(line)
-                    block_id = row.get("id")
-                    if not isinstance(block_id, str) or not block_id.startswith(ENTRY_PREFIX):
-                        raise ValueError(f"{target_jsonl}:{line_number}: invalid owned row")
+                row = json.loads(line)
+                block_id = row.get("id")
+                if not isinstance(block_id, str):
+                    raise ValueError(f"{target_jsonl}:{line_number}: missing row id")
+                if block_id.startswith(ENTRY_PREFIX):
                     removed += 1
                     continue
                 output.write(line)

@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
 #include <stdexcept>
 #include <string>
 
@@ -37,6 +38,28 @@
 
 namespace GRIMText::Training {
 namespace {
+
+struct DiagnosticPrompt {
+    const char* id;
+    const char* prompt;
+};
+
+// One probe per diagnostic interval, cycling over every contextual unknown
+// position. IDs are log metadata only; the model must infer the requested role.
+constexpr std::array<DiagnosticPrompt, 12> kArithmeticPrompts{{
+    {"decrease_removed", "A tank holds 120 liters. After using a few liters, 84 liters remain. How many liters were used?"},
+    {"decrease_start", "After 36 liters of water are used from a tank, 84 liters remain. How many liters were in the tank at first?"},
+    {"decrease_remaining", "A tank initially holds 120 liters. Then 36 liters are used. How many liters remain?"},
+    {"increase_start", "Maya receives 19 marbles and now has 42. How many marbles did she have before receiving them?"},
+    {"increase_added", "Maya had 23 marbles before receiving some more. She now has 42. How many marbles did she receive?"},
+    {"increase_final", "Maya has 23 marbles and receives 19 more. How many marbles does she have now?"},
+    {"comparison_smaller", "The blue rope is 18 feet shorter than the red rope. The red rope is 50 feet long. How long is the blue rope?"},
+    {"comparison_difference", "The red rope is 50 feet long and the blue rope is 32 feet long. How many feet shorter is the blue rope?"},
+    {"comparison_larger", "The blue rope is 32 feet long, which is 18 feet shorter than the red rope. How long is the red rope?"},
+    {"groups_group_count", "There are 72 students arranged into teams with 9 students on each team. How many teams are there?"},
+    {"groups_per_group", "There are 72 students divided equally among 8 teams. How many students are on each team?"},
+    {"groups_total", "There are 8 teams with 9 students on each team. How many students are there altogether?"},
+}};
 
 //------------------------------------------------------
 //  Environment helpers (self-contained, no Phase2 deps)
@@ -108,36 +131,33 @@ void logDiagnosticSample(TrainingContext& ctx,
         }
     }
 
-    const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT",
-        "A tank holds 120 liters. After using a few liters, 84 liters remain. How many liters were used?");
+    const auto sample_index = static_cast<std::size_t>(
+        optimizer_step / inference_diagnostic_interval - 1) % kArithmeticPrompts.size();
+    const auto& diagnostic = kArithmeticPrompts[sample_index];
+    const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT", diagnostic.prompt);
+    const char* custom_prompt = std::getenv("GRIM_SAMPLE_PROMPT");
+    const char* diagnostic_id = custom_prompt && *custom_prompt ? "custom" : diagnostic.id;
 
-    // Mirror the reasoning-model contract used at runtime: upstream models
-    // supply structured state, while this model determines the next output.
-    // These strings are rendered as labeled, masked input context; they are
-    // never treated as answer targets.
+    // Match the first-pass arithmetic curriculum exactly: no persisted state,
+    // operand bindings, operation hints, or target-role hints in the prefix.
+    // This generic goal also remains valid for GRIM_SAMPLE_PROMPT overrides.
     GRIM::ReasoningState reasoning_state;
-    reasoning_state.knowns = {
-        "tank_liters = 120;",
-        "remaining_liters = 84;"
-    };
-    reasoning_state.unknowns = {
-        "used_liters"
-    };
     reasoning_state.goal = GRIM::ConceptBlockGoal{
-        "Determine how many liters were used.",
+        "The quantity requested in the question is correctly reported.",
         {
             {
-                "The response contains one consumed-volume assignment.",
-                "Tank capacity and remaining volume form a complete subtraction relationship."
+                "The response answers the question using the stated quantities.",
+                ""
             }
         },
         {
-            "Use liters as the unit.",
-            "Derive the used volume from capacity minus remaining volume."
+            "Use only the quantities stated in the problem.",
+            "Report the quantity in the unit requested by the question.",
+            "Use exactly one single-step arithmetic tool call."
         }
     };
-    const int max_new_tokens = readEnvInt("GRIM_SAMPLE_TOKENS", 100);
-    const int max_chars = readEnvInt("GRIM_SAMPLE_MAX_CHARS", 300);
+    const int max_new_tokens = readEnvInt("GRIM_SAMPLE_TOKENS", 256);
+    const int max_chars = readEnvInt("GRIM_SAMPLE_MAX_CHARS", 2048);
     if (max_new_tokens <= 0 || max_chars <= 0) {
         return;
     }
@@ -193,6 +213,7 @@ void logDiagnosticSample(TrainingContext& ctx,
                                 " decode_ms=" + std::to_string(sample.decode_ms) +
                                 " prompt_tokens=" + std::to_string(sample.prompt_token_count) +
                                 " sequence_tokens=" + std::to_string(sample.sequence_token_count) +
+                                " case=" + diagnostic_id +
                                 " prompt=\"" + prompt + "\"");
         ctx.logging.logger->log("[Sample] " + decoded);
     } catch (const std::exception& e) {
