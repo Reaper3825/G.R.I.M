@@ -10,12 +10,14 @@
 #include <vector>
 
 namespace GRIM {
+namespace Lenses { struct LensSnapshot; }
 namespace Tokenizer {
 class AtomTable;
 class SequenceLocalAtomTable;
 }
 
 struct GeneratedSequence {
+    std::shared_ptr<const Lenses::LensSnapshot> prefill_lens_snapshot;
     std::vector<int> token_ids;
     std::vector<float> token_scores;
     std::vector<float> token_numeric_values;

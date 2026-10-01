@@ -17,6 +17,8 @@
 //======================================================//
 
 #include "DiagnosticInference.hpp"
+#include "DiagnosticLens.hpp"
+#include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../Phases/Phase2_InferenceLoop.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
@@ -31,6 +33,9 @@
 #include <array>
 #include <stdexcept>
 #include <string>
+#include <iomanip>
+#include <limits>
+#include <optional>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -44,7 +49,7 @@ struct DiagnosticPrompt {
     const char* prompt;
 };
 
-// One probe per diagnostic interval, cycling over every contextual unknown
+// One probe per diagnostic interval, cycling over every contextual unknown N = DD
 // position. IDs are log metadata only; the model must infer the requested role.
 constexpr std::array<DiagnosticPrompt, 12> kArithmeticPrompts{{
     {"decrease_removed", "A tank holds 120 liters. After using a few liters, 84 liters remain. How many liters were used?"},
@@ -178,7 +183,33 @@ void logDiagnosticSample(TrainingContext& ctx,
     cfg.repetition_penalty = 1.0f;
 
     try {
+        const auto lens_options = validateDiagnosticLensOptions({
+            cfg.lens_enabled, cfg.lens_validate, cfg.lens_top_k,
+            cfg.lens_validation_rounds, cfg.lens_validation_tokens,
+            cfg.lens_max_replay_rows, cfg.lens_absolute_tolerance});
         auto tokenizer = LoadInferenceTokenizer(ctx.config, *ctx.logging.logger);
+        GRIM::Lenses::LensCaptureRequest lens;
+        if (lens_options.enabled) {
+            if (!ctx.config.model_config || ctx.logging.session_id.empty())
+                throw std::runtime_error("Lens diagnostic requires compiled config and training session identity");
+            if (GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled)
+                throw std::runtime_error("Lens diagnostic currently requires a token model, not an insertion-gap model");
+            std::ostringstream config_hash;
+            config_hash << std::hex << std::setfill('0');
+            for (auto byte : ctx.config.model_config->integrity.semantic_sha256)
+                config_hash << std::setw(2) << static_cast<unsigned int>(byte);
+            std::uint64_t vocab_hash = 0;
+            const auto vocab_path = GRIM::HyperParameters::pathsHP(ctx.config).vocab_path;
+            if (!GRIM::Tokenizer::AtomTable::computeFileHash(vocab_path, vocab_hash))
+                throw std::runtime_error("Lens diagnostic could not fingerprint tokenizer artifact");
+            lens.identity = {ctx.logging.session_id,
+                "live-training:" + ctx.logging.session_id + ":step:" + std::to_string(optimizer_step),
+                "sha256:" + config_hash.str(), "vocab-file-hash64:" + std::to_string(vocab_hash),
+                static_cast<std::uint64_t>(optimizer_step)};
+            lens.top_k = std::min(lens_options.top_k, tokenizer->vocabSize());
+            lens.replay_identity_control = true;
+            lens.max_replay_rows = lens_options.max_replay_rows;
+        }
         const auto inference_state = reasoning_state.withPrompt(prompt);
         const auto concept_spans =
             GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
@@ -188,8 +219,64 @@ void logDiagnosticSample(TrainingContext& ctx,
         const std::string diagnostic_prefix =
             GRIM::ConceptCanonical::renderReasoningPrompt(inference_state, concept_spans);
         const auto start = std::chrono::steady_clock::now();
+        if (lens_options.validate) {
+            cfg.do_sample = false;
+            cfg.max_new_tokens = lens_options.validation_tokens;
+            cfg.min_new_tokens = 1;
+        }
+        std::optional<Phase2TextInferenceResult> baseline;
+        if (lens_options.validate)
+            baseline = executePhase2TextInference(ctx, *tokenizer, diagnostic_prefix, cfg);
         auto sample = executePhase2TextInference(
-            ctx, *tokenizer, diagnostic_prefix, cfg);
+            ctx, *tokenizer, diagnostic_prefix, cfg, lens_options.enabled ? &lens : nullptr);
+        auto report_lens = [&](const Phase2TextInferenceResult& captured) {
+            if (!captured.prefill_lens_snapshot)
+                throw std::runtime_error("Lens diagnostic requested capture but inference returned no snapshot");
+            const auto report = diagnosticLensReport(*captured.prefill_lens_snapshot,
+                lens_options.absolute_tolerance, [&](int id) {
+                    return tokenizer->decode(GRIM::Tokenizer::DecodeRequest({id}));
+                });
+            // Escape partial byte tokens and control characters in a single log record.
+            ctx.logging.logger->log("[Lens] " + report.dump(-1, ' ', true,
+                nlohmann::json::error_handler_t::replace));
+        };
+        if (lens_options.enabled) report_lens(sample);
+        if (baseline) {
+            auto memory_used = []() {
+                std::size_t free_bytes = 0, total_bytes = 0;
+                const auto sync = cudaDeviceSynchronize();
+                if (sync != cudaSuccess) throw std::runtime_error(cudaGetErrorString(sync));
+                const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
+                if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
+                return total_bytes - free_bytes;
+            };
+            // Baseline and first captured run warm both paths. Measurements below
+            // are device-wide observations, not a leak verdict or peak scratch size.
+            std::vector<std::size_t> used_bytes{memory_used()};
+            bool token_match = baseline->token_ids == sample.token_ids;
+            bool text_match = baseline->text == sample.text;
+            bool identity_pass = sample.prefill_lens_snapshot->identity_max_abs_logit_error.value_or(
+                std::numeric_limits<double>::infinity()) <= lens_options.absolute_tolerance;
+            for (int round = 1; round < lens_options.validation_rounds; ++round) {
+                {
+                    auto repeated = executePhase2TextInference(ctx, *tokenizer, diagnostic_prefix, cfg, &lens);
+                    report_lens(repeated);
+                    token_match = token_match && baseline->token_ids == repeated.token_ids;
+                    text_match = text_match && baseline->text == repeated.text;
+                    identity_pass = identity_pass && repeated.prefill_lens_snapshot->identity_max_abs_logit_error.value_or(
+                        std::numeric_limits<double>::infinity()) <= lens_options.absolute_tolerance;
+                }
+                used_bytes.push_back(memory_used());
+            }
+            const nlohmann::json validation = {
+                {"status", token_match && text_match && identity_pass ? "pass" : "fail"},
+                {"greedy_token_ids_match", token_match}, {"decoded_text_match", text_match},
+                {"identity_pass", identity_pass}, {"capture_rounds", lens_options.validation_rounds},
+                {"device_used_bytes_after_cleanup", used_bytes},
+                {"memory_verdict", "observation_only"},
+                {"weights", lens.identity.checkpoint_fingerprint}};
+            ctx.logging.logger->log("[LensValidation] " + validation.dump());
+        }
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 

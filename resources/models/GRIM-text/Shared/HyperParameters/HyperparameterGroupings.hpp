@@ -118,6 +118,13 @@ struct LoRATrainingHP {
 };
 
 struct GenerationHP {
+    bool lens_enabled = false;
+    bool lens_validate = false;
+    int lens_top_k = 10;
+    int lens_validation_rounds = 3;
+    int lens_validation_tokens = 16;
+    int lens_max_replay_rows = 1024;
+    double lens_absolute_tolerance = 1e-4;
     SamplingStrategy strategy = SamplingStrategy::UNSPECIFIED;
     int max_new_tokens = 0;
     int min_new_tokens = 0;
@@ -1431,6 +1438,13 @@ inline GenerationHP generationHP(const LanguageModelConfig& cfg)
     view.unk_token_id = cfg.generation_unk_token_id;
     view.no_repeat_ngram_size = cfg.generation_no_repeat_ngram_size;
     view.do_sample = cfg.generation_do_sample;
+    view.lens_enabled = cfg.generation_lens_enabled;
+    view.lens_validate = cfg.generation_lens_validate;
+    view.lens_top_k = cfg.generation_lens_top_k;
+    view.lens_validation_rounds = cfg.generation_lens_validation_rounds;
+    view.lens_validation_tokens = cfg.generation_lens_validation_tokens;
+    view.lens_max_replay_rows = cfg.generation_lens_max_replay_rows;
+    view.lens_absolute_tolerance = cfg.generation_lens_absolute_tolerance;
     view.bad_words_ids = cfg.generation_bad_words_ids;
     view.seed = cfg.generation_seed;
     return view;
@@ -1458,6 +1472,13 @@ inline GenerationHP generationHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.unk_token_id = Tokenizer::UNK_TOKEN_ID;
     view.no_repeat_ngram_size = snapshotTrainingConfigField<int>(snapshot, "generation_no_repeat_ngram_size");
     view.do_sample = snapshotTrainingConfigField<bool>(snapshot, "generation_do_sample");
+    view.lens_enabled = snapshotTrainingConfigField<bool>(snapshot, "generation_lens_enabled");
+    view.lens_validate = snapshotTrainingConfigField<bool>(snapshot, "generation_lens_validate");
+    view.lens_top_k = snapshotTrainingConfigField<int>(snapshot, "generation_lens_top_k");
+    view.lens_validation_rounds = snapshotTrainingConfigField<int>(snapshot, "generation_lens_validation_rounds");
+    view.lens_validation_tokens = snapshotTrainingConfigField<int>(snapshot, "generation_lens_validation_tokens");
+    view.lens_max_replay_rows = snapshotTrainingConfigField<int>(snapshot, "generation_lens_max_replay_rows");
+    view.lens_absolute_tolerance = snapshotTrainingConfigField<double>(snapshot, "generation_lens_absolute_tolerance");
     view.seed = 0;
     return view;
 }

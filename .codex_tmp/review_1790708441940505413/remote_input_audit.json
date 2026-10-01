@@ -1,0 +1,118 @@
+{
+  "flatbuffer": {
+    "total_blocks": 623379,
+    "sampled_provenance_counts": {
+      "synthetic_single_step_arithmetic_tool_v1": 24
+    },
+    "determine_counts": {
+      "Add the starting and additional quantities to find the combined amount.": 6,
+      "Subtract the quantity used from the starting quantity to find the amount remaining.": 6,
+      "Multiply the number of groups by the quantity in each group to find the total amount.": 6,
+      "Divide the total quantity by the number of equal groups to find the amount per group.": 6
+    },
+    "examples": [
+      {
+        "id": "ssatv1_000000",
+        "name": "Single-step arithmetic tool: direct addition metric",
+        "prompt": "Calculate the combined amount of 10 millimeters and 2 millimeters.",
+        "answer": "There are ${total_millimeters} millimeters altogether.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1:direct:add:metric",
+        "determine": "Add the starting and additional quantities to find the combined amount.",
+        "execute": "<TOOL>(${start_millimeters} + ${change_millimeters})</TOOL> -> ${total_millimeters}",
+        "define": "${start_millimeters} -> 10;\n${change_millimeters} -> 2;\n${total_millimeters};",
+        "goal_target": "total_millimeters is correctly determined"
+      },
+      {
+        "id": "ssatv1_000001",
+        "name": "Single-step arithmetic tool: direct addition imperial",
+        "prompt": "Calculate the combined amount of 10 inches and 2 inches.",
+        "answer": "There are ${total_inches} inches altogether.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1:direct:add:imperial",
+        "determine": "Add the starting and additional quantities to find the combined amount.",
+        "execute": "<TOOL>(${start_inches} + ${change_inches})</TOOL> -> ${total_inches}",
+        "define": "${start_inches} -> 10;\n${change_inches} -> 2;\n${total_inches};",
+        "goal_target": "total_inches is correctly determined"
+      },
+      {
+        "id": "ssatv1_000002",
+        "name": "Single-step arithmetic tool: direct addition count",
+        "prompt": "Calculate the combined amount of 10 apples and 2 apples.",
+        "answer": "There are ${total_apples} apples altogether.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1:direct:add:count",
+        "determine": "Add the starting and additional quantities to find the combined amount.",
+        "execute": "<TOOL>(${start_apples} + ${change_apples})</TOOL> -> ${total_apples}",
+        "define": "${start_apples} -> 10;\n${change_apples} -> 2;\n${total_apples};",
+        "goal_target": "total_apples is correctly determined"
+      },
+      {
+        "id": "ssatv1_000003",
+        "name": "Single-step arithmetic tool: direct subtraction metric",
+        "prompt": "Calculate 12 kilometers minus 2 kilometers.",
+        "answer": "There are ${remainder_kilometers} kilometers remaining.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1:direct:sub:metric",
+        "determine": "Subtract the quantity used from the starting quantity to find the amount remaining.",
+        "execute": "<TOOL>(${start_kilometers} - ${change_kilometers})</TOOL> -> ${remainder_kilometers}",
+        "define": "${start_kilometers} -> 12;\n${change_kilometers} -> 2;\n${remainder_kilometers};",
+        "goal_target": "remainder_kilometers is correctly determined"
+      }
+    ]
+  },
+  "jsonl": {
+    "sampled_provenance_counts": {
+      "synthetic_single_step_arithmetic_tool_v1_roles": 4
+    },
+    "examples": [
+      {
+        "id": "ssatv1_059134",
+        "name": "Single-step arithmetic tool: contextual increase start subtraction imperial",
+        "prompt": "During the change, 48 yards of fabric are delivered. Once the change is complete, the first shop has 143 yards of fabric. What was the original fabric length for the first shop, in yards?",
+        "answer": "The starting fabric length is ${start_length} yards.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1_roles:contextual:increase:3942",
+        "determine": "Subtract the fabric length delivered from the final fabric length to find the starting fabric length.",
+        "execute": "<TOOL>(${total_length} - ${change_length})</TOOL> -> ${start_length}",
+        "define": "${total_length} -> 143;\n${change_length} -> 48;\n${start_length};"
+      },
+      {
+        "id": "ssatv1_059135",
+        "name": "Single-step arithmetic tool: direct direct mul multiplication imperial",
+        "prompt": "What do 7 groups times 6.1 feet per group equal?",
+        "answer": "The total is ${total_length} feet.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1_roles:direct:59135",
+        "determine": "Multiply the number of groups by the quantity in each group to find the total amount.",
+        "execute": "<TOOL>${group_count} * ${quantity_length}</TOOL> -> ${total_length}",
+        "define": "${group_count} -> 7;\n${quantity_length} -> 6.1;\n${total_length};"
+      },
+      {
+        "id": "ssatv1_059136",
+        "name": "Single-step arithmetic tool: contextual increase added subtraction imperial",
+        "prompt": "Some fabric is delivered. Before the change, the first shop has 95 yards of fabric. Once the change is complete, the first shop has 143 yards of fabric. How many yards of fabric were delivered?",
+        "answer": "The fabric length delivered is ${change_length} yards.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1_roles:contextual:increase:3942",
+        "determine": "Subtract the starting fabric length from the final fabric length to find the fabric length delivered.",
+        "execute": "<TOOL>(${total_length} - ${start_length})</TOOL> -> ${change_length}",
+        "define": "${total_length} -> 143;\n${start_length} -> 95;\n${change_length};"
+      },
+      {
+        "id": "ssatv1_059137",
+        "name": "Single-step arithmetic tool: contextual increase final addition imperial",
+        "prompt": "Before the change, the first shop has 95 yards of fabric. During the change, 48 yards of fabric are delivered. What is the final fabric length for the first shop, in yards?",
+        "answer": "The final fabric length is ${total_length} yards.",
+        "source_sequence_id": "synthetic_single_step_arithmetic_tool_v1_roles:contextual:increase:3942",
+        "determine": "Add the starting fabric length and the fabric length delivered to find the final fabric length.",
+        "execute": "<TOOL>${start_length} + ${change_length}</TOOL> -> ${total_length}",
+        "define": "${start_length} -> 95;\n${change_length} -> 48;\n${total_length};"
+      }
+    ]
+  },
+  "grmt": {
+    "header": [
+      1196249684,
+      34,
+      60000,
+      10319
+    ],
+    "first_concept_block_id": "ssatv1_000000",
+    "first_sequence_length": 252,
+    "first_sequence_decoded": "<prompt> <ID318>Calculate the combined amount of <ID261><ID260> millimeters and <ID262> millimeters.<ID318></prompt><ID318><ID318><target_state><ID318>total_millimeters is correctly determined<ID318></target_state><ID318><ID318><criteria><ID318><criterion><ID318>total_millimeters is derived from the quantities stated in the problem<ID318></criterion><ID318><ID318><evidence><ID318>The two stated quantities provide the addends for one addition.<ID318></evidence><ID318><ID318></criteria><ID318><ID318><constraints><ID318><constraint><ID318>Use only the quantities stated in the problem.<ID318></constraint><ID318><ID318><constraint><ID318>Preserve the unit millimeters.<ID318></constraint><ID318><ID318><constraint><ID318>Use exactly one single-step arithmetic tool call.<ID318></constraint><ID318><ID318></constraints><ID318><ID318><determine><ID318>Add the starting and additional quantities to find the combined amount.<ID318></determine><ID318><ID318><define><ID318>${start_millimeters} -> <ID261><ID260>;<ID318>${change_millimeters} -> <ID262>;<ID318>${total_millimeters};<ID318></define><ID318><ID318><execute><ID318><ID311>(${start_millimeters} + ${change_millimeters})<ID317> -> ${total_millimeters}<ID318></execute><ID318><ID318><answer><ID318>There are ${total_millimeters} millimeters altogether.<ID318></answer><ID318><ID318>"
+  }
+}

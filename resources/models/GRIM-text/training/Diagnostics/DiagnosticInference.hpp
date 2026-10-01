@@ -31,6 +31,9 @@ namespace GRIMText::Training {
 /// rendered prefix through executePhase2TextInference() and logs the result.
 /// GRIM_SAMPLE_PROMPT overrides the probe; GRIM_SAMPLE_TOKENS (default 256) and
 /// GRIM_SAMPLE_MAX_CHARS (default 2048) control generation and display limits.
+/// generation_lens_enabled=true adds final-layer readouts and an identity-head replay.
+/// generation_lens_validate=true additionally compares a capture-disabled greedy
+/// baseline with repeated captured runs; see Shared/Lenses/README.md for controls.
 ///
 /// SAFETY: This function does NOT modify any model weight tensors,
 /// gradient buffers, or optimizer state. Inference paths use no training

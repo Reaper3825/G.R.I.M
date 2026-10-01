@@ -21,6 +21,8 @@
 #include "ModelForwardOutputs.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../VerboseLogging.hpp"
+#include "../Lenses/LensCapture_GPU.hpp"
+#include "../../Layers/Encoding/AblationFlags.hpp"
 
 #include <array>
 #include <iostream>
@@ -401,6 +403,20 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const bool use_layer_scale = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_layer_scale");
 
     const auto& payload = *request.payload;
+    const auto invocation_id = Lenses::nextForwardInvocationId();
+    std::optional<Lenses::LensCaptureMetadata> lens_metadata;
+    if (request.lens_capture) {
+        if (atom_boundary_hp.enabled)
+            throw std::runtime_error("Lens capture v1 does not support atom-insertion readout boundaries");
+        lens_metadata = Lenses::makeCaptureMetadata(
+            *request.lens_capture, payload,
+            HyperParameters::snapshotTrainingConfigField<NamedConceptSpanDefinitions>(*cfg, "concept_spans"),
+            num_layers, d_model,
+            request.kv_cache ? request.kv_cache->currentSeqlen() : 0,
+            request.kv_cache || (HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "causal_mask") &&
+                !Ablation::kDisableCausalMask),
+            request.graph.enable_dropout, invocation_id);
+    }
     (void)runtime_payload;
     ModelForwardOutputs forward_outputs;
     forward_outputs.setNamedConceptSpanMetadata(
@@ -752,6 +768,12 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         ? payload.atomInsertionGapRowCount()
         : total_tokens;
     MFWD_INFO("Forward complete: logits shape=[" << logit_rows << ", " << payload.vocab_size << "]");
+
+    if (lens_metadata) {
+        forward_outputs.lens_snapshot = Lenses::captureFinalLens(
+            *request.lens_capture, std::move(*lens_metadata), lm_head_hp,
+            lm_head_parameters, payload, forward_outputs, request.stream, request.cublas_handle);
+    }
 
     return forward_outputs;
 }

@@ -433,6 +433,13 @@ struct LanguageModelConfig {
     float generation_presence_penalty = 0.0f;
     int generation_no_repeat_ngram_size = 0;
     bool generation_do_sample = false;
+    bool generation_lens_enabled = false;
+    bool generation_lens_validate = false;
+    int generation_lens_top_k = 10;
+    int generation_lens_validation_rounds = 3;
+    int generation_lens_validation_tokens = 16;
+    int generation_lens_max_replay_rows = 1024;
+    double generation_lens_absolute_tolerance = 1e-4;
     int generation_num_return_sequences = 0;
     int generation_eos_token_id = -1;
     int generation_pad_token_id = -1;
@@ -1505,6 +1512,12 @@ inline void validateRootConfigDocument(
     if (params.generation_strategy == SamplingStrategy::UNSPECIFIED) {
         throw std::runtime_error(std::string(caller) + ": generation_strategy is UNSPECIFIED");
     }
+    if (params.generation_lens_top_k < 1 || params.generation_lens_top_k > 100 ||
+        params.generation_lens_validation_rounds < 2 || params.generation_lens_validation_rounds > 20 ||
+        params.generation_lens_validation_tokens < 1 || params.generation_lens_validation_tokens > 256 ||
+        params.generation_lens_max_replay_rows < 1 || params.generation_lens_max_replay_rows > 1048576 ||
+        !std::isfinite(params.generation_lens_absolute_tolerance) || params.generation_lens_absolute_tolerance < 0)
+        throw std::runtime_error(std::string(caller) + ": invalid generation_lens_* configuration");
     validatePositiveFields(params, {
         validationField("generation_max_new_tokens", &LanguageModelConfig::generation_max_new_tokens),
         validationField("generation_num_return_sequences", &LanguageModelConfig::generation_num_return_sequences),
@@ -1915,6 +1928,13 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(generation_frequency_penalty);
     GRIM_LOAD_CONFIG_FIELD(generation_presence_penalty);
     GRIM_LOAD_CONFIG_FIELD(generation_do_sample);
+    GRIM_LOAD_CONFIG_FIELD(generation_lens_enabled);
+    GRIM_LOAD_CONFIG_FIELD(generation_lens_validate);
+    GRIM_LOAD_CONFIG_FIELD(generation_lens_top_k);
+    GRIM_LOAD_CONFIG_FIELD(generation_lens_validation_rounds);
+    GRIM_LOAD_CONFIG_FIELD(generation_lens_validation_tokens);
+    GRIM_LOAD_CONFIG_FIELD(generation_lens_max_replay_rows);
+    GRIM_LOAD_CONFIG_FIELD(generation_lens_absolute_tolerance);
     GRIM_LOAD_CONFIG_FIELD(embedding_freeze_enabled);
     GRIM_LOAD_CONFIG_FIELD(embedding_freeze_after_step);
     GRIM_LOAD_CONFIG_FIELD(optimizer_kind);
@@ -2396,6 +2416,13 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_presence_penalty);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_no_repeat_ngram_size);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_do_sample);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_lens_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_lens_validate);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_lens_top_k);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_lens_validation_rounds);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_lens_validation_tokens);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_lens_max_replay_rows);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_lens_absolute_tolerance);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_num_return_sequences);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_eos_token_id);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_pad_token_id);

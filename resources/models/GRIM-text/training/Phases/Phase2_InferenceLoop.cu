@@ -280,7 +280,8 @@ GRIM::GeneratedSequence generateOneSequence(
     GRIM::Batching::BatchPayload& prompt_payload,
     GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::HyperParameters::GenerationHP& cfg,
-    GRIM::HyperParameters::GenerationStreamCallback* stream_callback)
+    GRIM::HyperParameters::GenerationStreamCallback* stream_callback,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture)
 {
     validatePromptPayload(prompt_payload);
     const auto model_hp = GRIM::HyperParameters::modelHP(config);
@@ -464,6 +465,7 @@ GRIM::GeneratedSequence generateOneSequence(
         request.bindings = &bindings;
         request.batch_idx = 0;
         request.kv_cache = &kv_cache;
+        request.lens_capture = active_payload.isInferencePrefill() ? lens_capture : nullptr;
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*enable_dropout=*/false,
@@ -473,6 +475,8 @@ GRIM::GeneratedSequence generateOneSequence(
 
         auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
         InferenceForwardScope inference_forward_scope{forward_outputs};
+        if (forward_outputs.lens_snapshot)
+            sequence.prefill_lens_snapshot = forward_outputs.lens_snapshot;
 
         if (local_atom_retrieval_enabled &&
             active_payload.isInferencePrefill()) {
@@ -857,7 +861,8 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
     GRIM::Batching::BatchPayload& prompt_payload,
     GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
-    GRIM::HyperParameters::GenerationStreamCallback* stream_callback)
+    GRIM::HyperParameters::GenerationStreamCallback* stream_callback,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture)
 {
     validateInferenceContext(ctx);
     validatePromptPayload(prompt_payload);
@@ -877,7 +882,7 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
-        outputs.push_back(generateOneSequence(ctx.config, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, tokenizer, sequence_hp, stream_callback));
+        outputs.push_back(generateOneSequence(ctx.config, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, tokenizer, sequence_hp, stream_callback, lens_capture));
 
     }
     return outputs;
@@ -889,7 +894,8 @@ Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
     GRIM::Tokenizer::UniByte& tokenizer,
     const std::string& prompt,
-    const GRIM::HyperParameters::GenerationHP& generation_hp)
+    const GRIM::HyperParameters::GenerationHP& generation_hp,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture)
 {
     if (prompt.empty()) {
         throw std::runtime_error("executePhase2TextInference: prompt is empty");
@@ -915,6 +921,8 @@ Phase2TextInferenceResult executePhase2TextInference(
     }
 
     if (atom_insertion_enabled) {
+        if (lens_capture)
+            throw std::runtime_error("Lens capture v1 requires the token model, not atom insertion");
         return executeAtomInsertionTextInference(
             ctx,
             prompt,
@@ -982,7 +990,7 @@ Phase2TextInferenceResult executePhase2TextInference(
 
     const auto start_generation = std::chrono::high_resolution_clock::now();
     auto generated = generatePayloadSequences(
-        ctx, prompt_payload, tokenizer, generation_hp, nullptr);
+        ctx, prompt_payload, tokenizer, generation_hp, nullptr, lens_capture);
     const auto end_generation = std::chrono::high_resolution_clock::now();
     result.generation_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_generation - start_generation).count();
@@ -993,6 +1001,8 @@ Phase2TextInferenceResult executePhase2TextInference(
 
     const auto start_decode = std::chrono::high_resolution_clock::now();
     const auto& sequence = generated[0];
+    result.token_ids = sequence.token_ids;
+    result.prefill_lens_snapshot = sequence.prefill_lens_snapshot;
     result.text = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(
         sequence.token_ids,
         sequence.atom_entry_ids,
@@ -1010,12 +1020,13 @@ Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
     GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::ConceptBlock& supplied_state,
-    const GRIM::HyperParameters::GenerationHP& generation_hp) {
+    const GRIM::HyperParameters::GenerationHP& generation_hp,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture) {
     const auto concept_spans =
         GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
             ctx.config, "concept_spans");
     return executePhase2TextInference(ctx, tokenizer,
-        GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state, concept_spans), generation_hp);
+        GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state, concept_spans), generation_hp, lens_capture);
 }
 
 } // namespace GRIMText::Training

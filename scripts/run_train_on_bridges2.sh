@@ -45,7 +45,8 @@
 #   --account A      Override GRIM_BRIDGES2_ACCOUNT.
 #   --sync-all       Enable MCS + CBS + CRS + FAS (push caches + flash-attention submodule on --build).
 #   --sync-mcs       Push merged_verified_cache.jsonl.
-#   --sync-cbs       Push concept_blocks.jsonl and concept_blocks.fb (when present locally).
+#   --sync-cbs       Rebuild concept_blocks.fb from local concept_blocks.jsonl, then push both.
+#                    Requires local Python 3 and vcpkg flatc; aborts on conversion failure.
 #   --sync-crs       Push curriculum_registry.json (if present locally).
 #   --sync-gmc PATH  Push a local per-model model.grimcfg to the matching model-store directory on Bridges-2.
 #                    Equivalent grouped form: --sync gmc PATH
@@ -331,6 +332,38 @@ LOCAL_VOCAB_PATH_EXPANDED="${LOCAL_VOCAB_PATH/#\~/$HOME}"
 LOCAL_VOCAB_TXT_PATH_EXPANDED="${LOCAL_VOCAB_TXT_PATH/#\~/$HOME}"
 LOCAL_GRMT_PATH_EXPANDED="${LOCAL_GRMT_PATH/#\~/$HOME}"
 TRAINING_LOGS_DIR_EXPANDED="${TRAINING_LOGS_DIR/#\~/$HOME}"
+
+# JSONL is authoritative for an explicit CBS push. Always rebuild: file mtimes
+# can reflect transfer order rather than content freshness. The builder replaces
+# the FB atomically, so a failed conversion leaves the previous FB intact.
+# Do this before any SSH/build/upload; pull-only modes do not push CBS.
+if [[ "$SKIP_CBS" == "0" && "$DO_PULL_LOGS" == false && "$DO_PULL_VOCAB" == false ]]; then
+  if [[ ! -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
+    echo "ERROR: CBS sync requires local JSONL: $CONCEPT_BLOCKS_PATH_EXPANDED" >&2
+    exit 1
+  fi
+  CBS_PYTHON=""
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; sys.exit(sys.version_info.major != 3)' >/dev/null 2>&1; then
+      CBS_PYTHON="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$CBS_PYTHON" ]]; then
+    echo "ERROR: CBS sync requires local Python 3 to refresh concept_blocks.fb." >&2
+    exit 1
+  fi
+  echo "[Bridges-2] CBS: rebuilding local concept_blocks.fb from concept_blocks.jsonl..."
+  if ! "$CBS_PYTHON" "$REPO_ROOT/scripts/build_concept_blocks_flatbuffer.py" \
+      --jsonl "$CONCEPT_BLOCKS_PATH_EXPANDED" --output "$CONCEPT_BLOCKS_FB_PATH_EXPANDED"; then
+    echo "ERROR: CBS FlatBuffer refresh failed; refusing to upload stale data or submit training." >&2
+    exit 1
+  fi
+  if [[ ! -s "$CONCEPT_BLOCKS_FB_PATH_EXPANDED" ]]; then
+    echo "ERROR: CBS refresh did not produce a non-empty FlatBuffer." >&2
+    exit 1
+  fi
+fi
 
 # SSH target: bridges2 or bridges2.psc.edu
 BRIDGES2_SSH="${GRIM_BRIDGES2_SSH:-bridges2}"
@@ -1551,18 +1584,8 @@ fi
 if [[ "$SKIP_CBS" == "1" ]]; then
   :
 else
-  if [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
-    transfer_training_file "concept_blocks.jsonl" "$CONCEPT_BLOCKS_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS"
-  else
-    echo "Skipping concept_blocks.jsonl (not found at $CONCEPT_BLOCKS_PATH_EXPANDED)."
-  fi
-
-  if [[ -f "$CONCEPT_BLOCKS_FB_PATH_EXPANDED" ]]; then
-    transfer_training_file "concept_blocks.fb" "$CONCEPT_BLOCKS_FB_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS_FB"
-  else
-    echo "Skipping concept_blocks.fb (not found at $CONCEPT_BLOCKS_FB_PATH_EXPANDED)."
-    echo "  DataLoader will fall back to concept_blocks.jsonl when no remote FlatBuffer exists."
-  fi
+  transfer_training_file "concept_blocks.jsonl" "$CONCEPT_BLOCKS_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS"
+  transfer_training_file "concept_blocks.fb" "$CONCEPT_BLOCKS_FB_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS_FB"
 fi
 
 if [[ "$SKIP_CRS" == "1" ]]; then

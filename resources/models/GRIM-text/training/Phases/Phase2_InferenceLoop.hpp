@@ -7,6 +7,7 @@
 #include "Phase1_Startup.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Forward/GeneratedSequence.hpp"
+#include "../../Shared/Lenses/LensMetadata.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 
@@ -20,7 +21,10 @@ namespace GRIM { struct ConceptBlock; }
 namespace GRIMText::Training {
 
 struct Phase2TextInferenceResult {
+    std::shared_ptr<const GRIM::Lenses::LensSnapshot> prefill_lens_snapshot;
     std::string text;
+    // Exact realized IDs, including the prompt, for diagnostic comparisons.
+    std::vector<int> token_ids;
     std::size_t prompt_token_count = 0;
     std::size_t sequence_token_count = 0;
     std::int64_t encode_ms = 0;
@@ -46,7 +50,8 @@ Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
      GRIM::Tokenizer::UniByte& tokenizer,
     const std::string& prompt,
-    const GRIM::HyperParameters::GenerationHP& generation_hp);
+    const GRIM::HyperParameters::GenerationHP& generation_hp,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr);
 
 // Structured state supplied by upstream models. Uses the training renderer;
 // an answer present on the input object is excluded from the inference prefix.
@@ -54,6 +59,7 @@ Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
     GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::ConceptBlock& supplied_state,
-    const GRIM::HyperParameters::GenerationHP& generation_hp);
+    const GRIM::HyperParameters::GenerationHP& generation_hp,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr);
 
 } // namespace GRIMText::Training

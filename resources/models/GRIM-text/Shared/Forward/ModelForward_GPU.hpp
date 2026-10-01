@@ -68,6 +68,9 @@ struct ModelForwardRequest {
     const Batching::BatchDeviceBindings* bindings = nullptr;
     uint64_t batch_idx = 0;
     ModelForwardGraphPolicy graph{};
+    // Optional diagnostics authored by the orchestration owner. Borrowed only
+    // during this call; result lives on ModelForwardOutputs::lens_snapshot.
+    const Lenses::LensCaptureRequest* lens_capture = nullptr;
 
     // Inference-only: when non-null, the encoder attention sublayers run the
     // KV-cache decode/prefill path over this session cache instead of full

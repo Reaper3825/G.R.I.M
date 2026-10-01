@@ -431,6 +431,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
+    ../../Shared/Lenses/LensMetadata.cpp
+    ../../Shared/Lenses/LensCapture_GPU.cu
     ../../Shared/AtomInsertion/AtomInsertionData.cu
     ../../Shared/AtomInsertion/AtomInsertionDecode.cpp
     ../../Shared/AtomInsertion/AtomInsertionBoundaryProjection.cu

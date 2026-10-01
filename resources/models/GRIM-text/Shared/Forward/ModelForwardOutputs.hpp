@@ -12,6 +12,7 @@
 #ifdef USE_CUDA
 
 #include "../ConceptBlock/NamedConceptSpans.hpp"
+#include "../Lenses/LensMetadata.hpp"
 #include "../../Common/LoRAMatrixClass.hpp"
 #include "../../Shared/TensorContract/LoRALinear.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -117,6 +118,9 @@ private:
     }
 
 public:
+    // Host-owned immutable diagnostics. Consumers may retain this shared_ptr
+    // across clear(); no forward tensor/parameter lifetime is extended.
+    std::shared_ptr<const Lenses::LensSnapshot> lens_snapshot;
 
     void setNamedConceptSpanMetadata(
         std::size_t batch_size,
@@ -478,6 +482,7 @@ public:
     }
 
     void clear() {
+        lens_snapshot.reset();
         row_named_concept_spans_.clear();
         clearRetainedLayerOutputs();
         embedding_tensor = Tensor();
