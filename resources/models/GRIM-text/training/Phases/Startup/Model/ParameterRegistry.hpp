@@ -713,7 +713,7 @@ inline void registerEncodingLayerParameters(
                 continue;
             }
         }
-0
+
         registrar.addTensor(prefix + spec.name,
                             encoding_parameters.*(spec.tensor_member),
                             spec.type,
