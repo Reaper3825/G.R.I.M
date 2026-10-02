@@ -153,4 +153,9 @@ int main() {
     assert(encoded_report.find('\n') == std::string::npos);
     assert(nlohmann::json::parse(encoded_report)["readouts"][0]["top_tokens"][0]["text"] == "quoted\"\n");
     std::cout << "lens metadata tests passed\n";
+    const auto validation = GRIMText::Training::diagnosticLensValidationReport(
+        true, true, false, 3, {100, 100, 100}, "live-step");
+    assert(validation["status"] == "fail");
+    assert(validation["memory_verdict"] == "observation_only");
+    assert(validation["device_used_bytes_after_cleanup"].size() == 3);
 }

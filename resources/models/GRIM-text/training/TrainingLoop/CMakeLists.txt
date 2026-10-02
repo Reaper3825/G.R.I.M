@@ -665,6 +665,7 @@ add_executable(train_gpu
     ../Phases/Phase2_InferenceLoop.cu
     ../Phases/Phase2_InferenceLoop.hpp
     ../Diagnostics/DiagnosticInference.cu
+    ../Diagnostics/DiagnosticLens.cpp
     ../Diagnostics/DiagnosticInference.hpp
     ../Diagnostics/MemoryMeasurer.cu
     ../Diagnostics/MemoryMeasurer.hpp

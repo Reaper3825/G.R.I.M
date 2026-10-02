@@ -161,7 +161,7 @@ not independently checksummed by this diagnostic.
 ### Host-only tests
 
 `Tests/lens_metadata_test.cpp` is a standalone host-only test with
-`Shared/Lenses/LensMetadata.cpp` and the existing nlohmann JSON include directory.
+`Shared/Lenses/LensMetadata.cpp`, `training/Diagnostics/DiagnosticLens.cpp`, and the existing nlohmann JSON include directory.
 It covers causal target alignment, inherited span policy, realized masking,
 padding rejection, prefill/decode coordinates, retained span lifetime, required
 identities, replay row limits, stable full-vocabulary probabilities, ties, and
@@ -171,7 +171,7 @@ From an x64 MSVC developer terminal in a separate scratch output directory
 (adjust the repository path if needed):
 
 ```bat
-cl /nologo /std:c++17 /EHsc /W4 /I"D:\G.R.I.M\resources\models\llama.cpp\vendor" "D:\G.R.I.M\resources\models\GRIM-text\Tests\lens_metadata_test.cpp" "D:\G.R.I.M\resources\models\GRIM-text\Shared\Lenses\LensMetadata.cpp" /Fe:lens_metadata_test.exe
+cl /nologo /std:c++17 /EHsc /W4 /I"D:\G.R.I.M\resources\models\llama.cpp\vendor" "D:\G.R.I.M\resources\models\GRIM-text\Tests\lens_metadata_test.cpp" "D:\G.R.I.M\resources\models\GRIM-text\Shared\Lenses\LensMetadata.cpp" "D:\G.R.I.M\resources\models\GRIM-text\training\Diagnostics\DiagnosticLens.cpp" /Fe:lens_metadata_test.exe
 lens_metadata_test.exe
 ```
 

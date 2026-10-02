@@ -280,13 +280,9 @@ void logDiagnosticSample(TrainingContext& ctx,
                 }
                 used_bytes.push_back(memory_used());
             }
-            const nlohmann::json validation = {
-                {"status", token_match && text_match && identity_pass ? "pass" : "fail"},
-                {"greedy_token_ids_match", token_match}, {"decoded_text_match", text_match},
-                {"identity_pass", identity_pass}, {"capture_rounds", lens_options.validation_rounds},
-                {"device_used_bytes_after_cleanup", used_bytes},
-                {"memory_verdict", "observation_only"},
-                {"weights", lens.identity.checkpoint_fingerprint}};
+            const auto validation = diagnosticLensValidationReport(
+                token_match, text_match, identity_pass, lens_options.validation_rounds,
+                used_bytes, lens.identity.checkpoint_fingerprint);
             ctx.logging.logger->log("[LensValidation] " + validation.dump());
         }
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

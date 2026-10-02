@@ -110,6 +110,7 @@ set(ALL_GPU_SOURCES
     ${TRAINING_CU_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/../Shared/AtomInsertion/AtomInsertionDecode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Shared/Lenses/LensMetadata.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Diagnostics/DiagnosticLens.cpp
 )
 
 # Remove Flash Attention from main list (needs special handling for sm_80+)
