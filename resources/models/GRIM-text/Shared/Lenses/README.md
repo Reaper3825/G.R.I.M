@@ -33,24 +33,28 @@ GRIM::Lenses::LensCaptureRequest lens;
 lens.identity = {session_id, checkpoint_fingerprint, config_fingerprint,
                  tokenizer_fingerprint, parameter_revision};
 lens.replay_identity_control = true;
-auto result = executePhase2TextInference(ctx, tokenizer, prompt, generation_hp, &lens);
+auto result = executePhase2TextInference(ctx, tokenizer, supplied_state, generation_hp, &lens);
 auto snapshot = result.prefill_lens_snapshot;
 ```
 
 Identities are authored by the orchestration owner, must be nonempty, and must
 describe the loaded model. The caller must keep parameters stable throughout the
-forward/replay, just as for ordinary inference. Defaults select the final prefill
-token, final encoder block, and top 10 vocabulary entries. Lower `top_k` for a
+forward/replay, just as for ordinary inference. Defaults select the final token
+of the named `prompt` span, final encoder block, and top 10 vocabulary entries.
+Set `prompt_span_name` for another configured prompt name, and
+`prompt_span_entry_index` to disambiguate repeated entries. Lower `top_k` for a
 vocabulary smaller than 10. No new architectural model configuration is required.
 The text result returns the first generated sequence's snapshot, matching its
 existing first-sequence text behavior.
 
 Training owners can supply the same request directly on `ModelForwardRequest`.
-The default training position uses the payload's pinned-prefix end; rows without
-a complete prefix require an explicit local token position. Inference has no
+The default position comes from the selected span, not the pinned-prefix end or
+sequence length. Rows without that span require an explicit local token position.
+Inference has no
 ground-truth target: target/supervision optionals remain empty. Span annotations
 are only exposed when the existing payload carries them; the lens does not infer
-span trees by parsing generated text.
+span trees by parsing generated text. The structured inference overload carries
+the canonical projected tree; the plain-string overload has no structured tree.
 
 ## Coordinates and supervision
 
@@ -144,9 +148,11 @@ bytes or a claim that the current weights equal a saved checkpoint. Unsupported
 gap models and missing captures are logged through the existing diagnostic error
 path. A numerical mismatch emits `fail` without changing training state.
 
-Inference payloads do not contain supervised targets, so those fields are null;
-span metadata is explicitly marked unavailable when the payload lacks a tree.
-The diagnostic does not invent labels by parsing its rendered prefix. Validation
+Inference payloads do not contain supervised targets, so those fields are null.
+The diagnostic now calls the structured overload and selects the prompt name from
+the configured root definition with source path `/prompt`. Its capture can precede
+the end of the full prefix when goal/state spans follow the user prompt. Span
+metadata is explicitly marked unavailable for plain-string payloads. Validation
 compares generated IDs/text, not capture-disabled full logits (which are not
 exported by that baseline). Identity parity compares the captured original logits
 against the head replay across the full vocabulary. Parameter immutability is

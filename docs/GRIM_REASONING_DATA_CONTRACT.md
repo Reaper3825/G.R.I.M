@@ -790,6 +790,23 @@ semantic ordering remains the same.
 
 ## 7. Span boundaries seen by the architecture
 
+Structured Phase 2 inference retains the canonical span tree through ignore
+filtering and uses the same `encodeConceptBlockRender` delimiter insertion and
+token-range projection as corpus compilation. The resulting immutable token
+spans travel on `BatchPayload::named_concept_spans`. Ignore filtering remaps
+parent/child indices and byte boundaries; explicit retained children under an
+ignored ancestor remain represented by that ancestor's surviving range.
+
+Lens prompt selection uses the configured prompt span's half-open token range,
+including its delimiters and separators: its final token is `span.end - 1`.
+The diagnostic resolves the prompt span name from the root definition with
+`source_path: /prompt`. This is distinct from the final token of the entire
+supplied prefix, which may end in constraints or persisted state. Prompt
+membership is determined by span containment, not by prefill/decode mode or the
+loss mask. Plain-text inference does not fabricate a structured tree; a lens
+without span metadata requires an explicit token position, and prompt membership
+remains unknown. Supervision policy and causal target projection are unchanged.
+
 The renderer first records half-open UTF-8 byte ranges `[begin, end)`. Corpus
 compilation projects them to half-open token ranges over the owning sequence.
 Never assume one byte equals one token.

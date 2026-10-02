@@ -12,7 +12,8 @@ int main(int argc, char** argv) {
     file >> snapshot.document;
     auto& config = snapshot.document.at("training").at("config");
     auto defaults = GRIM::HyperParameters::generationHP(snapshot);
-    assert(!defaults.lens_enabled && !defaults.lens_validate);
+    assert(defaults.lens_enabled == config.at("generation_lens_enabled").get<bool>());
+    assert(defaults.lens_validate == config.at("generation_lens_validate").get<bool>());
     config["generation_lens_enabled"] = true;
     config["generation_lens_validate"] = true;
     config["generation_lens_top_k"] = 7;

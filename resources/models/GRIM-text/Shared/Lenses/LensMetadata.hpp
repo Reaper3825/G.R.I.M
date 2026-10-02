@@ -43,7 +43,10 @@ struct LensIdentity {
 struct LensCaptureRequest {
     LensIdentity identity;
     int batch_row = 0;
-    int token_position = -1; // row-local; -1 selects payload's final prompt token
+    std::string prompt_span_name = "prompt";
+    // Disambiguates repeated names in the existing row tree when supplied.
+    std::optional<std::uint32_t> prompt_span_entry_index;
+    int token_position = -1; // row-local; -1 selects the named prompt span's end
     int top_k = 10;
     bool replay_identity_control = false;
     // Full-head replay retains full rectangle intermediates. Bound its row

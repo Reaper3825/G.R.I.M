@@ -88,17 +88,28 @@ int main() {
     payload.prompt_lengths.clear();
     payload.prompt_end_positions.clear();
     metadata = capture();
-    assert(metadata.token_position == 3 && metadata.supervision.is_prompt_token == true);
+    assert(metadata.token_position == 1 && metadata.supervision.is_prompt_token == true);
     assert(!metadata.supervision.target_token_id.has_value());
+    request.token_position = 3;
+    assert(capture().supervision.is_prompt_token == false); // prefill is not all prompt
+    request.token_position = -1;
+    request.prompt_span_name = "missing";
+    mustThrow([&] { capture(); });
+    request.prompt_span_name = "prompt";
+    request.prompt_span_entry_index = 1;
+    mustThrow([&] { capture(); }); // entry/name mismatch
+    request.prompt_span_entry_index = 0;
+    assert(capture().token_position == 1);
+    request.prompt_span_entry_index.reset();
+    payload.named_concept_spans.clear();
+    spans.reset();
+    assert(metadata.spans->entries.size() == 3); // retained immutable metadata
     payload.mode = Batching::BatchPayloadMode::InferenceDecode;
     mustThrow([&] { capture(); }); // no default prompt position in decode
     request.token_position = 0;
     metadata = capture(true, 8);
     assert(metadata.absolute_token_position == 8 && metadata.attention.visible_keys.end == 9);
-    assert(metadata.supervision.is_prompt_token == false);
-    payload.named_concept_spans.clear();
-    spans.reset();
-    assert(metadata.spans->entries.size() == 3); // retained immutable metadata
+    assert(!metadata.supervision.is_prompt_token.has_value());
     request.identity.checkpoint_fingerprint.clear();
     mustThrow([&] { capture(); });
 

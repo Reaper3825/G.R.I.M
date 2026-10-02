@@ -214,6 +214,18 @@ void logDiagnosticSample(TrainingContext& ctx,
         const auto concept_spans =
             GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
                 ctx.config, "concept_spans");
+        if (lens_options.enabled) {
+            const GRIM::NamedConceptSpanDefinition* prompt_definition = nullptr;
+            for (const auto& definition : concept_spans) {
+                if (definition.source_path != "/prompt") continue;
+                if (prompt_definition)
+                    throw std::runtime_error("Lens diagnostic: ambiguous configured prompt span");
+                prompt_definition = &definition;
+            }
+            if (!prompt_definition)
+                throw std::runtime_error("Lens diagnostic: no configured root span for /prompt");
+            lens.prompt_span_name = prompt_definition->name;
+        }
         // The SFT target now includes the section labels, so let the model
         // generate <determine> itself from the supplied structured state.
         const std::string diagnostic_prefix =
@@ -226,9 +238,9 @@ void logDiagnosticSample(TrainingContext& ctx,
         }
         std::optional<Phase2TextInferenceResult> baseline;
         if (lens_options.validate)
-            baseline = executePhase2TextInference(ctx, *tokenizer, diagnostic_prefix, cfg);
+            baseline = executePhase2TextInference(ctx, *tokenizer, inference_state, cfg);
         auto sample = executePhase2TextInference(
-            ctx, *tokenizer, diagnostic_prefix, cfg, lens_options.enabled ? &lens : nullptr);
+            ctx, *tokenizer, inference_state, cfg, lens_options.enabled ? &lens : nullptr);
         auto report_lens = [&](const Phase2TextInferenceResult& captured) {
             if (!captured.prefill_lens_snapshot)
                 throw std::runtime_error("Lens diagnostic requested capture but inference returned no snapshot");
@@ -259,7 +271,7 @@ void logDiagnosticSample(TrainingContext& ctx,
                 std::numeric_limits<double>::infinity()) <= lens_options.absolute_tolerance;
             for (int round = 1; round < lens_options.validation_rounds; ++round) {
                 {
-                    auto repeated = executePhase2TextInference(ctx, *tokenizer, diagnostic_prefix, cfg, &lens);
+                    auto repeated = executePhase2TextInference(ctx, *tokenizer, inference_state, cfg, &lens);
                     report_lens(repeated);
                     token_match = token_match && baseline->token_ids == repeated.token_ids;
                     text_match = text_match && baseline->text == repeated.text;

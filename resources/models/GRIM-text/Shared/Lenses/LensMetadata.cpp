@@ -28,13 +28,29 @@ LensCaptureMetadata makeCaptureMetadata(
         throw std::runtime_error("Lens capture: full-head replay exceeds max_replay_rows");
 
     const auto row = static_cast<std::size_t>(request.batch_row);
+    const auto spans = payload.named_concept_spans.empty() ? nullptr : payload.named_concept_spans.at(row);
+    const NamedConceptSpan* prompt_span = nullptr;
+    if (!spans && request.prompt_span_entry_index)
+        throw std::runtime_error("Lens capture: prompt span index supplied without a span tree");
+    if (spans) {
+        validateNamedConceptSpans(*spans, payload.seq_lengths.at(row));
+        if (request.prompt_span_entry_index) {
+            prompt_span = &spans->entries.at(*request.prompt_span_entry_index);
+            if (prompt_span->name != request.prompt_span_name)
+                throw std::runtime_error("Lens capture: prompt span entry/name mismatch");
+        } else {
+            for (const auto& entry : spans->entries) {
+                if (entry.name != request.prompt_span_name) continue;
+                if (prompt_span) throw std::runtime_error("Lens capture: ambiguous prompt span; select an entry index");
+                prompt_span = &entry;
+            }
+        }
+    }
     int position = request.token_position;
-    if (position == -1 && payload.isInferencePrefill()) {
-        position = payload.seq_lengths.at(row) - 1;
-    } else if (position == -1) {
-        if (payload.prompt_lengths.empty() || payload.prompt_lengths.at(row) <= 0)
-            throw std::runtime_error("Lens capture: no final prompt token in this payload; select a local position explicitly");
-        position = payload.prompt_end_positions.at(row);
+    if (position == -1) {
+        if (!prompt_span)
+            throw std::runtime_error("Lens capture: selected prompt span is unavailable; provide span metadata or an explicit token position");
+        position = prompt_span->span.end - 1;
     }
     if (position < 0 || position >= payload.seq_lengths.at(row))
         throw std::runtime_error("Lens capture position is outside real tokens");
@@ -59,21 +75,15 @@ LensCaptureMetadata makeCaptureMetadata(
 
     auto& supervision = result.supervision;
     supervision.input_token_id = payload.input_ids.at(flat);
-    if (!payload.prompt_lengths.empty()) {
-        const auto length = payload.prompt_lengths.at(row);
-        const auto end = payload.prompt_end_positions.at(row);
-        if (length > 0)
-            supervision.is_prompt_token = position >= end - length + 1 && position <= end;
-    }
-    if (payload.isInferencePrefill()) supervision.is_prompt_token = true;
-    if (payload.isInferenceDecode()) supervision.is_prompt_token = false;
+    if (prompt_span)
+        supervision.is_prompt_token = position >= prompt_span->span.begin && position < prompt_span->span.end;
     if (payload.isTraining()) {
         supervision.target_token_id = payload.target_ids.at(flat);
         supervision.is_lm_supervised_prediction = *supervision.target_token_id >= 0;
         if (!payload.atom_aux_target_mask.empty())
             supervision.atom_aux_target_mask = payload.atom_aux_target_mask.at(flat) != 0;
     }
-    if (!payload.named_concept_spans.empty()) result.spans = payload.named_concept_spans.at(row);
+    result.spans = spans;
     if (result.spans) {
         validateNamedConceptSpans(*result.spans, payload.seq_lengths.at(row));
         result.resolved_span_policies = conceptSpanPolicies(result.spans->entries, definitions);
