@@ -271,6 +271,17 @@ struct BatchPayload {
     const GRIM::NamedConceptSpans* namedConceptSpansForRow(std::size_t row) const;
     const uint8_t* atomAuxTargetMaskForRow(std::size_t row) const;
 
+    void validateNamedConceptSpanMetadata(const char* caller) const {
+        // Plain inference may omit the tree. Structured inference and training
+        // use the same row-aligned immutable metadata contract.
+        if ((isTraining() || !named_concept_spans.empty()) &&
+            named_concept_spans.size() != static_cast<size_t>(batch_size))
+            throw std::runtime_error(std::string(caller) + ": invalid named concept span row count");
+        for (size_t row = 0; row < named_concept_spans.size(); ++row)
+            if (named_concept_spans[row]) GRIM::validateNamedConceptSpans(
+                *named_concept_spans[row], static_cast<size_t>(seq_lengths.at(row)));
+    }
+
     void validate(const char* caller) const {
         if (EnableAtomIdentification && local_atom_retrieval_enabled) {
             throw std::runtime_error(
@@ -334,12 +345,7 @@ struct BatchPayload {
                 std::string(caller) +
                 ": training prompt-boundary arrays must both have batch_size entries");
         }
-        if ((isTraining() && named_concept_spans.size() != static_cast<size_t>(batch_size)) ||
-            (isInference() && !named_concept_spans.empty()))
-            throw std::runtime_error(std::string(caller) + ": invalid named concept span row count");
-        for (size_t row = 0; row < named_concept_spans.size(); ++row)
-            if (named_concept_spans[row]) GRIM::validateNamedConceptSpans(
-                *named_concept_spans[row], static_cast<size_t>(seq_lengths.at(row)));
+        validateNamedConceptSpanMetadata(caller);
         if (!prompt_lengths.empty() || !prompt_end_positions.empty()) {
             if (static_cast<int>(prompt_lengths.size()) != batch_size ||
                 static_cast<int>(prompt_end_positions.size()) != batch_size) {

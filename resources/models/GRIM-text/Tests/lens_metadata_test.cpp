@@ -38,6 +38,24 @@ int main() {
         {"value", {2, 3}, 1, {}}
     };
     payload.named_concept_spans = {spans};
+    // Regression: structured inference must accept its row-aligned tree.
+    for (const auto mode : {Batching::BatchPayloadMode::Training,
+                           Batching::BatchPayloadMode::InferencePrefill,
+                           Batching::BatchPayloadMode::InferenceDecode}) {
+        auto checked = payload;
+        checked.mode = mode;
+        checked.validateNamedConceptSpanMetadata("span regression");
+        checked.named_concept_spans.push_back(spans);
+        mustThrow([&] { checked.validateNamedConceptSpanMetadata("extra row"); });
+        checked.named_concept_spans = {spans};
+        checked.seq_lengths[0] = 3;
+        mustThrow([&] { checked.validateNamedConceptSpanMetadata("out of bounds"); });
+        checked.named_concept_spans.clear();
+        if (checked.isTraining())
+            mustThrow([&] { checked.validateNamedConceptSpanMetadata("missing training row"); });
+        else
+            checked.validateNamedConceptSpanMetadata("plain inference");
+    }
     NamedConceptSpanDefinition prompt;
     prompt.name = "prompt";
     prompt.supervision = ConceptSpanSupervision::Context;
