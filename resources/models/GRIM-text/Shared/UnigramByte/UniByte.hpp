@@ -196,7 +196,8 @@ struct DecodeRequest {
                            const std::vector<uint32_t>& entry_ids,
                            const AtomTable* table,
                            const std::vector<float>& numeric_values,
-                           const std::vector<uint8_t>& atom_mask)
+                           const std::vector<uint8_t>& atom_mask,
+                           size_t begin = 0)
         : token_ids(ids.data()),
           token_count(ids.size()),
           atom_entry_ids(entry_ids.data()),
@@ -205,7 +206,21 @@ struct DecodeRequest {
           token_numeric_count(numeric_values.size()),
           token_atom_mask(atom_mask.data()),
           token_atom_mask_count(atom_mask.size()),
-          atom_table(table) {}
+          atom_table(table) {
+        if (begin > token_count || atom_entry_count != token_count ||
+            token_numeric_count != token_count || token_atom_mask_count != token_count)
+            throw std::invalid_argument("DecodeRequest: invalid aligned token slice");
+        if (begin != 0) {
+            token_ids += begin;
+            atom_entry_ids += begin;
+            token_numeric_values += begin;
+            token_atom_mask += begin;
+        }
+        token_count -= begin;
+        atom_entry_count -= begin;
+        token_numeric_count -= begin;
+        token_atom_mask_count -= begin;
+    }
 
     DecodeRequest(const DecodeRequest&) = delete;
     DecodeRequest& operator=(const DecodeRequest&) = delete;

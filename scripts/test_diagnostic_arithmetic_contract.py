@@ -15,21 +15,28 @@ class DiagnosticArithmeticContractTests(unittest.TestCase):
     def test_goal_matches_training_prefix_without_persisted_bindings(self):
         source = SOURCE.read_text(encoding="utf-8")
         initializer = re.search(
-            r"reasoning_state\.goal = GRIM::ConceptBlockGoal\{(.*?)\n    \};",
+            r"const nlohmann::json input_state\{(.*?)\n    \}\}\};",
             source, re.S).group(1)
         strings = [json.loads(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"', initializer)]
+        strings = [s for s in strings if s not in {
+            "goal", "target_state", "success_criteria", "criterion", "evidence", "constraints"}]
         goal = curriculum.make_entry(2)[0]["goal"]
         self.assertEqual(strings, [goal["target_state"],
                                   goal["success_criteria"][0]["criterion"],
                                   goal["success_criteria"][0]["evidence"],
                                   *goal["constraints"]])
-        self.assertNotRegex(source, r"reasoning_state\.(?:knowns|unknowns)\s*=")
-        self.assertIn("reasoning_state.withPrompt(prompt)", source)
-        self.assertIn("renderReasoningPrompt(inference_state, concept_spans)", source)
+        self.assertNotIn('"knowns"', initializer)
+        self.assertNotIn('"unknowns"', initializer)
+        self.assertNotIn("ConceptBlock", source)
+        self.assertNotIn("withPrompt", source)
+        self.assertIn("buildPhase2InferencePrefill(ctx, *tokenizer, prompt, input_state)", source)
+        self.assertIn("executePhase2PayloadInference", source)
+        self.assertIn("sample.continuation_text", source)
 
     def test_probe_rotation_covers_every_role_and_preserves_override(self):
         source = SOURCE.read_text(encoding="utf-8")
-        cases = re.findall(r'\{"([a-z_]+)", "([^"\n]+)"\}', source)
+        probes = source[source.index("kArithmeticPrompts{{"):source.index("}};", source.index("kArithmeticPrompts{{"))]
+        cases = re.findall(r'\{"([a-z_]+)", "([^"\n]+)"\}', probes)
         expected = {f"{relationship}_{role}"
                     for relationship, roles in curriculum.TARGETS.items() for role in roles}
         self.assertEqual(len(cases), 12)

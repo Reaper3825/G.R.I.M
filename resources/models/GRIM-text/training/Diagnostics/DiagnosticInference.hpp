@@ -28,7 +28,8 @@ namespace GRIMText::Training {
 /// matches the configured sample interval.  This function is fully
 /// self-contained: it rotates through twelve single-operation arithmetic probes
 /// with empty persisted state and the curriculum's generic goal, then sends the
-/// rendered prefix through executePhase2TextInference() and logs the result.
+/// prefill payload through executePhase2PayloadInference() and logs only its
+/// generated continuation. Atom-insertion models use the raw-text classifier path.
 /// GRIM_SAMPLE_PROMPT overrides the probe; GRIM_SAMPLE_TOKENS (default 256) and
 /// GRIM_SAMPLE_MAX_CHARS (default 2048) control generation and display limits.
 /// generation_lens_enabled=true adds final-layer readouts and an identity-head replay.

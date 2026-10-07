@@ -1,4 +1,5 @@
 #include "../DataCollection/reasoning_state_json.hpp"
+#include "../resources/models/GRIM-text/Shared/Forward/InferenceInput.hpp"
 #include "../tests/concept_span_test_helpers.hpp"
 #include <cassert>
 #include <iostream>
@@ -15,7 +16,7 @@ int main() {
     state.knowns = {"capacity = 120 liters", "remaining = 84 liters"};
     state.unknowns = {"consumed volume"};
     state.goal = GRIM::ConceptBlockGoal{"Find consumed volume", {{"One assignment", "Subtraction applies"}}, {"Use liters"}};
-    // The actual client serializer and worker parser, with a full wire round trip.
+    // Client wire round trip, then the worker's payload-input adapter.
     json request{{"messages", {{{"role", "user"}, {"content", "Question?"}}}},
                  {"reasoning_state", GRIM::reasoningStateToJson(state)}};
     const auto wire = request.dump();
@@ -27,7 +28,9 @@ int main() {
     assert(restored.goal->success_criteria[0].evidence == "Subtraction applies");
     auto block = restored.withPrompt("Question?");
     assert(block.answer.empty() && block.id.empty() && block.raw.empty());
-    const auto input = GRIM::ConceptCanonical::renderReasoningPrompt(block, definitions);
+    const auto source = GRIM::Forward::inferenceInputSource("Question?", received.at("reasoning_state"));
+    const auto input = GRIM::SpanText::renderInput(source, definitions);
+    assert(input == GRIM::ConceptCanonical::renderReasoningPrompt(block, definitions));
     assert(input.find("<knowns>\ncapacity = 120 liters") != std::string::npos);
     assert(input.find("<unknowns>\nconsumed volume") != std::string::npos);
     assert(input.find("<target_state>\nFind consumed volume") != std::string::npos);
@@ -45,6 +48,9 @@ int main() {
             {{"goal", "bad"}}, {{"goal", {{"constraints", "bad"}}}},
             {{"goal", {{"success_criteria", {"bad"}}}}}, {{"answer", "leak"}},
             {{"raw", "leak"}}, {{"prompt", "override"}}, {{"goal", {{"answer", "leak"}}}}})
+    {
         rejects([&] { GRIM::reasoningStateFromJson(invalid); });
+        rejects([&] { GRIM::Forward::inferenceInputSource("Question?", invalid); });
+    }
     std::cout << "Reasoning-state wire round-trip, validation, and shared rendering tests passed\n";
 }

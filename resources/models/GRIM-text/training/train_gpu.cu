@@ -31,7 +31,6 @@
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
 #include "Phases/Phase2_InferenceLoop.hpp"
-#include "../../../../DataCollection/reasoning_state_json.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
@@ -201,6 +200,22 @@ std::string chatPromptFromRequest(const json& request, bool structured_state = f
     return prompt;
 }
 
+GRIMText::Training::Phase2TextInferenceResult executeWorkerInference(
+    GRIMText::Training::TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const std::string& prompt, const json& request,
+    const GRIM::HyperParameters::GenerationHP& generation_hp) {
+    if (!request.contains("reasoning_state"))
+        return GRIMText::Training::executePhase2TextInference(ctx, tokenizer, prompt, generation_hp);
+    const auto start = std::chrono::steady_clock::now();
+    auto prefill = GRIMText::Training::buildPhase2InferencePrefill(
+        ctx, tokenizer, prompt, request.at("reasoning_state"));
+    const auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    auto result = GRIMText::Training::executePhase2PayloadInference(ctx, tokenizer, prefill, generation_hp);
+    result.encode_ms = encode_ms;
+    return result;
+}
+
 int runInferenceWorker(
     GRIMText::Training::TrainingContext& ctx,
     GRIM::Tokenizer::UniByte& tokenizer,
@@ -226,15 +241,13 @@ int runInferenceWorker(
             const json request = json::parse(req.body);
             const std::string prompt = requireJsonString(request, "prompt");
             const auto gen_config = generationHPFromRequest(ctx.config, request);
-            const auto generated = request.contains("reasoning_state")
-                ? GRIMText::Training::executePhase2TextInference(
-                    ctx, tokenizer, GRIM::reasoningStateFromJson(request.at("reasoning_state")).withPrompt(prompt), gen_config)
-                : GRIMText::Training::executePhase2TextInference(ctx, tokenizer, prompt, gen_config);
+            const auto generated = executeWorkerInference(ctx, tokenizer, prompt, request, gen_config);
 
             json response = {
                 {"model", "grim-text"},
                 {"created_at", "2025-11-05T00:00:00Z"},
-                {"response", generated.text},
+                {"response", GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled
+                    ? generated.text : generated.continuation_text},
                 {"done", true},
                 {"stats", inferenceStatsJson(generated)}
             };
@@ -252,15 +265,13 @@ int runInferenceWorker(
             const json request = json::parse(req.body);
             const std::string prompt = chatPromptFromRequest(request, request.contains("reasoning_state"));
             const auto gen_config = generationHPFromRequest(ctx.config, request);
-            const auto generated = request.contains("reasoning_state")
-                ? GRIMText::Training::executePhase2TextInference(
-                    ctx, tokenizer, GRIM::reasoningStateFromJson(request.at("reasoning_state")).withPrompt(prompt), gen_config)
-                : GRIMText::Training::executePhase2TextInference(ctx, tokenizer, prompt, gen_config);
+            const auto generated = executeWorkerInference(ctx, tokenizer, prompt, request, gen_config);
 
             json response = {
                 {"model", "grim-text"},
                 {"created_at", "2025-11-05T00:00:00Z"},
-                {"message", {{"role", "assistant"}, {"content", generated.text}}},
+                {"message", {{"role", "assistant"}, {"content", GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled
+                    ? generated.text : generated.continuation_text}}},
                 {"done", true},
                 {"stats", inferenceStatsJson(generated)}
             };

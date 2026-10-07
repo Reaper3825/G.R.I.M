@@ -408,9 +408,10 @@ FlatBufferEmbeddingSerializer::load("embeddings.grem", embedder);
 Autoregressive generation is owned by Phase 2 inference, not `LanguageModel`.
 Use the GRIM-text server or run `train_gpu --inference`, which calls
 `executePhase1(...INFERENCE)` and routes text prompts through
-`executePhase2TextInference(ctx, tokenizer, prompt, generation_hp)`. Caller-built
-inference `BatchPayload` generation is an internal Phase 2 implementation
-detail, not a public/server boundary.
+`executePhase2TextInference(ctx, tokenizer, prompt, generation_hp)`. Trainer-side callers with realized tokens, goal/prompt spans and atom metadata
+use `executePhase2PayloadInference(ctx, tokenizer, prefill, generation_hp)`.
+The server remains a text/JSON transport boundary; its worker adapts structured
+input to a prefill payload without constructing a training ConceptBlock.
 
 ## ⚡ Performance Highlights
 

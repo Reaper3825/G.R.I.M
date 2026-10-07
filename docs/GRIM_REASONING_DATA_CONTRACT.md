@@ -12,13 +12,17 @@
 
 The normative implementation is split across:
 
+- [`SpanTextRenderer.hpp`](../resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp)
+  and [`SpanTextEncoder.hpp`](../resources/models/GRIM-text/Shared/ConceptBlock/SpanTextEncoder.hpp):
+  shared configured text, logical byte spans, and token-span projection with atom
+  side channels. These primitives have no training-entry or corpus dependency.
 - [`concept_block_canonical.hpp`](../DataCollection/concept_block_canonical.hpp):
-  canonical model-visible text and logical byte spans.
+  training-entry adapter over those shared primitives.
 - [`reasoning_state.hpp`](../DataCollection/reasoning_state.hpp) and
   [`reasoning_state_json.hpp`](../DataCollection/reasoning_state_json.hpp):
   inference-time state accepted from upstream producers.
 - [`Phase2_InferenceLoop.hpp`](../resources/models/GRIM-text/training/Phases/Phase2_InferenceLoop.hpp):
-  structured inference entrypoint.
+  realized inference-prefill payload and generation entrypoints.
 - [`ConceptSupervision.cu`](../resources/models/GRIM-text/training/Phases/Startup/ConceptSupervision.cu):
   runtime projection of configured ConceptBlock fields onto causal targets and
   masked context before window construction.
@@ -53,7 +57,8 @@ state persisted from earlier generation passes. The right side describes the
 model-supervised reasoning transition and terminal response represented in a
 complete training example.
 
-The normal `ReasoningState` wire object accepts only:
+The compatibility `reasoning_state` wire object (also serialized by
+`ReasoningState` clients) accepts only:
 
 - `goal.target_state`
 - `goal.success_criteria`
@@ -68,10 +73,33 @@ fields are retained for state persisted into later generation passes.
 `update`, `answer`, `raw`, and identity metadata. This prevents upstream callers
 from smuggling an answer or output state into the supplied state.
 
-`renderReasoningPrompt()` uses the same recursive, config-authored renderer as
-training and applies the same `ignore` filtering. It does not remove a specially
-named output field. `ReasoningState::withPrompt()` supplies only upstream state,
-so normal prefixes end before the output fields because those values are absent.
+The token-LM inference boundary is `executePhase2PayloadInference()` with a
+caller-authored, compact single-row inference `BatchPayload`. Its input IDs,
+atom registries/side channels, and `NamedConceptSpans` tree are realized before
+forward; each tree entry uses a half-open `GoalTokenSpan`. `ModelForwardRequest`
+borrows that payload, and lens capture reads its supplied span metadata.
+Inference does not accept a training `ConceptBlock`.
+
+`buildPhase2InferencePrefill()` adapts the prompt and compatibility wire state
+into that payload. It rejects model-generated fields, renders only supplied
+input via the shared configured renderer (including `ignore` filtering), and
+preserves supplied typed atom boundaries and their metadata. `ReasoningState`
+and `withPrompt()` remain compatibility/data-authoring helpers; diagnostic and
+worker inference do not use them to construct a training entry.
+
+The tokenizer consumes already-authored or atom-model-produced typed spans; it
+does not identify bare numeric text. The separate compiled atom-insertion model
+continues to accept raw text through `executePhase2TextInference()` and returns
+its annotated input. Token-LM inference consumes the supplied atom annotations
+or an already-realized payload; it does not implicitly launch another model.
+
+Token-LM results expose `continuation_text` separately from the full decoded
+sequence. The continuation is decoded from the realized prefill token boundary,
+with aligned atom side channels, after verifying that generated IDs preserve
+that prefix. Diagnostics and worker responses use the continuation, so text
+normalization cannot cause prefill state to be logged or returned. Atom-insertion
+results retain their distinct annotated-input response contract. This refactor
+preserves training encoding and does not require corpus regeneration.
 
 ## 2. Exact canonical model-visible order
 

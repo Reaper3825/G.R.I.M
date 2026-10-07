@@ -26,14 +26,15 @@ is implemented here.
 
 ## Usage
 
-Pass an optional fifth argument to either `executePhase2TextInference` overload:
+Pass an optional fifth argument to `executePhase2PayloadInference`:
 
 ```cpp
 GRIM::Lenses::LensCaptureRequest lens;
 lens.identity = {session_id, checkpoint_fingerprint, config_fingerprint,
                  tokenizer_fingerprint, parameter_revision};
 lens.replay_identity_control = true;
-auto result = executePhase2TextInference(ctx, tokenizer, supplied_state, generation_hp, &lens);
+// prefill owns the supplied token IDs, GoalTokenSpan tree, and atom side channels.
+auto result = executePhase2PayloadInference(ctx, tokenizer, prefill, generation_hp, &lens);
 auto snapshot = result.prefill_lens_snapshot;
 ```
 
@@ -53,8 +54,9 @@ sequence length. Rows without that span require an explicit local token position
 Inference has no
 ground-truth target: target/supervision optionals remain empty. Span annotations
 are only exposed when the existing payload carries them; the lens does not infer
-span trees by parsing generated text. The structured inference overload carries
-the canonical projected tree; the plain-string overload has no structured tree.
+span trees by parsing generated text. The payload inference entrypoint preserves the caller-authored tree. The
+compatibility wire adapter uses shared span encoding without constructing a
+training ConceptBlock; the plain-string adapter has no structured tree.
 
 ## Coordinates and supervision
 

@@ -15,14 +15,14 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-
-namespace GRIM { struct ConceptBlock; }
+#include <nlohmann/json.hpp>
 
 namespace GRIMText::Training {
 
 struct Phase2TextInferenceResult {
     std::shared_ptr<const GRIM::Lenses::LensSnapshot> prefill_lens_snapshot;
-    std::string text;
+    std::string text; // Full decoded sequence; atom-insertion models return annotated input.
+    std::string continuation_text; // Token-LM output only; never includes prefill state.
     // Exact realized IDs, including the prompt, for diagnostic comparisons.
     std::vector<int> token_ids;
     std::size_t prompt_token_count = 0;
@@ -35,7 +35,7 @@ struct Phase2TextInferenceResult {
 /**
  * @brief Execute Phase 2 inference from a text prompt over Phase1-owned state.
  *
- * This is the only public Phase 2 inference entrypoint. It keeps tokenizer
+ * This text adapter keeps tokenizer
  * access explicit at the call boundary instead of storing a runtime tokenizer
  * on TrainingContext. HTTP/front-end bridge code must send text/options to
  * train_gpu instead of touching TrainingContext, tokenizer artifacts, model
@@ -48,17 +48,22 @@ struct Phase2TextInferenceResult {
  */
 Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
-     GRIM::Tokenizer::UniByte& tokenizer,
+    GRIM::Tokenizer::UniByte& tokenizer,
     const std::string& prompt,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr);
 
-// Structured state supplied by upstream models. Uses the training renderer;
-// an answer present on the input object is excluded from the inference prefix.
-Phase2TextInferenceResult executePhase2TextInference(
-    TrainingContext& ctx,
-    GRIM::Tokenizer::UniByte& tokenizer,
-    const GRIM::ConceptBlock& supplied_state,
+// Build the wire-input adapter into a realized prefill payload. Existing
+// reasoning_state JSON is accepted for transport compatibility only.
+GRIM::Batching::BatchPayload buildPhase2InferencePrefill(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const std::string& prompt, const nlohmann::json& input_state);
+
+// Primary token-LM boundary: caller-authored tokens, GoalTokenSpan tree and atom
+// side channels. The generation loop authors ModelForwardRequest per invocation.
+Phase2TextInferenceResult executePhase2PayloadInference(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const GRIM::Batching::BatchPayload& prefill,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr);
 

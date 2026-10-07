@@ -22,8 +22,6 @@
 #include "../Phases/Phase2_InferenceLoop.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
-#include "../../../../../DataCollection/concept_block_canonical.hpp"
-#include "../../../../../DataCollection/reasoning_state.hpp"
 
 #include <iostream>
 #include <sstream>
@@ -146,21 +144,14 @@ void logDiagnosticSample(TrainingContext& ctx,
     // Match the first-pass arithmetic curriculum exactly: no persisted state,
     // operand bindings, operation hints, or target-role hints in the prefix.
     // This generic goal also remains valid for GRIM_SAMPLE_PROMPT overrides.
-    GRIM::ReasoningState reasoning_state;
-    reasoning_state.goal = GRIM::ConceptBlockGoal{
-        "The quantity requested in the question is correctly reported.",
-        {
-            {
-                "The response answers the question using the stated quantities.",
-                ""
-            }
-        },
-        {
-            "Use only the quantities stated in the problem.",
-            "Report the quantity in the unit requested by the question.",
-            "Use exactly one single-step arithmetic tool call."
-        }
-    };
+    const nlohmann::json input_state{{"goal", {
+        {"target_state", "The quantity requested in the question is correctly reported."},
+        {"success_criteria", {{{"criterion", "The response answers the question using the stated quantities."},
+                               {"evidence", ""}}}},
+        {"constraints", {"Use only the quantities stated in the problem.",
+                         "Report the quantity in the unit requested by the question.",
+                         "Use exactly one single-step arithmetic tool call."}}
+    }}};
     const int max_new_tokens = readEnvInt("GRIM_SAMPLE_TOKENS", 256);
     const int max_chars = readEnvInt("GRIM_SAMPLE_MAX_CHARS", 2048);
     if (max_new_tokens <= 0 || max_chars <= 0) {
@@ -210,7 +201,14 @@ void logDiagnosticSample(TrainingContext& ctx,
             lens.replay_identity_control = true;
             lens.max_replay_rows = lens_options.max_replay_rows;
         }
-        const auto inference_state = reasoning_state.withPrompt(prompt);
+        const bool atom_insertion =
+            GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled;
+        const auto encode_start = std::chrono::steady_clock::now();
+        std::optional<GRIM::Batching::BatchPayload> prefill;
+        if (!atom_insertion)
+            prefill = buildPhase2InferencePrefill(ctx, *tokenizer, prompt, input_state);
+        const auto prefill_encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - encode_start).count();
         const auto concept_spans =
             GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
                 ctx.config, "concept_spans");
@@ -226,10 +224,13 @@ void logDiagnosticSample(TrainingContext& ctx,
                 throw std::runtime_error("Lens diagnostic: no configured root span for /prompt");
             lens.prompt_span_name = prompt_definition->name;
         }
-        // The SFT target now includes the section labels, so let the model
-        // generate <determine> itself from the supplied structured state.
-        const std::string diagnostic_prefix =
-            GRIM::ConceptCanonical::renderReasoningPrompt(inference_state, concept_spans);
+        auto run_sample = [&](const GRIM::Lenses::LensCaptureRequest* capture = nullptr) {
+            if (atom_insertion)
+                return executePhase2TextInference(ctx, *tokenizer, prompt, cfg, capture);
+            auto result = executePhase2PayloadInference(ctx, *tokenizer, *prefill, cfg, capture);
+            result.encode_ms = prefill_encode_ms;
+            return result;
+        };
         const auto start = std::chrono::steady_clock::now();
         if (lens_options.validate) {
             cfg.do_sample = false;
@@ -238,9 +239,8 @@ void logDiagnosticSample(TrainingContext& ctx,
         }
         std::optional<Phase2TextInferenceResult> baseline;
         if (lens_options.validate)
-            baseline = executePhase2TextInference(ctx, *tokenizer, inference_state, cfg);
-        auto sample = executePhase2TextInference(
-            ctx, *tokenizer, inference_state, cfg, lens_options.enabled ? &lens : nullptr);
+            baseline = run_sample();
+        auto sample = run_sample(lens_options.enabled ? &lens : nullptr);
         auto report_lens = [&](const Phase2TextInferenceResult& captured) {
             if (!captured.prefill_lens_snapshot)
                 throw std::runtime_error("Lens diagnostic requested capture but inference returned no snapshot");
@@ -271,7 +271,7 @@ void logDiagnosticSample(TrainingContext& ctx,
                 std::numeric_limits<double>::infinity()) <= lens_options.absolute_tolerance;
             for (int round = 1; round < lens_options.validation_rounds; ++round) {
                 {
-                    auto repeated = executePhase2TextInference(ctx, *tokenizer, inference_state, cfg, &lens);
+                    auto repeated = run_sample(&lens);
                     report_lens(repeated);
                     token_match = token_match && baseline->token_ids == repeated.token_ids;
                     text_match = text_match && baseline->text == repeated.text;
@@ -288,19 +288,9 @@ void logDiagnosticSample(TrainingContext& ctx,
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 
-        std::string generated_text;
-        const bool has_rendered_prompt_prefix =
-            sample.text.size() >= diagnostic_prefix.size() &&
-            sample.text.compare(0, diagnostic_prefix.size(), diagnostic_prefix) == 0;
-        if (has_rendered_prompt_prefix) {
-            generated_text = sample.text.substr(diagnostic_prefix.size());
-        } else {
-            ctx.logging.logger->log(
-                "[Sample] WARNING: decoded sequence did not preserve the rendered prompt prefix; "
-                "suppressing sample text to avoid logging structured input state");
-        }
-        std::string decoded = trimSampleText(
-            generated_text, static_cast<std::size_t>(max_chars));
+        const std::string decoded = trimSampleText(
+            atom_insertion ? sample.text : sample.continuation_text,
+            static_cast<std::size_t>(max_chars));
         ctx.logging.logger->log("[Sample] step=" + std::to_string(optimizer_step) +
                                 " ms=" + std::to_string(elapsed_ms) +
                                 " encode_ms=" + std::to_string(sample.encode_ms) +

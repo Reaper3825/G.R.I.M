@@ -4,8 +4,8 @@
 //======================================================//
 
 #include "Phase2_InferenceLoop.hpp"
-#include "../../../../../DataCollection/concept_block_canonical.hpp"
-#include "../../Shared/DataLoader/ConceptBlockGrmtCompiler.hpp"
+#include "../../Shared/Forward/InferenceInput.hpp"
+#include "../../Shared/Forward/InferenceResultDecode.hpp"
 
 #include "../../Shared/AtomInsertion/AtomInsertionData.hpp"
 #include "../../Shared/AtomInsertion/AtomInsertionDecode.hpp"
@@ -891,186 +891,125 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
 
 } // namespace
 
-static Phase2TextInferenceResult executeTextInferenceImpl(
-    TrainingContext& ctx,
-    GRIM::Tokenizer::UniByte& tokenizer,
-    const std::string& prompt,
-    const GRIM::HyperParameters::GenerationHP& generation_hp,
-    const GRIM::Lenses::LensCaptureRequest* lens_capture,
-    const GRIM::ConceptCanonical::RenderResult* rendered)
-{
-    if (prompt.empty()) {
-        throw std::runtime_error("executePhase2TextInference: prompt is empty");
-    }
-    const auto& model_config = ctx.config;
-    const bool atom_insertion_enabled =
-        GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(model_config)
-            .enabled;
-    const bool local_atom_retrieval_enabled =
-        GRIM::HyperParameters::modelHP(model_config)
-            .local_atom_retrieval_enabled;
-    validateInferenceContext(ctx, !atom_insertion_enabled);
-    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "vocab_size");
-    const int batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "batch_size");
-    const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "max_seq_len");
-    const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "max_cached_seq_len");
-
-    if (tokenizer.vocabSize() != vocab_size) {
-        throw std::runtime_error(
-            "executePhase2TextInference: tokenizer.vocabSize()=" +
-            std::to_string(tokenizer.vocabSize()) +
-            " != config.vocab_size=" + std::to_string(vocab_size));
-    }
-
-    if (atom_insertion_enabled) {
-        if (lens_capture)
-            throw std::runtime_error("Lens capture v1 requires the token model, not atom insertion");
-        return executeAtomInsertionTextInference(
-            ctx,
-            prompt,
-            vocab_size,
-            std::min(max_seq_len, max_cached_seq_len));
-    }
-
-    Phase2TextInferenceResult result;
-
-    const auto start_encode = std::chrono::high_resolution_clock::now();
-    GRIM::Tokenizer::UniByteResult encoded;
-    std::shared_ptr<const GRIM::NamedConceptSpans> prompt_spans;
-    if (rendered) {
-        auto sequence = GRIM::encodeConceptBlockRender(*rendered, nullptr,
-            [&](const std::string& content, const std::vector<size_t>& boundaries,
-                std::vector<size_t>* counts) {
-                return tokenizer.tokenizeWithMetadata(content, boundaries, counts);
-            });
-        if (!sequence) throw std::runtime_error("Structured inference produced no tokens");
-        prompt_spans = sequence->named_concept_spans;
-        encoded.token_ids = std::move(sequence->token_ids);
-        encoded.token_numeric_values = std::move(sequence->token_numeric_values);
-        encoded.token_atom_mask = std::move(sequence->token_atom_mask);
-        encoded.token_atom_flags = std::move(sequence->token_atom_flags);
-        encoded.atom_table = std::move(sequence->atom_table);
-        encoded.atom_entry_ids = std::move(sequence->atom_entry_ids);
-        encoded.local_atom_table = std::move(sequence->local_atom_table);
-        encoded.token_local_atom_indices = std::move(sequence->token_local_atom_indices);
-    } else {
-        encoded = tokenizer.tokenizeWithMetadata(prompt);
-    }
-    auto tokens = std::move(encoded.token_ids);
-    auto numeric_values = std::move(encoded.token_numeric_values);
-    auto atom_mask = std::move(encoded.token_atom_mask);
-    auto atom_flags = std::move(encoded.token_atom_flags);
-    auto prompt_atom_table = encoded.atom_table;
-    auto atom_entry_ids = std::move(encoded.atom_entry_ids);
-    auto prompt_local_atom_table = encoded.local_atom_table;
-    auto local_atom_indices = std::move(encoded.token_local_atom_indices);
-    const auto end_encode = std::chrono::high_resolution_clock::now();
-    result.encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        end_encode - start_encode).count();
-
-    const int eos_id = GRIM::Tokenizer::EOS_TOKEN_ID;
-    if (!tokens.empty() && tokens.back() == eos_id) {
-        tokens.pop_back();
-        if (numeric_values.empty()) {
-            throw std::runtime_error("executePhase2TextInference: numeric_values empty while removing EOS");
-        }
-        numeric_values.pop_back();
-        if (atom_mask.empty()) {
-            throw std::runtime_error("executePhase2TextInference: atom_mask empty while removing EOS");
-        }
-        atom_mask.pop_back();
-        if (atom_flags.empty()) {
-            throw std::runtime_error("executePhase2TextInference: atom_flags empty while removing EOS");
-        }
-        atom_flags.pop_back();
-        if (atom_entry_ids.empty()) {
-            throw std::runtime_error("executePhase2TextInference: atom_entry_ids empty while removing EOS");
-        }
-        atom_entry_ids.pop_back();
-        if (local_atom_indices.empty()) {
-            throw std::runtime_error(
-                "executePhase2TextInference: token_local_atom_indices empty while removing EOS");
-        }
-        local_atom_indices.pop_back();
-    }
-
-    result.prompt_token_count = tokens.size();
-    if (prompt_spans) GRIM::validateNamedConceptSpans(*prompt_spans, tokens.size());
-
-    auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
-        tokens,
-        numeric_values,
-        atom_mask,
-        atom_flags,
-        prompt_atom_table,
-        atom_entry_ids,
-        prompt_local_atom_table,
-        local_atom_indices,
-        vocab_size,
-        static_cast<size_t>(batch_size),
-        static_cast<size_t>(max_cached_seq_len),
-        local_atom_retrieval_enabled);
-
-    if (prompt_spans) prompt_payload.named_concept_spans = {std::move(prompt_spans)};
-
-    const auto start_generation = std::chrono::high_resolution_clock::now();
-    auto generated = generatePayloadSequences(
-        ctx, prompt_payload, tokenizer, generation_hp, nullptr, lens_capture);
-    const auto end_generation = std::chrono::high_resolution_clock::now();
-    result.generation_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        end_generation - start_generation).count();
-
-    if (generated.empty()) {
-        throw std::runtime_error("executePhase2TextInference: payload generation returned no sequences");
-    }
-
-    const auto start_decode = std::chrono::high_resolution_clock::now();
-    const auto& sequence = generated[0];
-    result.token_ids = sequence.token_ids;
-    result.prefill_lens_snapshot = sequence.prefill_lens_snapshot;
-    result.text = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(
-        sequence.token_ids,
-        sequence.atom_entry_ids,
-        sequence.context_atom_table.get(),
-        sequence.token_numeric_values,
-        sequence.token_atom_mask));
-    const auto end_decode = std::chrono::high_resolution_clock::now();
-    result.decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        end_decode - start_decode).count();
-    result.sequence_token_count = sequence.token_ids.size();
-    return result;
-}
-
-Phase2TextInferenceResult executePhase2TextInference(
-    TrainingContext& ctx,
-    GRIM::Tokenizer::UniByte& tokenizer,
-    const std::string& prompt,
-    const GRIM::HyperParameters::GenerationHP& generation_hp,
-    const GRIM::Lenses::LensCaptureRequest* lens_capture) {
-    return executeTextInferenceImpl(ctx, tokenizer, prompt, generation_hp, lens_capture, nullptr);
-}
-
-Phase2TextInferenceResult executePhase2TextInference(
-    TrainingContext& ctx,
-    GRIM::Tokenizer::UniByte& tokenizer,
-    const GRIM::ConceptBlock& supplied_state,
-    const GRIM::HyperParameters::GenerationHP& generation_hp,
-    const GRIM::Lenses::LensCaptureRequest* lens_capture) {
-    auto concept_spans =
-        GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
-            ctx.config, "concept_spans");
+namespace {
+GRIM::Batching::BatchPayload buildTokenPrefill(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    GRIM::SpanText::EncodedText encoded) {
     if (GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled)
-        return executeTextInferenceImpl(ctx, tokenizer,
-            GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state, concept_spans),
-            generation_hp, lens_capture, nullptr);
-    GRIM::resolveConceptSpanDelimiters(concept_spans, [&](const std::string& text) {
+        throw std::invalid_argument("Token prefill cannot be used with the atom-insertion model");
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
+    if (tokenizer.vocabSize() != vocab_size)
+        throw std::runtime_error("Inference tokenizer vocabulary does not match compiled model");
+    auto& t = encoded.tokens;
+    // Supplied input is context. Only a tokenizer-added terminal EOS is removed.
+    if (!t.token_ids.empty() && t.token_ids.back() == GRIM::Tokenizer::EOS_TOKEN_ID) {
+        t.token_ids.pop_back();
+        t.token_numeric_values.pop_back();
+        t.token_atom_mask.pop_back();
+        t.token_atom_flags.pop_back();
+        t.atom_entry_ids.pop_back();
+        t.token_local_atom_indices.pop_back();
+    }
+    auto payload = GRIM::Batching::buildInferenceBatchPayload(
+        t.token_ids, t.token_numeric_values, t.token_atom_mask, t.token_atom_flags,
+        t.atom_table, t.atom_entry_ids, t.local_atom_table, t.token_local_atom_indices,
+        vocab_size,
+        static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size")),
+        static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_cached_seq_len")),
+        GRIM::HyperParameters::modelHP(ctx.config).local_atom_retrieval_enabled);
+    if (encoded.spans && !encoded.spans->empty()) {
+        GRIM::validateNamedConceptSpans(*encoded.spans, t.token_ids.size());
+        payload.named_concept_spans = {std::move(encoded.spans)};
+    }
+    payload.validate("buildTokenPrefill");
+    return payload;
+}
+} // namespace
+
+GRIM::Batching::BatchPayload buildPhase2InferencePrefill(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const std::string& prompt, const nlohmann::json& input_state) {
+    if (GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled)
+        throw std::invalid_argument("Structured token prefill requires a token model; use raw text for atom insertion");
+    const auto source = GRIM::Forward::inferenceInputSource(prompt, input_state);
+    auto definitions = GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
+        ctx.config, "concept_spans");
+    GRIM::resolveConceptSpanDelimiters(definitions, [&](const std::string& text) {
         const auto id = tokenizer.unigramLM().getPieceId(text);
         const auto* piece = tokenizer.unigramLM().getPiece(id);
         return piece && piece->text == text ? id : -1;
     });
-    const auto rendered = GRIM::ConceptCanonical::renderReasoningPromptWithSpans(
-        GRIM::ConceptCanonical::toCanonicalJson(supplied_state), concept_spans);
-    return executeTextInferenceImpl(ctx, tokenizer, rendered.text, generation_hp, lens_capture, &rendered);
+    const auto rendered = GRIM::SpanText::renderInputWithSpans(
+        source, definitions);
+    auto encoded = GRIM::SpanText::encodeSpanText(rendered,
+        [&](const auto& content, const auto& boundaries, auto* counts) {
+            return tokenizer.tokenizeWithMetadata(content, boundaries, counts);
+        });
+    return buildTokenPrefill(ctx, tokenizer, std::move(encoded));
+}
+
+Phase2TextInferenceResult executePhase2PayloadInference(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const GRIM::Batching::BatchPayload& prefill,
+    const GRIM::HyperParameters::GenerationHP& generation_hp,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture) {
+    validateInferenceContext(ctx);
+    validatePromptPayload(prefill);
+    if (prefill.EnableAtomIdentification)
+        throw std::invalid_argument("Token generation cannot consume atom-insertion gaps");
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
+    if (tokenizer.vocabSize() != vocab_size || prefill.vocab_size != vocab_size)
+        throw std::runtime_error("Inference prefill/tokenizer vocabulary does not match compiled model");
+    if (prefill.batch_size != 1 || prefill.total_tokens != prefill.seq_lengths.at(0))
+        throw std::invalid_argument("Inference generation requires one compact prefill row");
+    Phase2TextInferenceResult result;
+    result.prompt_token_count = static_cast<size_t>(prefill.seq_lengths.at(0));
+    const std::vector<int> prefill_ids(prefill.input_ids.begin(),
+        prefill.input_ids.begin() + result.prompt_token_count);
+    const auto start_generation = std::chrono::high_resolution_clock::now();
+    // Generation clones atom registries and attaches device storage locally.
+    // Repeated lens/baseline runs must not mutate the caller's input payload.
+    auto generation_prefill = prefill;
+    auto generated = generatePayloadSequences(ctx, generation_prefill, tokenizer, generation_hp, nullptr, lens_capture);
+    result.generation_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start_generation).count();
+    if (generated.empty()) throw std::runtime_error("Inference generation returned no sequences");
+    const auto start_decode = std::chrono::high_resolution_clock::now();
+    const auto& sequence = generated.front();
+    result.continuation_text = tokenizer.decode(
+        GRIM::Forward::continuationDecodeRequest(sequence, prefill_ids));
+    result.text = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(
+        sequence.token_ids, sequence.atom_entry_ids, sequence.context_atom_table.get(),
+        sequence.token_numeric_values, sequence.token_atom_mask));
+    result.token_ids = sequence.token_ids;
+    result.prefill_lens_snapshot = sequence.prefill_lens_snapshot;
+    result.sequence_token_count = sequence.token_ids.size();
+    result.decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start_decode).count();
+    return result;
+}
+
+Phase2TextInferenceResult executePhase2TextInference(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const std::string& prompt,
+    const GRIM::HyperParameters::GenerationHP& generation_hp,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture) {
+    if (prompt.empty()) throw std::invalid_argument("Inference prompt is empty");
+    if (GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled) {
+        validateInferenceContext(ctx, false);
+        if (lens_capture) throw std::invalid_argument("Lens capture requires token rows, not atom-insertion gaps");
+        return executeAtomInsertionTextInference(ctx, prompt,
+            GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size"),
+            std::min(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len"),
+                     GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_cached_seq_len")));
+    }
+    const auto start = std::chrono::high_resolution_clock::now();
+    auto prefill = buildTokenPrefill(ctx, tokenizer, {tokenizer.tokenizeWithMetadata(prompt), nullptr});
+    const auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start).count();
+    auto result = executePhase2PayloadInference(ctx, tokenizer, prefill, generation_hp, lens_capture);
+    result.encode_ms = encode_ms;
+    return result;
 }
 
 } // namespace GRIMText::Training
