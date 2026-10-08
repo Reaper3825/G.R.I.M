@@ -3,9 +3,40 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <limits>
 #include <stdexcept>
 
 namespace GRIM::Lenses {
+
+int planCaptureChunkRows(const LensCaptureRequest& request, int real_positions,
+                         int d_model, int vocab_size, int mlp_d_ff,
+                         bool normalized, bool bias, bool gated_weights,
+                         std::uint64_t& planned_bytes) {
+    if (real_positions <= 0 || d_model <= 0 || vocab_size <= 0 || mlp_d_ff < 0 ||
+        request.max_replay_rows <= 0 || !request.temporary_memory_budget_bytes)
+        throw std::runtime_error("Lens capture: invalid scratch geometry or budget");
+    const auto d = static_cast<std::uint64_t>(d_model);
+    const auto v = static_cast<std::uint64_t>(vocab_size);
+    const auto f = static_cast<std::uint64_t>(mlp_d_ff);
+    // Host: replay + actual logits and summarizeLogits' vocabulary index array.
+    const std::uint64_t host = v * (2 * sizeof(float) + sizeof(int));
+    if (gated_weights && d > (std::numeric_limits<std::uint64_t>::max() - host) / sizeof(float) / v)
+        throw std::runtime_error("Lens capture: scratch size overflow");
+    const std::uint64_t fixed = host +
+        (gated_weights ? v * d * sizeof(float) : 0);
+    // Device: normalized rows, four retained adapter intermediates, down/scaled/
+    // residual rows, projection and (when present) simultaneous bias output.
+    const std::uint64_t per_row = sizeof(float) *
+        ((normalized ? d : 0) + (f ? 4 * f + 3 * d : 0) +
+         v * (bias ? 2 : 1));
+    const auto budget = request.temporary_memory_budget_bytes;
+    if (budget < fixed || budget - fixed < per_row)
+        throw std::runtime_error("Lens capture: temporary budget cannot fit one readout row");
+    const auto rows = std::min<std::uint64_t>(
+        std::min(real_positions, request.max_replay_rows), (budget - fixed) / per_row);
+    planned_bytes = fixed + rows * per_row;
+    return static_cast<int>(rows);
+}
 
 LensCaptureMetadata makeCaptureMetadata(
     const LensCaptureRequest& request, const Batching::BatchPayload& payload,
@@ -23,9 +54,8 @@ LensCaptureMetadata makeCaptureMetadata(
         request.top_k <= 0 || request.top_k > payload.vocab_size ||
         (cache_prefix_length && payload.batch_size != 1))
         throw std::runtime_error("Lens capture: invalid geometry or top_k");
-    if (request.replay_identity_control &&
-        (request.max_replay_rows <= 0 || payload.total_tokens > request.max_replay_rows))
-        throw std::runtime_error("Lens capture: full-head replay exceeds max_replay_rows");
+    if (request.max_replay_rows <= 0 || !request.temporary_memory_budget_bytes)
+        throw std::runtime_error("Lens capture: invalid chunk row limit or temporary budget");
 
     const auto row = static_cast<std::size_t>(request.batch_row);
     const auto spans = payload.named_concept_spans.empty() ? nullptr : payload.named_concept_spans.at(row);
@@ -47,6 +77,7 @@ LensCaptureMetadata makeCaptureMetadata(
         }
     }
     int position = request.token_position;
+    if (request.all_positions) position = 0;
     if (position == -1) {
         if (!prompt_span)
             throw std::runtime_error("Lens capture: selected prompt span is unavailable; provide span metadata or an explicit token position");

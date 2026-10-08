@@ -7,13 +7,13 @@
 //           mlp_W_gate/mlp_W_up [d_model, mlp_d_ff] + mlp_W_down [mlp_d_ff, d_model]
 //           (optional residual SwiGLU adapter, config.lm_head_mlp_enabled).
 //
-//  Architecture: logits = projected(centered(adapter(RMSNorm(encoder_output)))) @ W^T + bias
+//  Architecture: logits = adapter(RMSNorm(encoder_output)) @ W_eff^T + bias
 //  Where W is either tied to embedding weights or independently allocated, and
 //  adapter(z) = z + mlp_alpha * (SiLU(z @ W_gate) ⊙ (z @ W_up)) @ W_down.
 //
 //  Backward is handled automatically by the autograd tape system:
-//    grad_W = centered^T @ grad_logits
-//    grad_input = grad_logits @ W  (flows back through centering + RMSNorm ops)
+//    grad_W = readout_input^T @ grad_logits
+//    grad_input = grad_logits @ W_eff (flows through adapter + RMSNorm)
 //    grad_bias = sum(grad_logits, dim=0)
 //    grad_gamma via RMSNormGradFn
 //======================================================//
@@ -62,6 +62,27 @@ void forwardLmHead(
     const Batching::BatchPayload& payload,
     cudaStream_t stream,
     cublasHandle_t cublas_handle,
+    Forward::ModelForwardOutputs& forward_outputs);
+
+// Selects real token positions within the existing payload, not a new batch.
+struct LMHeadReadoutSelection {
+    int batch_row = 0;
+    int position_begin = 0;
+    int position_end = 0; // exclusive
+};
+
+// Same row-local readout as forwardLmHead, without sequence pooling. The full
+// hidden rectangle is validated against payload; selection defines its slice.
+// Capture passes detached tensors and may reuse one gated weight matrix.
+// Ordinary forward calls must continue to use forwardLmHead.
+void forwardLmHeadReadoutChunk(
+    const HyperParameters::LMHeadLayerConstructionHP& hp,
+    const LMHeadParameterTensors& parameter_tensors,
+    const Tensor& input,
+    const Batching::BatchPayload& payload,
+    const LMHeadReadoutSelection& selection,
+    const Tensor* prepared_effective_weights,
+    cudaStream_t stream, cublasHandle_t cublas_handle,
     Forward::ModelForwardOutputs& forward_outputs);
 
 } // namespace GRIM

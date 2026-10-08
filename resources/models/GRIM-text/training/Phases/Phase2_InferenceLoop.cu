@@ -476,8 +476,10 @@ GRIM::GeneratedSequence generateOneSequence(
 
         auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
         InferenceForwardScope inference_forward_scope{forward_outputs};
-        if (forward_outputs.lens_snapshot)
+        if (forward_outputs.lens_snapshot) {
             sequence.prefill_lens_snapshot = forward_outputs.lens_snapshot;
+            sequence.prefill_lens_capture_result = forward_outputs.lens_capture_result;
+        }
 
         if (local_atom_retrieval_enabled &&
             active_payload.isInferencePrefill()) {
@@ -983,6 +985,7 @@ Phase2TextInferenceResult executePhase2PayloadInference(
         sequence.token_numeric_values, sequence.token_atom_mask));
     result.token_ids = sequence.token_ids;
     result.prefill_lens_snapshot = sequence.prefill_lens_snapshot;
+    result.prefill_lens_capture_result = sequence.prefill_lens_capture_result;
     result.sequence_token_count = sequence.token_ids.size();
     result.decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start_decode).count();

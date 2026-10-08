@@ -38,8 +38,8 @@ struct LensIdentity {
 };
 
 // Caller-owned, borrowed only for executeModelForward's duration. Absence of
-// this request disables all capture/replay work. Initial scope is token rows at
-// the final encoder output; gap models require a different target boundary.
+// this request disables all capture/replay work. Gap models require a different
+// target boundary. All positions means real tokens in batch_row, never padding.
 struct LensCaptureRequest {
     LensIdentity identity;
     int batch_row = 0;
@@ -48,9 +48,14 @@ struct LensCaptureRequest {
     std::optional<std::uint32_t> prompt_span_entry_index;
     int token_position = -1; // row-local; -1 selects the named prompt span's end
     int top_k = 10;
+    bool all_layers = false;
+    bool all_positions = false;
+    // Bounds additional capture-owned device buffers and host reduction scratch.
+    // Excludes the model/ordinary forward and the compact, persistent results.
+    std::uint64_t temporary_memory_budget_bytes = 64ULL * 1024 * 1024;
+    bool retain_readout_input = false;
     bool replay_identity_control = false;
-    // Full-head replay retains full rectangle intermediates. Bound its row
-    // count explicitly instead of silently allocating a training-sized replay.
+    // Maximum rows per readout chunk (kept for existing diagnostic callers).
     int max_replay_rows = 1024;
 };
 
@@ -113,6 +118,22 @@ struct LensSnapshot {
     // Identity J is implicit. Direct and J-identity share one head replay;
     // neither denotes a fitted Jacobian.
 };
+
+// One forward's complete host-owned capture. No live device views escape.
+// Ordered by layer, then row-local position; only the selected batch row.
+struct LensCaptureResult {
+    std::vector<LensSnapshot> snapshots;
+    std::uint64_t temporary_memory_budget_bytes = 0;
+    std::uint64_t planned_temporary_bytes = 0;
+    int chunk_rows = 0;
+};
+
+// Conservative scratch plan for detached FP32 row-local LM-head readout.
+// Includes one shared gated weight matrix when enabled and host reduction rows.
+int planCaptureChunkRows(const LensCaptureRequest& request, int real_positions,
+                         int d_model, int vocab_size, int mlp_d_ff,
+                         bool normalized, bool bias, bool gated_weights,
+                         std::uint64_t& planned_bytes);
 
 LensCaptureMetadata makeCaptureMetadata(
     const LensCaptureRequest& request, const Batching::BatchPayload& payload,

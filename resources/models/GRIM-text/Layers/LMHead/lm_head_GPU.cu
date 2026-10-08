@@ -44,13 +44,12 @@ namespace GRIM {
 //  Forward Pass
 //======================================================//
 
-void forwardLmHead(
+namespace {
+const Tensor& normalizeReadoutRows(
     const HyperParameters::LMHeadLayerConstructionHP& hp,
     const LMHeadParameterTensors& parameter_tensors,
     const Tensor& input,
-    const Batching::BatchPayload& payload,
-    cudaStream_t stream,
-    cublasHandle_t cublas_handle,
+    cudaStream_t stream, cublasHandle_t cublas_handle,
     Forward::ModelForwardOutputs& forward_outputs) {
     forward_outputs.final_normalized_hidden_states = Tensor();
     forward_outputs.mean_pool = Tensor();
@@ -62,7 +61,6 @@ void forwardLmHead(
     forward_outputs.lm_head_mlp_residual_out = Tensor();
     forward_outputs.logits_tensor = Tensor();
     const Tensor& lm_weights = parameter_tensors.weights;
-    const Tensor& lm_bias = parameter_tensors.bias;
     const Tensor& lm_final_rms_gamma = parameter_tensors.final_rms_gamma;
 
     // Rule 20: Crash on invalid state
@@ -79,61 +77,10 @@ void forwardLmHead(
     autograd::set_autograd_cublas_handle(cublas_handle);
 
     const int d_model = hp.d_model;
-    int batch_size = 0;
-    int rows_per_sequence = 0;
-    int total_tokens = 0;
-
-    if (hp.atom_insertion_enabled) {
-        batch_size = payload.batch_size;
-        rows_per_sequence = payload.max_seq_len - 1;
-        if (batch_size <= 0 || rows_per_sequence <= 0) {
-            throw std::runtime_error(
-                "forwardLmHead: non-causal gap rows require batch_size > 0 and "
-                "max_seq_len > 1, got batch_size=" +
-                std::to_string(batch_size) + " max_seq_len=" +
-                std::to_string(payload.max_seq_len));
-        }
-        total_tokens = batch_size * rows_per_sequence;
-    } else if (payload.isTraining()) {
-        batch_size = hp.training_batch_size;
-        rows_per_sequence = hp.training_rows_per_sequence;
-        if (batch_size <= 0 || rows_per_sequence <= 0) {
-            throw std::runtime_error(
-                "forwardLmHead: training payload requires config-authored fixed shape, got training_batch_size=" +
-                std::to_string(batch_size) + " training_rows_per_sequence=" +
-                std::to_string(rows_per_sequence));
-        }
-        total_tokens = batch_size * rows_per_sequence;
-    } else {
-        batch_size = payload.batch_size;
-        rows_per_sequence = payload.max_seq_len;
-        total_tokens = payload.total_tokens;
-    }
-
-    if (!input.shape.is_2d_layout()) {
-        throw std::runtime_error("forwardLmHead: input must be a 2D tensor");
-    }
-    const int input_rows = input.shape.as_2d().rows;
-    if (input_rows != total_tokens) {
-        throw std::runtime_error(
-            "forwardLmHead: input rows (" + std::to_string(input_rows) +
-            ") != selected row geometry (" + std::to_string(total_tokens) + ")");
-    }
-
-    if (rows_per_sequence <= 0) {
-        throw std::runtime_error("forwardLmHead: rows_per_sequence must be > 0, got " +
-                                 std::to_string(rows_per_sequence));
-    }
-    if (batch_size <= 0) {
-        throw std::runtime_error("forwardLmHead: batch_size must be > 0, got " +
-                                 std::to_string(batch_size));
-    }
-    if (static_cast<int>(payload.seq_lengths.size()) != batch_size) {
-        throw std::runtime_error("forwardLmHead: payload.seq_lengths size (" +
-                                 std::to_string(payload.seq_lengths.size()) +
-                                 ") != batch_size (" + std::to_string(batch_size) + ")");
-    }
-
+    if (!input.data || !input.shape.is_2d_layout() ||
+        input.shape.as_2d().rows <= 0 ||
+        input.shape.as_2d().cols != d_model || hp.vocab_size <= 0)
+        throw std::runtime_error("LM-head readout: invalid row geometry");
     // ════════════════════════════════════════════════════════════════════
     // STEP 0: Optional Final RMSNorm (pre-LM-head normalization)
     //
@@ -144,67 +91,36 @@ void forwardLmHead(
     const Tensor* current_input = &input;
 
     if (lm_final_rms_gamma.data) {
+        if (lm_final_rms_gamma.shape.total_elements() != static_cast<size_t>(d_model) ||
+            !std::isfinite(hp.rms_epsilon) || hp.rms_epsilon <= 0)
+            throw std::runtime_error("LM-head readout: invalid RMSNorm parameters");
         forward_outputs.final_normalized_hidden_states =
             autograd::rms_norm(input, lm_final_rms_gamma, hp.rms_epsilon, stream);
         current_input = &forward_outputs.final_normalized_hidden_states;
     }
 
-    // Each training batch row is one sequence containing prompt and response
-    // tokens. Select only its post-prompt token span here;
-    // meanPoolHiddenStates itself remains a generic operation over
-    // caller-authored token spans. A sequence
-    // without a prompt span is pooled over all of its real (non-PAD) rows.
-    if (!payload.prompt_lengths.empty() || !payload.prompt_end_positions.empty()) {
-        if (static_cast<int>(payload.prompt_lengths.size()) != batch_size ||
-            static_cast<int>(payload.prompt_end_positions.size()) != batch_size) {
-            throw std::runtime_error(
-                "forwardLmHead: prompt-boundary array size mismatch");
-        }
+    return *current_input;
+}
 
-        std::vector<MeanPoolSequenceSpan> mean_pool_spans;
-        mean_pool_spans.reserve(static_cast<std::size_t>(batch_size));
-        for (int batch_row = 0; batch_row < batch_size; ++batch_row) {
-            const std::size_t row = static_cast<std::size_t>(batch_row);
-            const int sequence_length = payload.seq_lengths[row];
-            const int prompt_length = payload.prompt_lengths[row];
-            const int prompt_end = payload.prompt_end_positions[row];
-
-            int first_response_token = 0;
-            if (prompt_length == 0) {
-                if (prompt_end != -1) {
-                    throw std::runtime_error(
-                        "forwardLmHead: empty prompt requires end=-1 at batch row " +
-                        std::to_string(batch_row));
-                }
-            } else {
-                const int prompt_start = prompt_end - prompt_length + 1;
-                if (prompt_length < 0 || prompt_start < 0 ||
-                    prompt_end < 0 || prompt_end >= sequence_length) {
-                    throw std::runtime_error(
-                        "forwardLmHead: invalid prompt span at batch row " +
-                        std::to_string(batch_row));
-                }
-                first_response_token = prompt_end + 1;
-            }
-
-            const int response_token_count =
-                sequence_length - first_response_token;
-            if (response_token_count <= 0) {
-                throw std::runtime_error(
-                    "forwardLmHead: prompt leaves no response tokens to mean-pool at batch row " +
-                    std::to_string(batch_row));
-            }
-            mean_pool_spans.push_back(MeanPoolSequenceSpan{
-                batch_row,
-                first_response_token,
-                sequence_length});
-        }
-        forward_outputs.mean_pool = meanPoolHiddenStates(
-            *current_input,
-            rows_per_sequence,
-            mean_pool_spans,
-            stream);
-    }
+void projectReadoutRows(
+    const HyperParameters::LMHeadLayerConstructionHP& hp,
+    const LMHeadParameterTensors& parameter_tensors,
+    const Tensor& normalized_input,
+    const Batching::BatchPayload& payload,
+    const LMHeadReadoutSelection* selection,
+    cudaStream_t stream,
+    Forward::ModelForwardOutputs& forward_outputs,
+    const Tensor* prepared_effective_weights) {
+    const int d_model = hp.d_model;
+    const int total_tokens = selection
+        ? selection->position_end - selection->position_begin
+        : (hp.atom_insertion_enabled ? payload.atomInsertionGapRowCount() : payload.total_tokens);
+    if (!normalized_input.shape.is_2d_layout() ||
+        normalized_input.shape.as_2d().rows != total_tokens)
+        throw std::runtime_error("LM-head readout: input rows differ from payload selection");
+    const Tensor& lm_weights = parameter_tensors.weights;
+    const Tensor& lm_bias = parameter_tensors.bias;
+    const Tensor* current_input = &normalized_input;
 
     // ════════════════════════════════════════════════════════════════════
     // STEP 0.5: Optional head-side residual SwiGLU adapter (capacity expansion)
@@ -234,7 +150,8 @@ void forwardLmHead(
         const auto gate_shape = mlp_W_gate.shape.as_2d();
         const auto up_shape = mlp_W_up.shape.as_2d();
         const auto down_shape = mlp_W_down.shape.as_2d();
-        if (gate_shape.rows != d_model || up_shape.rows != d_model ||
+        if (hp.mlp_d_ff <= 0 || gate_shape.cols != hp.mlp_d_ff ||
+            gate_shape.rows != d_model || up_shape.rows != d_model ||
             gate_shape.cols != down_shape.rows || up_shape.cols != down_shape.rows ||
             down_shape.cols != d_model) {
             throw std::runtime_error(
@@ -292,12 +209,17 @@ void forwardLmHead(
     // only, without plumbing a new authored config field yet.
     const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
     Tensor& effective_weights_storage = forward_outputs.lm_head_effective_weights;
-    const Tensor* effective_weights = &lm_weights;
-    if (use_token_type_gate) {
+    const Tensor* effective_weights = prepared_effective_weights ? prepared_effective_weights : &lm_weights;
+    if (use_token_type_gate && !prepared_effective_weights) {
         effective_weights_storage = autograd::type_gate_rows_by_token_type(lm_weights, stream);
         effective_weights_storage.name = "lm_head.token_type_gated_weights";
         effective_weights = &effective_weights_storage;
     }
+
+    if (!effective_weights->data || !effective_weights->shape.is_2d_layout() ||
+        effective_weights->shape.as_2d().rows != hp.vocab_size ||
+        effective_weights->shape.as_2d().cols != d_model)
+        throw std::runtime_error("LM-head readout: invalid effective weights");
 
     if (!matmul_input->data) {
         throw std::runtime_error("forwardLmHead: matmul input has null data - cannot compute weight gradient. "
@@ -317,19 +239,19 @@ void forwardLmHead(
         use_token_type_gate,
         total_tokens,
         d_model,
-        payload.vocab_size,
+        hp.vocab_size,
         stream);
 
     // Validate output geometry without restamping layout metadata here.
     const size_t logits_elements = forward_outputs.logits_tensor.shape.total_elements();
     const size_t expected_elements = static_cast<size_t>(total_tokens) *
-                                     static_cast<size_t>(payload.vocab_size);
+                                     static_cast<size_t>(hp.vocab_size);
     if (logits_elements != expected_elements) {
         throw std::runtime_error(
             "forwardLmHead: logits shape validation FAILED\n"
             "  Got: " + std::to_string(logits_elements) + " elements\n"
             "  Expected: " + std::to_string(expected_elements) + " elements (" +
-                std::to_string(total_tokens) + "x" + std::to_string(payload.vocab_size) + ")");
+                std::to_string(total_tokens) + "x" + std::to_string(hp.vocab_size) + ")");
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -344,8 +266,155 @@ void forwardLmHead(
     // unigram bias is enabled, so gating on data presence (rather than use_bias)
     // lets the log p(v) unigram bias take effect with use_bias=false.
     if (lm_bias.data) {
+        if (lm_bias.shape.total_elements() != static_cast<size_t>(hp.vocab_size))
+            throw std::runtime_error("LM-head readout: invalid bias geometry");
         forward_outputs.logits_tensor = autograd::broadcast_add(forward_outputs.logits_tensor, lm_bias, stream);
     }
+}
+} // namespace
+
+void forwardLmHead(
+    const HyperParameters::LMHeadLayerConstructionHP& hp,
+    const LMHeadParameterTensors& parameter_tensors,
+    const Tensor& input,
+    const Batching::BatchPayload& payload,
+    cudaStream_t stream, cublasHandle_t cublas_handle,
+    Forward::ModelForwardOutputs& forward_outputs) {
+    const int batch_size = payload.batch_size;
+    const int rows_per_sequence = hp.atom_insertion_enabled
+        ? payload.atom_insertion_gap_rows_per_sequence : payload.max_seq_len;
+    const int total_tokens = hp.atom_insertion_enabled
+        ? payload.atomInsertionGapRowCount() : payload.total_tokens;
+
+    if (hp.atom_insertion_enabled && rows_per_sequence != payload.max_seq_len - 1)
+        throw std::runtime_error("forwardLmHead: gap geometry does not match payload sequence length");
+    if (!hp.atom_insertion_enabled && payload.isTraining() &&
+        (hp.training_batch_size <= 0 || hp.training_rows_per_sequence <= 0 ||
+         batch_size != hp.training_batch_size || rows_per_sequence != hp.training_rows_per_sequence))
+        throw std::runtime_error("forwardLmHead: training payload differs from config-authored fixed shape");
+    if (batch_size <= 0 || rows_per_sequence <= 0 ||
+        static_cast<std::int64_t>(total_tokens) !=
+            static_cast<std::int64_t>(batch_size) * rows_per_sequence)
+        throw std::runtime_error("forwardLmHead: invalid payload rectangle");
+
+    if (!input.shape.is_2d_layout()) {
+        throw std::runtime_error("forwardLmHead: input must be a 2D tensor");
+    }
+    const int input_rows = input.shape.as_2d().rows;
+    if (input_rows != total_tokens) {
+        throw std::runtime_error(
+            "forwardLmHead: input rows (" + std::to_string(input_rows) +
+            ") != selected row geometry (" + std::to_string(total_tokens) + ")");
+    }
+
+    if (static_cast<int>(payload.seq_lengths.size()) != batch_size) {
+        throw std::runtime_error("forwardLmHead: payload.seq_lengths size (" +
+                                 std::to_string(payload.seq_lengths.size()) +
+                                 ") != batch_size (" + std::to_string(batch_size) + ")");
+    }
+
+    if (payload.vocab_size != hp.vocab_size)
+        throw std::runtime_error("forwardLmHead: payload vocabulary differs from head");
+    const Tensor& normalized_input = normalizeReadoutRows(
+        hp, parameter_tensors, input, stream, cublas_handle, forward_outputs);
+
+    // Each training batch row is one sequence containing prompt and response
+    // tokens. Select only its post-prompt token span here;
+    // meanPoolHiddenStates itself remains a generic operation over
+    // caller-authored token spans. A sequence
+    // without a prompt span is pooled over all of its real (non-PAD) rows.
+    if (!payload.prompt_lengths.empty() || !payload.prompt_end_positions.empty()) {
+        if (static_cast<int>(payload.prompt_lengths.size()) != batch_size ||
+            static_cast<int>(payload.prompt_end_positions.size()) != batch_size) {
+            throw std::runtime_error(
+                "forwardLmHead: prompt-boundary array size mismatch");
+        }
+
+        std::vector<MeanPoolSequenceSpan> mean_pool_spans;
+        mean_pool_spans.reserve(static_cast<std::size_t>(batch_size));
+        for (int batch_row = 0; batch_row < batch_size; ++batch_row) {
+            const std::size_t row = static_cast<std::size_t>(batch_row);
+            const int sequence_length = payload.seq_lengths[row];
+            const int prompt_length = payload.prompt_lengths[row];
+            const int prompt_end = payload.prompt_end_positions[row];
+
+            int first_response_token = 0;
+            if (prompt_length == 0) {
+                if (prompt_end != -1) {
+                    throw std::runtime_error(
+                        "forwardLmHead: empty prompt requires end=-1 at batch row " +
+                        std::to_string(batch_row));
+                }
+            } else {
+                const int prompt_start = prompt_end - prompt_length + 1;
+                if (prompt_length < 0 || prompt_start < 0 ||
+                    prompt_end < 0 || prompt_end >= sequence_length) {
+                    throw std::runtime_error(
+                        "forwardLmHead: invalid prompt span at batch row " +
+                        std::to_string(batch_row));
+                }
+                first_response_token = prompt_end + 1;
+            }
+
+            const int response_token_count =
+                sequence_length - first_response_token;
+            if (response_token_count <= 0) {
+                throw std::runtime_error(
+                    "forwardLmHead: prompt leaves no response tokens to mean-pool at batch row " +
+                    std::to_string(batch_row));
+            }
+            mean_pool_spans.push_back(MeanPoolSequenceSpan{
+                batch_row,
+                first_response_token,
+                sequence_length});
+        }
+        forward_outputs.mean_pool = meanPoolHiddenStates(
+            normalized_input,
+            rows_per_sequence,
+            mean_pool_spans,
+            stream);
+    }
+
+    projectReadoutRows(hp, parameter_tensors, normalized_input, payload, nullptr, stream,
+                       forward_outputs, nullptr);
+}
+
+void forwardLmHeadReadoutChunk(
+    const HyperParameters::LMHeadLayerConstructionHP& hp,
+    const LMHeadParameterTensors& parameter_tensors,
+    const Tensor& input,
+    const Batching::BatchPayload& payload,
+    const LMHeadReadoutSelection& selection,
+    const Tensor* prepared_effective_weights,
+    cudaStream_t stream, cublasHandle_t cublas_handle,
+    Forward::ModelForwardOutputs& forward_outputs) {
+    if (hp.atom_insertion_enabled || payload.EnableAtomIdentification ||
+        payload.batch_size <= 0 || payload.max_seq_len <= 0 ||
+        static_cast<std::int64_t>(payload.total_tokens) !=
+            static_cast<std::int64_t>(payload.batch_size) * payload.max_seq_len ||
+        payload.seq_lengths.size() != static_cast<std::size_t>(payload.batch_size) ||
+        payload.vocab_size != hp.vocab_size)
+        throw std::runtime_error("LM-head chunk: invalid token payload geometry");
+    if (!input.data || !input.shape.is_2d_layout() ||
+        input.shape.as_2d().rows != payload.total_tokens ||
+        input.shape.as_2d().cols != hp.d_model)
+        throw std::runtime_error("LM-head chunk: hidden rectangle differs from payload");
+    if (selection.batch_row < 0 || selection.batch_row >= payload.batch_size ||
+        selection.position_begin < 0 || selection.position_end <= selection.position_begin ||
+        selection.position_end > payload.seq_lengths.at(selection.batch_row) ||
+        selection.position_end > payload.max_seq_len)
+        throw std::runtime_error("LM-head chunk: selection is outside real payload positions");
+    const auto first_row = static_cast<std::size_t>(selection.batch_row) * payload.max_seq_len +
+                           selection.position_begin;
+    auto chunk = Tensor::from_ptr(input.data + first_row * hp.d_model,
+        TensorContract::TensorShape::make_BSM(
+            selection.position_end - selection.position_begin, hp.d_model),
+        false, false, "lens_readout_chunk");
+    chunk.stream = stream;
+    const Tensor& normalized_input = normalizeReadoutRows(
+        hp, parameter_tensors, chunk, stream, cublas_handle, forward_outputs);
+    projectReadoutRows(hp, parameter_tensors, normalized_input, payload, &selection, stream,
+                       forward_outputs, prepared_effective_weights);
 }
 
 } // namespace GRIM

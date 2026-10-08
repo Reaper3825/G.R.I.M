@@ -99,8 +99,39 @@ int main() {
     payload.EnableAtomIdentification = false;
     request.replay_identity_control = true;
     request.max_replay_rows = 5;
+    assert(capture().token_position == 1); // row limit now caps chunks, not the rectangle
+    request.max_replay_rows = 0;
     mustThrow([&] { capture(); });
+    request.max_replay_rows = 1024;
     request.replay_identity_control = false;
+
+    request.all_positions = true;
+    request.token_position = 99;
+    assert(capture().token_position == 0); // enumerate real positions independently of selection
+    request.all_positions = false;
+    request.token_position = -1;
+    std::uint64_t planned = 0;
+    LensCaptureRequest chunk_request;
+    chunk_request.max_replay_rows = 3;
+    assert(planCaptureChunkRows(chunk_request, 8, 16, 20, 32, true, true, false, planned) == 3);
+    const auto three_rows = planned;
+    chunk_request.temporary_memory_budget_bytes = three_rows;
+    assert(planCaptureChunkRows(chunk_request, 8, 16, 20, 32, true, true, false, planned) == 3);
+    chunk_request.temporary_memory_budget_bytes = three_rows - 1;
+    assert(planCaptureChunkRows(chunk_request, 8, 16, 20, 32, true, true, false, planned) == 2);
+    chunk_request.temporary_memory_budget_bytes = 1;
+    mustThrow([&] { planCaptureChunkRows(chunk_request, 8, 16, 20, 32, true, true, false, planned); });
+    chunk_request.temporary_memory_budget_bytes = 64 * 1024 * 1024;
+    assert(planCaptureChunkRows(chunk_request, 1, 16, 20, 0, false, false, true, planned) == 1);
+    assert(planned == 20 * (2 * sizeof(float) + sizeof(int)) + 20 * 16 * sizeof(float) + 20 * sizeof(float));
+    mustThrow([&] { planCaptureChunkRows(chunk_request, 0, 16, 20, 0, false, false, false, planned); });
+    chunk_request.temporary_memory_budget_bytes = std::numeric_limits<std::uint64_t>::max();
+    mustThrow([&] { planCaptureChunkRows(chunk_request, 1,
+        std::numeric_limits<int>::max(), std::numeric_limits<int>::max(),
+        0, false, false, true, planned); });
+    request.temporary_memory_budget_bytes = 0;
+    mustThrow([&] { capture(); });
+    request.temporary_memory_budget_bytes = 64 * 1024 * 1024;
 
     payload.mode = Batching::BatchPayloadMode::InferencePrefill;
     payload.prompt_lengths.clear();
@@ -130,6 +161,36 @@ int main() {
     assert(!metadata.supervision.is_prompt_token.has_value());
     request.identity.checkpoint_fingerprint.clear();
     mustThrow([&] { capture(); });
+
+    // A second batch row uses padded storage strides but only its real length.
+    Batching::BatchPayload mixed;
+    mixed.mode = Batching::BatchPayloadMode::InferencePrefill;
+    mixed.batch_size = 2; mixed.max_seq_len = 8; mixed.total_tokens = 16;
+    mixed.vocab_size = 20; mixed.seq_lengths = {2, 7};
+    mixed.input_ids = {1, 2, 0, 0, 0, 0, 0, 0, 3, 4, 5, 6, 7, 8, 9, 0};
+    LensCaptureRequest selected;
+    selected.identity = {"session", "checkpoint", "config", "tokenizer", 7};
+    selected.batch_row = 1; selected.token_position = 0;
+    selected.all_layers = true; selected.all_positions = true;
+    selected.max_replay_rows = 3;
+    assert(planCaptureChunkRows(selected, mixed.seq_lengths[1], 16, 20, 0, false, false, false, planned) == 3);
+    for (int i = 0; i < mixed.seq_lengths[1]; ++i) {
+        selected.all_positions = false; selected.token_position = i;
+        const auto m = makeCaptureMetadata(selected, mixed, {}, 5, 16, 0, true, false, 92);
+        assert(m.supervision.input_token_id == i + 3);
+        assert(m.token_position == i && m.layer_count == 5);
+        assert(m.attention.visible_keys.end == i + 1);
+    }
+    selected.token_position = 7;
+    mustThrow([&] { makeCaptureMetadata(selected, mixed, {}, 5, 16, 0, true, false, 92); });
+
+    // Compatibility views retain exactly the canonical collection's ownership.
+    auto collection = std::make_shared<LensCaptureResult>();
+    collection->snapshots.resize(2);
+    collection->snapshots.back().metadata.token_position = 6;
+    std::shared_ptr<const LensSnapshot> alias(collection, &collection->snapshots.back());
+    collection.reset();
+    assert(alias->metadata.token_position == 6);
 
     auto scores = summarizeLogits({1000, 1000, 1000, 1000}, 2, ReadoutKind::ActualFinal);
     assert(scores.top_tokens[0].token_id == 0 && scores.top_tokens[1].token_id == 1);

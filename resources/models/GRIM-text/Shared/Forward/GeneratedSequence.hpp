@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace GRIM {
-namespace Lenses { struct LensSnapshot; }
+namespace Lenses { struct LensSnapshot; struct LensCaptureResult; }
 namespace Tokenizer {
 class AtomTable;
 class SequenceLocalAtomTable;
@@ -18,6 +18,7 @@ class SequenceLocalAtomTable;
 
 struct GeneratedSequence {
     std::shared_ptr<const Lenses::LensSnapshot> prefill_lens_snapshot;
+    std::shared_ptr<const Lenses::LensCaptureResult> prefill_lens_capture_result;
     std::vector<int> token_ids;
     std::vector<float> token_scores;
     std::vector<float> token_numeric_values;

@@ -118,9 +118,11 @@ private:
     }
 
 public:
-    // Host-owned immutable diagnostics. Consumers may retain this shared_ptr
-    // across clear(); no forward tensor/parameter lifetime is extended.
+    // Host-owned immutable diagnostics. Consumers may retain these shared_ptrs
+    // across clear(); no forward tensor/parameter lifetime is extended. The
+    // single snapshot aliases the final entry in the canonical collection.
     std::shared_ptr<const Lenses::LensSnapshot> lens_snapshot;
+    std::shared_ptr<const Lenses::LensCaptureResult> lens_capture_result;
 
     void setNamedConceptSpanMetadata(
         std::size_t batch_size,
@@ -483,6 +485,7 @@ public:
 
     void clear() {
         lens_snapshot.reset();
+        lens_capture_result.reset();
         row_named_concept_spans_.clear();
         clearRetainedLayerOutputs();
         embedding_tensor = Tensor();

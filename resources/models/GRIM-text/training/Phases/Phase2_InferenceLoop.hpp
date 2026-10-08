@@ -21,6 +21,7 @@ namespace GRIMText::Training {
 
 struct Phase2TextInferenceResult {
     std::shared_ptr<const GRIM::Lenses::LensSnapshot> prefill_lens_snapshot;
+    std::shared_ptr<const GRIM::Lenses::LensCaptureResult> prefill_lens_capture_result;
     std::string text; // Full decoded sequence; atom-insertion models return annotated input.
     std::string continuation_text; // Token-LM output only; never includes prefill state.
     // Exact realized IDs, including the prompt, for diagnostic comparisons.

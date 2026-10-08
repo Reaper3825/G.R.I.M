@@ -16,16 +16,21 @@ void check(cudaError_t error) {
 }
 
 // Complete each transfer before any destination vector can be destroyed on an
-// exception. Captures are deliberately synchronous and opt-in in v1.
+// exception. Captures are deliberately synchronous and opt-in.
 std::vector<float> copyRow(const Tensor& tensor, std::size_t row, int width,
                            cudaStream_t stream) {
     if (!tensor.data || !tensor.shape.is_2d_layout() ||
         tensor.shape.as_2d().cols != width || row >= static_cast<std::size_t>(tensor.shape.as_2d().rows))
         throw std::runtime_error("Lens capture: tensor row geometry mismatch");
     std::vector<float> host(static_cast<std::size_t>(width));
-    check(cudaMemcpyAsync(host.data(), tensor.data + row * width,
-                          host.size() * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    check(cudaStreamSynchronize(stream));
+    try {
+        check(cudaMemcpyAsync(host.data(), tensor.data + row * width,
+                              host.size() * sizeof(float), cudaMemcpyDeviceToHost, stream));
+        check(cudaStreamSynchronize(stream));
+    } catch (...) {
+        (void)cudaStreamSynchronize(stream);
+        throw;
+    }
     return host;
 }
 }
@@ -34,60 +39,146 @@ std::uint64_t nextForwardInvocationId() {
     return invocation_counter.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-std::shared_ptr<const LensSnapshot> captureFinalLens(
-    const LensCaptureRequest& request, LensCaptureMetadata metadata,
+
+LensCaptureSession::LensCaptureSession(
+    const LensCaptureRequest& request, const Batching::BatchPayload& payload,
+    const NamedConceptSpanDefinitions& definitions, int layer_count,
+    int cache_prefix_length, bool effective_causal, bool dropout_enabled,
+    std::uint64_t invocation_id,
     const HyperParameters::LMHeadLayerConstructionHP& hp,
     const LMHeadParameterTensors& parameters,
-    const Batching::BatchPayload& payload,
-    const Forward::ModelForwardOutputs& actual,
-    cudaStream_t stream, cublasHandle_t handle) {
-    auto snapshot = std::make_shared<LensSnapshot>();
-    metadata.capture_sequence = capture_counter.fetch_add(1, std::memory_order_relaxed) + 1;
-    metadata.capture_timestamp_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    metadata.capture_monotonic_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    snapshot->metadata = std::move(metadata);
-    const auto row = static_cast<std::size_t>(snapshot->metadata.batch_row) * payload.max_seq_len
-        + snapshot->metadata.token_position;
-    snapshot->readout_input = copyRow(actual.encoder_output_tensor, row, hp.d_model, stream);
-    const auto actual_logits = copyRow(actual.logits_tensor, row, hp.vocab_size, stream);
-    snapshot->readouts.push_back(summarizeLogits(actual_logits, request.top_k, ReadoutKind::ActualFinal));
-
-    if (request.replay_identity_control) {
-        // Borrow detached parameters; never attach diagnostic gradients to the
-        // training graph or overwrite the owner's live forward outputs.
-        LMHeadParameterTensors detached;
-        detached.owns_weights = false;
-        detached.weights = parameters.weights.detach(stream);
-        if (parameters.bias.data) detached.bias = parameters.bias.detach(stream);
-        if (parameters.final_rms_gamma.data) detached.final_rms_gamma = parameters.final_rms_gamma.detach(stream);
-        if (parameters.mlp_W_gate.data) detached.mlp_W_gate = parameters.mlp_W_gate.detach(stream);
-        if (parameters.mlp_W_up.data) detached.mlp_W_up = parameters.mlp_W_up.detach(stream);
-        if (parameters.mlp_W_down.data) detached.mlp_W_down = parameters.mlp_W_down.detach(stream);
-        auto input = actual.encoder_output_tensor.detach(stream);
-        Forward::ModelForwardOutputs replay;
+    cudaStream_t stream, cublasHandle_t handle)
+    : request_(request), payload_(payload), hp_(hp), stream_(stream), handle_(handle),
+      result_(std::make_shared<LensCaptureResult>()) {
+    auto base = makeCaptureMetadata(request, payload, definitions, layer_count,
+        hp.d_model, cache_prefix_length, effective_causal, dropout_enabled, invocation_id);
+    if (!stream || !handle || hp.atom_insertion_enabled || hp.vocab_size != payload.vocab_size)
+        throw std::runtime_error("Lens capture: invalid execution or head geometry");
+    if (hp.mlp_enabled && hp.mlp_d_ff <= 0)
+        throw std::runtime_error("Lens capture: invalid adapter width");
+    if (!parameters.weights.data || !parameters.weights.shape.is_2d_layout() ||
+        parameters.weights.shape.as_2d().rows != hp.vocab_size ||
+        parameters.weights.shape.as_2d().cols != hp.d_model)
+        throw std::runtime_error("Lens capture: invalid vocabulary projection geometry");
+    const int count = request.all_positions ? payload.seq_lengths.at(request.batch_row) : 1;
+    positions_.reserve(count);
+    for (int i = 0; i < count; ++i) {
+        auto selected = request;
+        selected.all_positions = false;
+        selected.token_position = request.all_positions ? i : base.token_position;
+        positions_.push_back(makeCaptureMetadata(selected, payload, definitions, layer_count,
+            hp.d_model, cache_prefix_length, effective_causal, dropout_enabled, invocation_id));
+    }
+    result_->temporary_memory_budget_bytes = request.temporary_memory_budget_bytes;
+    result_->chunk_rows = planCaptureChunkRows(request, count, hp.d_model, hp.vocab_size,
+        hp.mlp_enabled ? hp.mlp_d_ff : 0, parameters.final_rms_gamma.data != nullptr,
+        parameters.bias.data != nullptr, kEnableLmHeadTokenTypeGateExperiment,
+        result_->planned_temporary_bytes);
+    result_->snapshots.reserve(static_cast<std::size_t>(count) * (request.all_layers ? layer_count : 1));
+    next_layer_ = request.all_layers ? 0 : layer_count - 1;
+    parameters_.owns_weights = false;
+    parameters_.weights = parameters.weights.detach(stream);
+    parameters_.bias = parameters.bias.detach(stream);
+    parameters_.final_rms_gamma = parameters.final_rms_gamma.detach(stream);
+    parameters_.mlp_W_gate = parameters.mlp_W_gate.detach(stream);
+    parameters_.mlp_W_up = parameters.mlp_W_up.detach(stream);
+    parameters_.mlp_W_down = parameters.mlp_W_down.detach(stream);
+    if (kEnableLmHeadTokenTypeGateExperiment) {
         try {
-            // Replay the owner's rectangle to retain the forward payload's
-            // geometry checks. The LM-head readout itself is row-local.
-            forwardLmHead(hp, detached, input, payload, stream, handle, replay);
-            const auto replay_logits = copyRow(replay.logits_tensor, row, hp.vocab_size, stream);
-            auto direct = summarizeLogits(replay_logits, request.top_k, ReadoutKind::Direct);
-            snapshot->readouts.push_back(direct);
-            direct.kind = ReadoutKind::JacobianIdentity;
-            snapshot->readouts.push_back(std::move(direct));
-            double maximum_error = 0;
-            for (std::size_t i = 0; i < actual_logits.size(); ++i)
-                maximum_error = std::max(maximum_error,
-                    std::abs(static_cast<double>(actual_logits[i]) - replay_logits[i]));
-            snapshot->identity_max_abs_logit_error = maximum_error;
+            effective_weights_ = autograd::type_gate_rows_by_token_type(parameters_.weights, stream);
+            check(cudaStreamSynchronize(stream));
         } catch (...) {
-            // Finish queued readout work before destroying detached views and
-            // replay scratch. Preserve the original diagnostic exception.
             (void)cudaStreamSynchronize(stream);
             throw;
         }
     }
-    return snapshot;
 }
+
+void LensCaptureSession::captureLayer(int layer, const Tensor& hidden,
+                                      const Tensor* actual_logits) {
+    const int final_layer = positions_.front().layer_count - 1;
+    if (!request_.all_layers && layer != final_layer) return;
+    // Final output remains live through the ordinary head. Read it once there,
+    // so validation compares the complete logits without retaining V per token.
+    if (layer == final_layer && !actual_logits) return;
+    if (layer != next_layer_ || layer > final_layer)
+        throw std::runtime_error("Lens capture: missing, repeated, or out-of-order layer");
+    if (!hidden.data || !hidden.shape.is_2d_layout() ||
+        hidden.shape.as_2d().rows != payload_.total_tokens ||
+        hidden.shape.as_2d().cols != hp_.d_model)
+        throw std::runtime_error("Lens capture: encoder rectangle mismatch");
+    const bool replay = !actual_logits || request_.replay_identity_control ||
+                        request_.all_layers || request_.all_positions;
+    for (std::size_t begin = 0; begin < positions_.size(); begin += result_->chunk_rows) {
+        const int rows = static_cast<int>(std::min<std::size_t>(
+            result_->chunk_rows, positions_.size() - begin));
+        const auto flat = static_cast<std::size_t>(request_.batch_row) * payload_.max_seq_len +
+                          positions_[begin].token_position;
+        const LMHeadReadoutSelection selection{request_.batch_row,
+            positions_[begin].token_position, positions_[begin].token_position + rows};
+        Forward::ModelForwardOutputs scratch;
+        try {
+            if (replay)
+                forwardLmHeadReadoutChunk(hp_, parameters_, hidden, payload_, selection,
+                    effective_weights_.data ? &effective_weights_ : nullptr,
+                    stream_, handle_, scratch);
+            for (int i = 0; i < rows; ++i) {
+                LensSnapshot snapshot;
+                snapshot.metadata = positions_[begin + i];
+                auto& m = snapshot.metadata;
+                m.layer_index = layer;
+                if (layer != final_layer)
+                    m.target_boundary = "encoder_block_output/post_block";
+                m.capture_sequence = capture_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+                m.capture_timestamp_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                m.capture_monotonic_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                if (request_.retain_readout_input)
+                    snapshot.readout_input = copyRow(hidden, flat + i, hp_.d_model, stream_);
+                std::vector<float> actual;
+                if (actual_logits) {
+                    actual = copyRow(*actual_logits, flat + i, hp_.vocab_size, stream_);
+                    snapshot.readouts.push_back(summarizeLogits(actual, request_.top_k, ReadoutKind::ActualFinal));
+                }
+                if (replay) {
+                    const auto logits = copyRow(scratch.logits_tensor, i, hp_.vocab_size, stream_);
+                    auto direct = summarizeLogits(logits, request_.top_k, ReadoutKind::Direct);
+                    snapshot.readouts.push_back(direct);
+                    if (actual_logits) {
+                        double error = 0;
+                        for (std::size_t v = 0; v < logits.size(); ++v)
+                            error = std::max(error, std::abs(static_cast<double>(actual[v]) - logits[v]));
+                        snapshot.identity_max_abs_logit_error = error;
+                        if (request_.replay_identity_control) {
+                            direct.kind = ReadoutKind::JacobianIdentity;
+                            snapshot.readouts.push_back(std::move(direct));
+                        }
+                    }
+                }
+                result_->snapshots.push_back(std::move(snapshot));
+            }
+            check(cudaStreamSynchronize(stream_));
+        } catch (...) {
+            // Scratch/input must outlive all queued work, including failed copies.
+            (void)cudaStreamSynchronize(stream_);
+            throw;
+        }
+    }
+    ++next_layer_;
+}
+
+void LensCaptureSession::publish(Forward::ModelForwardOutputs& outputs) {
+    const int layers = positions_.front().layer_count;
+    if (next_layer_ != layers || result_->snapshots.size() !=
+        positions_.size() * static_cast<std::size_t>(request_.all_layers ? layers : 1))
+        throw std::runtime_error("Lens capture: incomplete layer/position coverage");
+    outputs.lens_capture_result = result_;
+    // Existing single-snapshot consumers see the last real position/final layer.
+    // Aliasing shares the canonical collection's ownership; no duplicate result.
+    outputs.lens_snapshot = std::shared_ptr<const LensSnapshot>(
+        outputs.lens_capture_result, &result_->snapshots.back());
+    result_.reset();
+}
+
 } // namespace GRIM::Lenses

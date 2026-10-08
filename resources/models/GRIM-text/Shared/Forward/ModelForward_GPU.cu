@@ -380,19 +380,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
     const auto& payload = *request.payload;
     const auto invocation_id = Lenses::nextForwardInvocationId();
-    std::optional<Lenses::LensCaptureMetadata> lens_metadata;
-    if (request.lens_capture) {
-        if (atom_boundary_hp.enabled)
-            throw std::runtime_error("Lens capture v1 does not support atom-insertion readout boundaries");
-        lens_metadata = Lenses::makeCaptureMetadata(
-            *request.lens_capture, payload,
-            HyperParameters::snapshotTrainingConfigField<NamedConceptSpanDefinitions>(*cfg, "concept_spans"),
-            num_layers, d_model,
-            request.kv_cache ? request.kv_cache->currentSeqlen() : 0,
-            request.kv_cache || (HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "causal_mask") &&
-                !Ablation::kDisableCausalMask),
-            request.graph.enable_dropout, invocation_id);
-    }
     (void)runtime_payload;
     ModelForwardOutputs forward_outputs;
     forward_outputs.setNamedConceptSpanMetadata(
@@ -402,6 +389,20 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
     const bool dropout_enabled = request.graph.enable_dropout;
+    std::unique_ptr<Lenses::LensCaptureSession> lens_capture;
+    if (request.lens_capture) {
+        if (atom_boundary_hp.enabled)
+            throw std::runtime_error("Lens capture requires token rows, not insertion gaps");
+        lens_capture = std::make_unique<Lenses::LensCaptureSession>(
+            *request.lens_capture, payload,
+            HyperParameters::snapshotTrainingConfigField<NamedConceptSpanDefinitions>(*cfg, "concept_spans"),
+            num_layers, request.kv_cache ? request.kv_cache->currentSeqlen() : 0,
+            request.kv_cache || (HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "causal_mask") &&
+                !Ablation::kDisableCausalMask),
+            dropout_enabled, invocation_id, lm_head_hp, lm_head_parameters,
+            request.stream, request.cublas_handle);
+    }
+
 
 
     const int total_tokens = payload.total_tokens;
@@ -563,6 +564,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "enc_layer_output",
                 "executeModelForward(no_grad)");
 
+            if (lens_capture) lens_capture->captureLayer(layer_idx, layer_output_view);
+
             Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
             const size_t bytes = static_cast<size_t>(layer_output_view.shape.total_elements()) * sizeof(float);
             cudaError_t cp_err = cudaMemcpyAsync(owned.data, layer_output_view.data, bytes, cudaMemcpyDeviceToDevice, request.stream);
@@ -659,6 +662,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "enc_layer_output",
                 "executeModelForward(retained_graph)");
 
+            if (lens_capture) lens_capture->captureLayer(layer_idx, layer_output);
+
             forward_outputs.encoder_layer_outputs.push_back(std::move(layer_output));
         }
 
@@ -742,10 +747,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         : total_tokens;
     MFWD_INFO("Forward complete: logits shape=[" << logit_rows << ", " << payload.vocab_size << "]");
 
-    if (lens_metadata) {
-        forward_outputs.lens_snapshot = Lenses::captureFinalLens(
-            *request.lens_capture, std::move(*lens_metadata), lm_head_hp,
-            lm_head_parameters, payload, forward_outputs, request.stream, request.cublas_handle);
+    if (lens_capture) {
+        lens_capture->captureLayer(num_layers - 1, forward_outputs.encoder_output_tensor,
+                                   &forward_outputs.logits_tensor);
+        lens_capture->publish(forward_outputs);
     }
 
     return forward_outputs;

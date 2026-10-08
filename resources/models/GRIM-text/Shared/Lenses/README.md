@@ -1,28 +1,27 @@
-# Final-layer lens capture
+# Layer/position lens capture
 
-This is the first, opt-in token-model lens implementation. It captures the final
-encoder output before the real LM head and the actual logits before sampling.
-Optional identity control replays `forwardLmHead` with detached parameter/input
-views and a separate forward sink. Direct and identity-J readouts share that
-replay because both have exactly the same input at the final boundary. No fitted
-Jacobian, matrix file loader, intermediate-layer transport, UI, or gap-model lens
-is implemented here.
+Opt-in capture uses the existing shared model forward and the current LM head.
+It supports the selected token or every real position in one batch row, at the
+final encoder block or every block. Atom-insertion gap models remain unsupported.
+There is no new checkpoint loader, inspection executable, persistence path, or UI
+operation in this stage.
 
 ## Ownership
 
 - `LensMetadata.hpp` is the global host contract; `LensMetadata.cpp` resolves
   existing payload annotations and summarizes logits.
-- `LensCapture_GPU.cu` owns the capture/replay implementation. The shared forward
-  owner calls it after the real head completes, before forward cleanup/loss.
+- `LensCapture_GPU.cu` owns one capture session per shared forward. Both encoder
+  loops call it before intermediate output storage can be reused. Final-layer
+  capture runs after the ordinary head, while final hidden states remain live.
 - `ModelForwardRequest::lens_capture` borrows a caller-owned request only for the
   duration of the call. A null pointer disables captures and head replays.
-- `ModelForwardOutputs::lens_snapshot` owns an immutable host snapshot. Copying
-  its shared pointer before `clear()` preserves it without retaining GPU tensors,
-  autograd nodes, or model weights.
-- Phase 2 carries a prefill snapshot through `GeneratedSequence` into
-  `Phase2TextInferenceResult`. Decode calls are not captured by this entrypoint.
-- Loss and encoder owners need no new hooks for this stage: the final encoder
-  output is already retained, and realized supervision lives on `BatchPayload`.
+- `ModelForwardOutputs::lens_capture_result` owns the immutable host collection,
+  ordered by layer then position. `lens_snapshot` aliases its final entry for
+  existing single-token consumers. Both survive `clear()` when retained by callers;
+  neither retains GPU tensors, autograd nodes, or model weights.
+- Phase 2 carries `prefill_lens_capture_result` and the compatible snapshot through
+  `GeneratedSequence` into `Phase2TextInferenceResult`. Decode calls are not
+  captured by this entrypoint. Realized supervision comes from `BatchPayload`.
 
 ## Usage
 
@@ -32,10 +31,13 @@ Pass an optional fifth argument to `executePhase2PayloadInference`:
 GRIM::Lenses::LensCaptureRequest lens;
 lens.identity = {session_id, checkpoint_fingerprint, config_fingerprint,
                  tokenizer_fingerprint, parameter_revision};
+lens.all_layers = true;
+lens.all_positions = true; // seq_lengths[batch_row], excluding padding
+lens.temporary_memory_budget_bytes = 64ULL * 1024 * 1024;
 lens.replay_identity_control = true;
 // prefill owns the supplied token IDs, GoalTokenSpan tree, and atom side channels.
 auto result = executePhase2PayloadInference(ctx, tokenizer, prefill, generation_hp, &lens);
-auto snapshot = result.prefill_lens_snapshot;
+auto captures = result.prefill_lens_capture_result;
 ```
 
 Identities are authored by the orchestration owner, must be nonempty, and must
@@ -87,20 +89,38 @@ or restarts.
 
 ## Memory and readout
 
-Snapshots store one FP32 hidden row, top-k results, scalar metrics, and shared host
-span metadata. Temporary logits use O(V) host memory. Probabilities normalize over
-the complete vocabulary at temperature 1, never over just the displayed top-k.
-Ties sort by token ID; nonfinite logits are rejected.
+Snapshots store top-k results, scalar metrics, and shared host span metadata.
+Set `retain_readout_input=true` to also retain the FP32 hidden rows; the compact
+default does not. Probabilities and entropy normalize over the complete vocabulary
+at temperature 1. Ties sort by token ID; nonfinite logits are rejected.
 
-Identity control borrows the complete detached encoder rectangle and replays the
-complete head with the original payload. This retains the original forward geometry
-validation. The LM-head readout is row-local and has no centering or PC1
-context requirement. It adds full-rectangle head scratch and logits, but no parameter
-copies or parameter gradients. `max_replay_rows` defaults to 1024 and is checked
-before model execution; it bounds rows rather than claiming an exact byte limit.
-At 768 dimensions, the persistent captured hidden row costs 3 KiB. Identity J is
-implicit and allocates no matrix. Calls synchronize deliberately in this first
-diagnostic version; this is not an asynchronous streaming telemetry path.
+`forwardLmHead` retains its complete payload rectangle and prompt-boundary checks,
+including sequence-level mean pooling. It and `forwardLmHeadReadoutChunk` share
+one implementation of normalization, optional residual MLP, token-type gating,
+projection, and bias. Batch and sequence geometry come from `BatchPayload`.
+Capture passes that payload, the full hidden rectangle, detached parameters,
+and a selected batch row/position range. The chunk entry validates that range
+against real payload positions and creates its detached view. Tensor shapes are
+checked against the payload/selection, not used to author batch geometry.
+Sequence pooling stays in the ordinary payload-aware forward wrapper.
+There are no centering or PC1 paths.
+
+`temporary_memory_budget_bytes` bounds capture-owned device readout buffers plus
+host vocabulary reduction scratch, excluding model/ordinary-forward allocations,
+existing cuBLAS workspace, allocator overhead, metadata, and persistent results.
+The conservative plan includes simultaneous projection/bias outputs, normalization,
+MLP intermediates, host logits/index arrays, and one shared gated weight matrix
+when gating is enabled. A budget that cannot fit one row fails before encoder
+execution. `max_replay_rows` is now an additional chunk-size cap, not a limit on
+the full padded payload. Each chunk completes before its scratch is released for
+the next chunk; no layer-specific vocabulary matrices are retained.
+
+Intermediate layers always produce direct readouts. Expanded capture also replays
+the final layer and compares it to actual logits. Single-token final-only capture
+replays only when `replay_identity_control=true`. Identity-J is an implicit control
+at the final layer and allocates no matrix. Calls synchronize deliberately.
+The published collection records chunk size, budget, and planned temporary bytes.
+Full requested layer/position coverage is checked before publication.
 
 `identity_max_abs_logit_error` compares every vocabulary entry. The consumer
 chooses its numerical tolerance. The code does not claim a successful identity
@@ -114,7 +134,7 @@ control and must not be displayed as a fitted J-lens.
 Set `training.config.generation_lens_enabled` to `true` in `ai_config.json`
 to enable capture in `logDiagnosticSample` at its existing
 diagnostic interval. Normal diagnostic sampling settings remain unchanged. Each
-sample adds one complete head replay and emits a single-line JSON `[Lens]` record
+sample adds a bounded head replay and emits a single-line JSON `[Lens]` record
 containing decoded top tokens, all three readouts, visibility, available span and
 target annotations, provenance, and the full-vocabulary maximum absolute logit
 error. `jacobian_identity_control` is explicitly a control, not a fitted lens.
@@ -140,7 +160,7 @@ session caches and unrelated device activity may affect them.
 | `generation_lens_absolute_tolerance` | `0.0001` | Maximum absolute identity-logit error to pass |
 | `generation_lens_validation_rounds` | `3` | Captured validation runs, range 2–20, plus one baseline |
 | `generation_lens_validation_tokens` | `16` | Validation continuation limit, range 1–256 |
-| `generation_lens_max_replay_rows` | `1024` | Full-head replay row limit |
+| `generation_lens_max_replay_rows` | `1024` | Maximum rows per readout chunk |
 
 The normal `GRIM_SAMPLE_TOKENS` and `GRIM_SAMPLE_MAX_CHARS` must remain positive
 for the diagnostic to run. New controls are strictly parsed. Lens reports use
