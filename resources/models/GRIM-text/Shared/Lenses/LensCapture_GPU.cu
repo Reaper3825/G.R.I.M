@@ -117,53 +117,48 @@ void LensCaptureSession::captureLayer(int layer, const Tensor& hidden,
         const LMHeadReadoutSelection selection{request_.batch_row,
             positions_[begin].token_position, positions_[begin].token_position + rows};
         Forward::ModelForwardOutputs scratch;
-        try {
-            if (replay)
-                forwardLmHeadReadoutChunk(hp_, parameters_, hidden, payload_, selection,
-                    effective_weights_.data ? &effective_weights_ : nullptr,
-                    stream_, handle_, scratch);
-            for (int i = 0; i < rows; ++i) {
-                LensSnapshot snapshot;
-                snapshot.metadata = positions_[begin + i];
-                auto& m = snapshot.metadata;
-                m.layer_index = layer;
-                if (layer != final_layer)
-                    m.target_boundary = "encoder_block_output/post_block";
-                m.capture_sequence = capture_counter.fetch_add(1, std::memory_order_relaxed) + 1;
-                m.capture_timestamp_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                m.capture_monotonic_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-                if (request_.retain_readout_input)
-                    snapshot.readout_input = copyRow(hidden, flat + i, hp_.d_model, stream_);
-                std::vector<float> actual;
+        // Scratch follows the existing ModelForwardOutputs/Tensor RAII lifecycle.
+        if (replay)
+            forwardLmHeadReadoutChunk(hp_, parameters_, hidden, payload_, selection,
+                effective_weights_.data ? &effective_weights_ : nullptr,
+                stream_, handle_, scratch);
+        for (int i = 0; i < rows; ++i) {
+            LensSnapshot snapshot;
+            snapshot.metadata = positions_[begin + i];
+            auto& m = snapshot.metadata;
+            m.layer_index = layer;
+            if (layer != final_layer)
+                m.target_boundary = "encoder_block_output/post_block";
+            m.capture_sequence = capture_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+            m.capture_timestamp_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            m.capture_monotonic_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (request_.retain_readout_input)
+                snapshot.readout_input = copyRow(hidden, flat + i, hp_.d_model, stream_);
+            std::vector<float> actual;
+            if (actual_logits) {
+                actual = copyRow(*actual_logits, flat + i, hp_.vocab_size, stream_);
+                snapshot.readouts.push_back(summarizeLogits(actual, request_.top_k, ReadoutKind::ActualFinal));
+            }
+            if (replay) {
+                const auto logits = copyRow(scratch.logits_tensor, i, hp_.vocab_size, stream_);
+                auto direct = summarizeLogits(logits, request_.top_k, ReadoutKind::Direct);
+                snapshot.readouts.push_back(direct);
                 if (actual_logits) {
-                    actual = copyRow(*actual_logits, flat + i, hp_.vocab_size, stream_);
-                    snapshot.readouts.push_back(summarizeLogits(actual, request_.top_k, ReadoutKind::ActualFinal));
-                }
-                if (replay) {
-                    const auto logits = copyRow(scratch.logits_tensor, i, hp_.vocab_size, stream_);
-                    auto direct = summarizeLogits(logits, request_.top_k, ReadoutKind::Direct);
-                    snapshot.readouts.push_back(direct);
-                    if (actual_logits) {
-                        double error = 0;
-                        for (std::size_t v = 0; v < logits.size(); ++v)
-                            error = std::max(error, std::abs(static_cast<double>(actual[v]) - logits[v]));
-                        snapshot.identity_max_abs_logit_error = error;
-                        if (request_.replay_identity_control) {
-                            direct.kind = ReadoutKind::JacobianIdentity;
-                            snapshot.readouts.push_back(std::move(direct));
-                        }
+                    double error = 0;
+                    for (std::size_t v = 0; v < logits.size(); ++v)
+                        error = std::max(error, std::abs(static_cast<double>(actual[v]) - logits[v]));
+                    snapshot.identity_max_abs_logit_error = error;
+                    if (request_.replay_identity_control) {
+                        direct.kind = ReadoutKind::JacobianIdentity;
+                        snapshot.readouts.push_back(std::move(direct));
                     }
                 }
-                result_->snapshots.push_back(std::move(snapshot));
             }
-            check(cudaStreamSynchronize(stream_));
-        } catch (...) {
-            // Scratch/input must outlive all queued work, including failed copies.
-            (void)cudaStreamSynchronize(stream_);
-            throw;
+            result_->snapshots.push_back(std::move(snapshot));
         }
+
     }
     ++next_layer_;
 }
