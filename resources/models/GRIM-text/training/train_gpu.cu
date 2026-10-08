@@ -34,6 +34,9 @@
 #include "Phases/Phase3_Cleanup.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
+#include "../Shared/Lenses/LensInspectionReport.hpp"
+#include <mutex>
+#include <filesystem>
 #include <chrono>
 #include <sstream>
 #include <stdexcept>
@@ -221,7 +224,12 @@ int runInferenceWorker(
     GRIM::Tokenizer::UniByte& tokenizer,
     int port) {
     httplib::Server svr;
+    // All routes share model workspaces, KV state and the tokenizer.
+    std::mutex execution_mutex;
     const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
+    std::uint64_t vocab_hash = 0;
+    const std::string tokenizer_identity = GRIM::Tokenizer::AtomTable::computeFileHash(paths_hp.vocab_path, vocab_hash)
+        ? "vocab-file-hash64:" + std::to_string(vocab_hash) : std::string{};
 
     svr.Get("/internal/status", [&](const httplib::Request&, httplib::Response& res) {
         json response = {
@@ -236,11 +244,55 @@ int runInferenceWorker(
         res.set_content(response.dump(), "application/json");
     });
 
+    svr.Post("/internal/inspect", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const auto request = json::parse(req.body);
+            if (request.value("mode", std::string("inference")) != "inference")
+                throw std::invalid_argument("Training replay requires a prepared training-window payload; it is not an inference prompt");
+            const auto& compiled = *ctx.config.model_config;
+            if (requireJsonString(request, "config_sha256") != GRIM::Lenses::inspectionConfigDigest(compiled) ||
+                !std::filesystem::equivalent(requireJsonString(request, "config_path"), compiled.source_path))
+                throw std::invalid_argument("Selected model differs from the loaded inference model");
+            GRIM::Lenses::LensCaptureRequest capture;
+            capture.all_layers = true;
+            capture.all_positions = true;
+            const auto& top_k = request.at("top_k");
+            if (!top_k.is_number_integer() || top_k.get<int64_t>() <= 0 || top_k.get<int64_t>() > tokenizer.vocabSize())
+                throw std::invalid_argument("Inspection top-k must be in 1..vocabulary size");
+            capture.top_k = top_k.get<int>();
+            const auto budget = request.at("temporary_memory_budget_bytes");
+            if (!budget.is_number_integer() || budget.get<int64_t>() <= 0)
+                throw std::invalid_argument("Inspection scratch budget must be a positive integer");
+            capture.temporary_memory_budget_bytes = budget.get<uint64_t>();
+            capture.replay_identity_control = true;
+            if (tokenizer_identity.empty())throw std::runtime_error("Cannot identify the loaded tokenizer artifact");
+            capture.identity.execution_session_id = ctx.logging.session_id;
+            capture.identity.tokenizer_fingerprint = tokenizer_identity;
+            capture.identity.checkpoint_fingerprint = ctx.loaded_checkpoint_path;
+            capture.identity.compiled_config_fingerprint = GRIM::Lenses::inspectionConfigDigest(compiled);
+            const auto& prompt = requireJsonString(request, "prompt");
+            const auto* input_state = request.contains("reasoning_state") ? &request.at("reasoning_state") : nullptr;
+            std::lock_guard<std::mutex> execution_lock(execution_mutex);
+            auto result = GRIMText::Training::executePhase2Inspection(ctx, tokenizer, prompt, input_state, capture);
+            if (!result.prefill_lens_capture_result)
+                throw std::runtime_error("Inspection did not publish its capture result");
+            auto report = GRIM::Lenses::inspectionReport(*result.prefill_lens_capture_result,
+                compiled, ctx.loaded_checkpoint_path, [&](int id) {
+                    return tokenizer.decode(GRIM::Tokenizer::DecodeRequest({id}));
+                });
+            res.set_content(report.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+        }
+    });
+
     svr.Post("/internal/generate", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json request = json::parse(req.body);
             const std::string prompt = requireJsonString(request, "prompt");
             const auto gen_config = generationHPFromRequest(ctx.config, request);
+            std::lock_guard<std::mutex> execution_lock(execution_mutex);
             const auto generated = executeWorkerInference(ctx, tokenizer, prompt, request, gen_config);
 
             json response = {
@@ -265,6 +317,7 @@ int runInferenceWorker(
             const json request = json::parse(req.body);
             const std::string prompt = chatPromptFromRequest(request, request.contains("reasoning_state"));
             const auto gen_config = generationHPFromRequest(ctx.config, request);
+            std::lock_guard<std::mutex> execution_lock(execution_mutex);
             const auto generated = executeWorkerInference(ctx, tokenizer, prompt, request, gen_config);
 
             json response = {

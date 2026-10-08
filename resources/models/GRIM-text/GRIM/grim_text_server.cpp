@@ -184,6 +184,10 @@ int main(int argc, char** argv)
             forwardStatusFromWorker(options.worker_port, res);
         });
 
+        svr.Post("/api/inspect", [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, "/internal/inspect", req, res);
+        });
+
         svr.Post("/api/generate", [&](const httplib::Request& req, httplib::Response& res) {
             forwardToWorker(options.worker_port, "/internal/generate", req, res);
         });

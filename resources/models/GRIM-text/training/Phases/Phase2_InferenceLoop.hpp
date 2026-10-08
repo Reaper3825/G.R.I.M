@@ -33,6 +33,13 @@ struct Phase2TextInferenceResult {
     std::int64_t decode_ms = 0;
 };
 
+// Forward-only inspection of the existing inference prefill. No token sampling,
+// optimizer updates, or parameter graph. The result owns the complete capture.
+Phase2TextInferenceResult executePhase2Inspection(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const std::string& prompt, const nlohmann::json* input_state,
+    const GRIM::Lenses::LensCaptureRequest& capture);
+
 /**
  * @brief Execute Phase 2 inference from a text prompt over Phase1-owned state.
  *

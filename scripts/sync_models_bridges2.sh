@@ -5,12 +5,15 @@
 # NOTE: Keep this file with LF line endings for bash compatibility on Windows.
 #
 # Usage:
+#   ./scripts/sync_models_bridges2.sh watch-models [--prune-remote] [--interval 60] [--host USER@data.bridges2.psc.edu]
 #   ./scripts/sync_models_bridges2.sh collect [--dry-run] [--skip-checkpoints] [--pull-vocab] [--pull-grmt] [--subpath REL]
 #   ./scripts/sync_models_bridges2.sh pull-logs [--dry-run] [--subpath REL]
 #   ./scripts/sync_models_bridges2.sh delete [--dry-run] [--yes] [--subpath REL]
 #   ./scripts/sync_models_bridges2.sh both   [--dry-run] [--yes] [--pull-vocab] [--pull-grmt] [--subpath REL]
 #
 # Modes:
+#   watch-models — continuously pull resources/models/model_store (Python + OpenSSH; Ctrl+C stops)
+#                  See docs/BRIDGES2_MODEL_WATCH.md. Extra args go to watch_models_bridges2.py.
 #   collect — rsync FROM Bridges-2 → local repo (pull checkpoints off ocean storage)
 #   pull-logs — rsync training logs FROM Bridges-2 → local repo
 #   delete  — remove the same path ON Bridges-2 only (frees /ocean quota; does not delete local)
@@ -37,6 +40,19 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Dispatch before the legacy one-shot connection/transfer setup. This mode uses
+# the data transfer node and works without local rsync or SSH ControlMaster.
+if [[ "${1:-}" == "watch-models" ]]; then
+  shift
+  for watcher_python in python3 python; do
+    if command -v "$watcher_python" >/dev/null 2>&1 && "$watcher_python" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+      exec "$watcher_python" "$REPO_ROOT/scripts/watch_models_bridges2.py" "$@"
+    fi
+  done
+  echo "ERROR: watch-models requires Python 3.10+ and OpenSSH." >&2
+  exit 1
+fi
 
 DEFAULT_CHECKPOINTS_REL="resources/models/GRIM-text/checkpoints"
 TRAINING_LOGS_REL="resources/models/GRIM-text/training/logs"

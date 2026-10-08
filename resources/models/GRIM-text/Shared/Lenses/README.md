@@ -3,8 +3,46 @@
 Opt-in capture uses the existing shared model forward and the current LM head.
 It supports the selected token or every real position in one batch row, at the
 final encoder block or every block. Atom-insertion gap models remain unsupported.
-There is no new checkpoint loader, inspection executable, persistence path, or UI
-operation in this stage.
+The Observatory panel can inspect the model already loaded through the existing
+inference lifecycle. There is no separate checkpoint loader or inspection executable.
+
+## Observatory interface
+
+Select the matching model-store entry, enter inference input, set top-k and the
+capture scratch budget in MiB, and choose **Run inspection**. The panel sends
+`/api/inspect` through the existing HTTP bridge to `/internal/inspect` on the
+Phase 1-owned inference worker. The worker checks the selected artifact path
+and semantic digest against its loaded configuration. It uses the loaded
+checkpoint and tokenizer identities, captures all layers and real positions,
+and returns before sampling any token. Generation and inspection share a mutex
+because they borrow the same model, tokenizer, caches and workspaces.
+
+`executePhase2Inspection` uses the same prefill adapters, upload, cached forward
+and cleanup as ordinary generation. Graph connections and dropout remain disabled.
+The ordinary generation entrypoints retain their existing behavior.
+`LensInspectionReport.hpp` adapts the immutable capture to the existing
+Observatory HTTP presentation contract; it does not compute new probabilities.
+All readout kinds, raw logits, full-vocabulary probabilities, entropy and final
+maximum absolute logit error survive transport. The panel can switch between
+direct, actual final logits and identity control; unavailable layer/kind pairs
+are displayed as unavailable. Presentation snapshots stay immutable while the
+native viewport reads them.
+
+Position validation follows the selected `.grimcfg` maximum sequence length;
+top-k follows the actual vocabulary. The former fixed position/candidate/entry
+limits are removed. Host files and responses retain a 512 MiB size guard, which
+is independent of the capture scratch budget.
+
+This connects inference inspection. Training-example replay still requires the
+prepared-window reference and payload orchestration; the inference endpoint
+rejects training replay instead of reinterpreting it as prompt text. Compact
+`.grimlens` save/load remains separate from this presentation adapter.
+
+Host-only validation (no runtime build or execution):
+
+```powershell
+./tests/run_ui_observatory_report.ps1 -CheckPanelSyntax -CheckRuntimeSyntax
+```
 
 ## Ownership
 

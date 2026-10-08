@@ -7,6 +7,8 @@
 #include "ui/primitives/ui_graph.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "resources.hpp"
+#include "ai/grim_text_server_manager.hpp"
+#include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <future>
 #include <iomanip>
@@ -23,6 +25,7 @@ struct UIObservatoryView::Impl {
     struct Loaded {
         std::shared_ptr<GRIM::Config::CompiledModelConfigSnapshot> config;
         std::shared_ptr<Report> report;
+        bool liveCapture=false;
     };
     std::shared_ptr<GRIM::Config::CompiledModelConfigSnapshot> config;
     std::shared_ptr<Report> report;
@@ -32,6 +35,12 @@ struct UIObservatoryView::Impl {
     int modelIndex=0;
     std::string configPath,capturePath,message="Select a model from the model store to begin.";
     UIInputBox captureInput{&capturePath};
+    std::string promptText,topKText="10",budgetText="256";
+    UIInputBox promptInput{&promptText},topKInput{&topKText},budgetInput{&budgetText};
+    UIButton runInspection;
+    UIDropdown readoutKind;
+    int readoutIndex=0;
+    bool liveCapture=false;
     UIButton loadConfig,refresh,loadCapture,preview,play,view,reset;
     UIDropdown model;
     UIDropdown position,candidate;
@@ -47,6 +56,16 @@ struct UIObservatoryView::Impl {
     std::vector<ObservatoryViewport::Selection> graphSelection;
 
     Impl():
+      runInspection("Run inspection",[this]{beginInspection();}),
+      readoutKind("",{"Direct readout","Actual final logits","Identity control"},0,[this](int i,const std::string&){
+          readoutIndex=i;
+          if(report) {
+              // Native rendering holds an immutable report snapshot concurrently.
+              auto selected=std::make_shared<Report>(*report);
+              selectReadout(*selected,readoutName());report=std::move(selected);
+              selectedToken=-1;rebuild();
+          }
+      }),
       loadConfig("Reload model",[this]{beginLoad(true);}),
       refresh("Refresh store",[this]{refreshModels();}),
       loadCapture("Load capture",[this]{beginLoad(false);}),
@@ -75,6 +94,8 @@ struct UIObservatoryView::Impl {
       }),
       layer("Encoder layer",1,1,1,[this](float value){selectedLayer=unsigned(value)-1;selectedToken=-1;rebuild();},1) {
         captureInput.setPlaceholder("Absolute path to saved Observatory capture.json");
+        promptInput.setPlaceholder("Inference input (uses the currently loaded checkpoint)");
+        topKInput.setText(topKText);budgetInput.setText(budgetText);
         auto& gc=graph.getConfig();gc.useDownsampling=false;gc.pointRadius=5;gc.showValues=false;
         graph.setXAxisRange(0,1);
         graph.setOnPointClick([this](int i,const DataPoint&){
@@ -84,7 +105,7 @@ struct UIObservatoryView::Impl {
         });
     }
     void clearModel() {
-        playing=false;play.setText("Play depth");config.reset();report.reset();
+        playing=false;play.setText("Play depth");config.reset();report.reset();liveCapture=false;
         position.collapse();candidate.collapse();position.setItems({});
         layer.setRange(1,1);graph.clearData();
         if(viewport){viewport->setReport({},0,0,-1);viewport->hide();}
@@ -121,6 +142,43 @@ struct UIObservatoryView::Impl {
             message=std::string("Model store: ")+e.what();
         }
     }
+    const char* readoutName() const {
+        return readoutIndex==1?"actual_final":readoutIndex==2?"identity_control":"direct";
+    }
+    void beginInspection() {
+        if(loading.valid()) {message="Wait for the current operation to finish.";return;}
+        if(!config) {message="Select a model first.";return;}
+        if(promptText.empty()) {message="Enter inference input first.";return;}
+        try {
+            auto positive=[](const std::string& text) {
+                if(text.empty() || text.find_first_not_of("0123456789")!=std::string::npos)
+                    throw std::invalid_argument("Top-k and scratch MiB must be positive integers");
+                const auto value=std::stoull(text);
+                if(value==0)throw std::invalid_argument("Top-k and scratch MiB must be positive integers");
+                return value;
+            };
+            const auto top=positive(topKText),mib=positive(budgetText);
+            if(top>1000000 || mib>1048576)throw std::invalid_argument("Inspection option is out of range");
+            const auto snapshot=config;
+            const nlohmann::json request={{"mode","inference"},{"config_path",configPath},
+                {"config_sha256",configDigest(*snapshot)},{"prompt",promptText},
+                {"top_k",top},{"temporary_memory_budget_bytes",mib*1024ULL*1024ULL}};
+            const auto url=GRIM::GRIMTextServerManager::getInstance().getServerURL();
+            playing=false;play.setText("Play depth");
+            message="Inspecting every layer and real position using the loaded checkpoint...";
+            loading=std::async(std::launch::async,[snapshot,request,url] {
+                httplib::Client client(url);
+                client.set_connection_timeout(2,0);client.set_read_timeout(600,0);
+                const auto response=client.Post("/api/inspect",request.dump(),"application/json");
+                if(!response)throw std::runtime_error("Inference server unavailable. Load the selected model through the existing model loader first.");
+                if(response->body.size()>512ULL*1024*1024)throw std::runtime_error("Inspection exceeds the 512 MiB host response budget");
+                const auto json=nlohmann::json::parse(response->body);
+                if(response->status!=200)throw std::runtime_error(json.value("error",std::string("Inspection request failed")));
+                Loaded result;result.report=std::make_shared<Report>(parseReport(json,*snapshot));result.liveCapture=true;
+                return result;
+            });
+        } catch(const std::exception& e) {message=e.what();}
+    }
     void beginLoad(bool model) {
         if(loading.valid()) {message="A file is already loading.";return;}
         if(!model && !config) {message="Select a model before opening a capture.";return;}
@@ -139,13 +197,14 @@ struct UIObservatoryView::Impl {
     }
     void installed() {
         position.collapse();candidate.collapse();
+        selectReadout(*report,readoutName());
         positionIndex=0;selectedLayer=report->positions.front().layers.front().layer;selectedToken=-1;
         playing=false;play.setText("Play depth");elapsed=0;
         std::vector<std::string> labels;
         for(const auto& p:report->positions) labels.push_back("Position "+std::to_string(p.position));
         position.setItems(labels);position.setSelectedIndex(0);
         layer.setRange(1,float(report->layerCount));
-        message=report->synthetic?"SYNTHETIC PREVIEW - fabricated probabilities; no model execution.":"Saved capture loaded. Probabilities are not renormalized to top-k.";
+        message=report->synthetic?"SYNTHETIC PREVIEW - fabricated probabilities; no model execution.":liveCapture?"Inspection complete. Every layer and real position captured; using full-vocabulary probabilities.":"Saved capture loaded. Probabilities are not renormalized to top-k.";
         rebuild();if(viewport)viewport->resetCamera();
     }
     const LayerReadout* readout() const {
@@ -174,7 +233,7 @@ struct UIObservatoryView::Impl {
         if(viewport)viewport->setReport(report,positionIndex,selectedLayer,selectedToken);
     }
     void layout(const PanelRect& rect,uint64_t panelId) {
-        readyLayout=rect.size.x>=660 && rect.size.y>=380;
+        readyLayout=rect.size.x>=660 && rect.size.y>=448;
         if(!readyLayout){if(viewport)viewport->hide();return;}
         const float x=rect.origin.x+10,y=rect.origin.y+4,w=rect.size.x-20;
         auto place=[&](Widget& widget,float px,float py,float width,float height=28.f) {
@@ -182,11 +241,14 @@ struct UIObservatoryView::Impl {
         };
         place(model,x,y-4,w-250,34);place(refresh,x+w-240,y,115);place(loadConfig,x+w-115,y,115);
         place(captureInput,x,y+34,w-125);place(loadCapture,x+w-115,y+34,115);
-        place(preview,x,y+68,150);place(view,x+160,y+68,100);place(reset,x+270,y+68,120);
-        place(play,x+w-115,y+68,115);
-        place(position,x+65,y+146,170);place(layer,x+265,y+146,w-265);
-        scene={{x,y+188},{w-255,rect.size.y-204}};
-        inspector={{x+w-245,y+188},{245,scene.size.y}};
+        place(promptInput,x,y+68,w-145);place(runInspection,x+w-135,y+68,135);
+        place(topKInput,x+50,y+102,70);place(budgetInput,x+225,y+102,90);
+        place(readoutKind,x+330,y+98,w-330,34);
+        place(preview,x,y+136,150);place(view,x+160,y+136,100);place(reset,x+270,y+136,120);
+        place(play,x+w-115,y+136,115);
+        place(position,x+65,y+214,170);place(layer,x+265,y+214,w-265);
+        scene={{x,y+256},{w-255,rect.size.y-272}};
+        inspector={{x+w-245,y+256},{245,scene.size.y}};
         place(candidate,inspector.origin.x+75,inspector.origin.y,160);
         place(graph,scene.origin.x,scene.origin.y,scene.size.x,scene.size.y);
     }
@@ -198,8 +260,8 @@ void UIObservatoryView::refreshModels(){impl_->refreshModels();}
 void UIObservatoryView::hide(){
     auto& s=*impl_;
     s.playing=false;s.play.setText("Play depth");
-    s.model.collapse();s.position.collapse();s.candidate.collapse();
-    s.captureInput.setFocused(false);
+    s.model.collapse();s.position.collapse();s.candidate.collapse();s.readoutKind.collapse();
+    s.captureInput.setFocused(false);s.promptInput.setFocused(false);s.topKInput.setFocused(false);s.budgetInput.setFocused(false);
     s.layer.setRange(s.layer.getMinValue(),s.layer.getMaxValue());
     if(s.viewport)s.viewport->hide();
 }
@@ -212,20 +274,22 @@ void UIObservatoryView::update(const InputState& input,float dt,const PanelRect&
                 s.position.collapse();s.candidate.collapse();
                 s.config=std::move(result.config);s.report.reset();s.position.setItems({});s.layer.setRange(1,1);s.graph.clearData();
                 if(s.viewport){s.viewport->setReport({},0,0,-1);s.viewport->hide();}
-                s.message="Model configuration verified. Load a saved capture or try the synthetic preview.";
-            } else {s.report=std::move(result.report);s.installed();}
-        } catch(const std::exception& e){s.message=std::string("Load failed: ")+e.what();}
+                s.liveCapture=false;s.message="Model verified. Run inspection uses the existing loaded checkpoint; all layers and real positions.";
+            } else {s.report=std::move(result.report);s.liveCapture=result.liveCapture;s.installed();}
+        } catch(const std::exception& e){s.message=std::string("Operation failed: ")+e.what();}
     }
     if(!s.readyLayout)return;
     bool modelExpanded=s.model.isExpanded();s.model.update(input,dt);
     if(modelExpanded || s.model.isExpanded()) {if(s.viewport)s.viewport->hide();return;}
+    bool readoutExpanded=s.readoutKind.isExpanded();s.readoutKind.update(input,dt);
+    if(readoutExpanded || s.readoutKind.isExpanded()) {if(s.viewport)s.viewport->hide();return;}
     bool expanded=s.position.isExpanded();s.position.update(input,dt);
     if(expanded || s.position.isExpanded()) {if(s.viewport)s.viewport->hide();return;}
     if(s.report) {
         expanded=s.candidate.isExpanded();s.candidate.update(input,dt);
         if(expanded || s.candidate.isExpanded()) {if(s.viewport)s.viewport->hide();return;}
     }
-    for(Widget* w:std::initializer_list<Widget*>{&s.captureInput,&s.loadConfig,&s.refresh,&s.loadCapture,&s.preview,&s.view,&s.reset,&s.play})w->update(input,dt);
+    for(Widget* w:std::initializer_list<Widget*>{&s.promptInput,&s.topKInput,&s.budgetInput,&s.runInspection,&s.captureInput,&s.loadConfig,&s.refresh,&s.loadCapture,&s.preview,&s.view,&s.reset,&s.play})w->update(input,dt);
     if(!s.report)return;
     s.layer.update(input,dt);if(s.flat)s.graph.update(input,dt);
     if(s.viewport)if(auto pick=s.viewport->takeSelection()) {
@@ -242,22 +306,23 @@ void UIObservatoryView::update(const InputState& input,float dt,const PanelRect&
 }
 void UIObservatoryView::draw(OverlayRenderer& r,const PanelRect& rect) {
     auto& s=*impl_;
-    if(!s.readyLayout){r.drawText(rect.origin,"Enlarge the panel to at least 660 x 380 content pixels.",0xFFBBBBBB);return;}
-    s.model.drawOverlay(r,{0,0});
-    for(Widget* w:std::initializer_list<Widget*>{&s.captureInput,&s.loadConfig,&s.refresh,&s.loadCapture,&s.preview,&s.view,&s.reset,&s.play})w->drawOverlay(r,{0,0});
+    if(!s.readyLayout){r.drawText(rect.origin,"Enlarge the panel to at least 660 x 448 content pixels.",0xFFBBBBBB);return;}
+    s.model.drawOverlay(r,{0,0});s.readoutKind.drawOverlay(r,{0,0});
+    for(Widget* w:std::initializer_list<Widget*>{&s.promptInput,&s.topKInput,&s.budgetInput,&s.runInspection,&s.captureInput,&s.loadConfig,&s.refresh,&s.loadCapture,&s.preview,&s.view,&s.reset,&s.play})w->drawOverlay(r,{0,0});
     const float x=rect.origin.x+10,y=rect.origin.y+4;
-    r.pushClipRect({x,y+99},{rect.size.x-20,45});
-    r.drawText({x,y+101},oneLine(s.message),s.report&&s.report->synthetic?0xFF66CCFF:0xFFCCCCCC);
+    r.drawText({x,y+109},"Top-k",0xFFAAAAAA);r.drawText({x+130,y+109},"Scratch MiB",0xFFAAAAAA);
+    r.pushClipRect({x,y+167},{rect.size.x-20,45});
+    r.drawText({x,y+169},oneLine(s.message),s.report&&s.report->synthetic?0xFF66CCFF:0xFFCCCCCC);
     if(s.config) {
         const auto& a=s.config->architecture;
-        r.drawText({x,y+122},"grimcfg: "+std::to_string(a.num_layers)+" layers | d_model "+std::to_string(a.d_model)+" | heads "+std::to_string(a.num_heads)+" / KV "+std::to_string(a.num_kv_heads)+" | max sequence "+std::to_string(a.max_seq_len),0xFFAAAAAA);
+        r.drawText({x,y+190},"grimcfg: "+std::to_string(a.num_layers)+" layers | d_model "+std::to_string(a.d_model)+" | heads "+std::to_string(a.num_heads)+" / KV "+std::to_string(a.num_kv_heads)+" | max sequence "+std::to_string(a.max_seq_len),0xFFAAAAAA);
     }
     r.popClipRect();
-    if(!s.report) {r.drawText({x,y+190},"Post-run analysis: load an inference or training-example capture.",0xFFBBBBBB);s.model.drawExpandedList(r,{0,0});return;}
-    r.drawText({x,y+153},"Token:",0xFFAAAAAA);
+    if(!s.report) {r.drawText({x,y+258},"Inference inspection is available. Training replay needs prepared-window runtime support.",0xFFBBBBBB);s.model.drawExpandedList(r,{0,0});s.readoutKind.drawExpandedList(r,{0,0});return;}
+    r.drawText({x,y+221},"Token:",0xFFAAAAAA);
     s.position.drawOverlay(r,{0,0});s.layer.drawOverlay(r,{0,0});
     r.pushClipRect(s.scene.origin,s.scene.size);
-    if(s.flat || s.model.isExpanded() || s.position.isExpanded() || s.candidate.isExpanded()) {
+    if(s.flat || s.model.isExpanded() || s.readoutKind.isExpanded() || s.position.isExpanded() || s.candidate.isExpanded()) {
         if(s.viewport)s.viewport->hide();s.graph.drawOverlay(r,{0,0});
     } else {
         try {
@@ -277,14 +342,16 @@ void UIObservatoryView::draw(OverlayRenderer& r,const PanelRect& rect) {
     s.candidate.drawOverlay(r,{0,0});
     float iy=s.inspector.origin.y+37;
     auto text=[&](const std::string& value,uint32_t color=0xFFCCCCCC){r.drawText({s.inspector.origin.x,iy},value,color);iy+=21;};
-    text(s.report->synthetic?"SYNTHETIC / V = "+std::to_string(s.report->vocabSize):"SAVED MODEL CAPTURE",0xFF66CCFF);
+    text(s.report->synthetic?"SYNTHETIC / V = "+std::to_string(s.report->vocabSize):s.liveCapture?"LIVE MODEL CAPTURE":"SAVED MODEL CAPTURE",0xFF66CCFF);
     text(s.report->mode=="inference"?"Mode: Inference":"Mode: Training example replay");
     text("Visibility: "+s.report->visibility);
     text("Input: "+oneLine(s.report->positions[s.positionIndex].inputText),0xFFAAAAAA);
     text("Checkpoint: "+oneLine(s.report->checkpoint),0xFFAAAAAA);
     text("Layer "+std::to_string(s.selectedLayer+1)+" / "+std::to_string(s.report->layerCount));
     if(const auto* l=s.readout()) {
-        text("Entropy: "+fixed(l->entropyNats)+" nats");
+        if(l->identityMaxAbsLogitError)text("Final max logit error: "+fixed(*l->identityMaxAbsLogitError,7));
+        if(l->candidates.empty())text("Selected readout unavailable at this layer.",0xFF66CCFF);
+        else text("Entropy: "+fixed(l->entropyNats)+" nats");
         double mass=0;for(const auto& c:l->candidates)mass+=c.probability;
         text("Shown mass: "+fixed(mass*100,2)+"%");
         text("Candidates (probability / token ID)",0xFFAAAAAA);
@@ -292,13 +359,14 @@ void UIObservatoryView::draw(OverlayRenderer& r,const PanelRect& rect) {
             text("Selected: "+oneLine(c.text),0xFFFFFFFF);
             std::ostringstream value;value<<"P(#"<<c.tokenId<<") = "<<std::setprecision(7)<<c.probability;
             text(value.str(),0xFFFFFFFF);
+            if(c.logit)text("Logit: "+fixed(*c.logit,6),0xFFFFFFFF);
         }
         for(const auto& c:l->candidates) {
             if(iy+22>s.inspector.origin.y+s.inspector.size.y)break;
             text(fixed(c.probability*100,2)+"%  #"+std::to_string(c.tokenId)+"  "+oneLine(c.text),c.tokenId==s.selectedToken?0xFFFFFFFF:0xFFBBBBBB);
         }
     } else text("This layer was not captured.",0xFF66CCFF);
-    r.popClipRect();s.position.drawExpandedList(r,{0,0});s.candidate.drawExpandedList(r,{0,0});s.model.drawExpandedList(r,{0,0});
+    r.popClipRect();s.position.drawExpandedList(r,{0,0});s.candidate.drawExpandedList(r,{0,0});s.model.drawExpandedList(r,{0,0});s.readoutKind.drawExpandedList(r,{0,0});
 }
 bool UIObservatoryView::shouldPassThroughAt(float x,float y) const {
     if(!impl_->viewport)return false;const auto g=impl_->viewport->geometry();

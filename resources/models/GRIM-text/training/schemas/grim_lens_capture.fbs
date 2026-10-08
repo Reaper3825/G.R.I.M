@@ -1,0 +1,71 @@
+// Compact inspection output: artifact references plus captured readouts.
+// One file covers one selected sequence/window. Referenced artifacts must remain
+// available; configuration, tokenizer text and source sequence data are not embedded.
+// Generated bindings belong in the build tree. Wire enums map explicitly to C++.
+namespace GRIMLenses;
+
+enum InspectionMode : ubyte {
+  Unspecified = 0,
+  Inference = 1,
+  TrainingExample = 2
+}
+
+enum ReadoutKind : ubyte {
+  Unspecified = 0,
+  ActualFinal = 1,
+  Direct = 2,
+  JacobianIdentityControl = 3
+}
+
+// Contiguous 16-byte records. Probability uses the FULL vocabulary at T=1.
+struct RankedToken {
+  token_id: uint;
+  logit: float;
+  probability: double;
+}
+
+table Readout {
+  kind: ReadoutKind = Unspecified;
+  entropy_nats: double;
+  // Descending logits; token ID breaks ties. No top-k renormalization.
+  top_tokens: [RankedToken] (required);
+}
+
+table LayerPositionCapture {
+  position: uint; // Real row-local token position, excluding padding.
+  layer: uint;    // Zero-based post-encoder-block output.
+  readouts: [Readout] (required);
+  // Absent unless final-layer replay was compared across the full vocabulary.
+  identity_max_abs_logit_error: double = null;
+}
+
+table LensCapture {
+  format_version: uint = 1;
+  // Model-store directory containing model.grimcfg and resolving its tokenizer.
+  model_store_entry: string (required);
+  // Exact weights used, rather than a moving alias such as "latest".
+  checkpoint_reference: string (required);
+  mode: InspectionMode = Unspecified;
+  // Training source reference; absent for inference. Corpus path disambiguates
+  // IDs across corpora. Window index uses that corpus's existing preparation.
+  concept_block_id: string;
+  corpus_path: string;
+  window_index: uint = null;
+  // Cached prefix offset; absolute position = cache_prefix_length + position.
+  cache_prefix_length: long;
+  // Layer-major, then position order; each (layer,position) pair occurs once.
+  captures: [LayerPositionCapture] (required);
+}
+
+// Resolve relative paths against the capture file's directory. The reader must
+// structurally verify the buffer, reject unsupported versions/enum values,
+// validate references and indices against the resolved artifacts, and enforce
+// file/allocation limits. Require nonempty model/checkpoint references, captures
+// and readouts. Training references must identify an unambiguous source/window.
+// Validate finite logits/entropy/errors, nonnegative entropy/errors, unique
+// candidate IDs, and probabilities in [0,1] whose sum is <= 1 within tolerance.
+// ActualFinal and identity errors belong only to the configured final layer.
+// JacobianIdentityControl is an implicit control, never a fitted Jacobian.
+root_type LensCapture;
+file_identifier "GLC1";
+file_extension "grimlens";

@@ -282,7 +282,8 @@ GRIM::GeneratedSequence generateOneSequence(
     GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::HyperParameters::GenerationHP& cfg,
     GRIM::HyperParameters::GenerationStreamCallback* stream_callback,
-    const GRIM::Lenses::LensCaptureRequest* lens_capture)
+    const GRIM::Lenses::LensCaptureRequest* lens_capture,
+    bool inspect_only = false)
 {
     validatePromptPayload(prompt_payload);
     const auto model_hp = GRIM::HyperParameters::modelHP(config);
@@ -340,7 +341,8 @@ GRIM::GeneratedSequence generateOneSequence(
         throw std::runtime_error("Phase2 payload inference requires config.use_gpu=true");
     }
 
-    if (prompt_tokens.size() >= static_cast<size_t>(max_seq_len)) {
+    if (prompt_tokens.size() > static_cast<size_t>(max_seq_len) ||
+        (!inspect_only && prompt_tokens.size() == static_cast<size_t>(max_seq_len))) {
         throw std::runtime_error("Phase2 payload inference: prompt length " +
                                  std::to_string(prompt_tokens.size()) + " exceeds max_seq_len " +
                                  std::to_string(max_seq_len));
@@ -806,6 +808,10 @@ GRIM::GeneratedSequence generateOneSequence(
 
     // ── Prefill: populate the cache from the prompt; read the last position. ──
     TailLogits prefill = runCachedForward(prompt_payload, /*n_tail=*/1);
+    if (inspect_only) {
+        sequence.finished = true;
+        return sequence;
+    }
 
     bool finished = false;
 
@@ -865,7 +871,8 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
     GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     GRIM::HyperParameters::GenerationStreamCallback* stream_callback,
-    const GRIM::Lenses::LensCaptureRequest* lens_capture)
+    const GRIM::Lenses::LensCaptureRequest* lens_capture,
+    bool inspect_only = false)
 {
     validateInferenceContext(ctx);
     validatePromptPayload(prompt_payload);
@@ -885,7 +892,7 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
-        outputs.push_back(generateOneSequence(ctx.config, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, tokenizer, sequence_hp, stream_callback, lens_capture));
+        outputs.push_back(generateOneSequence(ctx.config, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, tokenizer, sequence_hp, stream_callback, lens_capture, inspect_only));
 
     }
     return outputs;
@@ -950,11 +957,11 @@ GRIM::Batching::BatchPayload buildPhase2InferencePrefill(
     return buildTokenPrefill(ctx, tokenizer, std::move(encoded));
 }
 
-Phase2TextInferenceResult executePhase2PayloadInference(
+static Phase2TextInferenceResult executePayload(
     TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::Batching::BatchPayload& prefill,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
-    const GRIM::Lenses::LensCaptureRequest* lens_capture) {
+    const GRIM::Lenses::LensCaptureRequest* lens_capture, bool inspect_only) {
     validateInferenceContext(ctx);
     validatePromptPayload(prefill);
     if (prefill.EnableAtomIdentification)
@@ -972,7 +979,7 @@ Phase2TextInferenceResult executePhase2PayloadInference(
     // Generation clones atom registries and attaches device storage locally.
     // Repeated lens/baseline runs must not mutate the caller's input payload.
     auto generation_prefill = prefill;
-    auto generated = generatePayloadSequences(ctx, generation_prefill, tokenizer, generation_hp, nullptr, lens_capture);
+    auto generated = generatePayloadSequences(ctx, generation_prefill, tokenizer, generation_hp, nullptr, lens_capture, inspect_only);
     result.generation_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start_generation).count();
     if (generated.empty()) throw std::runtime_error("Inference generation returned no sequences");
@@ -990,6 +997,33 @@ Phase2TextInferenceResult executePhase2PayloadInference(
     result.decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start_decode).count();
     return result;
+}
+
+Phase2TextInferenceResult executePhase2PayloadInference(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const GRIM::Batching::BatchPayload& prefill,
+    const GRIM::HyperParameters::GenerationHP& generation_hp,
+    const GRIM::Lenses::LensCaptureRequest* lens_capture) {
+    return executePayload(ctx, tokenizer, prefill, generation_hp, lens_capture, false);
+}
+
+Phase2TextInferenceResult executePhase2Inspection(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
+    const std::string& prompt, const nlohmann::json* input_state,
+    const GRIM::Lenses::LensCaptureRequest& capture) {
+    if (prompt.empty()) throw std::invalid_argument("Inspection input is empty");
+    // Use the same tokenizer/span adapter, device upload, cached prefill and
+    // forward lifecycle as inference. Return before sampling or decode forwards.
+    auto prefill = input_state
+        ? buildPhase2InferencePrefill(ctx, tokenizer, prompt, *input_state)
+        : buildTokenPrefill(ctx, tokenizer, {tokenizer.tokenizeWithMetadata(prompt), nullptr});
+    auto hp = GRIM::HyperParameters::generationHP(ctx.config);
+    hp.num_return_sequences = 1;
+    hp.max_new_tokens = 1;
+    hp.min_new_tokens = 0;
+    hp.strategy = GRIM::HyperParameters::SamplingStrategy::GREEDY;
+    hp.do_sample = false;
+    return executePayload(ctx, tokenizer, prefill, hp, &capture, true);
 }
 
 Phase2TextInferenceResult executePhase2TextInference(

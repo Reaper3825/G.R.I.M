@@ -1,4 +1,4 @@
-param([switch]$CheckPanelSyntax)
+param([switch]$CheckPanelSyntax, [switch]$CheckRuntimeSyntax)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/ui-observatory-tests'
@@ -28,6 +28,17 @@ if ($CheckPanelSyntax) {
     $syntax += @('ui/observatory/observatory_viewport.cpp','ui/observatory/ui_observatory_view.cpp','ui/ui_training_panel.cpp','resources/models/GRIM-text/Shared/ModelConfig/CompiledModelConfig.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
     Set-Content -LiteralPath (Join-Path $output 'panel-syntax.rsp') -Value $syntax -Encoding ascii
     $commands += @('cl @panel-syntax.rsp','if errorlevel 1 exit /b %errorlevel%')
+}
+if ($CheckRuntimeSyntax) {
+    # Parse runtime sources only: /Zs produces no objects, executables or GPU work.
+    $cudaInclude = Join-Path $env:CUDA_PATH 'include'
+    if (-not (Test-Path -LiteralPath $cudaInclude)) { throw 'The existing CUDA headers are required for runtime syntax validation.' }
+    $runtimeSyntax = @($common | Where-Object { $_ -ne '/DGRIM_BUILD_HOST' }) + @('/Zs','/TP','/DUSE_CUDA')
+    $runtimeSyntax += '/I"' + $cudaInclude + '"'
+    $runtimeSyntax += '/I"' + (Join-Path $workspace 'resources/models/GRIM-text') + '"'
+    $runtimeSyntax += @('resources/models/GRIM-text/training/Phases/Phase2_InferenceLoop.cu','resources/models/GRIM-text/training/train_gpu.cu','resources/models/GRIM-text/GRIM/grim_text_server.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+    Set-Content -LiteralPath (Join-Path $output 'runtime-syntax.rsp') -Value $runtimeSyntax -Encoding ascii
+    $commands += @('cl @runtime-syntax.rsp','if errorlevel 1 exit /b %errorlevel%')
 }
 Set-Content -LiteralPath (Join-Path $output 'report.cmd') -Value $commands -Encoding ascii
 Push-Location $output
