@@ -1,17 +1,14 @@
 # Automatic Bridges-2 model-store downloads
 
-Run this on your PC in a separate PowerShell terminal; leave it running while
+Run this on your PC in a separate Bash terminal; leave it running while
 training is submitted normally:
-
-```powershell
-python scripts/watch_models_bridges2.py --prune-remote
-```
-
-Or from Git Bash/WSL:
 
 ```bash
 ./scripts/sync_models_bridges2.sh watch-models --prune-remote
 ```
+
+This Bash entry point launches the Python watcher. It also works directly as
+`python scripts/watch_models_bridges2.py --prune-remote`.
 
 The watcher recursively copies new or changed files from
 `/ocean/projects/cis250124p/uwadkins/G.R.I.M/resources/models/model_store`
@@ -28,18 +25,26 @@ symlinks are skipped. Nothing is built, submitted, or executed in the training r
 
 ## SSH setup
 
-Requires existing Python 3.10+ and OpenSSH locally, and `python3` on the remote
-data node. No extra Python packages or rsync are needed. Transfers originate on
+Requires existing Python 3.10+ and OpenSSH (`ssh` and `sftp`) locally, and
+`python3` on the Bridges-2 **login node**. No extra Python packages or rsync
+are needed. The data node restricts executable commands and rejects `python3`;
+the watcher uses SSH on `bridges2` for listings, metadata, checksums, and cleanup,
+and SFTP on `data.bridges2.psc.edu` for file bytes. Transfers originate on
 your PC through PSC's data transfer node, as required by the
 [Bridges-2 transfer guide](https://www.psc.edu/resources/bridges-2/user-guide/#transferring-files).
-The training launcher continues to use its existing login-node connection.
+The watcher's login host defaults to the same `bridges2` alias used by training
+(or `GRIM_BRIDGES2_SSH` when set).
 
 First test the data-node connection interactively to establish its host key and
 confirm your key/agent works:
 
-```powershell
-ssh uwadkins@data.bridges2.psc.edu true
+```bash
+ssh bridges2 'python3 --version'
+sftp uwadkins@data.bridges2.psc.edu
 ```
+
+At the SFTP prompt, enter `pwd`, then `bye`. Test the DTN with SFTP, not
+`ssh ... true`: arbitrary shell commands are restricted there.
 
 The watcher uses `BatchMode=yes`: it cannot prompt for a password or passphrase
 on each poll. Use an SSH key accepted by PSC and load its passphrase into your
@@ -53,10 +58,10 @@ Host bridges2-data
     IdentityFile ~/.ssh/id_ed25519
 ```
 
-Then test `ssh bridges2-data true` and run:
+Then test `sftp bridges2-data` and run:
 
-```powershell
-python scripts/watch_models_bridges2.py --host bridges2-data --prune-remote
+```bash
+./scripts/sync_models_bridges2.sh watch-models --host bridges2-data --prune-remote
 ```
 
 ## Options and behavior
@@ -67,14 +72,23 @@ python scripts/watch_models_bridges2.py --host bridges2-data --prune-remote
 - `--host USER@HOST`: override the data-node target; environment equivalent:
   `GRIM_BRIDGES2_DATA_SSH`. This intentionally does not use `GRIM_BRIDGES2_SSH`,
   which commonly points at the training login node.
+- `--control-host bridges2`: override the login-node target for metadata and
+  cleanup (environment: `GRIM_BRIDGES2_SSH`; default `bridges2`). For setups
+  without an alias, use `--control-host uwadkins@bridges2.psc.edu`.
 - `--remote-repo /ocean/projects/.../G.R.I.M`: override the remote repository;
   defaults to `GRIM_BRIDGES2_DIR` when set, otherwise the path above.
 - `--local-dir D:/somewhere/model_store`: override the local destination.
 - `--ssh C:/Windows/System32/OpenSSH/ssh.exe`: choose an SSH executable.
+- `--sftp C:/Windows/System32/OpenSSH/sftp.exe`: choose an SFTP executable.
 - `--once --interval 5`: take two polls, copy stable files, then exit. Returns
   nonzero if a poll/transfer fails, any listed file remains unsynchronized, or
   requested cleanup is deferred/fails.
 - Ctrl+C stops the watcher without affecting the training job.
+
+Every successful scan prints a timestamped `Heartbeat: scan OK; N remote files`
+line, including idle scans. At the default interval it appears about every
+60 seconds while idle. Transfers and checksum verification can extend the time
+between scans; failed scans print a warning instead of a success heartbeat.
 
 A file becomes eligible after identical metadata appears in two consecutive
 successful polls. New files normally start downloading within 60–120 seconds
@@ -104,7 +118,7 @@ files on each machine but do not transfer the checkpoint a second time.
 Already-downloaded files from an earlier watcher run can be cleaned up without
 downloading them again.
 
-Before deletion, the data-node process scans retention again and checks remote
+Before deletion, the login-node control process scans retention again and checks remote
 file identities and metadata. Changed files, checksum mismatches, incomplete
 downloads, and newly retained checkpoints defer cleanup. The next poll retries.
 Removal targets individual checkpoint/sidecar files, never a whole directory.

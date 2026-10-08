@@ -249,3 +249,7 @@ scripts/run_train_on_anvil.sh
 cache/geospatial/*.sqlite
 cache/geospatial/*.sqlite-shm
 cache/geospatial/*.sqlite-wal
+
+# Model checkpoints and optimizer state (large generated files)
+*.grimckpt
+*.opt

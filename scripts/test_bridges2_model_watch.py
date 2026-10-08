@@ -3,18 +3,22 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from watch_models_bridges2 import InstanceLock, Watcher, local_path, protected_checkpoints
+from watch_models_bridges2 import InstanceLock, Watcher, local_path, protected_checkpoints, sftp_quote, error_message
 
 
 class LocalWatcher(Watcher):
     def command(self, source, *args):
         return [sys.executable, "-c", source, self.remote_root, *args]
+
+    def transfer_via_sftp(self, relative, temporary):
+        shutil.copyfile(Path(self.remote_root) / relative, temporary)
 
 
 class WatchTests(unittest.TestCase):
@@ -64,14 +68,11 @@ class WatchTests(unittest.TestCase):
         target.parent.mkdir()
         target.write_bytes(b"old checkpoint")
         self.watcher.poll()
-        original = self.watcher.command
+        def fail_stream(relative, temporary):
+            Path(temporary).write_bytes(b"partial")
+            raise RuntimeError("Interrupted SFTP download")
 
-        def fail_stream(source, *args):
-            if args:
-                return [sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'partial');sys.exit(1)"]
-            return original(source, *args)
-
-        with patch.object(self.watcher, "command", side_effect=fail_stream):
+        with patch.object(self.watcher, "transfer_via_sftp", side_effect=fail_stream):
             self.watcher.poll()
         self.assertEqual(target.read_bytes(), b"old checkpoint")
         self.assertEqual(list(target.parent.glob("*.partial")), [])
@@ -83,7 +84,7 @@ class WatchTests(unittest.TestCase):
         signature = self.watcher.inventory()["checkpoint.grimckpt"]
         replacement = self.write_remote("replacement.tmp", b"new")
         replacement.replace(source)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(subprocess.CalledProcessError):
             self.watcher.download("checkpoint.grimckpt", signature)
         self.assertFalse((self.local / "checkpoint.grimckpt").exists())
         self.assertEqual(list(self.local.iterdir()), [])
@@ -104,16 +105,16 @@ class WatchTests(unittest.TestCase):
         target = self.local / "checkpoint.grimckpt"
         target.write_bytes(b"previous local checkpoint")
         signature = self.watcher.inventory()["checkpoint.grimckpt"]
-        original = self.watcher.command
+        original = self.watcher.transfer_via_sftp
 
-        def change_during_stream(source, *args):
-            source = source.replace("    sys.stdout.buffer.flush()", """    sys.stdout.buffer.flush()
-    s = path.stat()
-    os.utime(path, ns=(s.st_atime_ns, s.st_mtime_ns + 1000000000))""")
-            return original(source, *args)
+        def change_during_stream(relative, temporary):
+            original(relative, temporary)
+            path = self.remote / relative
+            s = path.stat()
+            os.utime(path, ns=(s.st_atime_ns, s.st_mtime_ns + 1000000000))
 
-        with patch.object(self.watcher, "command", side_effect=change_during_stream):
-            with self.assertRaises(RuntimeError):
+        with patch.object(self.watcher, "transfer_via_sftp", side_effect=change_during_stream):
+            with self.assertRaises(subprocess.CalledProcessError):
                 self.watcher.download("checkpoint.grimckpt", signature)
         self.assertEqual(target.read_bytes(), b"previous local checkpoint")
         self.assertEqual(list(self.local.glob("*.partial")), [])
@@ -139,6 +140,29 @@ class WatchTests(unittest.TestCase):
         remote_args = shlex.split(command[-1])
         self.assertEqual(remote_args[-3:], [watcher.remote_root, "model/file with spaces", "[1, 2]"])
         self.assertIn("BatchMode=yes", command)
+
+    def test_control_ssh_and_data_sftp_use_separate_hosts(self):
+        watcher = Watcher("user@data", "/remote/model_store", self.local, self.state, control_host="bridges2")
+        self.assertEqual(watcher.command("print('metadata')")[-2], "bridges2")
+        with patch("watch_models_bridges2.subprocess.Popen") as start:
+            process = start.return_value
+            process.returncode = 0
+            watcher.transfer_via_sftp("a/file with spaces.grimckpt", str(self.local / "target"))
+            self.assertEqual(start.call_args.args[0][-1], "user@data")
+            batch = process.communicate.call_args.args[0].decode()
+            self.assertIn('get "/remote/model_store/a/file with spaces.grimckpt"', batch)
+            self.assertNotIn("python", str(start.call_args.args[0]))
+
+    def test_sftp_paths_quote_globs_and_reject_batch_injection(self):
+        self.assertEqual(sftp_quote('/a/file [1] "x"'), '"/a/file \\[1\\] \\"x\\""')
+        with self.assertRaises(ValueError):
+            sftp_quote("file\nrm /other")
+
+    def test_errors_show_stderr_without_encoded_command(self):
+        error = subprocess.CalledProcessError(255, ["ssh", "huge base64 command"], stderr=b"Login denied: python3 is not an allowed command\n")
+        message = error_message(error)
+        self.assertIn("Login denied", message)
+        self.assertNotIn("base64", message)
 
     def checkpoint_pair(self, directory, stage, epoch, mtime):
         prefix = f"{directory}/checkpoint_{stage}_epoch_{epoch}"
