@@ -5,6 +5,7 @@
 #include <memory>
 #include <functional>
 #include <algorithm>
+#include <optional>
 
 // Forward declarations
 class OverlayRenderer;
@@ -32,11 +33,23 @@ struct DataPoint {
     float value;
     std::string label;
     uint32_t color;  // For per-point coloring (optional)
+    // Explicit X for Line/Scatter/MultiLine/Area; omitted means legacy index.
+    std::optional<float> x;
     
     DataPoint() : value(0.0f), label(""), color(0xFFFFFFFF) {}
     DataPoint(float v) : value(v), label(""), color(0xFFFFFFFF) {}
     DataPoint(float v, const std::string& lbl) : value(v), label(lbl), color(0xFFFFFFFF) {}
     DataPoint(float v, const std::string& lbl, uint32_t col) : value(v), label(lbl), color(col) {}
+    static DataPoint xy(float x, float y, const std::string& label = "") {
+        DataPoint point(y, label);
+        point.x = x;
+        return point;
+    }
+};
+
+struct GraphPointHit {
+    int seriesIndex = -1; // -1 denotes single-series data
+    int pointIndex = -1;  // index in displayed (possibly downsampled) data
 };
 
 // ============================================================
@@ -93,6 +106,9 @@ struct GraphConfig {
     // Performance options
     int maxDataPoints = 500;  // Automatic downsampling if exceeded
     bool useDownsampling = true;
+    bool autoScaleX = true;
+    float minX = 0.0f;
+    float maxX = 1.0f;
 };
 
 // ============================================================
@@ -133,6 +149,7 @@ public:
     GraphConfig& getConfig() { return m_config; }
     
     void setAxisRange(float minVal, float maxVal);
+    void setXAxisRange(float minVal, float maxVal);
     void enableAutoScale(bool enable) { m_config.autoScale = enable; }
     
     // ========================================
@@ -149,6 +166,11 @@ public:
     
     void setOnPointHover(std::function<void(int index, const DataPoint& point)> callback);
     void setOnPointClick(std::function<void(int index, const DataPoint& point)> callback);
+    using SeriesPointCallback = std::function<void(const GraphPointHit&, const DataPoint&)>;
+    void setOnSeriesPointHover(SeriesPointCallback callback) { m_onSeriesPointHover = std::move(callback); }
+    void setOnSeriesPointClick(SeriesPointCallback callback) { m_onSeriesPointClick = std::move(callback); }
+    // Uses the same screen coordinates as drawing/update; hidden series ignored.
+    std::optional<GraphPointHit> hitTest(const Vec2& mousePos) const;
     
 private:
     // ========================================
@@ -161,18 +183,22 @@ private:
     
     std::vector<DataPoint> m_data;          // Single series data
     std::vector<DataSeries> m_series;       // Multi-series data
+    bool m_hasExplicitX = false;
     
     // ========================================
     // Interaction State
     // ========================================
     
     int m_hoveredIndex = -1;
+    int m_hoveredSeries = -1;
     float m_animationProgress = 0.0f;
     bool m_isDragging = false;
     Vec2 m_dragStart{0, 0};
     
     std::function<void(int, const DataPoint&)> m_onPointHover;
     std::function<void(int, const DataPoint&)> m_onPointClick;
+    SeriesPointCallback m_onSeriesPointHover;
+    SeriesPointCallback m_onSeriesPointClick;
     
     // ========================================
     // Rendering Helpers
@@ -203,6 +229,9 @@ private:
     Vec2 getGraphOrigin() const;
     float mapValueToY(float value) const;
     float mapValueToX(float index, int totalPoints) const;
+    float mapPointToX(const DataPoint& point, size_t index, size_t count) const;
+    void calculateXAutoScale();
+    bool hasExplicitX() const;
     void calculateAutoScale();
     std::vector<DataPoint> downsampleData(const std::vector<DataPoint>& data, int maxPoints) const;
     bool isPointInCircle(const Vec2& point, const Vec2& center, float radius) const;

@@ -36,6 +36,8 @@ public:
     
     // Check if dropdown is currently expanded
     bool isExpanded() const { return expanded; }
+    // Close menus when their owning tab is hidden or its data is replaced.
+    void collapse() { expanded = false; scrollOffset = 0; hoveredItem = -1; }
 
 private:
     std::string label;

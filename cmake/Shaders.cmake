@@ -200,12 +200,24 @@ grim_compile_shader(
 )
 
 # ---- Custom target so GRIM depends on shader compilation ----
+grim_compile_shader(
+    NAME vs_observatory TYPE VERTEX
+    SOURCE "${GRIM_SHADER_DIR}/vs_observatory.sc"
+    VARYING_DEF "${GRIM_SHADER_DIR}/varying_observatory.def.sc"
+)
+grim_compile_shader(
+    NAME fs_observatory TYPE FRAGMENT
+    SOURCE "${GRIM_SHADER_DIR}/fs_observatory.sc"
+    VARYING_DEF "${GRIM_SHADER_DIR}/varying_observatory.def.sc"
+)
 add_custom_target(grim_shaders ALL
     DEPENDS
         ${GRIM_SHADER_OUTPUTS_vs_popup_model}
         ${GRIM_SHADER_OUTPUTS_fs_popup_model}
         ${GRIM_SHADER_OUTPUTS_vs_cesium_terrain}
         ${GRIM_SHADER_OUTPUTS_fs_cesium_terrain}
+        ${GRIM_SHADER_OUTPUTS_vs_observatory}
+        ${GRIM_SHADER_OUTPUTS_fs_observatory}
 )
 
 # Make the generated headers includable

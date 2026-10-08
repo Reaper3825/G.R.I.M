@@ -1,5 +1,6 @@
 // UITrainingPanel: shared lifecycle, tab dispatch, and server polling
 #include "training_panel/ui_training_panel_internal.hpp"
+#include "observatory/ui_observatory_view.hpp"
 
 using namespace GRIMText;
 using namespace UITheme;
@@ -61,6 +62,11 @@ UITrainingPanel::UITrainingPanel()
         setView(TrainingPanelTab::Tokenizer);
     });
     tabTokenizerBtn_->setSize(90.0f, 28.0f);
+    tabObservatoryBtn_ = std::make_shared<UIButton>("Observatory", [this]() {
+        setView(TrainingPanelTab::Observatory);
+    });
+    tabObservatoryBtn_->setSize(115.0f, 28.0f);
+    observatory_ = std::make_unique<UIObservatoryView>();
 
     // ══════════════════════════════════════════════════════
     //  Home tab — Model Browser widgets
@@ -237,13 +243,31 @@ UITrainingPanel::~UITrainingPanel() = default;
 // ============================================================
 
 void UITrainingPanel::setView(TrainingPanelTab tab) {
+    if (observatory_ && tab != TrainingPanelTab::Observatory) observatory_->hide();
     activeTab_ = tab;
     if (tab == TrainingPanelTab::Home) {
         refreshModelList();
         updateResourceBars();
     } else if (tab == TrainingPanelTab::ModelConfig) {
         refreshConfigModelDropdown();
+    } else if (tab == TrainingPanelTab::Observatory) {
+        observatory_->refreshModels();
     }
+}
+
+void UITrainingPanel::setVisible(bool value) {
+    UIPanel::setVisible(value);
+    if (!value && observatory_) observatory_->hide();
+}
+
+bool UITrainingPanel::shouldPassThroughAt(float x, float y) const {
+    return isVisible() && !isMinimized() && activeTab_ == TrainingPanelTab::Observatory &&
+           observatory_ && observatory_->shouldPassThroughAt(x, y);
+}
+
+void UITrainingPanel::collectPassThroughRects(std::vector<PanelRect>& rects) const {
+    if (isVisible() && !isMinimized() && activeTab_ == TrainingPanelTab::Observatory && observatory_)
+        observatory_->collectPassThroughRects(rects);
 }
 
 // ============================================================
@@ -251,8 +275,9 @@ void UITrainingPanel::setView(TrainingPanelTab tab) {
 // ============================================================
 
 void UITrainingPanel::update(const InputState& input, float dt) {
-    if (!isVisible()) return;
+    if (!isVisible()) { if (observatory_) observatory_->hide(); return; }
     UIPanel::update(input, dt);
+    if (!isVisible() || isMinimized()) { if (observatory_) observatory_->hide(); return; }
 
     // Tab buttons — always update
     tabHomeBtn_->update(input, dt);
@@ -260,11 +285,19 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     tabToolGapsBtn_->update(input, dt);
     tabModelConfigBtn_->update(input, dt);
     tabTokenizerBtn_->update(input, dt);
+    tabObservatoryBtn_->update(input, dt);
 
     // Bottom bar buttons — always active
 
     // Tab-specific updates
     switch (activeTab_) {
+        case TrainingPanelTab::Observatory: {
+            PanelRect content = getContentRect();
+            content.origin.y += (kContentTopY - kTabBarY);
+            content.size.y -= (kContentTopY - kTabBarY);
+            observatory_->update(input, dt, content, getPanelID());
+            break;
+        }
         case TrainingPanelTab::Home: {
             browserScrollBox_->update(input, dt);
             vramBar_->update(input, dt);
@@ -349,7 +382,7 @@ void UITrainingPanel::pollServer() {
 // ============================================================
 
 bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
-    if (!UIPanel::drawOverlay(renderer)) return false;
+    if (!UIPanel::drawOverlay(renderer)) { if (observatory_) observatory_->hide(); return false; }
 
     // ── Tab buttons ──
     float tabX = position.x + 10.0f;
@@ -358,12 +391,14 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     tabToolGapsBtn_->setPosition(tabX + 220.0f, position.y + kTabBarY);
     tabModelConfigBtn_->setPosition(tabX + 315.0f, position.y + kTabBarY);
     tabTokenizerBtn_->setPosition(tabX + 435.0f, position.y + kTabBarY);
+    tabObservatoryBtn_->setPosition(tabX + 530.0f, position.y + kTabBarY);
 
     tabHomeBtn_->drawOverlay(renderer, position);
     tabKnowledgeGapsBtn_->drawOverlay(renderer, position);
     tabToolGapsBtn_->drawOverlay(renderer, position);
     tabModelConfigBtn_->drawOverlay(renderer, position);
     tabTokenizerBtn_->drawOverlay(renderer, position);
+    tabObservatoryBtn_->drawOverlay(renderer, position);
 
     // Active tab indicator (2px underline)
     float indicatorX = tabX;
@@ -374,6 +409,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         case TrainingPanelTab::ToolGaps:      indicatorX = tabX + 220.0f; indicatorW = 90.0f;  break;
         case TrainingPanelTab::ModelConfig:   indicatorX = tabX + 315.0f; indicatorW = 115.0f; break;
         case TrainingPanelTab::Tokenizer:     indicatorX = tabX + 435.0f; indicatorW = 90.0f;  break;
+        case TrainingPanelTab::Observatory:   indicatorX = tabX + 530.0f; indicatorW = 115.0f; break;
     }
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {indicatorW, 2.0f},
                       Colors::Primary);
@@ -404,6 +440,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         case TrainingPanelTab::ToolGaps:      drawToolGapsTab(renderer, content);      break;
         case TrainingPanelTab::ModelConfig:   drawModelConfigTab(renderer, content);   break;
         case TrainingPanelTab::Tokenizer:     drawTokenizerTab(renderer, content);     break;
+        case TrainingPanelTab::Observatory:   observatory_->draw(renderer, content);    break;
     }
 
     // ── Bottom action bar (Training tab) ──

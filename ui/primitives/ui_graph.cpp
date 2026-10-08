@@ -7,10 +7,19 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <limits>
+#include <stdexcept>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+namespace {
+void validatePoint(const DataPoint& point) {
+    if (!std::isfinite(point.value) || (point.x && !std::isfinite(*point.x)))
+        throw std::invalid_argument("UIGraph coordinates must be finite");
+}
+}
 
 // ============================================================
 // Constructor
@@ -29,6 +38,7 @@ UIGraph::UIGraph(const std::string& title, GraphType type)
 // ============================================================
 
 void UIGraph::setData(const std::vector<DataPoint>& data) {
+    for (const auto& point : data) validatePoint(point);
     m_data = data;
     
     // Apply downsampling if needed
@@ -38,12 +48,15 @@ void UIGraph::setData(const std::vector<DataPoint>& data) {
                   " to " + std::to_string(m_data.size()) + " points");
     }
     
+    m_hoveredIndex = m_hoveredSeries = -1;
+    calculateXAutoScale();
     if (m_config.autoScale) {
         calculateAutoScale();
     }
 }
 
 void UIGraph::addDataPoint(const DataPoint& point) {
+    validatePoint(point);
     m_data.push_back(point);
     
     // Apply downsampling if exceeded limit
@@ -51,6 +64,8 @@ void UIGraph::addDataPoint(const DataPoint& point) {
         m_data = downsampleData(m_data, m_config.maxDataPoints);
     }
     
+    m_hoveredIndex = m_hoveredSeries = -1;
+    calculateXAutoScale();
     if (m_config.autoScale) {
         calculateAutoScale();
     }
@@ -63,6 +78,9 @@ void UIGraph::addDataPoint(float value, const std::string& label) {
 void UIGraph::clearData() {
     m_data.clear();
     m_hoveredIndex = -1;
+    m_hoveredSeries = -1;
+    calculateXAutoScale();
+    if (m_config.autoScale) calculateAutoScale();
 }
 
 // ============================================================
@@ -70,6 +88,7 @@ void UIGraph::clearData() {
 // ============================================================
 
 void UIGraph::addSeries(const DataSeries& series) {
+    for (const auto& point : series.data) validatePoint(point);
     m_series.push_back(series);
     
     // Apply downsampling to series if needed
@@ -77,6 +96,8 @@ void UIGraph::addSeries(const DataSeries& series) {
         m_series.back().data = downsampleData(m_series.back().data, m_config.maxDataPoints);
     }
     
+    m_hoveredIndex = m_hoveredSeries = -1;
+    calculateXAutoScale();
     if (m_config.autoScale) {
         calculateAutoScale();
     }
@@ -94,12 +115,18 @@ void UIGraph::addSeries(const std::string& name, const std::vector<DataPoint>& d
 void UIGraph::clearSeries() {
     m_series.clear();
     m_hoveredIndex = -1;
+    m_hoveredSeries = -1;
+    calculateXAutoScale();
+    if (m_config.autoScale) calculateAutoScale();
 }
 
 void UIGraph::setSeriesVisible(const std::string& name, bool visible) {
     for (auto& series : m_series) {
         if (series.name == name) {
             series.visible = visible;
+            m_hoveredIndex = m_hoveredSeries = -1;
+            calculateXAutoScale();
+            if (m_config.autoScale) calculateAutoScale();
             break;
         }
     }
@@ -112,12 +139,27 @@ void UIGraph::setSeriesVisible(const std::string& name, bool visible) {
 void UIGraph::setGraphType(GraphType type) {
     m_type = type;
     m_hoveredIndex = -1;  // Reset hover state
+    m_hoveredSeries = -1;
+    calculateXAutoScale();
+    if (m_config.autoScale) calculateAutoScale();
 }
 
 void UIGraph::setAxisRange(float minVal, float maxVal) {
+    if (!std::isfinite(minVal) || !std::isfinite(maxVal) || minVal >= maxVal ||
+        !std::isfinite(maxVal - minVal))
+        throw std::invalid_argument("UIGraph Y range must be finite and increasing");
     m_config.minValue = minVal;
     m_config.maxValue = maxVal;
     m_config.autoScale = false;
+}
+
+void UIGraph::setXAxisRange(float minVal, float maxVal) {
+    if (!std::isfinite(minVal) || !std::isfinite(maxVal) || minVal >= maxVal ||
+        !std::isfinite(maxVal - minVal))
+        throw std::invalid_argument("UIGraph X range must be finite and increasing");
+    m_config.minX = minVal;
+    m_config.maxX = maxVal;
+    m_config.autoScaleX = false;
 }
 
 void UIGraph::setOnPointHover(std::function<void(int, const DataPoint&)> callback) {
@@ -143,33 +185,26 @@ void UIGraph::update(const InputState& input, float dt) {
     
     if (inBounds) {
         // Update hover state
-        int oldHovered = m_hoveredIndex;
-        m_hoveredIndex = findHoveredPoint(m);
-        
-        // Trigger hover callback if changed
-        if (m_hoveredIndex != oldHovered && m_hoveredIndex >= 0 && m_onPointHover) {
-            if (m_type == GraphType::MultiLine && !m_series.empty()) {
-                // For multi-line, we'd need more complex logic - simplified here
-                if (m_hoveredIndex < static_cast<int>(m_series[0].data.size())) {
-                    m_onPointHover(m_hoveredIndex, m_series[0].data[m_hoveredIndex]);
-                }
-            } else if (m_hoveredIndex < static_cast<int>(m_data.size())) {
-                m_onPointHover(m_hoveredIndex, m_data[m_hoveredIndex]);
+        const int oldIndex = m_hoveredIndex, oldSeries = m_hoveredSeries;
+        const auto hit = hitTest(m);
+        m_hoveredIndex = hit ? hit->pointIndex : -1;
+        m_hoveredSeries = hit ? hit->seriesIndex : -1;
+        if (hit) {
+            // Copy before invoking callbacks: consumers may replace the data.
+            const DataPoint point = hit->seriesIndex < 0 ? m_data[hit->pointIndex]
+                : m_series[hit->seriesIndex].data[hit->pointIndex];
+            if (oldIndex != m_hoveredIndex || oldSeries != m_hoveredSeries) {
+                if (m_onPointHover) m_onPointHover(hit->pointIndex, point);
+                if (m_onSeriesPointHover) m_onSeriesPointHover(*hit, point);
             }
-        }
-        
-        // Handle click
-        if (Mouse::wasPressed(MouseButton::Left) && m_hoveredIndex >= 0 && m_onPointClick) {
-            if (m_type == GraphType::MultiLine && !m_series.empty()) {
-                if (m_hoveredIndex < static_cast<int>(m_series[0].data.size())) {
-                    m_onPointClick(m_hoveredIndex, m_series[0].data[m_hoveredIndex]);
-                }
-            } else if (m_hoveredIndex < static_cast<int>(m_data.size())) {
-                m_onPointClick(m_hoveredIndex, m_data[m_hoveredIndex]);
+            if (Mouse::wasPressed(MouseButton::Left)) {
+                if (m_onPointClick) m_onPointClick(hit->pointIndex, point);
+                if (m_onSeriesPointClick) m_onSeriesPointClick(*hit, point);
             }
         }
     } else {
         m_hoveredIndex = -1;
+        m_hoveredSeries = -1;
     }
     
     // Update animation
@@ -291,9 +326,12 @@ void UIGraph::drawGrid(OverlayRenderer& renderer) {
         renderer.drawRect({x, origin.y}, {1, graphArea.y}, m_config.gridColor);
         
         // X-axis labels (show time or index)
-        if (m_config.showLabels && i > 0) {
+        if (m_config.showLabels && (i > 0 || m_hasExplicitX)) {
             std::ostringstream oss;
-            if (!m_series.empty() && !m_series[0].data.empty()) {
+            if (m_hasExplicitX) {
+                oss << std::fixed << std::setprecision(2)
+                    << m_config.minX + (m_config.maxX - m_config.minX) * i / xGridLines;
+            } else if (!m_series.empty() && !m_series[0].data.empty()) {
                 size_t dataSize = m_series[0].data.size();
                 size_t index = (dataSize * i) / xGridLines;
                 if (index < dataSize && !m_series[0].data[index].label.empty()) {
@@ -371,9 +409,9 @@ void UIGraph::drawLineGraph(OverlayRenderer& renderer) {
     
     // Draw lines between points
     for (size_t i = 1; i < m_data.size(); ++i) {
-        float x1 = mapValueToX(i - 1, m_data.size());
+        float x1 = mapPointToX(m_data[i - 1], i - 1, m_data.size());
         float y1 = mapValueToY(m_data[i - 1].value);
-        float x2 = mapValueToX(i, m_data.size());
+        float x2 = mapPointToX(m_data[i], i, m_data.size());
         float y2 = mapValueToY(m_data[i].value);
         
         // Simple line rendering (draw as thick rect)
@@ -397,7 +435,7 @@ void UIGraph::drawLineGraph(OverlayRenderer& renderer) {
     
     // Draw points
     for (size_t i = 0; i < m_data.size(); ++i) {
-        float x = mapValueToX(i, m_data.size());
+        float x = mapPointToX(m_data[i], i, m_data.size());
         float y = mapValueToY(m_data[i].value);
         
         float radius = (m_hoveredIndex == static_cast<int>(i)) ? m_config.pointRadius * 1.5f : m_config.pointRadius;
@@ -507,7 +545,7 @@ void UIGraph::drawScatterGraph(OverlayRenderer& renderer) {
     Vec2 graphArea = getGraphArea();
     
     for (size_t i = 0; i < m_data.size(); ++i) {
-        float x = mapValueToX(i, m_data.size());
+        float x = mapPointToX(m_data[i], i, m_data.size());
         float y = mapValueToY(m_data[i].value);
         
         float radius = (m_hoveredIndex == static_cast<int>(i)) ? m_config.pointRadius * 1.5f : m_config.pointRadius;
@@ -542,6 +580,7 @@ void UIGraph::drawAreaGraph(OverlayRenderer& renderer) {
         // Find max data length across all series
         size_t maxLen = 0;
         for (const auto& series : m_series) {
+            if (!series.visible) continue;
             maxLen = std::max(maxLen, series.data.size());
         }
         
@@ -550,11 +589,11 @@ void UIGraph::drawAreaGraph(OverlayRenderer& renderer) {
         // Draw each series as filled area (reverse order for proper stacking)
         for (int s = static_cast<int>(m_series.size()) - 1; s >= 0; --s) {
             const auto& series = m_series[s];
-            if (series.data.empty()) continue;
+            if (!series.visible || series.data.empty()) continue;
             
             // Draw filled area
             for (size_t i = 0; i < series.data.size(); ++i) {
-                float x = mapValueToX(static_cast<float>(i), static_cast<float>(maxLen));
+                float x = mapPointToX(series.data[i], i, maxLen);
                 float y = mapValueToY(series.data[i].value);
                 float baseY = origin.y + graphArea.y;
                 float fillHeight = baseY - y;
@@ -566,9 +605,9 @@ void UIGraph::drawAreaGraph(OverlayRenderer& renderer) {
             
             // Draw line on top of area
             for (size_t i = 0; i < series.data.size() - 1; ++i) {
-                float x1 = mapValueToX(static_cast<float>(i), static_cast<float>(maxLen));
+                float x1 = mapPointToX(series.data[i], i, maxLen);
                 float y1 = mapValueToY(series.data[i].value);
-                float x2 = mapValueToX(static_cast<float>(i + 1), static_cast<float>(maxLen));
+                float x2 = mapPointToX(series.data[i + 1], i + 1, maxLen);
                 float y2 = mapValueToY(series.data[i + 1].value);
                 
                 renderer.drawLine({x1, y1}, {x2, y2}, series.color, 2.0f);
@@ -588,7 +627,7 @@ void UIGraph::drawAreaGraph(OverlayRenderer& renderer) {
     
     // Draw filled area under line
     for (size_t i = 0; i < m_data.size(); ++i) {
-        float x = mapValueToX(i, m_data.size());
+        float x = mapPointToX(m_data[i], i, m_data.size());
         float y = mapValueToY(m_data[i].value);
         float fillHeight = origin.y + graphArea.y - y;
         
@@ -750,14 +789,15 @@ void UIGraph::drawStackedBarGraph(OverlayRenderer& renderer) {
 void UIGraph::drawMultiLineGraph(OverlayRenderer& renderer) {
     if (m_series.empty()) return;
     
-    for (const auto& series : m_series) {
+    for (size_t seriesIndex = 0; seriesIndex < m_series.size(); ++seriesIndex) {
+        const auto& series = m_series[seriesIndex];
         if (!series.visible || series.data.empty()) continue;
         
         // Draw lines
         for (size_t i = 1; i < series.data.size(); ++i) {
-            float x1 = mapValueToX(i - 1, series.data.size());
+            float x1 = mapPointToX(series.data[i - 1], i - 1, series.data.size());
             float y1 = mapValueToY(series.data[i - 1].value);
-            float x2 = mapValueToX(i, series.data.size());
+            float x2 = mapPointToX(series.data[i], i, series.data.size());
             float y2 = mapValueToY(series.data[i].value);
             
             float thickness = m_config.lineThickness;
@@ -779,10 +819,11 @@ void UIGraph::drawMultiLineGraph(OverlayRenderer& renderer) {
         
         // Draw points
         for (size_t i = 0; i < series.data.size(); ++i) {
-            float x = mapValueToX(i, series.data.size());
+            float x = mapPointToX(series.data[i], i, series.data.size());
             float y = mapValueToY(series.data[i].value);
             
-            float radius = m_config.pointRadius;
+            const bool hovered = m_hoveredSeries == static_cast<int>(seriesIndex) && m_hoveredIndex == static_cast<int>(i);
+            float radius = m_config.pointRadius * (hovered ? 1.5f : 1.0f);
             renderer.drawRect({x - radius, y - radius}, {radius * 2, radius * 2}, series.color);
         }
     }
@@ -810,7 +851,8 @@ float UIGraph::mapValueToY(float value) const {
     Vec2 origin = getGraphOrigin();
     Vec2 graphArea = getGraphArea();
     
-    float normalized = (value - m_config.minValue) / (m_config.maxValue - m_config.minValue);
+    const float span = m_config.maxValue - m_config.minValue;
+    float normalized = span > 0.0f ? (value - m_config.minValue) / span : 0.5f;
     return origin.y + graphArea.y - (normalized * graphArea.y);
 }
 
@@ -823,6 +865,82 @@ float UIGraph::mapValueToX(float index, int totalPoints) const {
     return origin.x + (index / (totalPoints - 1)) * graphArea.x;
 }
 
+bool UIGraph::hasExplicitX() const {
+    if (m_type != GraphType::Line && m_type != GraphType::Scatter &&
+        m_type != GraphType::MultiLine && m_type != GraphType::Area) return false;
+    const auto containsX = [](const std::vector<DataPoint>& data) {
+        return std::any_of(data.begin(), data.end(), [](const DataPoint& p) { return p.x.has_value(); });
+    };
+    if (m_type == GraphType::MultiLine || (m_type == GraphType::Area && !m_series.empty())) {
+        for (const auto& series : m_series)
+            if (series.visible && containsX(series.data)) return true;
+        return false;
+    }
+    return containsX(m_data);
+}
+
+float UIGraph::mapPointToX(const DataPoint& point, size_t index, size_t count) const {
+    if (!m_hasExplicitX) return mapValueToX(static_cast<float>(index), static_cast<int>(count));
+    const float span = m_config.maxX - m_config.minX;
+    const float fraction = span > 0.0f ? (point.x.value_or(static_cast<float>(index)) - m_config.minX) / span : 0.5f;
+    return getGraphOrigin().x + fraction * getGraphArea().x;
+}
+
+void UIGraph::calculateXAutoScale() {
+    m_hasExplicitX = hasExplicitX();
+    if (!m_config.autoScaleX) return;
+    float minimum = std::numeric_limits<float>::max(), maximum = std::numeric_limits<float>::lowest();
+    const auto visit = [&](const std::vector<DataPoint>& data) {
+        for (size_t i = 0; i < data.size(); ++i) {
+            const float x = data[i].x.value_or(static_cast<float>(i));
+            minimum = std::min(minimum, x);
+            maximum = std::max(maximum, x);
+        }
+    };
+    if (m_type == GraphType::MultiLine || (m_type == GraphType::Area && !m_series.empty())) {
+        for (const auto& series : m_series) if (series.visible) visit(series.data);
+    } else visit(m_data);
+    if (minimum > maximum) { minimum = 0.0f; maximum = 1.0f; }
+    if (minimum == maximum) {
+        const float padding = std::max(0.5f, std::abs(minimum) * 0.1f);
+        minimum -= padding;
+        maximum += padding;
+    }
+    m_config.minX = minimum;
+    m_config.maxX = maximum;
+}
+
+std::optional<GraphPointHit> UIGraph::hitTest(const Vec2& mousePos) const {
+    if (!visible) return std::nullopt;
+    if (m_type == GraphType::Pie || m_type == GraphType::Donut) {
+        const int index = findHoveredPoint(mousePos);
+        return index < 0 ? std::nullopt : std::optional<GraphPointHit>({-1, index});
+    }
+    const Vec2 origin = getGraphOrigin(), area = getGraphArea();
+    if (area.x <= 0 || area.y <= 0 || mousePos.x < origin.x || mousePos.x > origin.x + area.x ||
+        mousePos.y < origin.y || mousePos.y > origin.y + area.y) return std::nullopt;
+    std::optional<GraphPointHit> closest;
+    float distance = m_config.pointRadius * m_config.pointRadius * 9.0f;
+    const auto visit = [&](const std::vector<DataPoint>& data, int series, size_t count) {
+        for (size_t i = 0; i < data.size(); ++i) {
+            const float x = mapPointToX(data[i], i, count), y = mapValueToY(data[i].value);
+            if (x < origin.x || x > origin.x + area.x || y < origin.y || y > origin.y + area.y) continue;
+            const float dx = mousePos.x - x, dy = mousePos.y - y, squared = dx * dx + dy * dy;
+            if (squared <= distance) {
+                distance = squared;
+                closest = GraphPointHit{series, static_cast<int>(i)};
+            }
+        }
+    };
+    if (m_type == GraphType::MultiLine || (m_type == GraphType::Area && !m_series.empty())) {
+        size_t count = 0;
+        for (const auto& series : m_series) if (series.visible) count = std::max(count, series.data.size());
+        for (size_t s = 0; s < m_series.size(); ++s) if (m_series[s].visible)
+            visit(m_series[s].data, static_cast<int>(s), m_type == GraphType::Area ? count : m_series[s].data.size());
+    } else visit(m_data, -1, m_data.size());
+    return closest;
+}
+
 void UIGraph::calculateAutoScale() {
     if (m_data.empty() && m_series.empty()) {
         m_config.minValue = 0.0f;
@@ -833,20 +951,22 @@ void UIGraph::calculateAutoScale() {
     float minVal = std::numeric_limits<float>::max();
     float maxVal = std::numeric_limits<float>::lowest();
     
-    // Check single series data
-    for (const auto& point : m_data) {
-        minVal = std::min(minVal, point.value);
-        maxVal = std::max(maxVal, point.value);
-    }
-    
-    // Check multi-series data
-    for (const auto& series : m_series) {
-        for (const auto& point : series.data) {
+    const auto visit = [&](const std::vector<DataPoint>& data) {
+        for (const auto& point : data) {
             minVal = std::min(minVal, point.value);
             maxVal = std::max(maxVal, point.value);
         }
-    }
+    };
+    if (m_type == GraphType::MultiLine || m_type == GraphType::StackedBar ||
+        (m_type == GraphType::Area && !m_series.empty())) {
+        for (const auto& series : m_series) if (series.visible) visit(series.data);
+    } else visit(m_data);
     
+    if (minVal > maxVal) {
+        m_config.minValue = 0.0f;
+        m_config.maxValue = 1.0f;
+        return;
+    }
     // Add 10% padding
     float range = maxVal - minVal;
     if (range < 0.001f) range = 1.0f;  // Avoid division by zero
@@ -856,6 +976,7 @@ void UIGraph::calculateAutoScale() {
 }
 
 std::vector<DataPoint> UIGraph::downsampleData(const std::vector<DataPoint>& data, int maxPoints) const {
+    if (maxPoints <= 0) throw std::invalid_argument("UIGraph maxDataPoints must be positive");
     if (data.size() <= static_cast<size_t>(maxPoints)) {
         return data;
     }
@@ -863,11 +984,10 @@ std::vector<DataPoint> UIGraph::downsampleData(const std::vector<DataPoint>& dat
     std::vector<DataPoint> downsampled;
     downsampled.reserve(maxPoints);
     
-    // Simple decimation - take every Nth point
-    int step = data.size() / maxPoints;
-    for (size_t i = 0; i < data.size(); i += step) {
-        downsampled.push_back(data[i]);
-    }
+    // Preserve both trajectory endpoints and honour the configured ceiling.
+    if (maxPoints == 1) return {data.back()};
+    for (int i = 0; i < maxPoints; ++i)
+        downsampled.push_back(data[static_cast<size_t>(i) * (data.size() - 1) / (maxPoints - 1)]);
     
     return downsampled;
 }

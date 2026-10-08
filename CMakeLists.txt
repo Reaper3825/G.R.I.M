@@ -370,6 +370,26 @@ add_dependencies(GRIM generate_grim_session_schema)
 target_sources(GRIM PRIVATE ${GRIM_SESSION_GENERATED_HEADER})
 target_include_directories(GRIM PRIVATE ${GRIM_SESSION_GENERATED_DIR})
 
+# Decode Observatory's selected .grimcfg without linking the model runtime.
+set(GRIM_CONFIG_SCHEMA ${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/training/schemas/grim_compiled_hyperparameters.fbs)
+set(GRIM_CONFIG_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/model_config)
+set(GRIM_CONFIG_GENERATED_HEADER ${GRIM_CONFIG_GENERATED_DIR}/grim_compiled_hyperparameters_generated.h)
+add_custom_command(
+  OUTPUT ${GRIM_CONFIG_GENERATED_HEADER}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${GRIM_CONFIG_GENERATED_DIR}
+  # Integrity verification normalizes a copy through generated mutable accessors.
+  COMMAND $<TARGET_FILE:flatbuffers::flatc> --cpp --gen-object-api --gen-mutable
+          -o ${GRIM_CONFIG_GENERATED_DIR} ${GRIM_CONFIG_SCHEMA}
+  DEPENDS flatbuffers::flatc ${GRIM_CONFIG_SCHEMA}
+  COMMENT "Generating compiled model configuration schema for Observatory"
+  VERBATIM
+)
+add_custom_target(generate_grim_config_schema DEPENDS ${GRIM_CONFIG_GENERATED_HEADER})
+add_dependencies(GRIM generate_grim_config_schema)
+target_sources(GRIM PRIVATE ${GRIM_CONFIG_GENERATED_HEADER}
+  ${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/Shared/ModelConfig/CompiledModelConfig.cpp)
+target_include_directories(GRIM PRIVATE ${GRIM_CONFIG_GENERATED_DIR})
+
 set_target_properties(GRIM PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON

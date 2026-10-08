@@ -9,11 +9,16 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
+#include <stdexcept>
 
 UISlider::UISlider(const std::string& lbl, float minVal, float maxVal, float initialVal,
                    std::function<void(float)> onChange, float step)
     : label(lbl), minValue(minVal), maxValue(maxVal), value(initialVal), callback(std::move(onChange)), stepSize(step)
 {
+    if (!std::isfinite(stepSize) || stepSize < 0.0f)
+        throw std::invalid_argument("UISlider step must be finite and nonnegative");
+    setRange(minVal, maxVal);
     // Generate unique focus ID
     focusID = UIFocusManager::getInstance().generateUniqueID();
     
@@ -33,7 +38,33 @@ static std::string trimTrailingZeros(std::string s) {
 }
 
 void UISlider::setValue(float val) {
-    value = std::clamp(val, minValue, maxValue);
+    value = constrainedValue(val);
+}
+
+float UISlider::constrainedValue(float val) const {
+    if (!std::isfinite(val))
+        throw std::invalid_argument("UISlider value must be finite");
+    double result = std::clamp(val, minValue, maxValue);
+    if (stepSize > 0.0f)
+        result = minValue + std::round((result - minValue) / stepSize) * stepSize;
+    return static_cast<float>(std::clamp(result, double(minValue), double(maxValue)));
+}
+
+void UISlider::setRange(float minVal, float maxVal) {
+    if (!std::isfinite(minVal) || !std::isfinite(maxVal) || minVal > maxVal ||
+        !std::isfinite(maxVal - minVal))
+        throw std::invalid_argument("UISlider requires finite ordered bounds");
+    if (!std::isfinite(value))
+        throw std::invalid_argument("UISlider value must be finite");
+    minValue = minVal;
+    maxValue = maxVal;
+    value = constrainedValue(value);
+    valueBeforeEdit = value;
+    dragging = false;
+    editingText = false;
+    textBuffer.clear();
+    if (focusID != 0 && UIFocusManager::getInstance().isWidgetFocused(focusID))
+        UIFocusManager::getInstance().clearFocus();
 }
 
 float UISlider::getNormalizedValue() const {
@@ -46,6 +77,7 @@ float UISlider::getHandleX() const {
 }
 
 void UISlider::update(const InputState& input, float dt) {
+    if (!visible || minValue == maxValue || size.x <= 160.0f) return;
     Vec2 m = input.mousePos;
     
     // Slider bar = the track itself (no separate box); bar height fits text
@@ -98,7 +130,7 @@ void UISlider::update(const InputState& input, float dt) {
         if (Key::wasPressed(KeyCode::Enter)) {
             try {
                 float newValue = std::stof(textBuffer);
-                newValue = std::clamp(newValue, minValue, maxValue);
+                newValue = constrainedValue(newValue);
                 if (newValue != value) {
                     value = newValue;
                     if (callback) callback(value);
@@ -132,7 +164,7 @@ void UISlider::update(const InputState& input, float dt) {
         if (leftDown && !overTrack) {
             try {
                 float newValue = std::stof(textBuffer);
-                newValue = std::clamp(newValue, minValue, maxValue);
+                newValue = constrainedValue(newValue);
                 if (newValue != value) {
                     value = newValue;
                     if (callback) callback(value);
@@ -191,9 +223,7 @@ void UISlider::update(const InputState& input, float dt) {
             normalized = std::clamp(normalized, 0.0f, 1.0f);
             
             float newValue = minValue + normalized * (maxValue - minValue);
-            if (stepSize > 0.0f)
-                newValue = minValue + std::round((newValue - minValue) / stepSize) * stepSize;
-            newValue = std::clamp(newValue, minValue, maxValue);
+            newValue = constrainedValue(newValue);
             
             if (newValue != value) {
                 value = newValue;

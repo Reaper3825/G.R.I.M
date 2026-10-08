@@ -12,6 +12,10 @@ public:
     void draw(class UIRenderer& renderer) override;
     
     void setValue(float val);
+    // Programmatic updates do not invoke onChange. Equal bounds lock the slider.
+    void setRange(float minVal, float maxVal);
+    float getMinValue() const { return minValue; }
+    float getMaxValue() const { return maxValue; }
     float getValue() const { return value; }
     std::string getLabel() const { return label; }
     
@@ -46,5 +50,6 @@ private:
     static constexpr float kRepeatRate = 0.035f;
     
     float getNormalizedValue() const;
+    float constrainedValue(float val) const;
     float getHandleX() const;
 };

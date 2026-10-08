@@ -2,7 +2,7 @@
 //======================================================//
 //  UITrainingPanel — Unified Model + Training Hub
 //
-//  Five tabs: Home | Knowledge Gaps | Tool Gaps | Model Config | Tokenizer
+//  Home | Knowledge Gaps | Tool Gaps | Model Config | Tokenizer | Observatory
 //
 //  Merges the former ModelRegistry panel and Training panel
 //  into a single DataHub-style tabbed interface.
@@ -12,6 +12,7 @@
 //  - Tool Gaps:      tool-gap proposals (ToolGapPlanner)
 //  - Model Config:   edit a snapshot and compile a per-model .grimcfg
 //  - Tokenizer:      standalone tokenizer validation & encode
+//  - Observatory:    post-run per-layer capture visualization
 //======================================================//
 
 #include "primitives/ui_panel.hpp"
@@ -34,6 +35,7 @@
 #include <atomic>
 
 class OverlayRenderer;
+class UIObservatoryView;
 struct InputState;
 
 // ─────────────────────────────────────────────────────────
@@ -55,7 +57,8 @@ enum class TrainingPanelTab : uint8_t {
     KnowledgeGaps = 1,
     ToolGaps      = 2,
     ModelConfig   = 3,
-    Tokenizer     = 4
+    Tokenizer     = 4,
+    Observatory   = 5
 };
 
 // ─────────────────────────────────────────────────────────
@@ -68,6 +71,9 @@ public:
 
     void update(const InputState& input, float dt) override;
     bool drawOverlay(OverlayRenderer& renderer) override;
+    void setVisible(bool visible) override;
+    bool shouldPassThroughAt(float x, float y) const override;
+    void collectPassThroughRects(std::vector<PanelRect>& rects) const override;
 
     // --- View control (DataHub pattern) -------------------------
     void setView(TrainingPanelTab tab);
@@ -100,6 +106,8 @@ private:
     std::shared_ptr<UIButton> tabToolGapsBtn_;
     std::shared_ptr<UIButton> tabModelConfigBtn_;
     std::shared_ptr<UIButton> tabTokenizerBtn_;
+    std::shared_ptr<UIButton> tabObservatoryBtn_;
+    std::unique_ptr<UIObservatoryView> observatory_;
 
     // ═════════════════════════════════════════════════════
     //  Home tab — Model Browser
