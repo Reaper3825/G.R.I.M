@@ -51,16 +51,10 @@ inline constexpr bool kEnableLmHeadTokenTypeGateExperiment = false;
 /// LM head forward with autograd tracking:
 ///   0.   Optional: RMSNorm(input, final_rms_gamma_frozen_or_trained_) — pre-LM-head normalization
 ///   0.5. Optional: residual SwiGLU adapter u = z + mlp_alpha * (SiLU(z@W_gate) ⊙ (z@W_up)) @ W_down
-///        (config.lm_head_mlp_enabled — head capacity expansion, composes before centering/PC1)
-///   1.   Optional: center_columns_by_causal_prefix_lengths on normalized input (Issue #125/#132)
-///   2.   Optional: project_out_pc1 on the current LM input (composes after centering when both are enabled)
-///   3.   logits = input @ weights^T  (autograd::matmul, transpose_b=true)
-///   4.   Optional: center_rows on logits (numerical stability)
-///   5.   Optional: logits += bias  (autograd::broadcast_add)
+///   1. logits = input @ W_eff^T (optional token-type weight gate)
+///   2. Optional: logits += bias
 ///
-/// hp.atom_insertion_enabled selects the row contract. Token-LM rows use the
-/// existing token geometry; atom-insertion rows use B*(S-1) gap geometry and
-/// do not apply causal-prefix hidden-state centering.
+/// hp.atom_insertion_enabled selects token rows or B*(S-1) atom-gap rows.
 void forwardLmHead(
     const HyperParameters::LMHeadLayerConstructionHP& hp,
     const LMHeadParameterTensors& parameter_tensors,

@@ -42,7 +42,7 @@ __device__ __forceinline__ float warpReduceSum(float v) {
 }
 
 // One block per vocab row. Threads in the block stripe across the active
-// subspace for that row, optionally center it, then accumulate the resulting
+// subspace for that row, then accumulate the resulting
 // W_eff row RMS over the full d_model denominator (inactive dimensions are 0).
 // Per-block thread 0 finalizes row_rms and atomically merges it into the
 // three global accumulators.
@@ -50,7 +50,6 @@ __global__ void kernelLMHeadRowStats(
     const float* __restrict__ W,           // [vocab_size, d_model]
     int                       vocab_size,
     int                       d_model,
-    bool                      center_rows,
     bool                      token_type_gate,
     float                     inv_d_model, // 1.0f / d_model precomputed on host
     float*              __restrict__ d_sum_rms,
@@ -79,25 +78,20 @@ __global__ void kernelLMHeadRowStats(
     }
 
     // 1. Per-thread strided active-subspace reductions.
-    float sum = 0.0f;
     float sum_sq = 0.0f;
     for (int d = active_start + tid; d < active_end; d += bsz) {
         const float v = row_ptr[d];
-        sum += v;
         sum_sq += v * v;
     }
 
     // 2. Warp-level reduction (Hopper + Ampere both support __shfl_down_sync).
-    sum = warpReduceSum(sum);
     sum_sq = warpReduceSum(sum_sq);
 
     // 3. Inter-warp reduction via shared memory. One slot per warp.
-    __shared__ float warp_sums_active[kMaxWarpsPerBlock];
     __shared__ float warp_sums[kMaxWarpsPerBlock];
     const int lane  = tid & (kWarpSize - 1);
     const int wid   = tid >> 5;
     if (lane == 0) {
-        warp_sums_active[wid] = sum;
         warp_sums[wid] = sum_sq;
     }
     __syncthreads();
@@ -105,43 +99,8 @@ __global__ void kernelLMHeadRowStats(
     // 4. First warp reduces the per-warp partials.
     if (wid == 0) {
         const int n_warps = (bsz + kWarpSize - 1) / kWarpSize;
-        float active_sum = (lane < n_warps) ? warp_sums_active[lane] : 0.0f;
         float v = (lane < n_warps) ? warp_sums[lane] : 0.0f;
-        active_sum = warpReduceSum(active_sum);
         v = warpReduceSum(v);
-
-        __shared__ float shared_row_mean;
-        if (lane == 0) {
-            shared_row_mean = center_rows
-                ? active_sum / static_cast<float>(active_width)
-                : 0.0f;
-            warp_sums[0] = v;
-        }
-        __syncthreads();
-
-        if (center_rows) {
-            float centered_sum_sq = 0.0f;
-            for (int d = active_start + tid; d < active_end; d += bsz) {
-                const float centered = row_ptr[d] - shared_row_mean;
-                centered_sum_sq += centered * centered;
-            }
-            centered_sum_sq = warpReduceSum(centered_sum_sq);
-            if (lane == 0) {
-                warp_sums[wid] = centered_sum_sq;
-            }
-            __syncthreads();
-
-            float centered_total = (lane < n_warps) ? warp_sums[lane] : 0.0f;
-            centered_total = warpReduceSum(centered_total);
-            if (lane == 0) {
-                warp_sums[0] = centered_total;
-            }
-            __syncthreads();
-            v = warp_sums[0];
-        } else {
-            __syncthreads();
-            v = warp_sums[0];
-        }
 
         if (lane == 0) {
             const float row_rms = sqrtf(v * inv_d_model);
@@ -181,7 +140,6 @@ LMHeadWeightStats computeLMHeadWeightStats(
     int vocab_size,
     int d_model,
     cudaStream_t stream,
-    bool center_rows,
     bool token_type_gate)
 {
     // ── Rule 20: validate inputs, fail loud. ──
@@ -238,7 +196,7 @@ LMHeadWeightStats computeLMHeadWeightStats(
     const float inv_d_model = 1.0f / static_cast<float>(d_model);
 #ifdef __CUDACC__
     kernelLMHeadRowStats<<<vocab_size, kThreadsPerBlock, 0, stream>>>(
-        weights, vocab_size, d_model, center_rows, token_type_gate, inv_d_model,
+        weights, vocab_size, d_model, token_type_gate, inv_d_model,
         &d_scratch->sum_rms,
         &d_scratch->sum_rms_sq,
         &d_scratch->max_packed);

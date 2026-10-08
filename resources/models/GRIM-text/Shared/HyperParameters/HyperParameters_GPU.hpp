@@ -402,12 +402,7 @@ struct LanguageModelConfig {
     int atom_embedding_dim = 0;
 
     // LM Head / RMSNorm gamma config
-    bool lm_head_center_hidden_states = false;
     bool freeze_learned_rms_gammas = false;
-    bool project_out_pc1 = false;
-    int  pc1_power_iters = 0;
-    bool center_logits = false;
-    bool center_encoder_residuals = false;
 
     // LM-head residual SwiGLU adapter (head capacity expansion):
     //   u = z + lm_head_mlp_alpha * SwiGLU_MLP(z), z = RMSNorm(encoder_output)
@@ -575,7 +570,6 @@ struct LanguageModelConfig {
     float loss_class_balanced_beta = 0.0f;
     float loss_local_atom_retrieval_weight = 0.0f;
 
-    bool lm_head_centering_enabled = false;
     bool embedding_freeze_enabled = false;
     int embedding_freeze_after_step = 0;
 
@@ -1353,11 +1347,6 @@ inline void validateRootConfigDocument(
             validationField("layer_scale_init", &LanguageModelConfig::layer_scale_init)
         }, caller);
     }
-    if (params.project_out_pc1) {
-        validatePositiveFields(params, {
-            validationField("pc1_power_iters", &LanguageModelConfig::pc1_power_iters)
-        }, caller);
-    }
     if (params.lm_head_mlp_enabled) {
         validatePositiveFields(params, {
             validationField("lm_head_mlp_d_ff", &LanguageModelConfig::lm_head_mlp_d_ff)
@@ -1724,13 +1713,8 @@ inline void applyCompiledModelConfig(
     params.rms_epsilon = e.rms_epsilon;
     params.use_layer_scale = e.use_layer_scale;
     params.layer_scale_init = e.layer_scale_init;
-    params.center_encoder_residuals = e.center_residuals;
 
     params.lm_head_unigram_bias = lm.unigram_bias_enabled;
-    params.lm_head_center_hidden_states = lm.center_hidden_states;
-    params.center_logits = lm.center_logits;
-    params.project_out_pc1 = lm.project_out_pc1;
-    params.pc1_power_iters = compiledU32ToInt(lm.pc1_power_iters, "lm_head.pc1_power_iters");
     params.lm_head_mlp_enabled = lm.mlp_enabled;
     params.lm_head_mlp_d_ff = compiledU32ToInt(lm.mlp_d_ff, "lm_head.mlp_d_ff");
     params.lm_head_mlp_alpha = lm.mlp_alpha;
@@ -1908,7 +1892,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_enabled);
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_beta);
     GRIM_LOAD_CONFIG_FIELD(loss_local_atom_retrieval_weight);
-    GRIM_LOAD_CONFIG_FIELD(lm_head_centering_enabled);
     GRIM_LOAD_CONFIG_FIELD(freeze_learned_rms_gammas);
     if (config.at("hardcoded_hidden_states_enabled").get<bool>()) {
         params.hardcoded_hidden_pattern = config.at("hardcoded_hidden_states_pattern").get<HardcodedPattern>();
@@ -2391,15 +2374,10 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(local_atom_retrieval_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_embedding_dim);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_center_hidden_states);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_d_ff);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_alpha);
     GRIM_WRITE_FINAL_CONFIG_FIELD(freeze_learned_rms_gammas);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(project_out_pc1);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(pc1_power_iters);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(center_logits);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(center_encoder_residuals);
     GRIM_WRITE_FINAL_CONFIG_FIELD(hardcoded_hidden_pattern);
     GRIM_WRITE_FINAL_CONFIG_FIELD(hardcoded_log_every_n_batches);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_strategy);
@@ -2547,7 +2525,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_beta);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_local_atom_retrieval_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_centering_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_after_step);
     GRIM_WRITE_FINAL_CONFIG_FIELD(optimizer_kind);

@@ -200,15 +200,8 @@ const char* classifyConfigSection(const std::string& key) {
     if (isOneOf(key, {"single_stream_mode", "disable_async_frees", "synchronize_after_kernels"})) {
         return "CUDA execution mode";
     }
-    if (startsWith(key, "lm_head_") ||
-        isOneOf(key, {
-            "freeze_learned_rms_gammas",
-            "center_logits",
-            "center_encoder_residuals",
-            "project_out_pc1",
-            "pc1_power_iters"
-        })) {
-        return "LM head centering";
+    if (startsWith(key, "lm_head_") || key == "freeze_learned_rms_gammas") {
+        return "LM head";
     }
     if (isOneOf(key, {
             "use_layer_scale",

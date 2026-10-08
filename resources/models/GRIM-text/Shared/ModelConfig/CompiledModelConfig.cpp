@@ -21,7 +21,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::uint32_t kSupportedSchemaVersion = 9;
-constexpr std::uint32_t kSupportedSemanticVersion = 11;
+constexpr std::uint32_t kSupportedSemanticVersion = 12;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -571,10 +571,8 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         f->positional_encoding()->alibi_max_bias(), f->positional_encoding()->rope_theta(),
         f->positional_encoding()->rope_scaling()};
     result.features.encoder = {f->encoder()->rms_epsilon(), f->encoder()->use_layer_scale(),
-        f->encoder()->layer_scale_init(), f->encoder()->center_residuals()};
+        f->encoder()->layer_scale_init()};
     result.features.lm_head = {f->lm_head()->unigram_bias_enabled(),
-        f->lm_head()->center_hidden_states(), f->lm_head()->center_logits(),
-        f->lm_head()->project_out_pc1(), f->lm_head()->pc1_power_iters(),
         f->lm_head()->mlp_enabled(), f->lm_head()->mlp_d_ff(), f->lm_head()->mlp_alpha()};
     result.features.arg_selector_enabled = f->arg_selector_enabled();
 

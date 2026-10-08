@@ -294,21 +294,6 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
                                  ") != BatchPayload.total_tokens (" + std::to_string(payload.total_tokens) + ")");
     }
     
-    if (hp.center_encoder_residuals) {
-        if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
-            throw std::runtime_error("forwardEncodingLayer: payload.seq_lengths size (" +
-                                     std::to_string(payload.seq_lengths.size()) +
-                                     ") != payload.batch_size (" + std::to_string(payload.batch_size) + ")");
-        }
-        for (int b = 0; b < payload.batch_size; ++b) {
-            const int row_len = payload.seq_lengths[static_cast<size_t>(b)];
-            if (row_len <= 1 || row_len > payload.max_seq_len) {
-                throw std::runtime_error("forwardEncodingLayer: center_encoder_residuals invalid seq_lengths[" +
-                                         std::to_string(b) + "]=" + std::to_string(row_len) +
-                                         " for payload.max_seq_len=" + std::to_string(payload.max_seq_len));
-            }
-        }
-    }
     if constexpr (kEnableEncoderStepLogs) {
         fprintf(stderr, "[EncoderFwd] validated: batch=%d heads=%d kv_heads=%d head_dim=%d\n", 
                 payload.batch_size, hp.num_heads, hp.num_kv_heads, hp.head_dim);
@@ -453,36 +438,6 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     // ========================================================================
     residual1 = autograd::add(input, *proj_for_residual, stream);
     
-    // ========================================================================
-    // RESIDUAL CENTERING (Issue #118 / Mode Collapse Fix)
-    //
-    // WHY: Causal attention creates a shared output component from prefix tokens.
-    //   Residual accumulation + RMSNorm direction preservation amplifies this
-    //   shared direction through layers: ρ grows +0.01-0.04 per layer.
-    //   Over 12 layers: ρ(emb)=0.05 → ρ(final)=0.44 → mode collapse.
-    //
-    // WHAT: center_columns_by_causal_prefix_lengths subtracts the strict-past
-    //   prefix mean over VALID (unpadded) tokens for each feature WITHIN EACH
-    //   BATCH ROW:
-    //   h[b,0,d] = h[b,0,d]
-    //   h[b,t,d] -= mean_{u < t}(h[b,u,d])   for valid t > 0
-    //   h[b,t,d] = 0                         for padded t
-    //   This removes the running shared direction at each layer without making
-    //   sample A depend on sample B, including PAD rows, or leaking future
-    //   positions into token t. Strict-past also preserves the first token
-    //   instead of erasing it with mean_{u <= 0}.
-    //
-    // GRADIENT COST: The centering projection is lower-triangular. Backward
-    //   applies its transpose within each sequence; no gradient path crosses
-    //   from future inputs into earlier forward positions.
-    // ========================================================================
-    if (hp.center_encoder_residuals) {
-        if (payload.max_seq_len <= 1) {
-            throw std::runtime_error("forwardEncodingLayer: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
-        }
-        residual1 = autograd::center_columns_by_causal_prefix_lengths(
-            residual1, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream);
-    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");
     
     

@@ -191,7 +191,7 @@ enum class MetricStream : int {
     // estimator of Σ_v p(v)·E[v] since positions are sampled from p(v).
     // High |cos(h_t, e_uf_dir)| during steps 0–600 → unigram-frequency collapse mode
     // (h aligned with the dominant-token direction). Compared at the LM-input tensor
-    // (post-centering when `lm_head_centering.project_out_pc1` is enabled).
+    // after the final RMSNorm and optional LM-head adapter.
     UNIGRAM_DIR_COS_ABS_MEAN = 45,    // mean_t |cos(h_t, e_uf_dir)| at LM-input tensor
     UNIGRAM_DIR_COS_SIGNED_MEAN = 46, // mean_t  cos(h_t, e_uf_dir) at LM-input tensor
 

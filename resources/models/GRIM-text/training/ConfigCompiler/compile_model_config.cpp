@@ -27,7 +27,7 @@ using json = nlohmann::json;
 namespace {
 
 constexpr std::uint32_t kSchemaVersion = 9;
-constexpr std::uint32_t kSemanticVersion = 11;
+constexpr std::uint32_t kSemanticVersion = 12;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -85,13 +85,8 @@ struct EffectiveConfig {
     float rms_epsilon = 1.0e-5f;
     bool use_layer_scale = false;
     float layer_scale_init = 1.0f;
-    bool center_residuals = false;
 
     bool lm_head_unigram_bias = false;
-    bool lm_head_center_hidden_states = false;
-    bool center_logits = false;
-    bool project_out_pc1 = false;
-    std::uint32_t pc1_power_iters = 0;
     bool lm_head_mlp_enabled = false;
     std::uint32_t lm_head_mlp_d_ff = 0;
     float lm_head_mlp_alpha = 0.0f;
@@ -423,6 +418,13 @@ std::vector<float> computeRopeInvFreq(const EffectiveConfig& c) {
 }
 
 EffectiveConfig compileEffectiveConfig(const json& model_config) {
+    for (const char* retired : {"center_encoder_residuals", "lm_head_center_hidden_states",
+                                "center_logits", "project_out_pc1", "pc1_power_iters",
+                                "lm_head_centering_enabled"}) {
+        if (model_config.contains(retired)) {
+            throw std::runtime_error(std::string("removed model config field: ") + retired);
+        }
+    }
     if (!model_config.is_object()) {
         throw std::runtime_error("model_config.json root must be an object");
     }
@@ -504,17 +506,11 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     c.use_layer_scale = required<bool>(j, "use_layer_scale");
     c.layer_scale_init = requiredFinite(j, "layer_scale_init");
     if (c.use_layer_scale) requirePositive(c.layer_scale_init, "layer_scale_init");
-    c.center_residuals = required<bool>(j, "center_encoder_residuals");
 
     c.lm_head_unigram_bias = required<bool>(j, "lm_head_unigram_bias");
     if (c.lm_head_unigram_bias && !c.lm_head_bias) {
         throw std::runtime_error("lm_head_unigram_bias=true requires lm_head_bias_enabled=true");
     }
-    c.lm_head_center_hidden_states = required<bool>(j, "lm_head_center_hidden_states");
-    c.center_logits = required<bool>(j, "center_logits");
-    c.project_out_pc1 = required<bool>(j, "project_out_pc1");
-    c.pc1_power_iters = requiredU32(j, "pc1_power_iters", true);
-    if (c.project_out_pc1 && c.pc1_power_iters == 0) throw std::runtime_error("project_out_pc1 requires pc1_power_iters > 0");
     c.lm_head_mlp_enabled = required<bool>(j, "lm_head_mlp_enabled");
     c.lm_head_mlp_d_ff = requiredU32(j, "lm_head_mlp_d_ff", !c.lm_head_mlp_enabled);
     c.lm_head_mlp_alpha = requiredFinite(j, "lm_head_mlp_alpha");
@@ -652,10 +648,9 @@ std::vector<std::uint8_t> buildArtifact(
         builder, c.positional_kind, c.rope_base_seq_len, c.alibi_min_locality_distance,
         c.alibi_slope_exponent, c.alibi_max_bias, c.rope_theta, c.rope_scaling);
     const auto encoder = GRIMConfig::CreateEncoderConfig(
-        builder, c.rms_epsilon, c.use_layer_scale, c.layer_scale_init, c.center_residuals);
+        builder, c.rms_epsilon, c.use_layer_scale, c.layer_scale_init);
     const auto lm_head = GRIMConfig::CreateLmHeadConfig(
-        builder, c.lm_head_unigram_bias, c.lm_head_center_hidden_states,
-        c.center_logits, c.project_out_pc1, c.pc1_power_iters,
+        builder, c.lm_head_unigram_bias,
         c.lm_head_mlp_enabled, c.lm_head_mlp_d_ff, c.lm_head_mlp_alpha);
 
     // Retired feature tables remain reserved in the FlatBuffer schema for

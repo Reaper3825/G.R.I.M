@@ -15,7 +15,7 @@ from test_add_gradfn_host import compile_and_run
 def main():
     tests = Path(__file__).resolve().parent
     repo = tests.parents[3]
-    build = repo / 'build/config-compiler'
+    build = Path(os.environ.get('GRIM_CONFIG_COMPILER_BUILD', str(repo / 'build/config-compiler')))
     compiler = build / ('Release/compile_model_config.exe' if os.name == 'nt' else 'compile_model_config')
     out = Path(tempfile.mkdtemp(prefix='grim-head-gate-config-test-'))
     config = json.loads((repo / 'model_config.json').read_text(encoding='utf-8'))
@@ -46,7 +46,7 @@ int main() {
     assert(!off.features.attention.head_gate_enabled && on.features.attention.head_gate_enabled);
     assert(on.features.attention.residual_gate_enabled);
     assert(on.architecture.num_heads==12 && on.architecture.num_kv_heads==4);
-    assert(on.schema_version==9 && on.semantic_version==11);
+    assert(on.schema_version==9 && on.semantic_version==12);
     const auto capability = CompiledModelCapability::AttentionHeadGate;
     assert(std::find(off.required_capabilities.begin(),off.required_capabilities.end(),capability)==off.required_capabilities.end());
     assert(std::find(on.required_capabilities.begin(),on.required_capabilities.end(),capability)!=on.required_capabilities.end());
@@ -58,7 +58,7 @@ int main() {
     if os.name != 'nt':
         raise RuntimeError('Set up equivalent header search paths for this host before running the reader test')
     previous = os.environ.get('CL')
-    os.environ['CL'] = (previous or '') + f' /I"{build / "generated"}" /I"{repo / "vcpkg_installed/x64-windows/include"}"'
+    os.environ['CL'] = (previous or '') + f' /I"{build / "generated"}" /I"{tests.parent / "training/vcpkg_installed/x64-windows/include"}"'
     try:
         compile_and_run(cpp)
     finally:

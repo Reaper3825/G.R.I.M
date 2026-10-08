@@ -51,7 +51,6 @@ Every concrete `GradFn` constructor must set `op_name` to a non-empty static str
 When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStreamSynchronize` between them — even on the same stream.
 
 ## Fail-hard CenterColumns kernels
-`center_columns*` autograd wrappers launch kernels that may deliberately `trap` on invalid sequence lengths. Every forward/backward CenterColumns launch must immediately check `cudaGetLastError()` and then `cudaStreamSynchronize(stream)` so launch failures and device-side traps surface at the centering call site, not several kernels later.
 
 ## Gradient norm sync
 `cudaStreamSynchronize` inside `computeGradNorm` drains the entire backward pipeline. Pass `sync_for_host_read=false` for non-logging steps; only sync when logging gradient components.
@@ -91,7 +90,7 @@ QKV-specific diagnostics live in `Shared/TensorContract/AutogradQKVDiagnostics.h
 ## GradFn accumulation contract
 GradFns must never overwrite a persistent leaf gradient buffer during backward. If a backward kernel writes directly into `tensor.grad_data()`, it must use additive writes (`+=` or `atomicAdd`) because `ensure_grad()` only allocates/zeroes the buffer once; step/microbatch zeroing owns the accumulation window.
 
-For non-leaf inputs, a GradFn may write its local Jacobian result into an owned temporary buffer, but that buffer must be zeroed before use and additive writes are still preferred so the same kernel is safe for both owned and leaf buffers. If a GradFn must use a shared forward kernel that assigns into its output (for example centering kernels), keep the owned temporary buffer and explicitly accumulate that temporary into the leaf grad buffer before continuing the chain.
+For non-leaf inputs, a GradFn may write its local Jacobian result into an owned temporary buffer, but that buffer must be zeroed before use and additive writes are still preferred so the same kernel is safe for both owned and leaf buffers. If a GradFn must use a shared forward kernel that assigns into its output (for example token-type masking kernels), keep the owned temporary buffer and explicitly accumulate that temporary into the leaf grad buffer before continuing the chain.
 
 Use `Shared/TensorContract/GradientAccumulation.hpp` for generic `dst += src * scale` pass-through or scratch-to-leaf accumulation. Do not add per-translation-unit `kernel_accumulate_grad` copies in GradFns; operator-specific derivatives may still use their own additive kernels when they compute a real local Jacobian (for example GELU, RMSNorm, embedding scatter-add, or broadcast reductions).
 

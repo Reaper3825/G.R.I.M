@@ -7,8 +7,7 @@
 //           bias [vocab_size] (optional), final_rms_gamma [d_model],
 //           mlp_W_gate/mlp_W_up/mlp_W_down (optional residual SwiGLU adapter).
 //
-//  Forward: RMSNorm → optional residual SwiGLU adapter → optional centering
-//           → optional PC1 projection → logits = input @ W^T → bias
+//  Forward: RMSNorm → optional residual SwiGLU adapter → logits = input @ W_eff^T → bias
 //
 //  ISSUE #56 pattern: The LM head writes any materialized LM-input tensor plus
 //  logits into the canonical shared-forward sink owned by the active caller.
@@ -219,8 +218,7 @@ void forwardLmHead(
     // The gate/silu/up/swiglu intermediates are retained on the forward sink
     // because SiluGradFn and ElementwiseMulGradFn hold non-owning pointers into
     // their input buffers (same contract as the encoder FFN retained tensors).
-    // u composes BEFORE the optional centering / PC1 chain below, so those
-    // interventions (when enabled) operate on the adapter-enriched state.
+    // The projection consumes the adapter-enriched state.
     // ════════════════════════════════════════════════════════════════════
 
     if (hp.mlp_enabled) {
@@ -267,72 +265,15 @@ void forwardLmHead(
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // STEP 1: Optional hidden-state geometry projection chain
-    //
-    //   Column centering h: Σ_t h[t,d] = 0 for each feature d   (Issue #125)
-    //     Removes shared direction across positions → reduces cos(h_i, h_j).
-    //
-    //   Row centering of WEIGHT matrix instead of h (April 2026 reformulation,
-    //   applied below at STEP 2 — see commentary there):
-    //     Constrains Σ_d W[v,d] = 0 for each vocab v. Mathematically equivalent
-    //     invariance to the original Issue #132 row-centering-of-h, with two
-    //     advantages:
-    //       (a) preserves per-position energy in h — no rms bifurcation when h
-    //           drifts toward the all-ones direction (the failure mode that
-    //           caused rms_max/rms_min to climb 1.02x → 4.0x and produced
-    //           spurious high ρ from tiny denominators);
-    //       (b) STRONGER guarantee — also makes back-propagated grad_h satisfy
-    //           Σ_d grad_h[t,d] = 0 automatically (Issue #132's original
-    //           row-centering-of-h only enforced the property in forward).
-    // ════════════════════════════════════════════════════════════════════
-
-    const Tensor* matmul_input = current_input;
-    Tensor centered_hidden_for_pc1;
-
-    const bool use_causal_prefix_centering =
-        hp.center_hidden_states && !hp.atom_insertion_enabled;
-
-    if (use_causal_prefix_centering) {
-        if (rows_per_sequence <= 1) {
-            throw std::runtime_error("forwardLmHead: center_hidden_states requires rows_per_sequence > 1; single-token decode cannot column-center hidden states without erasing the signal");
-        }
-        // Column-center h with a strict-past causal prefix mean inside each
-        // sequence: removes the running shared direction across valid positions
-        // without coupling samples inside the batch, including PAD activations
-        // in the mean, erasing token 0, or leaking future tokens into the
-        // current LM position.
-        // Row-centering moved to W at STEP 2 (April 2026 reformulation).
-        centered_hidden_for_pc1 = autograd::center_columns_by_causal_prefix_lengths(
-            *current_input, payload.seq_lengths, batch_size, rows_per_sequence, stream);
-        matmul_input = &centered_hidden_for_pc1;
-    }
-
-    if (hp.project_out_pc1) {
-        // Issue #149: project out dominant PC1 direction via power iteration.
-        // g is RMS-normalized (g·g = D), so the projection coefficient is (h·g)/D:
-        //   h̃[t] = h[t] - (h[t]·g / D) * g     where g = PC1(H), stop-gradient
-        // Backward: grad_h += (I - gg^T/D) * grad_h̃  (accumulates into input grad)
-        forward_outputs.lm_head_input_tensor = autograd::project_out_pc1(*matmul_input, hp.pc1_power_iters, stream);
-        matmul_input = &forward_outputs.lm_head_input_tensor;
-    } else if (use_causal_prefix_centering) {
-        // Materialize the causal-prefix centered tensor so it survives this
-        // scope (Issue #127) and callers can explicitly keep the live LM-input
-        // handle inside the forward boundary.
-        forward_outputs.lm_head_input_tensor = std::move(centered_hidden_for_pc1);
-        matmul_input = &forward_outputs.lm_head_input_tensor;
-    } else {
-        // current_input already points at forward-owned storage: the adapter
-        // residual, the final normalized hidden states, or the encoder output.
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    // STEP 2: Linear projection  logits = lm_input @ weights^T
+    // STEP 1: Linear projection  logits = lm_input @ weights^T
     //
     // autograd::matmul builds the computation graph:
     //   MatMulGradFn::apply() computes:
     //     grad_input  = grad_output @ weights      (for backward to encoder)
     //     grad_weights = lm_input^T @ grad_output  (for weight update)
     // ════════════════════════════════════════════════════════════════════
+    const Tensor* matmul_input = current_input;
+
     if (!lm_weights.shape.is_2d_layout()) {
         throw std::runtime_error("forwardLmHead: weights must be 2D [vocab_size, d_model]");
     }
@@ -350,18 +291,9 @@ void forwardLmHead(
     // Local experiment path: bypass the hard token-type gate inside the LM head
     // only, without plumbing a new authored config field yet.
     const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
-    const bool use_centered_weights = hp.center_hidden_states;
     Tensor& effective_weights_storage = forward_outputs.lm_head_effective_weights;
     const Tensor* effective_weights = &lm_weights;
-    if (use_centered_weights && use_token_type_gate) {
-        effective_weights_storage = autograd::center_rows_by_token_type_gate(lm_weights, stream);
-        effective_weights_storage.name = "lm_head.centered_token_type_gated_weights";
-        effective_weights = &effective_weights_storage;
-    } else if (use_centered_weights) {
-        effective_weights_storage = autograd::center_rows(lm_weights, stream);
-        effective_weights_storage.name = "lm_head.centered_weights";
-        effective_weights = &effective_weights_storage;
-    } else if (use_token_type_gate) {
+    if (use_token_type_gate) {
         effective_weights_storage = autograd::type_gate_rows_by_token_type(lm_weights, stream);
         effective_weights_storage.name = "lm_head.token_type_gated_weights";
         effective_weights = &effective_weights_storage;
@@ -369,7 +301,7 @@ void forwardLmHead(
 
     if (!matmul_input->data) {
         throw std::runtime_error("forwardLmHead: matmul input has null data - cannot compute weight gradient. "
-            "Check encoder output and centering/PC1 buffers.");
+            "Check encoder output and LM-head adapter buffers.");
     }
     forward_outputs.logits_tensor = autograd::matmul(
         *matmul_input,
@@ -382,9 +314,6 @@ void forwardLmHead(
         *matmul_input,
         *effective_weights,
         forward_outputs.logits_tensor,
-        use_causal_prefix_centering,
-        hp.project_out_pc1,
-        use_centered_weights,
         use_token_type_gate,
         total_tokens,
         d_model,
@@ -404,17 +333,7 @@ void forwardLmHead(
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // STEP 3: Optional logit centering (numerical stability)
-    //
-    // Softmax is shift-invariant: softmax(x - c) = softmax(x)
-    // So centering doesn't change predictions but keeps logits near zero.
-    // ════════════════════════════════════════════════════════════════════
-    if (hp.center_logits) {
-        forward_outputs.logits_tensor = autograd::center_rows(forward_outputs.logits_tensor, stream);
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    // STEP 4: Optional bias addition
+    // STEP 2: Optional bias addition
     //
     // autograd::broadcast_add builds BiasAddGradFn:
     //   grad_logits passes through to input

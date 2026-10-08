@@ -141,13 +141,8 @@ public:
             {"rms_epsilon", "EncoderConfig"},
             {"use_layer_scale", "EncoderConfig"},
             {"layer_scale_init", "EncoderConfig"},
-            {"center_encoder_residuals", "EncoderConfig"},
 
             {"lm_head_unigram_bias", "LmHeadConfig"},
-            {"lm_head_center_hidden_states", "LmHeadConfig"},
-            {"center_logits", "LmHeadConfig"},
-            {"project_out_pc1", "LmHeadConfig"},
-            {"pc1_power_iters", "LmHeadConfig"},
             {"lm_head_mlp_enabled", "LmHeadConfig"},
             {"lm_head_mlp_d_ff", "LmHeadConfig"},
             {"lm_head_mlp_alpha", "LmHeadConfig"},

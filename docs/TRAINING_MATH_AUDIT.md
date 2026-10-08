@@ -1,3 +1,5 @@
+> Historical investigation: optional encoder/LM-head centering and PC1 projection were removed on 2026-10-08. References below describe retired code, not current requirements.
+
 # Training Math Correctness Audit
 
 **Purpose:** Audit the training pipeline for mathematical correctness. Mode collapse / plateau should be traced to root causes in the math, not masked by heuristic patches.

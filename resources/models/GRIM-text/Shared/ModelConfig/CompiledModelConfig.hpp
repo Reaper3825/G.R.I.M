@@ -115,15 +115,10 @@ struct CompiledEncoderConfig {
     float rms_epsilon = 0.0f;
     bool use_layer_scale = false;
     float layer_scale_init = 0.0f;
-    bool center_residuals = false;
 };
   
 struct CompiledLmHeadConfig {
     bool unigram_bias_enabled = false;
-    bool center_hidden_states = false;
-    bool center_logits = false;
-    bool project_out_pc1 = false;
-    std::uint32_t pc1_power_iters = 0;
     bool mlp_enabled = false;
     std::uint32_t mlp_d_ff = 0;
     float mlp_alpha = 0.0f;

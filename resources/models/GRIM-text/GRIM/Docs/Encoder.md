@@ -90,21 +90,8 @@ The diagnostic emits one compact summary equation plus `LAYER_RESIDUAL1_ROW_EQUA
 ## FFN post-GELU cache
 `forwardEncodingLayer()` MUST `cudaMemcpyAsync` post-GELU activations into `args.cache_ffn_output` after the explicit FFN compute call. Forgetting this leaves the cache as garbage → corrupted W2 gradients.
 
-## Activation centering before weight grads
-Center cached activations (`cached_ln1_output`, `cached_ffn_input`, …) **before** the weight-gradient GEMMs to eliminate systematic bias from non-zero mean.
-
-## Residual centering is per-sequence, padding-aware, and causal-prefix only
-`center_encoder_residuals` MUST use `autograd::center_columns_by_causal_prefix_lengths(x, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream)`, not global `center_columns(x)`, fixed-row `center_columns_by_sequence(x, payload.max_seq_len, stream)`, or full-sequence `center_columns_by_sequence_lengths(...)`, on flattened `[batch_size * seq_len, d_model]` tensors.
-
-Global column-centering over the full flat matrix makes sample A depend on sample B via the batch-wide mean. Full-sequence per-row centering avoids cross-batch leakage but still leaks future positions `t+1...N` into token `t`, which is forbidden for an autoregressive model. Fixed-row per-sequence centering also leaks PAD activations into real-token means because `BatchPayload` pads input IDs to `Tokenizer::PAD_TOKEN_ID` and those rows produce real embeddings. The safe equation is:
-
-`h[b,0,d] = h[b,0,d]`
-
-`h[b,t,d] = h[b,t,d] - mean_{u < t}(h[b,u,d])` for valid `t > 0`, and padded rows are zeroed.
-
-This removes the running within-sequence shared direction without crossing batch-row ownership boundaries, letting PAD rows steer the mean, erasing the first token, or leaking future tokens into the current position. If any centered row has `seq_lengths[b] <= 1`, fail loud; there is no meaningful strict-past context to center against.
-
-`center_encoder_residuals` applies to the live intra-layer residual stream inside `forwardEncodingLayer()` at `residual1 = center_columns_by_causal_prefix_lengths(input + attn_branch, ...)`. Do **not** apply a second causal-prefix centering pass to the committed layer output in `ModelForward_GPU.cu` before handing it to the next layer. Re-applying the same non-orthogonal prefix-centering operator at the layer boundary amplifies early-token rows (`seq_pos` 1-3 showed runaway row-RMS growth while branch RMS stayed small) and makes `input_{l+1}` larger than the raw `output_l` it was derived from.
+## Residual stream
+Residual additions pass directly to the next normalization or layer. The optional collapse-era residual-centering projection has been removed.
 
 ## `per_token_grad_scale=true` is REQUIRED
 Gradient RMS ~1e-6 with ~3000 tokens is **correct**. Disabling causes ~3000× effective LR explosion.

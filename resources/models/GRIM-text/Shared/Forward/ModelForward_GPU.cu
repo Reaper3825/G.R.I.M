@@ -62,28 +62,6 @@ const TensorContract::Shape2D& requireTensor2DShape(
     return tensor.shape.as_2d();
 }
 
-void requireCenteringSequenceLengths(const Batching::BatchPayload& payload,
-                                     const char* caller) {
-    if (payload.batch_size <= 0 || payload.max_seq_len <= 0) {
-        throw std::runtime_error(std::string(caller) + ": invalid payload geometry batch=" +
-                                 std::to_string(payload.batch_size) + " seq=" +
-                                 std::to_string(payload.max_seq_len));
-    }
-    if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
-        throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
-                                 std::to_string(payload.seq_lengths.size()) +
-                                 ") != batch_size (" + std::to_string(payload.batch_size) + ")");
-    }
-    for (int b = 0; b < payload.batch_size; ++b) {
-        const int row_len = payload.seq_lengths[static_cast<size_t>(b)];
-        if (row_len <= 1 || row_len > payload.max_seq_len) {
-            throw std::runtime_error(std::string(caller) + ": invalid seq_lengths[" +
-                                     std::to_string(b) + "]=" + std::to_string(row_len) +
-                                     " for padding-aware centering over max_seq_len=" +
-                                     std::to_string(payload.max_seq_len));
-        }
-    }
-}
 
 Tensor viewCommittedTensor(const Tensor& owned,
                            cudaStream_t stream,
@@ -394,8 +372,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto lora_hp = HyperParameters::loraTrainingHP(*cfg);
     const auto atom_boundary_hp =
         HyperParameters::atomInsertionBoundaryProjectionHP(*cfg);
-    const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
-    const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
     const auto positional_encoding = HyperParameters::snapshotTrainingConfigField<HyperParameters::PositionalEncodingType>(*cfg, "positional_encoding");
     const float dropout_rate = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "dropout_rate");
@@ -427,9 +403,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
     const bool dropout_enabled = request.graph.enable_dropout;
 
-    if (center_encoder_residuals || lm_head_center_hidden_states) {
-        requireCenteringSequenceLengths(payload, "ModelForward");
-    }
 
     const int total_tokens = payload.total_tokens;
 

@@ -59,7 +59,7 @@ When editing `resources/models/GRIM-text/Shared/TensorContract/GradFns/*`, persi
 
 ✅ If a grad pointer comes from `.grad_data()`, write with `+=` or `atomicAdd`.  
 ✅ Owned non-leaf scratch grad buffers must be zeroed before use; using `+=` is still preferred so kernels are leaf-safe.  
-✅ If a kernel must assign into an owned temporary (e.g. centering kernels), then explicitly accumulate that temporary into the leaf grad buffer before propagating.  
+✅ If a kernel must assign into an owned temporary (e.g. token-type masking kernels), then explicitly accumulate that temporary into the leaf grad buffer before propagating.
 ✅ For leaf-vs-non-leaf capture: leaf → `x.ensure_grad(); ptr = x.grad_data();`; non-leaf → allocate owned zeroed scratch.  
 ✅ Before finishing any GradFn edit, grep for assignment-style grad writes: `grad_.*\] =`, `.*_grad.*\] =`, `dx\[.*\] =`, `input_grad\[.*\] =`.
 
@@ -165,7 +165,7 @@ Project-specific knowledge lives in [`resources/models/GRIM-text/GRIM/Docs/`](..
 | Loss kernel or per-component gradient clipping | [Docs/Loss.md](../resources/models/GRIM-text/GRIM/Docs/Loss.md) |
 | Grouped Query Attention shapes / backward scaling | [Docs/GQA.md](../resources/models/GRIM-text/GRIM/Docs/GQA.md) |
 | FlashAttention v2 kernels (Dao-AILab integration) | [Docs/FlashAttention.md](../resources/models/GRIM-text/GRIM/Docs/FlashAttention.md) |
-| LM head, tied embeddings, γ_final, hidden centering | [Docs/LMHead.md](../resources/models/GRIM-text/GRIM/Docs/LMHead.md) |
+| LM head, tied embeddings, γ_final, row-local readout | [Docs/LMHead.md](../resources/models/GRIM-text/GRIM/Docs/LMHead.md) |
 | Encoder layer (attention + FFN), bias autograd, LayerScale | [Docs/Encoder.md](../resources/models/GRIM-text/GRIM/Docs/Encoder.md) |
 | ScratchBlock reasoning layer | [Docs/ScratchBlock.md](../resources/models/GRIM-text/GRIM/Docs/ScratchBlock.md) |
 | ALiBi / RoPE position encoding | [Docs/PositionEncoding.md](../resources/models/GRIM-text/GRIM/Docs/PositionEncoding.md) |

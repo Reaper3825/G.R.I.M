@@ -12,3 +12,9 @@
 
 - Before creating, transforming, or reviewing GRIM ConceptBlock reasoning examples, read `docs/GRIM_REASONING_DATA_CONTRACT.md`.
 - Changes to `DataCollection/concept_block.fbs`, `DataCollection/concept_block.hpp`, `DataCollection/concept_block_canonical.hpp`, ConceptBlock/Goal span projection, or concept supervision policy must update `docs/GRIM_REASONING_DATA_CONTRACT.md` when they affect the documented contract.
+
+## Removed collapse interventions
+
+- Encoder residual centering, LM-head hidden/weight centering, logit centering, and PC1 projection have been removed. Do not design lens capture or generation around these historical paths. LM-head readout math is row-local; existing forward payload geometry checks still apply.
+- Retired FlatBuffer slots and read-only checkpoint compatibility handling are legacy metadata, not supported model features. Historical collapse investigation notes and plans do not describe the current architecture.
+- Preserve unrelated normalization, token-type gating, initialization mean subtraction, and softmax/loss gradient math.

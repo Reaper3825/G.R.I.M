@@ -1,3 +1,5 @@
+> Historical investigation: optional encoder/LM-head centering and PC1 projection were removed on 2026-10-08. References below describe retired code, not current requirements.
+
 # Hardcoded Hidden States Diagnostic (Issue #42)
 
 ## Purpose

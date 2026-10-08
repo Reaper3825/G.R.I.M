@@ -68,8 +68,8 @@ std::shared_ptr<const LensSnapshot> captureFinalLens(
         auto input = actual.encoder_output_tensor.detach(stream);
         Forward::ModelForwardOutputs replay;
         try {
-            // Preserve the entire input rectangle and its payload: causal
-            // centering and PC1 are not generally single-row operations.
+            // Replay the owner's rectangle to retain the forward payload's
+            // geometry checks. The LM-head readout itself is row-local.
             forwardLmHead(hp, detached, input, payload, stream, handle, replay);
             const auto replay_logits = copyRow(replay.logits_tensor, row, hp.vocab_size, stream);
             auto direct = summarizeLogits(replay_logits, request.top_k, ReadoutKind::Direct);

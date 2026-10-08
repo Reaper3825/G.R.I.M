@@ -156,15 +156,17 @@ table EncoderConfig {
   rms_epsilon:float32;
   use_layer_scale:bool;
   layer_scale_init:float32;
-  center_residuals:bool;
+  // Removed collapse interventions: reserve wire slots permanently.
+  retired_center_residuals:bool (deprecated);
 }
 
 table LmHeadConfig {
   unigram_bias_enabled:bool;
-  center_hidden_states:bool;
-  center_logits:bool;
-  project_out_pc1:bool;
-  pc1_power_iters:uint32;
+  // Removed collapse interventions: reserve wire slots permanently.
+  retired_center_hidden_states:bool (deprecated);
+  retired_center_logits:bool (deprecated);
+  retired_project_out_pc1:bool (deprecated);
+  retired_pc1_power_iters:uint32 (deprecated);
 
   mlp_enabled:bool;
   mlp_d_ff:uint32;

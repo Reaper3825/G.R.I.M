@@ -73,7 +73,7 @@ Why this is a boundary leak:
 Owner and writer:
 
 - `Shared/TrainingState/TrainingStateGPU.cu`: allocated as `[max_tokens_per_batch, d_model]`.
-- `Shared/Forward/ModelForward_GPU.cu`: written from the actual LM-head input after optional centering.
+- `Shared/Forward/ModelForward_GPU.cu`: written from the actual LM-head input after final RMSNorm and the optional adapter.
 
 Direct readers:
 

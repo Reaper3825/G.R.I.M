@@ -138,13 +138,6 @@ static void requireEncoderAttentionHP(const GRIM::HyperParameters::EncoderSelfAt
     }
 }
 
-// Issue #142: applyLmHeadGradCorrections DELETED.
-// Centering is now INSIDE autograd graph (Issues #125/#132):
-//   CenterRowsGradFn::apply() row-centers grad_A in backward
-//   CenterColumnsGradFn::apply() column-centers grad_A in backward
-// The old external centerGradientsKernel was redundant (row centering is idempotent)
-// and wasted GPU time (kernel launch + cudaStreamSynchronize + 6x fprintf per call).
-
 /**
  * MatMulGradFn - Backward for matrix multiplication (TAPE-BASED)
  * Forward: C = A @ B  [M,K] @ [K,N] = [M,N]

@@ -14,11 +14,8 @@
 //  Per row v ∈ [0, vocab_size):
 //      row_rms[v] = sqrt( (1/d_model) · Σ_d W_eff[v,d]² )
 //
-//  W_eff semantics are controlled by the two boolean options below:
-//    - token_type_gate=false, center_rows=false: W_eff = W_lm
-//    - token_type_gate=true,  center_rows=false: W_eff = type_gate_rows_by_token_type(W_lm)
-//    - token_type_gate=false, center_rows=true:  W_eff = center_rows(W_lm)
-//    - token_type_gate=true,  center_rows=true:  W_eff = center_rows_by_token_type_gate(W_lm)
+//  W_eff = type_gate_rows_by_token_type(W_lm) when token_type_gate is true;
+//  otherwise W_eff = W_lm.
 //
 //  Returned aggregates (over the full vocab, not a sample):
 //      w_rms_mean     = (1/V) · Σ_v row_rms[v]
@@ -73,7 +70,6 @@ struct LMHeadWeightStats {
 //   vocab_size   Number of rows in W. Must be > 0.
 //   d_model      Number of columns in W. Must be > 0 and ≤ 8192 (block sizing).
 //   stream       CUDA stream the kernel + alloc + memcpy run on. NULL forbidden.
-//   center_rows  Whether to subtract the row mean inside the active subspace.
 //   token_type_gate Whether to zero out inactive token-type subspace dims.
 //
 // Returns:
@@ -87,7 +83,6 @@ LMHeadWeightStats computeLMHeadWeightStats(
     int vocab_size,
     int d_model,
     cudaStream_t stream,
-    bool center_rows = false,
     bool token_type_gate = false);
 
 } // namespace GRIM::Diagnostics

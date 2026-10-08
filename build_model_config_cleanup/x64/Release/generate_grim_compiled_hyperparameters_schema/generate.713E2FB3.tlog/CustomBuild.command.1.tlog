@@ -1,0 +1,30 @@
+^D:\G.R.I.M\BUILD_MODEL_CONFIG_CLEANUP\CMAKEFILES\EE504928A57844334D58468B08F57A25\GRIM_COMPILED_HYPERPARAMETERS_GENERATED.H.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/G.R.I.M/build_model_config_cleanup/generated
+if %errorlevel% neq 0 goto :cmEnd
+D:\G.R.I.M\resources\models\GRIM-text\training\vcpkg_installed\x64-windows\tools\flatbuffers\flatc.exe -o D:/G.R.I.M/build_model_config_cleanup/generated -c --gen-mutable D:/G.R.I.M/resources/models/GRIM-text/training/ConfigCompiler/../schemas/grim_compiled_hyperparameters.fbs
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\G.R.I.M\BUILD_MODEL_CONFIG_CLEANUP\CMAKEFILES\D86477E19156CC10D298103D807F64B3\GENERATE_GRIM_COMPILED_HYPERPARAMETERS_SCHEMA.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\G.R.I.M\RESOURCES\MODELS\GRIM-TEXT\TRAINING\CONFIGCOMPILER\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/G.R.I.M/resources/models/GRIM-text/training/ConfigCompiler -BD:/G.R.I.M/build_model_config_cleanup --check-stamp-file D:/G.R.I.M/build_model_config_cleanup/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

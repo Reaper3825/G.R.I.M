@@ -165,9 +165,6 @@ namespace GRIM::autograd {
 void logLmHeadGemmForwardEquation(const Tensor& lm_input,
                                   const Tensor& effective_weights,
                                   const Tensor& logits,
-                                  bool center_hidden_states,
-                                  bool project_out_pc1,
-                                  bool used_centered_weights,
                                   bool used_token_type_gate,
                                   int total_tokens,
                                   int d_model,
@@ -218,21 +215,8 @@ void logLmHeadGemmForwardEquation(const Tensor& lm_input,
         ratio = logit_stats.rms / expected_logit_rms;
     }
 
-    std::string lm_input_expr = "RMSNorm(h)";
-    if (center_hidden_states) {
-        lm_input_expr = "center_columns_by_causal_prefix_lengths(RMSNorm(h))";
-    }
-    if (project_out_pc1) {
-        lm_input_expr = "project_out_pc1(" + lm_input_expr + ")";
-    }
-    std::string w_eff_expr = "W_lm";
-    if (used_centered_weights && used_token_type_gate) {
-        w_eff_expr = "center_rows_by_token_type_gate(W_lm)";
-    } else if (used_centered_weights) {
-        w_eff_expr = "center_rows(W_lm)";
-    } else if (used_token_type_gate) {
-        w_eff_expr = "type_gate_rows_by_token_type(W_lm)";
-    }
+    const char* lm_input_expr = "final LM input (RMSNorm and optional adapter)";
+    const char* w_eff_expr = used_token_type_gate ? "type_gate_rows_by_token_type(W_lm)" : "W_lm";
 
     std::ostringstream eq;
     eq.setf(std::ios::fixed);
@@ -325,14 +309,14 @@ void logLmHeadGemmBackwardEquation(const Tensor& grad_output,
     logGradFlowTensorStats("LM_HEAD_GEMM_BWD grad_logits", grad_output.data,
                            grad_output.numel(), stream, true);
     if (lm_input_requires_grad && grad_lm_input) {
-        logGradFlowTensorStats("LM_HEAD_GEMM_BWD grad_lm_input_pre_centering",
+        logGradFlowTensorStats("LM_HEAD_GEMM_BWD grad_lm_input",
                                grad_lm_input,
                                static_cast<std::size_t>(M) * K,
                                stream,
                                true);
     }
     if (w_eff_requires_grad && grad_w_eff) {
-        logGradFlowTensorStats("LM_HEAD_GEMM_BWD grad_W_eff_pre_center_rows",
+        logGradFlowTensorStats("LM_HEAD_GEMM_BWD grad_W_eff",
                                grad_w_eff,
                                static_cast<std::size_t>(N) * K,
                                stream,

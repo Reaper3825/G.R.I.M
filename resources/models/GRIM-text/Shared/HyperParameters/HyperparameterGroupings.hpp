@@ -353,7 +353,6 @@ struct EncoderLayerConstructionHP {
     int min_seq_len_for_flash = 0;
     bool use_layer_scale = false;
     float layer_scale_init = 0.0f;
-    bool center_encoder_residuals = false;
     bool attention_qkv_bias_enabled = false;
     bool attention_output_bias_enabled = false;
     bool ffn_output_bias_enabled = false;
@@ -415,10 +414,6 @@ struct LMHeadLayerConstructionHP {
     bool bias_enabled = false;
     bool unigram_bias = false;
     bool tie_embeddings = false;
-    bool center_hidden_states = false;
-    bool project_out_pc1 = false;
-    int pc1_power_iters = 0;
-    bool center_logits = false;
     bool freeze_learned_rms_gammas = false;
     float rms_epsilon = 0.0f;
     // Head-side residual SwiGLU adapter: u = z + mlp_alpha * SwiGLU_MLP(z)
@@ -461,7 +456,6 @@ struct ModelHP {
     int encoder_min_seq_len_for_flash = 0;
     bool encoder_use_layer_scale = false;
     float encoder_layer_scale_init = 0.0f;
-    bool encoder_center_encoder_residuals = false;
     bool encoder_use_bias = false;
     float encoder_dropout_rate = 0.0f;
     float encoder_attention_dropout = 0.0f;
@@ -480,10 +474,6 @@ struct ModelHP {
     bool lm_head_use_bias = false;
     bool lm_head_unigram_bias = false;
     bool lm_head_tie_embeddings = false;
-    bool lm_head_center_hidden_states = false;
-    bool lm_head_project_out_pc1 = false;
-    int lm_head_pc1_power_iters = 0;
-    bool lm_head_center_logits = false;
     bool lm_head_freeze_learned_rms_gammas = false;
     float lm_head_rms_epsilon = 0.0f;
     bool lm_head_mlp_enabled = false;
@@ -1276,7 +1266,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.encoder_min_seq_len_for_flash = min_seq_len_for_flash;
     view.encoder_use_layer_scale = requireBool("use_layer_scale");
     view.encoder_layer_scale_init = requireFloat("layer_scale_init");
-    view.encoder_center_encoder_residuals = requireBool("center_encoder_residuals");
     view.encoder_use_bias = requireBool("use_bias");
     view.encoder_dropout_rate = dropout_rate;
     view.encoder_attention_dropout = attention_dropout;
@@ -1295,10 +1284,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.lm_head_use_bias = requireBool("use_bias");
     view.lm_head_unigram_bias = requireBool("lm_head_unigram_bias");
     view.lm_head_tie_embeddings = requireBool("tie_embeddings");
-    view.lm_head_center_hidden_states = requireBool("lm_head_center_hidden_states");
-    view.lm_head_project_out_pc1 = requireBool("project_out_pc1");
-    view.lm_head_pc1_power_iters = requireInt("pc1_power_iters");
-    view.lm_head_center_logits = requireBool("center_logits");
     view.lm_head_freeze_learned_rms_gammas = requireBool("freeze_learned_rms_gammas");
     view.lm_head_rms_epsilon = EPSILON_RMSNORM;
     view.lm_head_mlp_enabled = requireBool("lm_head_mlp_enabled");
@@ -1351,7 +1336,6 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.min_seq_len_for_flash = model.encoder_min_seq_len_for_flash;
     view.use_layer_scale = model.encoder_use_layer_scale;
     view.layer_scale_init = model.encoder_layer_scale_init;
-    view.center_encoder_residuals = model.encoder_center_encoder_residuals;
     view.attention_qkv_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "attention_qkv_bias_enabled");
     view.attention_output_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "attention_output_bias_enabled");
     view.ffn_output_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "ffn_output_bias_enabled");
@@ -1393,10 +1377,6 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "lm_head_bias_enabled");
     view.unigram_bias = model.lm_head_unigram_bias;
     view.tie_embeddings = model.lm_head_tie_embeddings;
-    view.center_hidden_states = model.lm_head_center_hidden_states;
-    view.project_out_pc1 = model.lm_head_project_out_pc1;
-    view.pc1_power_iters = model.lm_head_pc1_power_iters;
-    view.center_logits = model.lm_head_center_logits;
     view.freeze_learned_rms_gammas = model.lm_head_freeze_learned_rms_gammas;
     view.rms_epsilon = model.lm_head_rms_epsilon;
     view.mlp_enabled = model.lm_head_mlp_enabled;

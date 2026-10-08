@@ -258,10 +258,6 @@ std::vector<CompatibilityFactValue> buildCompatibilityFacts(
     addBool("use_layer_scale");
     addBool("use_atom_data");
     addBool("selector_enabled");
-    addBool("lm_head_center_hidden_states");
-    addBool("project_out_pc1");
-    addBool("center_logits");
-    addBool("center_encoder_residuals");
     addBool("lm_head_mlp_enabled");
 
     const auto positional_encoding =
@@ -602,27 +598,54 @@ std::uint64_t totalPayloadBytes(const std::vector<HostParameterEntry>& entries) 
 
 bool compatibilityFactsMatch(
     const flatbuffers::Vector<flatbuffers::Offset<GRIMCheckpoint::CompatibilityFact>>* stored,
+    std::uint64_t stored_checksum,
     const std::vector<CompatibilityFactValue>& expected,
     std::string& mismatch)
 {
-    if (!stored || stored->size() != expected.size()) {
+    if (!stored) {
+        mismatch = "missing checkpoint compatibility facts";
+        return false;
+    }
+    std::vector<CompatibilityFactValue> original;
+    std::vector<CompatibilityFactValue> active;
+    for (const auto* fact : *stored) {
+        if (!fact || !fact->name() || !fact->canonical_value()) {
+            mismatch = "invalid checkpoint compatibility fact";
+            return false;
+        }
+        const std::string name = fact->name()->str();
+        const std::string value = fact->canonical_value()->str();
+        if (!original.empty() && name <= original.back().name) {
+            mismatch = "checkpoint compatibility facts must be unique and sorted";
+            return false;
+        }
+        original.push_back({name, value});
+        // Read-only legacy metadata handling. New checkpoints omit these facts.
+        const bool retired = name == "center_encoder_residuals" ||
+            name == "lm_head_center_hidden_states" || name == "project_out_pc1" ||
+            name == "center_logits";
+        if (retired) {
+            if (value != "false") {
+                mismatch = "checkpoint used a removed collapse intervention: " + name;
+                return false;
+            }
+        } else {
+            active.push_back({name, value});
+        }
+    }
+    if (compatibilityChecksum(original) != stored_checksum) {
+        mismatch = "checkpoint compatibility checksum mismatch";
+        return false;
+    }
+    if (active.size() != expected.size()) {
         mismatch = "compatibility fact count mismatch: checkpoint=" +
-            std::to_string(stored ? stored->size() : 0) +
-            " current=" + std::to_string(expected.size());
+            std::to_string(active.size()) + " current=" + std::to_string(expected.size());
         return false;
     }
     for (std::size_t i = 0; i < expected.size(); ++i) {
-        const auto* fact = stored->Get(static_cast<flatbuffers::uoffset_t>(i));
-        if (!fact || !fact->name() || !fact->canonical_value()) {
-            mismatch = "invalid compatibility fact at index " + std::to_string(i);
-            return false;
-        }
-        const std::string stored_name = fact->name()->str();
-        const std::string stored_value = fact->canonical_value()->str();
-        if (stored_name != expected[i].name || stored_value != expected[i].value) {
-            mismatch = "compatibility fact mismatch at index " + std::to_string(i) +
-                ": checkpoint=" + stored_name + "=" + stored_value +
-                " current=" + expected[i].name + "=" + expected[i].value;
+        if (active[i].name != expected[i].name || active[i].value != expected[i].value) {
+            mismatch = "compatibility fact mismatch: checkpoint=" + active[i].name +
+                "=" + active[i].value + " current=" + expected[i].name + "=" + expected[i].value;
             return false;
         }
     }
@@ -885,13 +908,10 @@ bool loadParameterCheckpoint(
         std::string fact_mismatch;
         if (!compatibilityFactsMatch(
                 checkpoint->compatibility_facts(),
+                checkpoint->compatibility_xxhash64(),
                 expected_facts,
                 fact_mismatch)) {
             throw std::runtime_error(fact_mismatch);
-        }
-        if (checkpoint->compatibility_xxhash64() !=
-            compatibilityChecksum(expected_facts)) {
-            throw std::runtime_error("checkpoint compatibility checksum mismatch");
         }
 
         const auto& groups = parameter_registry.requireCheckpointParameterGroups("loadParameterCheckpoint");

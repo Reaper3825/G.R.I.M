@@ -20,7 +20,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [Loss.md](Loss.md) | Unified loss, registered global gradient clipping |
 | [GQA.md](GQA.md) | Grouped Query Attention shapes & backward scaling |
 | [FlashAttention.md](FlashAttention.md) | FA2 kernel ordering, GQA backward buffers |
-| [LMHead.md](LMHead.md) | Tied embeddings, γ_final, hidden-state centering |
+| [LMHead.md](LMHead.md) | Tied embeddings, γ_final, row-local readout |
 | [Encoder.md](Encoder.md) | Encoder layer, bias autograd, FFN cache, LayerScale |
 | [ScratchBlock.md](ScratchBlock.md) | ScratchBlock forward/backward and buffer sync |
 | [PositionEncoding.md](PositionEncoding.md) | ALiBi & RoPE NTK |

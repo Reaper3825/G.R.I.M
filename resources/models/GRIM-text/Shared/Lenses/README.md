@@ -93,8 +93,9 @@ the complete vocabulary at temperature 1, never over just the displayed top-k.
 Ties sort by token ID; nonfinite logits are rejected.
 
 Identity control borrows the complete detached encoder rectangle and replays the
-complete head with the original payload. This preserves centering/PC1 context and
-batch geometry. It adds full-rectangle head scratch and logits, but no parameter
+complete head with the original payload. This retains the original forward geometry
+validation. The LM-head readout is row-local and has no centering or PC1
+context requirement. It adds full-rectangle head scratch and logits, but no parameter
 copies or parameter gradients. `max_replay_rows` defaults to 1024 and is checked
 before model execution; it bounds rows rather than claiming an exact byte limit.
 At 768 dimensions, the persistent captured hidden row costs 3 KiB. Identity J is

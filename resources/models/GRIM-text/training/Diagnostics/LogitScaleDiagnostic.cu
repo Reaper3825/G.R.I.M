@@ -524,8 +524,6 @@ void runLogitScaleDiagnostic(
 
                 float w_rms_mean = 0.0f, w_rms_sq_mean = 0.0f, w_rms_max = 0.0f;
                 int w_rms_max_tok = -1;
-                const auto lm_head_hp = GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config);
-                const bool use_centered_weights = lm_head_hp.center_hidden_states;
                 const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
                 // Issue #138 / Apr 2026 follow-up: replace the 500-row host-side
                 // sampled CPU loop with a full-vocab on-device warp-shuffle
@@ -553,7 +551,6 @@ void runLogitScaleDiagnostic(
                             payload.vocab_size,
                             d_model,
                             diag_stream,
-                            use_centered_weights,
                             use_token_type_gate);
                     validateLmHeadWeightsConsumerBoundaryOrThrow(
                         ctx,
@@ -946,13 +943,7 @@ void runLogitScaleDiagnostic(
                          << " W_rms_max=" << w_rms_max << " (tok=" << w_rms_max_tok << ")"
                          << " d_model=" << d_model << "\n";
                     scale_eq << "  WEIGHT TRANSFORM: "
-                         << (use_centered_weights && use_token_type_gate
-                               ? "center_rows_by_token_type_gate(W_lm)"
-                               : use_centered_weights
-                                   ? "center_rows(W_lm)"
-                                   : use_token_type_gate
-                                       ? "type_gate_rows_by_token_type(W_lm)"
-                                       : "W_lm")
+                         << (use_token_type_gate ? "type_gate_rows_by_token_type(W_lm)" : "W_lm")
                          << "\n";
                     scale_eq << "  EXPECTED logit_std = sqrt(d_model) × h_rms_rms × W_eff_rms_rms\n";
                 scale_eq << "                      = sqrt(" << d_model << ") × " << h_rms_rms
