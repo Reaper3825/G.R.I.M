@@ -31,6 +31,24 @@ compile_model_config \
   --output model.grimcfg
 ```
 
+Compile all model-store presets in one batch:
+
+```text
+compile_model_config --batch --ai-config ai_config.json
+```
+
+`--ai-config` defaults to `ai_config.json` in the current directory. Batch mode
+reads `paths.grim_text.model_store` (or the legacy
+`training.config.grim_text_model_store` when the primary directive is absent).
+Relative store paths resolve against the AI config's directory. It scans only
+immediate model subdirectories, in sorted order, compiling each
+`model_config.json` to `model.grimcfg` beside it and replacing existing artifacts.
+Folders without a source are reported as skipped. Each source uses the same
+validation and integrity checks as single-file mode; invalid sources leave their
+existing artifacts untouched. Other models continue after a failure, with a
+final success/failure/skip summary and a nonzero exit code if any model fails
+or no sources are found. `--batch` cannot be combined with `--input` or `--output`.
+
 Vocabulary size is intentionally late-bound by training or inference startup
 before model allocation. Exact vocabulary identity belongs to trained-weight or
 checkpoint compatibility metadata, represented separately by

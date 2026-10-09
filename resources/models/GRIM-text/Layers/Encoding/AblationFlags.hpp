@@ -68,7 +68,7 @@
 namespace GRIM { namespace Ablation {
 
 // When true, attention sublayer contributes 0 to the residual:
-//   residual1 = input  (+ optional centering)
+//   residual1 = input
 inline constexpr bool kZeroAttnResidual = false;
 
 // When true, FFN sublayer contributes 0 to the residual:

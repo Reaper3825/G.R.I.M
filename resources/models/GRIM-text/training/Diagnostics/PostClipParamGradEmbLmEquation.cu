@@ -274,12 +274,12 @@ std::string formatPostClipParamGradEmbLmEquation(
         << (batch_idx + 1);
     if (diag.tied_embeddings) {
         oss << " WEIGHT_GRAD: grad_W_tied = grad_lm + grad_emb (direct accumulation)\n";
-        oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
+        oss << "  EQUATION: grad_lm[v] = lm_input^T @ grad_logits[:,v] (dense matmul)\n";
         oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
         oss << "            postclip_param_grad_tied = grad_lm + grad_emb (same embedding/LM parameter buffer)\n";
     } else {
         oss << " WEIGHT_GRAD: untied grad_lm + grad_emb inspected together after component clipping\n";
-        oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
+        oss << "  EQUATION: grad_lm[v] = lm_input^T @ grad_logits[:,v] (dense matmul)\n";
         oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
         oss << "            postclip_param_grad_joint[v] = concat(grad_lm[v], grad_emb[v]) (host-side row aggregation across untied buffers)\n";
     }

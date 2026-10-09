@@ -8,9 +8,8 @@
 //  during training.  No diagnostic code should modify shared
 //  training state (weight tensors, requires_grad, optimizer).
 //
-//  The underlying Phase2 inference path chooses KV decode only for sequence-local
-//  geometry. Sequence-coupled centering/projection uses full-context inference.
-//  Both modes keep inference state separate from optimizer-owned training state.
+//  Phase2 inference uses cached prefill and incremental KV decode, keeping
+//  inference state separate from optimizer-owned training state.
 //
 //  Author: Austin Wadkins
 //  Date: April 2026

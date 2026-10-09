@@ -173,7 +173,7 @@ enum class MetricStream : int {
     RMS_GAMMA_FINAL_RMS = 37,        // RMS(γ_final) — LM head final RMSNorm gamma
     // ρ-denominator collapse detector (April 2026)
     RHO_RAW_RMS_SPREAD = 38,         // rms_max / rms_min — per-position rms bifurcation
-                                     // (>2.0 indicates row-centering or upstream collapse
+                                     // (>2.0 indicates upstream representation collapse
                                      //  is stripping certain positions to near-zero,
                                      //  driving spurious high ρ via tiny denominators)
     // h↔W alignment diagnostics (April 2026) — LM-head leak channel detector.

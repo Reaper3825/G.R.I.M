@@ -305,7 +305,7 @@ std::vector<DumpSection> collectSnapshotSections(
         "Telemetry lattice",
         "Loss options",
         "Generation",
-        "LM head centering",
+        "LM head",
         "LayerScale / QK-norm",
         "Hardcoded hidden states diag",
         "Embedding freeze",

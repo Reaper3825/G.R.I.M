@@ -405,7 +405,6 @@ public:
     // Generic pooled hidden-state output. This is not target-state Goal metadata;
     // target-state production belongs to the frozen target model.
     Tensor mean_pool;
-    Tensor lm_head_input_tensor;
     // Optional transformed weights consumed by logits MatMul; live through backward.
     Tensor lm_head_effective_weights;
     // LM-head residual SwiGLU adapter (config.lm_head_mlp_enabled) retained
@@ -446,9 +445,6 @@ public:
     Tensor scratch_atom_embeddings;
 
     Tensor* liveLmHeadInputOrNull() {
-        if (lm_head_input_tensor.data) {
-            return &lm_head_input_tensor;
-        }
         if (lm_head_mlp_residual_out.data) {
             return &lm_head_mlp_residual_out;
         }
@@ -465,9 +461,6 @@ public:
     }
 
     const Tensor* liveLmHeadInputOrNull() const {
-        if (lm_head_input_tensor.data) {
-            return &lm_head_input_tensor;
-        }
         if (lm_head_mlp_residual_out.data) {
             return &lm_head_mlp_residual_out;
         }
@@ -498,7 +491,6 @@ public:
         encoder_output_tensor = Tensor();
         final_normalized_hidden_states = Tensor();
         mean_pool = Tensor();
-        lm_head_input_tensor = Tensor();
         lm_head_mlp_gate_out = Tensor();
         lm_head_mlp_silu_out = Tensor();
         lm_head_mlp_up_out = Tensor();
@@ -607,7 +599,6 @@ public:
         reportTensor("encoder_output_tensor", encoder_output_tensor);
         reportTensor("final_normalized_hidden_states", final_normalized_hidden_states);
         reportTensor("mean_pool", mean_pool);
-        reportTensor("lm_head_input_tensor", lm_head_input_tensor);
         reportTensor("lm_head_effective_weights", lm_head_effective_weights);
         reportTensor("lm_head_mlp_gate_out", lm_head_mlp_gate_out);
         reportTensor("lm_head_mlp_silu_out", lm_head_mlp_silu_out);

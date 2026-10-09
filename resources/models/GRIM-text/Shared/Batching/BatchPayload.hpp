@@ -407,6 +407,29 @@ struct BatchPayload {
                 std::to_string(target_ids.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
+        // Batching owns the complete host LM target contract. Loss consumers
+        // rely on this validation at construction/upload rather than rescanning.
+        if (hasTrainingTargets()) {
+            int realized_valid_count = 0;
+            for (int i = 0; i < total_tokens; ++i) {
+                const int target = target_ids[static_cast<std::size_t>(i)];
+                if (target < -1 || target >= vocab_size) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": invalid LM target at token=" +
+                        std::to_string(i) + " target=" + std::to_string(target) +
+                        " (must be -1 or in [0," + std::to_string(vocab_size) + "))");
+                }
+                if (target >= 0) ++realized_valid_count;
+            }
+            if (realized_valid_count != lm_valid_tokens ||
+                realized_valid_count != valid_tokens) {
+                throw std::runtime_error(
+                    std::string(caller) + ": realized LM target count=" +
+                    std::to_string(realized_valid_count) +
+                    " != authored lm_valid_tokens=" + std::to_string(lm_valid_tokens) +
+                    " or valid_tokens=" + std::to_string(valid_tokens));
+            }
+        }
         if (isInference() && !target_ids.empty()) {
             if (static_cast<int>(target_ids.size()) != total_tokens) {
                 throw std::runtime_error(

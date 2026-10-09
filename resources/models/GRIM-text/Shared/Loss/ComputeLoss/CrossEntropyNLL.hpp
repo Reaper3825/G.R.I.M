@@ -34,9 +34,9 @@ struct CrossEntropyForwardResult {
 };
 
 struct CrossEntropyForwardWorkspace {
-    float* loss_sum = nullptr;      // Device scalar [1], NLLLossGradFn-owned forward scratch
-    int* valid_count = nullptr;     // Device scalar [1], NLLLossGradFn-owned forward scratch
-    float* weight_sum = nullptr;    // Device scalar [1], NLLLossGradFn-owned forward scratch
+    float* loss_sum = nullptr;      // Device scalar [1], TextLossGradFn-owned forward scratch
+    int* valid_count = nullptr;     // Device scalar [1], TextLossGradFn-owned forward scratch
+    float* weight_sum = nullptr;    // Device scalar [1], TextLossGradFn-owned forward scratch
     std::size_t loss_sum_bytes = 0;
     std::size_t valid_count_bytes = 0;
     std::size_t weight_sum_bytes = 0;
@@ -48,8 +48,10 @@ struct CrossEntropyForwardWorkspace {
  *
  * This is the single forward call used by unified_loss() after log_softmax().
  * It consumes caller-owned scalar reduction workspace, performs host readback,
- * fail-loud validation, and mean normalization. In the autograd path the caller
- * is NLLLossGradFn::capture_inputs(), so the scratch is Category 1 tape state.
+ * loss-resource/result validation, and mean normalization. Host payload/targets
+ * must already be validated by batching and the matching upload completed.
+ * In the autograd path the caller
+ * is TextLossGradFn::capture_inputs(), so the scratch is Category 1 tape state.
  */
 CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     const float* log_probs,
@@ -63,17 +65,18 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
 );
 
 /**
- * Compute gradient of the cross-entropy-family loss w.r.t. log-probabilities.
+ * Accumulate the cross-entropy-family gradient w.r.t. logits into a live destination.
  *
- * This is the single backward call used by NLLLossGradFn before chaining into
- * LogSoftmaxGradFn.
+ * This fuses NLL and log-softmax backward. The caller owns/initializes the
+ * destination; masked rows are untouched and valid rows use +=.
+ * Requires the validated forward payload and its still-live device bindings.
  */
-void computeCrossEntropyBackwardToLogProbs(
+void computeCrossEntropyBackwardToLogits(
     const float* log_probs,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     const CrossEntropyTargetSelection& target_selection,
-    float* grad_log_probs,
+    float* grad_logits,
     int valid_count,
     float weight_sum,
     const HyperParameters::LossConfigHP& config,

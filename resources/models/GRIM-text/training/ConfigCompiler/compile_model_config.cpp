@@ -33,6 +33,8 @@ constexpr std::uint32_t kFfnMultiplier = 4;
 struct Cli {
     fs::path input;
     fs::path output;
+    bool batch = false;
+    fs::path ai_config;
 };
 
 struct EffectiveConfig {
@@ -751,14 +753,24 @@ Cli parseCli(int argc, char** argv) {
         };
         if (arg == "--input") cli.input = value();
         else if (arg == "--output") cli.output = value();
+        else if (arg == "--batch") cli.batch = true;
+        else if (arg == "--ai-config") cli.ai_config = value();
         else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: compile_model_config --input model_config.json --output model.grimcfg\n";
+            std::cout << "Usage: compile_model_config --input model_config.json --output model.grimcfg\n"
+                      << "       compile_model_config --batch [--ai-config ai_config.json]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + arg);
         }
     }
-    if (cli.input.empty() || cli.output.empty()) {
+    if (cli.batch) {
+        if (!cli.input.empty() || !cli.output.empty()) {
+            throw std::runtime_error("--batch cannot be combined with --input or --output");
+        }
+        if (cli.ai_config.empty()) cli.ai_config = "ai_config.json";
+    } else if (!cli.ai_config.empty()) {
+        throw std::runtime_error("--ai-config requires --batch");
+    } else if (cli.input.empty() || cli.output.empty()) {
         throw std::runtime_error("--input and --output are required");
     }
     return cli;
@@ -776,36 +788,92 @@ json readJson(const fs::path& path) {
     return document;
 }
 
+void compileOne(const fs::path& input, const fs::path& output) {
+    const json source = readJson(input);
+    const EffectiveConfig config = compileEffectiveConfig(source);
+    const std::uint64_t capability_hash = capabilityHash(config.capabilities);
+
+    const std::array<std::uint8_t, 32> zero_hash{};
+    const auto provisional = buildArtifact(config, zero_hash, 0, 0);
+    const auto normalized = normalizedArtifact(provisional);
+    const auto semantic_hash = sha256(normalized.data(), normalized.size());
+    const std::uint64_t model_hash = xxhash64(normalized.data(), normalized.size());
+    const auto artifact = buildArtifact(config, semantic_hash, model_hash, capability_hash);
+    verifyFlatBuffer(artifact);
+
+    const auto verification_image = normalizedArtifact(artifact);
+    if (sha256(verification_image.data(), verification_image.size()) != semantic_hash ||
+        xxhash64(verification_image.data(), verification_image.size()) != model_hash) {
+        throw std::runtime_error("artifact integrity self-verification failed");
+    }
+    writeArtifact(output, artifact);
+
+    std::cout << "compiled " << output.string() << "\n"
+              << "  schema_version: " << kSchemaVersion << "\n"
+              << "  semantic_version: " << kSemanticVersion << "\n"
+              << "  semantic_sha256: " << hex(semantic_hash.data(), semantic_hash.size()) << "\n"
+              << "  model_compatibility_xxhash64: 0x" << std::hex << model_hash << "\n"
+              << "  capability_xxhash64: 0x" << capability_hash << std::dec << "\n";
+}
+
+int compileBatch(const fs::path& ai_config) {
+    const fs::path config_path = fs::absolute(ai_config).lexically_normal();
+    const json document = readJson(config_path);
+    std::string raw_store;
+    // Use the same primary directive and legacy fallback as the model loader.
+    if (document.contains("paths") && document.at("paths").contains("grim_text") &&
+        document.at("paths").at("grim_text").contains("model_store")) {
+        raw_store = document.at("paths").at("grim_text").at("model_store").get<std::string>();
+    } else {
+        raw_store = document.at("training").at("config").at("grim_text_model_store").get<std::string>();
+    }
+    if (raw_store.empty()) throw std::runtime_error("configured model store is empty");
+    const fs::path store = (fs::path(raw_store).is_absolute()
+        ? fs::path(raw_store) : config_path.parent_path() / raw_store).lexically_normal();
+    if (!fs::is_directory(store)) {
+        throw std::runtime_error("configured model store is not a directory: " + store.string());
+    }
+
+    std::vector<fs::path> directories;
+    for (const auto& entry : fs::directory_iterator(store)) {
+        if (entry.is_directory()) directories.push_back(entry.path());
+    }
+    std::sort(directories.begin(), directories.end());
+    std::size_t succeeded = 0, failed = 0, skipped = 0;
+    std::cout << "batch model store: " << store.string() << '\n';
+    for (const auto& directory : directories) {
+        const fs::path input = directory / "model_config.json";
+        try {
+            if (!fs::exists(input)) {
+                ++skipped;
+                std::cout << "skipped " << directory.string() << ": no model_config.json\n";
+                continue;
+            }
+            if (!fs::is_regular_file(input)) {
+                throw std::runtime_error("model_config.json is not a regular file");
+            }
+            compileOne(input, directory / "model.grimcfg");
+            ++succeeded;
+        } catch (const std::exception& e) {
+            ++failed;
+            std::cerr << "failed " << input.string() << ": " << e.what() << '\n';
+        }
+    }
+    std::cout << "batch summary: " << succeeded << " succeeded, " << failed
+              << " failed, " << skipped << " skipped\n";
+    if (succeeded + failed == 0) {
+        throw std::runtime_error("no model_config.json inputs found under " + store.string());
+    }
+    return failed == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
         const Cli cli = parseCli(argc, argv);
-        const json source = readJson(cli.input);
-        const EffectiveConfig config = compileEffectiveConfig(source);
-        const std::uint64_t capability_hash = capabilityHash(config.capabilities);
-
-        const std::array<std::uint8_t, 32> zero_hash{};
-        const auto provisional = buildArtifact(config, zero_hash, 0, 0);
-        const auto normalized = normalizedArtifact(provisional);
-        const auto semantic_hash = sha256(normalized.data(), normalized.size());
-        const std::uint64_t model_hash = xxhash64(normalized.data(), normalized.size());
-        const auto artifact = buildArtifact(config, semantic_hash, model_hash, capability_hash);
-        verifyFlatBuffer(artifact);
-
-        const auto verification_image = normalizedArtifact(artifact);
-        if (sha256(verification_image.data(), verification_image.size()) != semantic_hash ||
-            xxhash64(verification_image.data(), verification_image.size()) != model_hash) {
-            throw std::runtime_error("artifact integrity self-verification failed");
-        }
-        writeArtifact(cli.output, artifact);
-
-        std::cout << "compiled " << cli.output.string() << "\n"
-                  << "  schema_version: " << kSchemaVersion << "\n"
-                  << "  semantic_version: " << kSemanticVersion << "\n"
-                  << "  semantic_sha256: " << hex(semantic_hash.data(), semantic_hash.size()) << "\n"
-                  << "  model_compatibility_xxhash64: 0x" << std::hex << model_hash << "\n"
-                  << "  capability_xxhash64: 0x" << capability_hash << std::dec << "\n";
+        if (cli.batch) return compileBatch(cli.ai_config);
+        compileOne(cli.input, cli.output);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "compile_model_config: " << e.what() << '\n';

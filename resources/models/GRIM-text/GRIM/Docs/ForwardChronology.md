@@ -81,7 +81,7 @@ flowchart TD
 
 ## Inference chronology
 
-Inference has one chronological shape: Phase2 owns the autoregressive generation loop and repeatedly scores the current full context through the same shared forward graph used by training/eval.
+Inference has one chronological shape: Phase2 owns the autoregressive generation loop and prefills the prompt once, then scores pending tokens through the shared forward graph using its session-owned KV cache.
 
 ### Inference entrypoints
 

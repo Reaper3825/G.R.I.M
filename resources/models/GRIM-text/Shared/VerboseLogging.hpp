@@ -26,7 +26,7 @@ constexpr bool ENABLE_BACKWARD_GRADIENT_LOGS = false;  ///< "[BACKWARD layer=X] 
 constexpr bool ENABLE_BACKWARD_FLASH_ATTN_LOGS = false;///< "[BACKWARD layer=X] Flash Attention backward complete"
 
 // Loss computation logging - DISABLED FOR PRODUCTION
-constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;  ///< NLLLossGradFn diagnostic sampling
+constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;  ///< TextLossGradFn accumulated logits-gradient sampling
 
 // Rho computation feeds two independent sinks. Keep telemetry enabled for
 // post-training CSV analysis while allowing the verbose equation logs to stay off.

@@ -412,7 +412,7 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
 
     // Experimental ablation (AblationFlags.hpp): zero attention's contribution
     // to the residual while keeping the autograd graph intact. The chosen
-    // branch tensor is multiplied by 0 so residual1 == input (+ centering),
+    // branch tensor is multiplied by 0 so residual1 == input,
     // and attention parameters receive zero gradient (sublayer frozen).
     if (GRIM::Ablation::kZeroAttnResidual) {
         Tensor& attn_branch = hp.use_layer_scale ? scaled_proj : attention_residual_branch;
@@ -468,7 +468,6 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     // Issue #56: The final output IS stored in intermediates too
     // for consistency, but we also return it
     // Issue #109: Apply LayerScale to ffn_out before residual addition
-    // Issue #118: Apply centering to remove common direction before residual add
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2...\n");
     

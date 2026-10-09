@@ -2,7 +2,7 @@
 //  AutogradLoss.hpp
 //  Unified autograd-enabled loss: Focal + Label Smoothing + Cross Entropy + Entropy Reg
 //
-//  This is the ONLY public loss computation path.
+//  This is the public primary text loss computation path.
 //  Cross-entropy / NLL internals live in CrossEntropyNLL.hpp/.cu.
 //======================================================//
 
@@ -27,14 +27,15 @@ namespace autograd {
  * Compute unified loss with autograd support
  * 
  * Architecture:
- *   logits → autograd::log_softmax() → log_probs → NLL loss → scalar loss
+ *   logits → loss-owned log_probs → NLL forward → scalar loss
  *
  * Internally composes:
  *   1. log_softmax(logits) — numerically stable log(softmax(x)) = x - logsumexp(x)
  *   2. NLL loss on log_probs — -log_probs[target] with focal/smoothing/entropy
  *
  * Backward chain:
- *   NLLLossGradFn → LogSoftmaxGradFn → upstream (MatMulGradFn)
+ *   TextLossGradFn → logits producer (or leaf gradient)
+ *   Fused NLL/log-softmax backward accumulates directly; no grad_log_probs tensor.
  *   Produces: grad_logits[j] = (p_j - q_j) / N  (standard CE gradient)
  *
  * Loss formula:
@@ -43,12 +44,14 @@ namespace autograd {
  *   (focal_alpha is ONLY applied when focal_enabled=true)
  * 
  * @param logits      [num_tokens, vocab_size] - raw logits from LM head
- * @param payload     Host-side batch metadata: geometry, vocab, valid-token counts
+ * @param payload     Immutable host metadata validated by batch construction/upload
  * @param bindings    Device-side batch view containing uploaded d_target_ids
  * @param config      Durable loss grouping from HyperparameterGroupings.hpp
  * @param d_class_weights Optional class-balanced weights owned by TrainingState
  * @param stream      CUDA stream
  * @return Scalar loss tensor with grad_fn attached (if logits.requires_grad)
+ * The bindings must belong to this payload's completed upload and remain valid
+ * through backward. Loss validates its tensors/resources, not host target data.
  */
 Tensor unified_loss(
     Tensor& logits,

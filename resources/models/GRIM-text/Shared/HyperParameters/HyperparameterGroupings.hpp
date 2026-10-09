@@ -190,6 +190,9 @@ struct GradientClippingHP {
 };
 
 struct LossConfigHP {
+    // Launch geometry comes from the centralized CUDA constant owner.
+    int cuda_block_size = CUDA_BLOCK_SIZE_STANDARD;
+
     float focal_alpha = 0.0f;
     float focal_gamma = 0.0f;
     bool focal_enabled = false;

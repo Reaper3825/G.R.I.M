@@ -53,7 +53,6 @@ const Tensor& normalizeReadoutRows(
     Forward::ModelForwardOutputs& forward_outputs) {
     forward_outputs.final_normalized_hidden_states = Tensor();
     forward_outputs.mean_pool = Tensor();
-    forward_outputs.lm_head_input_tensor = Tensor();
     forward_outputs.lm_head_mlp_gate_out = Tensor();
     forward_outputs.lm_head_mlp_silu_out = Tensor();
     forward_outputs.lm_head_mlp_up_out = Tensor();
