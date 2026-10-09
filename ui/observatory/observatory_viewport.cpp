@@ -72,7 +72,7 @@ struct ObservatoryViewport::State {
                 double best=144.0, bestDepth=2.0;
                 for (const auto& l:report->positions[position].layers) for (const auto& c:l.candidates) {
                     auto p=camera.projectPoint(location(*report,l.layer,c.probability,l.entropyNats));
-                    if (!p) continue;
+                    if (!p) continue; 
                     double d=(p->x-e.x)*(p->x-e.x)+(p->y-e.y)*(p->y-e.y);
                     if (d<best || (std::abs(d-best)<1e-6 && p->z<bestDepth)) {
                         best=d;bestDepth=p->z;selection=Selection{l.layer,c.tokenId};

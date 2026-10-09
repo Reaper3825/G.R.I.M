@@ -249,10 +249,6 @@ void logLmHeadGemmForwardEquation(const Tensor& lm_input,
        << " min=" << logit_stats.min_val << " max=" << logit_stats.max_val
        << " rms=" << logit_stats.rms << " ratio=" << ratio
        << " nan=" << logit_stats.nan_count << " inf=" << logit_stats.inf_count << "\n";
-    if (used_centered_weights && weight_stats.row_mean_abs_max > 1e-4f) {
-        eq << "  [ANOMALY] W_eff row means are not near zero after " << w_eff_expr << ": max_abs="
-           << weight_stats.row_mean_abs_max << "\n";
-    }
     if (std::isfinite(ratio) && ratio > 3.0f) {
         eq << "  [ANOMALY] actual/expected logit RMS ratio=" << ratio
            << " suggests h↔W alignment or hidden-state collapse at the LM GEMM boundary\n";

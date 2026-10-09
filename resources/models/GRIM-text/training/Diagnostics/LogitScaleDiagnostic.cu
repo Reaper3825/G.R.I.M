@@ -436,7 +436,7 @@ void runLogitScaleDiagnostic(
                 const float avg_per_pos_range = per_pos_range_sum / sample_positions;
                 
                 // --- Hidden state norms at LM head input ---
-                // The live LM-head input tensor is centered when centering is enabled.
+                // Use the live LM-head input after normalization and the optional adapter.
                 const float* h_src = lm_head_input_tensor.data;
                 const auto& h_shape = lm_head_input_tensor.shape.require("runLogitScaleDiagnostic lm_head_input_tensor");
                 if (!h_shape.is_2d_layout()) {
@@ -897,11 +897,11 @@ void runLogitScaleDiagnostic(
                 // exactly, so the actual/expected>>1 gap is entirely the
                 // isotropic-null gap (real h↔W anisotropy) and NOT a mis-measured
                 // actual or expected term. Only exact when no LM-head weight
-                // transform (centering / type-gate) is active.
+                // token-type weight gate is inactive.
                 float recon_residual = std::numeric_limits<float>::quiet_NaN();
                 float recon_logit    = 0.0f;
                 float live_logit     = 0.0f;
-                const bool recon_exact = (!use_centered_weights && !use_token_type_gate);
+                const bool recon_exact = !use_token_type_gate;
                 const int  recon_t0 = lm_valid_positions.front();
                 const int  recon_v0 = (w_rms_max_tok >= 0 && w_rms_max_tok < vocab_size) ? w_rms_max_tok : 0;
                 if (recon_exact) {
