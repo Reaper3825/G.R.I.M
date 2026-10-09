@@ -448,7 +448,6 @@ void runOptimizerWindowFromEpoch(
         tel_input.optimizer_step    = optimizer_step;
         tel_input.should_step       = true;
         tel_input.text_loss         = result.text_loss;
-        tel_input.selector_loss     = result.selector_loss;
         tel_input.local_atom_retrieval_loss =
             result.local_atom_retrieval_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
@@ -459,8 +458,6 @@ void runOptimizerWindowFromEpoch(
 
         GRIM::Telemetry::updateTelemetryObservations(
             ctx,
-            training_state,
-            ctx.gpu_model,
             parameter_registry,
             tel_input);
     }

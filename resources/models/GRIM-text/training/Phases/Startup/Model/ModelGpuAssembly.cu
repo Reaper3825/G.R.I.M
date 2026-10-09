@@ -97,23 +97,6 @@ void requirePBMReady(bool pbm_initialized,
     }
 }
 
-void requireReadGateWorkspace(const GRIM::TrainingState& training_state,
-                              const char* caller) {
-    if (!training_state.read_gate_accum_tensor.data) {
-        throw std::runtime_error(
-            std::string("[") + caller + "] TrainingState workspace allocation did not create read_gate_accum_tensor");
-    }
-}
-
-void allocateRuntimeWorkspaces(GRIM::TrainingState& training_state,
-                               cudaStream_t primary_stream,
-                               const char* caller,
-                               const char* allocation_banner) {
-    std::cout << allocation_banner << std::endl;
-    training_state.allocateReadGateWorkspace(primary_stream);
-    requireReadGateWorkspace(training_state, caller);
-}
-
 void validatePBMConfigOrThrow(const GRIM::Config::AiConfigSnapshot& model_cfg,
                               const GRIM::HyperParameters::PBMConstructionHP& pbm_hp,
                               const char* caller) {
@@ -316,7 +299,7 @@ void initializeTrainingRuntime(::GRIM::TrainingState& training_state,
     constexpr const char* caller = "Startup::initializeTrainingRuntime";
     requireRuntimeNotInitialized(training_state, caller, "training runtime");
 
-    cudaStream_t primary_stream = requirePrimaryStream(
+    (void)requirePrimaryStream(
         training_state,
         caller,
         "[Startup::initializeTrainingRuntime] StreamController not initialized! Phase1_Startup must call stream_ctrl.initialize() before training runtime allocation — Rule 20: no silent fallbacks");
@@ -328,11 +311,8 @@ void initializeTrainingRuntime(::GRIM::TrainingState& training_state,
     requirePBMReady(pbm_owner.initialized(), caller, "PBM not initialized! Call Startup::initializePBM() before training runtime allocation — Rule 20: no silent fallbacks");
     std::cout << "✓ PBM (Hybrid ALiBi+RoPE) pre-initialized" << std::endl;
 
-    allocateRuntimeWorkspaces(training_state, primary_stream, caller, "📊 Allocating TrainingState runtime workspaces");
-
-    std::cout << "✓ TrainingState runtime workspaces allocated" << std::endl;
     training_state.initialized = true;
-    std::cout << "✓ Training state initialized with runtime workspaces" << std::endl;
+    std::cout << "✓ Training state initialized" << std::endl;
 }
 
 void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
@@ -382,8 +362,6 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     std::cout << "  ℹ Allocating activation caches: batch=" << max_batch_size
               << ", seq_len=" << max_seq_len_cache
               << ", total_tokens=" << max_tokens << std::endl;
-
-    allocateRuntimeWorkspaces(training_state, primary_stream, caller, "  ↳ Allocating inference runtime workspaces");
 
     generation_state.resetSession();
     std::cout << "  ✓ Reset Phase2 inference session state" << std::endl;

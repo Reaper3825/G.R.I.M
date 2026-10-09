@@ -92,17 +92,11 @@ void populateCoreStreams(float* obs, const TelemetryBatchInput& input) {
 }
 
 //------------------------------------------------------
-// Streams 61-68: Raw loss decomposition
+// Streams 61-62: Live loss decomposition
 //------------------------------------------------------
 void populateLossComponentStreams(float* obs, const TelemetryBatchInput& input) {
     obs[61] = input.text_loss;
     obs[62] = input.local_atom_retrieval_loss;
-    obs[63] = input.selector_loss;
-    obs[64] = 0.0f;
-    obs[65] = 0.0f;
-    obs[66] = 0.0f;
-    obs[67] = 0.0f;
-    obs[68] = input.execution_loss;
 }
 
 //------------------------------------------------------
@@ -132,46 +126,6 @@ void populateAdamCausationStreams(float* obs, const TelemetryBatchInput& input,
     obs[12] = disruption_emb;
     obs[13] = inv_bc2;
     obs[60] = iteration;
-}
-
-//------------------------------------------------------
-// Streams 14-15 reserved; streams 16-20: Execution Block health tracking
-//------------------------------------------------------
-void populateExecBlockHealthStreams(
-    float* obs,
-    const TelemetryBatchInput& input) {
-    obs[14] = 0.0f;
-    obs[15] = 0.0f;
-    obs[16] = input.exec_selection_entropy;
-    obs[17] = input.exec_op_entropy;
-    obs[18] = input.exec_div_clamp_rate;
-    obs[19] = input.exec_max_p_write;
-    obs[20] = input.exec_active_ratio;
-}
-
-//------------------------------------------------------
-// Streams 21-26: EB injection diagnostics + explicit loss composition
-//------------------------------------------------------
-void populateEBInjectionStreams(
-    float* obs,
-    const GRIM::TrainingState& training_state,
-    const TelemetryBatchInput& input,
-    const GRIMText::Training::Startup::GpuModelState& gpu_model) {
-
-    // Stream 21: EB_INJECT_GATE
-    obs[21] = input.inject_gate_mean;
-
-    // Stream 22: EB_READ_GATE_MEAN (Category 2 telemetry snapshot on TrainingState)
-    obs[22] = training_state.h_read_gate_mean;
-
-    obs[23] = 0.0f;
-    obs[24] = 0.0f;
-
-    // Stream 25: EB_LOSS_FRAC
-    obs[25] = 0.0f;
-
-    // Stream 26 is reserved for historical compatibility.
-    obs[26] = 0.0f;
 }
 
 //------------------------------------------------------
@@ -246,8 +200,6 @@ void populatePBMStreams(float* obs, GRIMText::Training::TrainingContext& ctx, in
 
 void updateTelemetryObservations(
     GRIMText::Training::TrainingContext& ctx,
-    const GRIM::TrainingState& training_state,
-    const GRIMText::Training::Startup::GpuModelState& gpu_model,
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const TelemetryBatchInput& input) {
 
@@ -271,22 +223,11 @@ void updateTelemetryObservations(
     // Streams 0-4: Core metrics
     populateCoreStreams(obs, input);
 
-    // Streams 61-68: Raw loss decomposition
+    // Streams 61-62: Live loss decomposition
     populateLossComponentStreams(obs, input);
 
     // Streams 9-13 plus stream 60: optimizer causation
     populateAdamCausationStreams(obs, input, ctx.telemetry.adam_cumulative_disp);
-
-    // Streams 14-15 reserved; streams 16-20: Execution Block health
-    populateExecBlockHealthStreams(obs, input);
-
-    // Streams 21-26: EB injection diagnostics
-    populateEBInjectionStreams(obs, training_state, input, gpu_model);
-
-    // streams 25-26: explicit non-text loss fractions
-    if (input.loss > 1e-12f) {
-        obs[25] = input.execution_loss / input.loss;
-    }
 
     // Streams 27-30: PBM diagnostics
     populatePBMStreams(obs, ctx, input.max_seq_len);

@@ -24,15 +24,6 @@ namespace GRIM {
 TrainingState::TrainingState() = default;
 TrainingState::~TrainingState() = default;
 
-void TrainingState::allocateReadGateWorkspace(cudaStream_t stream)
-{
-    StreamController::fatalIfDefaultStream(stream,
-                                           "TrainingState::allocateReadGateWorkspace");
-
-    read_gate_accum_tensor = Tensor::zeros({2}, stream, "read_gate_accum");
-    std::cout << "✓ Allocated read-gate telemetry accumulator [sum,count]" << std::endl;
-}
-
 } // namespace GRIM
 
 #endif  // USE_CUDA

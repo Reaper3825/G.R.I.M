@@ -137,6 +137,7 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
         }
 
         for (int s = 0; s < num_streams_; ++s) {
+            if (!isActiveMetricStream(s)) continue;
             TelemetryState state{};
             TelemetryError err = lattice.readState(level, s, &state);
             if (err != TelemetryError::OK) continue;

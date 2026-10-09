@@ -38,8 +38,6 @@ struct TrainingState {
     TrainingState(TrainingState&&) = delete;
     TrainingState& operator=(TrainingState&&) = delete;
 
-    void allocateReadGateWorkspace(cudaStream_t stream);
-
     //======================================================//
     //  PARAMETER TENSORS (weights + gradients via autograd)
     //======================================================//
@@ -69,17 +67,6 @@ struct TrainingState {
     TeacherLogits::Buffer teacher_logits;
     TeacherLogits::Buffer reference_logits;
 
-    //======================================================//
-    //  CROSS-ATTENTION READ-GATE TELEMETRY (Rule 20 ownership taxonomy)
-    //======================================================//
-    // read_gate_accum_tensor: Category 3 (workspace). [2] device buffer
-    //   = [sum_of_gate_values, total_token_count]. Reusable across batches;
-    //   contents are stale across the autograd boundary — must be re-zeroed
-    //   before each forward and snapshotted before backward consumes the tape.
-    // h_read_gate_mean: Category 2 (durable telemetry scalar). Survives the
-    //   autograd boundary by design — consumed by TelemetryUpdate after clear().
-    Tensor read_gate_accum_tensor;
-    float  h_read_gate_mean  = 0.0f;
     // NOTE: encoder_workspace DELETED (Rule 20/26)
     // Autograd forward creates its own intermediate Tensors — nothing consumed the workspace.
 

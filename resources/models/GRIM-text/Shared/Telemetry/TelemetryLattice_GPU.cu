@@ -57,7 +57,7 @@ __global__ void updateTelemetryStateKernel(
     int* error_flag                 // [1] - atomicOr on error
 ) {
     const int stream_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (stream_idx >= num_streams) {
+    if (stream_idx >= num_streams || !isActiveMetricStream(stream_idx)) {
         return;
     }
 
@@ -318,19 +318,6 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::ADAM_CUMULATIVE_DISP: return "adam_cumulative_disp";
         case MetricStream::ADAM_DISRUPTION_EMB: return "adam_disruption_emb";
         case MetricStream::ADAM_INV_BC2_AMP: return "adam_inv_bc2_amp";
-        case MetricStream::RESERVED_14: return "reserved_14";
-        case MetricStream::RESERVED_15: return "reserved_15";
-        case MetricStream::EXEC_SELECTION_ENTROPY: return "exec_selection_entropy";
-        case MetricStream::EXEC_OP_ENTROPY: return "exec_op_entropy";
-        case MetricStream::EXEC_DIV_CLAMP_RATE: return "exec_div_clamp_rate";
-        case MetricStream::EXEC_MAX_P_WRITE: return "exec_max_p_write";
-        case MetricStream::EXEC_ACTIVE_RATIO: return "exec_active_ratio";
-        case MetricStream::EB_INJECT_GATE: return "eb_inject_gate";
-        case MetricStream::EB_READ_GATE_MEAN: return "eb_read_gate_mean";
-        case MetricStream::RESERVED_23: return "reserved_23";
-        case MetricStream::RESERVED_24: return "reserved_24";
-        case MetricStream::EB_LOSS_FRAC: return "eb_loss_frac";
-        case MetricStream::RESERVED_26: return "reserved_26";
         case MetricStream::PBM_ALIBI_SLOPE_RMS: return "pbm_alibi_slope_rms";
         case MetricStream::PBM_ALIBI_EFF_BIAS_MAX: return "pbm_alibi_eff_bias_max";
         case MetricStream::PBM_ROPE_INV_FREQ_RMS: return "pbm_rope_inv_freq_rms";
@@ -367,37 +354,6 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::OPTIMIZER_ITERATION: return "optimizer_iteration";
         case MetricStream::TEXT_LOSS: return "text_loss";
         case MetricStream::LOCAL_ATOM_RETRIEVAL_LOSS: return "local_atom_retrieval_loss";
-        case MetricStream::SELECTOR_LOSS: return "selector_loss";
-        case MetricStream::RESERVED_64: return "reserved_64";
-        case MetricStream::RESERVED_65: return "reserved_65";
-        case MetricStream::RESERVED_66: return "reserved_66";
-        case MetricStream::RESERVED_67: return "reserved_67";
-        case MetricStream::EXECUTION_LOSS: return "execution_loss";
-        case MetricStream::EXEC_LOSS_GATE_CE_RAW: return "exec_loss_gate_ce_raw";
-        case MetricStream::EXEC_LOSS_STOP_CE_RAW: return "exec_loss_stop_ce_raw";
-        case MetricStream::EXEC_LOSS_OP_CE_RAW: return "exec_loss_op_ce_raw";
-        case MetricStream::EXEC_LOSS_ARG1_CE_RAW: return "exec_loss_arg1_ce_raw";
-        case MetricStream::EXEC_LOSS_ARG2_CE_RAW: return "exec_loss_arg2_ce_raw";
-        case MetricStream::EXEC_LOSS_WRITE_CE_RAW: return "exec_loss_write_ce_raw";
-        case MetricStream::EXEC_LOSS_DIV_PRE_NORM: return "exec_loss_div_pre_norm";
-        case MetricStream::EXEC_LOSS_ENTROPY_CONTRIBUTION: return "exec_loss_entropy_contribution";
-        case MetricStream::EXEC_LOSS_GATE_CONTRIBUTION: return "exec_loss_gate_contribution";
-        case MetricStream::EXEC_LOSS_STOP_CONTRIBUTION: return "exec_loss_stop_contribution";
-        case MetricStream::EXEC_LOSS_OP_CONTRIBUTION: return "exec_loss_op_contribution";
-        case MetricStream::EXEC_LOSS_ARG1_CONTRIBUTION: return "exec_loss_arg1_contribution";
-        case MetricStream::EXEC_LOSS_ARG2_CONTRIBUTION: return "exec_loss_arg2_contribution";
-        case MetricStream::EXEC_LOSS_WRITE_CONTRIBUTION: return "exec_loss_write_contribution";
-        case MetricStream::EXEC_LOSS_DIV_CONTRIBUTION: return "exec_loss_div_contribution";
-        case MetricStream::EXEC_LOSS_RECONSTRUCTED: return "exec_loss_reconstructed";
-        case MetricStream::EXEC_LOSS_RESIDUAL: return "exec_loss_residual";
-        case MetricStream::EXEC_GATE_ACCURACY: return "exec_gate_accuracy";
-        case MetricStream::EXEC_STOP_ACCURACY: return "exec_stop_accuracy";
-        case MetricStream::EXEC_OP_ACCURACY: return "exec_op_accuracy";
-        case MetricStream::EXEC_ARG1_ACCURACY: return "exec_arg1_accuracy";
-        case MetricStream::EXEC_ARG2_ACCURACY: return "exec_arg2_accuracy";
-        case MetricStream::EXEC_WRITE_ACCURACY: return "exec_write_accuracy";
-        case MetricStream::RESERVED_92: return "reserved_92";
-        case MetricStream::EXEC_LOSS_SCALAR_TERM_COUNT: return "exec_loss_scalar_term_count";
         default: return "unknown";
     }
 }

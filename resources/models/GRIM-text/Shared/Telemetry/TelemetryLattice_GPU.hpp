@@ -142,21 +142,7 @@ enum class MetricStream : int {
     ADAM_CUMULATIVE_DISP = 11,    // Σlr(t): total weight displacement from Xavier init
     ADAM_DISRUPTION_EMB = 12,     // cumulative_disp / xavier_emb_scale: displacement in Xavier units
     ADAM_INV_BC2_AMP = 13,        // 1/(1-β₂^(step+1)): v bias correction amplification factor
-    // Execution Block health tracking
-    RESERVED_14 = 14,
-    RESERVED_15 = 15,
-    EXEC_SELECTION_ENTROPY = 16,     // mean(H(arg1)+H(arg2)+H(op)+H(write))/4: decision sharpness
-    EXEC_OP_ENTROPY = 17,            // mean(H(op)): operation diversity (collapse = single op)
-    EXEC_DIV_CLAMP_RATE = 18,        // div_clamp_count / total_steps: numerical stability
-    EXEC_MAX_P_WRITE = 19,           // mean(max(p_write)): write slot concentration
-    EXEC_ACTIVE_RATIO = 20,          // active_rows / batch_size: exec block utilization
-    // EB/SB injection diagnostics (poisoning hypothesis)
-    EB_INJECT_GATE = 21,             // mean sigmoid inject gate across active rows*steps
-    EB_READ_GATE_MEAN = 22,          // mean sigmoid cross-attn read gate across tokens*layers
-    RESERVED_23 = 23,
-    RESERVED_24 = 24,
-    EB_LOSS_FRAC = 25,               // execution_loss / total_loss
-    RESERVED_26 = 26,
+    // Slots 14-26 retired (execution/injection diagnostics); do not reuse.
     // PBM (Positional Bias Method) diagnostics
     PBM_ALIBI_SLOPE_RMS = 27,        // RMS of ALiBi slopes (constant; verifies init integrity)
     PBM_ALIBI_EFF_BIAS_MAX = 28,     // max|slope| * batch_max_seq_len (varies per batch)
@@ -238,42 +224,14 @@ enum class MetricStream : int {
     // objective units so they can be graphed directly beside stream 0 (LOSS).
     TEXT_LOSS                = 61,
     LOCAL_ATOM_RETRIEVAL_LOSS = 62,
-    SELECTOR_LOSS            = 63,
-    RESERVED_64              = 64,
-    RESERVED_65              = 65,
-    RESERVED_66              = 66,
-    RESERVED_67              = 67,
-    EXECUTION_LOSS           = 68,
-
-    // Legacy execution-objective stream IDs are retained for telemetry schema
-    // compatibility. The removed teacher-forced execution path no longer
-    // writes them.
-    EXEC_LOSS_GATE_CE_RAW          = 69,
-    EXEC_LOSS_STOP_CE_RAW          = 70,
-    EXEC_LOSS_OP_CE_RAW            = 71,
-    EXEC_LOSS_ARG1_CE_RAW          = 72,
-    EXEC_LOSS_ARG2_CE_RAW          = 73,
-    EXEC_LOSS_WRITE_CE_RAW         = 74,
-    EXEC_LOSS_DIV_PRE_NORM         = 75,
-    EXEC_LOSS_ENTROPY_CONTRIBUTION = 76,
-    EXEC_LOSS_GATE_CONTRIBUTION    = 77,
-    EXEC_LOSS_STOP_CONTRIBUTION    = 78,
-    EXEC_LOSS_OP_CONTRIBUTION      = 79,
-    EXEC_LOSS_ARG1_CONTRIBUTION    = 80,
-    EXEC_LOSS_ARG2_CONTRIBUTION    = 81,
-    EXEC_LOSS_WRITE_CONTRIBUTION   = 82,
-    EXEC_LOSS_DIV_CONTRIBUTION     = 83,
-    EXEC_LOSS_RECONSTRUCTED        = 84,
-    EXEC_LOSS_RESIDUAL             = 85,
-    EXEC_GATE_ACCURACY             = 86,
-    EXEC_STOP_ACCURACY             = 87,
-    EXEC_OP_ACCURACY               = 88,
-    EXEC_ARG1_ACCURACY             = 89,
-    EXEC_ARG2_ACCURACY             = 90,
-    EXEC_WRITE_ACCURACY            = 91,
-    RESERVED_92                    = 92,
-    EXEC_LOSS_SCALAR_TERM_COUNT    = 93,
+    // Slots 63-93 retired (selector, latent and execution objectives); do not reuse.
 };
+
+// Shared by the GPU update and CSV export. Stable IDs include retired holes.
+__host__ __device__ constexpr bool isActiveMetricStream(int stream_idx) {
+    return (stream_idx >= 0 && stream_idx <= 13) ||
+           (stream_idx >= 27 && stream_idx <= 62);
+}
 
 const char* getMetricStreamName(MetricStream stream);
 
