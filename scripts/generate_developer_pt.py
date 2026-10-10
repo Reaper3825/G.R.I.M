@@ -364,7 +364,9 @@ def recover(data_dir):
     journal.unlink()
 
 
-def append_rows(data_dir, name, rows):
+def append_rows(data_dir, name, rows, course_key="dev", course_name="Developer assistance"):
+    if not re.fullmatch(r"[a-z0-9_]+", course_key) or not course_name.strip():
+        raise ValueError("Invalid PT course key/name")
     with locked(data_dir):
         recover(data_dir)
         registry, curriculum, manifest = load_target(data_dir, name)
@@ -407,13 +409,13 @@ def append_rows(data_dir, name, rows):
                 members.add(block_id)
         if not added_ids:
             return {"new_rows": 0, "new_members": 0}
-        course_id = "course_dev_pt_" + digest(curriculum["id"].encode())[:16]
+        course_id = "course_" + course_key + "_pt_" + digest(curriculum["id"].encode())[:16]
         course = next((c for c in registry["courses"] if c["id"] == course_id), None)
         if course is None:
-            course = {"id": course_id, "name": "Developer assistance", "concept_block_ids": []}
+            course = {"id": course_id, "name": course_name, "concept_block_ids": []}
             registry["courses"].append(course)
-        elif course_id not in curriculum["course_ids"]:
-            raise ValueError("Developer course ID collision")
+        elif course_id not in curriculum["course_ids"] or course["name"] != course_name:
+            raise ValueError("PT course ID/name collision")
         course["concept_block_ids"].extend(added_ids)
         if course_id not in curriculum["course_ids"]:
             curriculum["course_ids"].append(course_id)
