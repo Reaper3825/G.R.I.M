@@ -1,4 +1,5 @@
 #include "bootstrap.hpp"
+#include "../core/grim_text_server_api.hpp"
 #include "bootstrap_config.hpp"
 #include "resources.hpp"
 #include "console_history.hpp"
@@ -375,7 +376,7 @@ static void bootstrapSubsystems() {
         if (GRIM::startGRIMTextServer()) {
             LOG_PHASE("GRIM-text server startup", true);
             LOG_DEBUG("Bootstrap", "GRIM-text server running at " +
-                     aiConfig.value("grim_text_url", "http://127.0.0.1:11435"));
+                     aiConfig.value("grim_text_url", GRIM::ServerAPI::defaultPublicURL()));
         } else {
             LOG_ERROR("Bootstrap", "Failed to start GRIM-text server");
             LOG_PHASE("GRIM-text server startup", false);

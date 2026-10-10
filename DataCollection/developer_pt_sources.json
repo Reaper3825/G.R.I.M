@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "cpp-guidelines",
+      "repository": "isocpp/CppCoreGuidelines",
+      "ref": "master",
+      "include": ["CppCoreGuidelines.md"],
+      "start_marker": "### <a name=\"rp-direct\"></a>P.1:",
+      "license_paths": ["LICENSE"],
+      "topic": "cpp-design"
+    },
+    {
+      "id": "python-docs",
+      "repository": "python/cpython",
+      "ref": "v3.13.0",
+      "include": ["Doc/tutorial/*.rst", "Doc/howto/*.rst"],
+      "license_paths": ["LICENSE"],
+      "topic": "python"
+    },
+    {
+      "id": "cmake-docs",
+      "repository": "Kitware/CMake",
+      "ref": "v3.31.0",
+      "include": ["Help/guide/tutorial/*.rst", "Help/manual/cmake-buildsystem.7.rst", "Help/manual/cmake-generator-expressions.7.rst"],
+      "license_paths": ["Copyright.txt"],
+      "topic": "build-tools"
+    },
+    {
+      "id": "powershell-docs",
+      "repository": "MicrosoftDocs/PowerShell-Docs",
+      "ref": "main",
+      "include": ["reference/docs-conceptual/learn/ps101/*.md", "reference/7.5/Microsoft.PowerShell.Core/About/about_*.md"],
+      "license_paths": ["LICENSE.md", "LICENSE-CODE.md"],
+      "topic": "powershell"
+    },
+    {
+      "id": "pytest-docs",
+      "repository": "pytest-dev/pytest",
+      "ref": "8.3.3",
+      "include": ["doc/en/how-to/*.rst", "doc/en/explanation/*.rst"],
+      "license_paths": ["LICENSE"],
+      "topic": "testing"
+    }
+  ]
+}

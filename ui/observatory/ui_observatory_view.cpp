@@ -1,3 +1,4 @@
+#include "../../core/grim_text_server_api.hpp"
 #include "ui_observatory_view.hpp"
 #include "observatory_viewport.hpp"
 #include "ui/primitives/ui_button.hpp"
@@ -204,7 +205,7 @@ struct UIObservatoryView::Impl {
             loading=std::async(std::launch::async,[snapshot,request,url,capturePath,jacobian] {
                 httplib::Client client(url);
                 client.set_connection_timeout(2,0);client.set_read_timeout(jacobian?3600:600,0);
-                const auto response=client.Post("/api/inspect",request.dump(),"application/json");
+                const auto response=client.Post(GRIM::ServerAPI::Public::kInspect,request.dump(),GRIM::ServerAPI::kJsonContentType);
                 if(!response)throw std::runtime_error("Inference server unavailable. Load the selected model through the existing model loader first.");
                 const auto json=parseInspectionResponse(response->status,response->body);
                 Loaded result;result.report=std::make_shared<Report>(parseReport(json,*snapshot));result.liveCapture=true;

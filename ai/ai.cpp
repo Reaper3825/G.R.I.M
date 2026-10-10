@@ -12,6 +12,7 @@
 #include "personality_manager.hpp"
 #include "location.hpp"  // For location context
 #include "grim_text_server_manager.hpp"
+#include "../core/grim_text_server_api.hpp"
 #include "../MMO/Backends/GrimNativeBackend.hpp"
 #include "../MMO/Backends/OllamaBackend.hpp"
 #include <fstream>
@@ -216,7 +217,7 @@ static std::string callGrimTextDirect(
     const std::string& prompt,
     const std::string& session_id,
     const std::optional<GRIM::ReasoningState>& reasoning_state = std::nullopt) {
-    std::string url = aiConfig.value("grim_text_url", "http://127.0.0.1:11435");
+    std::string url = aiConfig.value("grim_text_url", GRIM::ServerAPI::defaultPublicURL());
     ensureGrimTextServerReady(url);
 
     GRIM::MMO::GrimNativeBackend backend(url, "grim-text-direct");

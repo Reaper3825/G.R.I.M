@@ -144,6 +144,9 @@ namespace UITheme {
     // Typography
     // ====================================================
     namespace Typography {
+        // Fixed baseline for the global Font Size setting. Keep this stable
+        // when tuning the individual sizes below.
+        constexpr float ReferenceSize  = 14.0f;
         constexpr float TitleSize      = 17.0f;
         constexpr float HeaderSize     = 15.0f;
         constexpr float BodySize       = 14.0f;

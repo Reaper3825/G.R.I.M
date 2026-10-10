@@ -3,6 +3,7 @@
 //======================================================//
 
 #include "ProcessManager.hpp"
+#include "../../core/grim_text_server_api.hpp"
 #include "../../logger.hpp"
 #include "../../resources.hpp"
 
@@ -284,7 +285,7 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     }
     slot.executable_path = server_exe.string();
 
-    const uint16_t public_port = slot.port > 0 ? slot.port : 11435;
+    const uint16_t public_port = slot.port > 0 ? slot.port : GRIM::ServerAPI::kDefaultPublicPort;
     const uint16_t worker_port = configuredInferenceWorkerPort(public_port);
     const std::string cmd_line = "\"" + server_exe.string() +
         "\" --public-port " + std::to_string(public_port) +
@@ -405,7 +406,7 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     }
     slot.executable_path = server_exe.string();
 
-    const uint16_t public_port = slot.port > 0 ? slot.port : 11435;
+    const uint16_t public_port = slot.port > 0 ? slot.port : GRIM::ServerAPI::kDefaultPublicPort;
     const uint16_t worker_port = configuredInferenceWorkerPort(public_port);
     const std::string public_port_str = std::to_string(public_port);
     const std::string worker_port_str = std::to_string(worker_port);

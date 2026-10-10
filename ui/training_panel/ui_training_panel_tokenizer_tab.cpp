@@ -244,7 +244,9 @@ void UITrainingPanel::drawEncodeResults(OverlayRenderer& renderer, float x, floa
         // Determine display text
         std::string displayText = tok.piece;
         if (displayText.empty()) {
-            displayText = "<" + std::to_string(tok.id) + ">";
+            // Older workers decode each piece as a complete sequence, stripping
+            // the sole space from a standalone unigram word-boundary marker.
+            displayText = tok.type == "unigram" ? " " : "<" + std::to_string(tok.id) + ">";
         }
         // Replace control chars for display
         for (char& c : displayText) {
@@ -254,7 +256,8 @@ void UITrainingPanel::drawEncodeResults(OverlayRenderer& renderer, float x, floa
         }
 
         float textW = UIDrawHelpers::getTextWidth(displayText);
-        float chipW = textW + 2.0f * chipPadX;
+        const std::string idStr = std::to_string(tok.id);
+        float chipW = std::max(textW, UIDrawHelpers::getTextWidth(idStr)) + 2.0f * chipPadX;
 
         // Wrap to next line
         if (chipX + chipW > x + width && chipX > x) {
@@ -271,7 +274,6 @@ void UITrainingPanel::drawEncodeResults(OverlayRenderer& renderer, float x, floa
         renderer.drawText({chipX + chipPadX, chipY + 5.0f}, displayText, Colors::TextPrimary);
 
         // Token ID subscript
-        std::string idStr = std::to_string(tok.id);
         renderer.drawText({chipX + chipPadX, chipY + chipH - 10.0f}, idStr, Colors::TextSecondary);
 
         chipX += chipW + chipGap;

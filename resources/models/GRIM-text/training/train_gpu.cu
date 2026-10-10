@@ -45,6 +45,7 @@
 #include <utility>
 #include <vector>
 
+#include "../../../../core/grim_text_server_api.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
@@ -107,7 +108,7 @@ GRIM::HyperParameters::ModelExecutionMode requestedExecutionMode(int argc, char*
 }
 
 int requestedInferenceWorkerPort(int argc, char** argv) {
-    int port = 11436;
+    int port = GRIM::ServerAPI::kDefaultWorkerPort;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--inference-worker-port") {
@@ -232,7 +233,7 @@ int runInferenceWorker(
     const std::string tokenizer_identity = GRIM::Tokenizer::AtomTable::computeFileHash(paths_hp.vocab_path, vocab_hash)
         ? "vocab-file-hash64:" + std::to_string(vocab_hash) : std::string{};
 
-    svr.Get("/internal/status", [&](const httplib::Request&, httplib::Response& res) {
+    svr.Get(GRIM::ServerAPI::Worker::kStatus, [&](const httplib::Request&, httplib::Response& res) {
         json response = {
             {"status", "ready"},
             {"model", "grim-text"},
@@ -242,7 +243,7 @@ int runInferenceWorker(
             {"loaded_checkpoint_path", ctx.loaded_checkpoint_path},
             {"vocab_path", paths_hp.vocab_path}
         };
-        res.set_content(response.dump(), "application/json");
+        res.set_content(response.dump(), GRIM::ServerAPI::kJsonContentType);
     });
 
     const auto tokenizer_request = [&](const httplib::Request& req, httplib::Response& res, bool encode) {
@@ -255,7 +256,7 @@ int runInferenceWorker(
             std::unique_lock<std::mutex> lock(execution_mutex, std::try_to_lock);
             if (!lock.owns_lock()) {
                 res.status = 409;
-                res.set_content(json({{"error", "Model worker is busy; retry when the current operation finishes"}}).dump(), "application/json");
+                res.set_content(json({{"error", "Model worker is busy; retry when the current operation finishes"}}).dump(), GRIM::ServerAPI::kJsonContentType);
                 return;
             }
             auto response = encode
@@ -264,20 +265,20 @@ int runInferenceWorker(
             response["vocab_path"] = paths_hp.vocab_path;
             response["loaded_checkpoint_path"] = ctx.loaded_checkpoint_path;
             res.status = response.value("status", std::string{}) == "success" ? 200 : 422;
-            res.set_content(response.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
+            res.set_content(response.dump(-1, ' ', false, json::error_handler_t::replace), GRIM::ServerAPI::kJsonContentType);
         } catch (const std::exception& e) {
             res.status = 400;
-            res.set_content(json({{"status", "error"}, {"error", e.what()}}).dump(), "application/json");
+            res.set_content(json({{"status", "error"}, {"error", e.what()}}).dump(), GRIM::ServerAPI::kJsonContentType);
         }
     };
-    svr.Post("/internal/tokenizer/run", [&](const httplib::Request& req, httplib::Response& res) {
+    svr.Post(GRIM::ServerAPI::Worker::kTokenizerRun, [&](const httplib::Request& req, httplib::Response& res) {
         tokenizer_request(req, res, false);
     });
-    svr.Post("/internal/tokenizer/encode", [&](const httplib::Request& req, httplib::Response& res) {
+    svr.Post(GRIM::ServerAPI::Worker::kTokenizerEncode, [&](const httplib::Request& req, httplib::Response& res) {
         tokenizer_request(req, res, true);
     });
 
-    svr.Post("/internal/inspect", [&](const httplib::Request& req, httplib::Response& res) {
+    svr.Post(GRIM::ServerAPI::Worker::kInspect, [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const auto request = json::parse(req.body);
             if (request.value("mode", std::string("inference")) != "inference")
@@ -331,14 +332,14 @@ int runInferenceWorker(
                 compiled, ctx.loaded_checkpoint_path, [&](int id) {
                     return tokenizer.decode(GRIM::Tokenizer::DecodeRequest({id}));
                 });
-            res.set_content(report.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
+            res.set_content(report.dump(-1, ' ', false, json::error_handler_t::replace), GRIM::ServerAPI::kJsonContentType);
         } catch (const std::exception& e) {
             res.status = 400;
-            res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+            res.set_content(json({{"error", e.what()}}).dump(), GRIM::ServerAPI::kJsonContentType);
         }
     });
 
-    svr.Post("/internal/generate", [&](const httplib::Request& req, httplib::Response& res) {
+    svr.Post(GRIM::ServerAPI::Worker::kGenerate, [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json request = json::parse(req.body);
             const std::string prompt = requireJsonString(request, "prompt");
@@ -354,16 +355,16 @@ int runInferenceWorker(
                 {"done", true},
                 {"stats", inferenceStatsJson(generated)}
             };
-            res.set_content(response.dump(), "application/json");
+            res.set_content(response.dump(), GRIM::ServerAPI::kJsonContentType);
         } catch (const std::exception& e) {
             res.status = 500;
             EmitModuleError(ModuleId::TrainingOrchestrator,
                 std::string("[/internal/generate] ") + e.what(), ctx.global_step);
-            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
+            res.set_content(json({{"error", std::string(e.what())}}).dump(), GRIM::ServerAPI::kJsonContentType);
         }
     });
 
-    svr.Post("/internal/chat", [&](const httplib::Request& req, httplib::Response& res) {
+    svr.Post(GRIM::ServerAPI::Worker::kChat, [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json request = json::parse(req.body);
             const std::string prompt = chatPromptFromRequest(request, request.contains("reasoning_state"));
@@ -379,12 +380,12 @@ int runInferenceWorker(
                 {"done", true},
                 {"stats", inferenceStatsJson(generated)}
             };
-            res.set_content(response.dump(), "application/json");
+            res.set_content(response.dump(), GRIM::ServerAPI::kJsonContentType);
         } catch (const std::exception& e) {
             res.status = 500;
             EmitModuleError(ModuleId::TrainingOrchestrator,
                 std::string("[/internal/chat] ") + e.what(), ctx.global_step);
-            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
+            res.set_content(json({{"error", std::string(e.what())}}).dump(), GRIM::ServerAPI::kJsonContentType);
         }
     });
 
@@ -392,7 +393,7 @@ int runInferenceWorker(
     ready << "[Phase 2] Inference worker listening on http://127.0.0.1:" << port;
     EmitModuleInfo(ModuleId::TrainingOrchestrator, ready.str(), ctx.global_step);
 
-    if (!svr.listen("127.0.0.1", port)) {
+    if (!svr.listen(GRIM::ServerAPI::kLoopbackHost, port)) {
         throw std::runtime_error("train_gpu: inference worker failed to listen on requested port " +
                                  std::to_string(port));
     }

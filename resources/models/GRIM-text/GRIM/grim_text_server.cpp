@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 
+#include "../../../../core/grim_text_server_api.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
@@ -28,8 +29,8 @@ using json = nlohmann::json;
 namespace {
 
 struct BridgeOptions {
-    int public_port = 11435;
-    int worker_port = 11436;
+    int public_port = GRIM::ServerAPI::kDefaultPublicPort;
+    int worker_port = GRIM::ServerAPI::kDefaultWorkerPort;
 };
 
 int parsePort(const std::string& value, const char* option_name) {
@@ -76,10 +77,10 @@ BridgeOptions parseBridgeOptions(int argc, char** argv) {
 }
 
 bool workerReady(int worker_port) {
-    httplib::Client client("127.0.0.1", worker_port);
+    httplib::Client client(GRIM::ServerAPI::kLoopbackHost, worker_port);
     client.set_connection_timeout(0, 200000);
     client.set_read_timeout(1, 0);
-    auto response = client.Get("/internal/status");
+    auto response = client.Get(GRIM::ServerAPI::Worker::kStatus);
     return response && response->status == 200;
 }
 
@@ -89,37 +90,37 @@ void forwardToWorker(
     const httplib::Request& req,
     httplib::Response& res)
 {
-    httplib::Client client("127.0.0.1", worker_port);
+    httplib::Client client(GRIM::ServerAPI::kLoopbackHost, worker_port);
     client.set_connection_timeout(2, 0);
-    client.set_read_timeout(std::string(worker_path)=="/internal/inspect"?3600:600, 0);
-    auto worker_response = client.Post(worker_path, req.body, "application/json");
+    client.set_read_timeout(std::string(worker_path)==GRIM::ServerAPI::Worker::kInspect?3600:600, 0);
+    auto worker_response = client.Post(worker_path, req.body, GRIM::ServerAPI::kJsonContentType);
     if (!worker_response) {
         res.status = 503;
         res.set_content(json({
                             {"error", "router_unavailable"},
                             {"message", "The MMO router model is not loaded"}
                         }).dump(),
-                        "application/json");
+                        GRIM::ServerAPI::kJsonContentType);
         return;
     }
 
     res.status = worker_response->status;
     std::string content_type = worker_response->get_header_value("Content-Type");
     if (content_type.empty()) {
-        content_type = "application/json";
+        content_type = GRIM::ServerAPI::kJsonContentType;
     }
     res.set_content(worker_response->body, content_type.c_str());
 }
 
 void forwardStatusFromWorker(int worker_port, httplib::Response& res) {
-    httplib::Client client("127.0.0.1", worker_port);
+    httplib::Client client(GRIM::ServerAPI::kLoopbackHost, worker_port);
     client.set_connection_timeout(0, 200000);
     client.set_read_timeout(1, 0);
-    auto worker_response = client.Get("/internal/status");
+    auto worker_response = client.Get(GRIM::ServerAPI::Worker::kStatus);
 
     json response = {
         {"status", "ok"},
-        {"service", "grim_text_server"},
+        {"service", GRIM::ServerAPI::kServiceName},
         {"router_status", "unloaded"}
     };
     if (worker_response && worker_response->status == 200) {
@@ -131,7 +132,7 @@ void forwardStatusFromWorker(int worker_port, httplib::Response& res) {
     }
 
     res.status = 200;
-    res.set_content(response.dump(), "application/json");
+    res.set_content(response.dump(), GRIM::ServerAPI::kJsonContentType);
 }
 
 } // namespace
@@ -158,31 +159,31 @@ int main(int argc, char** argv)
         httplib::Server svr;
 
         // Bridge liveness does not depend on a loaded model or its execution lock.
-        svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-            res.set_content(json({{"status", "ok"}, {"service", "grim_text_server"}}).dump(),
-                            "application/json");
+        svr.Get(GRIM::ServerAPI::Public::kHealth, [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(json({{"status", "ok"}, {"service", GRIM::ServerAPI::kServiceName}}).dump(),
+                            GRIM::ServerAPI::kJsonContentType);
         });
 
-        svr.Post("/api/tokenizer/run", [&](const httplib::Request& req, httplib::Response& res) {
-            forwardToWorker(options.worker_port, "/internal/tokenizer/run", req, res);
+        svr.Post(GRIM::ServerAPI::Public::kTokenizerRun, [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, GRIM::ServerAPI::Worker::kTokenizerRun, req, res);
         });
 
-        svr.Post("/api/tokenizer/encode", [&](const httplib::Request& req, httplib::Response& res) {
-            forwardToWorker(options.worker_port, "/internal/tokenizer/encode", req, res);
+        svr.Post(GRIM::ServerAPI::Public::kTokenizerEncode, [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, GRIM::ServerAPI::Worker::kTokenizerEncode, req, res);
         });
 
-        svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
+        svr.Get(GRIM::ServerAPI::Public::kRoot, [&](const httplib::Request&, httplib::Response& res) {
             json response = { 
                 {"status", "ok"},
-                {"service", "grim_text_server"},
+                {"service", GRIM::ServerAPI::kServiceName},
                 {"version", "1.0.0"},
                 {"router_status", workerReady(options.worker_port) ? "ready" : "unloaded"},
                 {"runtime_owner", "mmo_model_loader"}
             };
-            res.set_content(response.dump(), "application/json");
+            res.set_content(response.dump(), GRIM::ServerAPI::kJsonContentType);
         });
 
-        svr.Get("/api/tags", [&](const httplib::Request&, httplib::Response& res) {
+        svr.Get(GRIM::ServerAPI::Public::kTags, [&](const httplib::Request&, httplib::Response& res) {
             json models = json::array();
             if (workerReady(options.worker_port)) {
                 models.push_back({
@@ -191,30 +192,30 @@ int main(int argc, char** argv)
                 });
             }
             json response = {{"models", std::move(models)}};
-            res.set_content(response.dump(), "application/json");
+            res.set_content(response.dump(), GRIM::ServerAPI::kJsonContentType);
         });
 
-        svr.Get("/api/status", [&](const httplib::Request&, httplib::Response& res) {
+        svr.Get(GRIM::ServerAPI::Public::kStatus, [&](const httplib::Request&, httplib::Response& res) {
             forwardStatusFromWorker(options.worker_port, res);
         });
 
-        svr.Post("/api/inspect", [&](const httplib::Request& req, httplib::Response& res) {
-            forwardToWorker(options.worker_port, "/internal/inspect", req, res);
+        svr.Post(GRIM::ServerAPI::Public::kInspect, [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, GRIM::ServerAPI::Worker::kInspect, req, res);
         });
 
-        svr.Post("/api/generate", [&](const httplib::Request& req, httplib::Response& res) {
-            forwardToWorker(options.worker_port, "/internal/generate", req, res);
+        svr.Post(GRIM::ServerAPI::Public::kGenerate, [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, GRIM::ServerAPI::Worker::kGenerate, req, res);
         });
 
-        svr.Post("/api/chat", [&](const httplib::Request& req, httplib::Response& res) {
-            forwardToWorker(options.worker_port, "/internal/chat", req, res);
+        svr.Post(GRIM::ServerAPI::Public::kChat, [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, GRIM::ServerAPI::Worker::kChat, req, res);
         });
 
         std::cout << "[GRIM-text] Starting HTTP bridge on http://127.0.0.1:"
                   << options.public_port << "\n";
         std::cout << "[GRIM-text] Press Ctrl+C to stop.\n";
 
-        svr.listen("127.0.0.1", options.public_port);
+        svr.listen(GRIM::ServerAPI::kLoopbackHost, options.public_port);
     } catch (const std::exception& e) {
         std::cerr << "[GRIM-text] ERROR: " << e.what() << "\n";
 #ifdef _WIN32

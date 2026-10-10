@@ -1,6 +1,7 @@
 #pragma once
 // JSON diagnostics transport through the GRIM-text public bridge.
 // Call from background work; this client owns no server lifecycle or model state.
+#include "../core/grim_text_server_api.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -16,10 +17,10 @@ public:
             httplib::Client client(url_);
             client.set_connection_timeout(1, 0);
             client.set_read_timeout(1, 0);
-            const auto response = client.Get("/health");
+            const auto response = client.Get(GRIM::ServerAPI::Public::kHealth);
             if (!response || response->status != 200) return false;
             const auto status = nlohmann::json::parse(response->body);
-            return status.value("service", std::string{}) == "grim_text_server";
+            return status.value("service", std::string{}) == GRIM::ServerAPI::kServiceName;
         } catch (...) { return false; }
     }
     struct TokenizerResult {
@@ -55,7 +56,7 @@ public:
             const auto body = nlohmann::json::object();
             
             std::string bodyStr = body.dump();
-            auto res = client->Post("/api/tokenizer/run", bodyStr, "application/json");
+            auto res = client->Post(GRIM::ServerAPI::Public::kTokenizerRun, bodyStr, GRIM::ServerAPI::kJsonContentType);
             
             if (!res) {
                 result.error = "Connection failed";
@@ -136,7 +137,7 @@ public:
             body["text"] = text;
 
             std::string bodyStr = body.dump();
-            auto res = client->Post("/api/tokenizer/encode", bodyStr, "application/json");
+            auto res = client->Post(GRIM::ServerAPI::Public::kTokenizerEncode, bodyStr, GRIM::ServerAPI::kJsonContentType);
 
             if (!res) {
                 result.error = "Connection failed";

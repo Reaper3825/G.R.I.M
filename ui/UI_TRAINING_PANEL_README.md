@@ -16,6 +16,12 @@ same core-plus-tab layout as DataHub.
 
 ## Tokenizer diagnostics
 
+`core/grim_text_server_api.hpp` defines the shared public and worker endpoint
+paths, default ports and public URL, loopback host, service identity, and JSON
+content type. The HTTP bridge, worker, server/process managers, startup code,
+native generation backend, tokenizer client, and Observatory use this contract. It is separate
+from the DLL plugin function table in `core/plugin_api.hpp`.
+
 Load a model through the model loader before validating or encoding text. The
 panel uses the server URL from `GRIMTextServerManager` and posts to
 `/api/tokenizer/run` and `/api/tokenizer/encode`. The bridge forwards to the

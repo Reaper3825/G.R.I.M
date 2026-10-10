@@ -2,6 +2,7 @@
 // See GrimNativeBackend.hpp for interface documentation.
 //======================================================//
 #include "GrimNativeBackend.hpp"
+#include "../../core/grim_text_server_api.hpp"
 #include "../../DataCollection/reasoning_state_json.hpp"
 
 #include "../../logger.hpp"
@@ -99,13 +100,13 @@ GenerationResult GrimNativeBackend::generateWithHistory(
     if (options.top_k > 0)         body["top_k"]        = options.top_k;
 
     int timeout = options.timeout_ms > 0 ? options.timeout_ms : kDefaultGrimTextTimeoutMs;
-    std::string endpoint = url_ + "/api/chat";
+    std::string endpoint = url_ + GRIM::ServerAPI::Public::kChat;
 
     LOG_DEBUG("MMO_GRIM_NATIVE", "[TRACE] POST " + endpoint + " (timeout=" + std::to_string(timeout) + "ms)");
 
     cpr::Response http_resp = cpr::Post(
         cpr::Url{endpoint},
-        cpr::Header{{"Content-Type", "application/json"}},
+        cpr::Header{{"Content-Type", GRIM::ServerAPI::kJsonContentType}},
         cpr::Body{body.dump()},
         cpr::Timeout{timeout}
     );
@@ -166,7 +167,7 @@ GenerationResult GrimNativeBackend::generateEnvelope(
 
     cpr::Response http_resp = cpr::Post(
         cpr::Url{endpoint},
-        cpr::Header{{"Content-Type", "application/json"}},
+        cpr::Header{{"Content-Type", GRIM::ServerAPI::kJsonContentType}},
         cpr::Body{options.envelope_json},
         cpr::Timeout{timeout}
     );
@@ -202,7 +203,7 @@ GenerationResult GrimNativeBackend::generateEnvelope(
 bool GrimNativeBackend::isAvailable() const {
     try {
         cpr::Response resp = cpr::Get(
-            cpr::Url{url_ + "/api/tags"},
+            cpr::Url{url_ + GRIM::ServerAPI::Public::kTags},
             cpr::Timeout{2000}
         );
         return resp.status_code == 200;

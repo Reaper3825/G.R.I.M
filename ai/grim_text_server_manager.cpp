@@ -3,6 +3,7 @@
 //======================================================//
 
 #include "grim_text_server_manager.hpp"
+#include "../core/grim_text_server_api.hpp"
 #include "../logger.hpp"
 #include "../resources.hpp"
 #include <cpr/cpr.h>
@@ -95,7 +96,7 @@ GRIMTextServerManager& GRIMTextServerManager::getInstance() {
 
 GRIMTextServerManager::GRIMTextServerManager() 
     : serverPath_("resources/models/GRIM-text/training/build/Release/grim_text_server.exe"),
-      serverURL_("http://127.0.0.1:11435"),
+      serverURL_(GRIM::ServerAPI::defaultPublicURL()),
       running_(false)
 #ifdef _WIN32
       , hProcess_(nullptr)

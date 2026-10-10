@@ -49,8 +49,24 @@ inline nlohmann::json encodeTokenizerText(const GRIM::Tokenizer::UniByte& tokeni
         const char* type = isSpecialTokenId(id) ? "special" : isByteTokenId(id) ? "byte" :
             isNumericTokenId(id) ? "numeric" : isAtomTokenId(id) ? "atom" :
             isNewlineTokenId(id) ? "newline" : "unigram";
+        std::string display_piece;
+        if (id >= UNIGRAM_VOCAB_OFFSET) {
+            const auto* piece = tokenizer.unigramLM().getPiece(id);
+            if (!piece) throw std::runtime_error("Diagnostic token has no backing UnigramPiece");
+            display_piece = piece->text;
+            // Per-token display must retain every boundary space. Sequence decode
+            // strips one leading space, which would hide a standalone marker.
+            const std::string marker = "\xE2\x96\x81"; // SentencePiece U+2581
+            for (size_t pos = 0; (pos = display_piece.find(marker, pos)) != std::string::npos; ++pos) {
+                display_piece.replace(pos, marker.size(), " ");
+            }
+        } else if (id == BYTE_TOKEN_OFFSET + ' ') {
+            display_piece = " ";
+        } else {
+            display_piece = tokenizer.decode(DecodeRequest({id}));
+        }
         response["tokens"].push_back({{"id", id}, {"type", type},
-            {"piece", tokenizer.decode(DecodeRequest({id}))}});
+            {"piece", std::move(display_piece)}});
     }
     return response;
 }

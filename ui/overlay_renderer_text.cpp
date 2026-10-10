@@ -241,9 +241,21 @@ void OverlayRenderer::rebuildAtlas()
     LOG_ERROR("OverlayRenderer", "Failed to bake font atlas (tried up to 4096x4096)");
 }
 
-void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_t color)
+// Keep drawing, measurement, and wrapping on the same theme-relative scale.
+static float typographyScale(float size)
 {
-    drawTextScaled(pos, text, color, 1.0f);
+    if (!std::isfinite(size) || size <= 0.0f) {
+        throw std::invalid_argument("Text size must be finite and > 0");
+    }
+    static_assert(UITheme::Typography::ReferenceSize > 0.0f,
+                  "Theme reference size must be > 0");
+    return size / UITheme::Typography::ReferenceSize;
+}
+
+void OverlayRenderer::drawText(const Vec2& pos, const std::string& text,
+                               uint32_t color, float size)
+{
+    drawTextScaled(pos, text, color, typographyScale(size));
 }
 
 void OverlayRenderer::drawTextScaled(
@@ -252,11 +264,11 @@ void OverlayRenderer::drawTextScaled(
     uint32_t color,
     float scale)
 {
-    if (scale <= 0.0f) {
-        throw std::invalid_argument("OverlayRenderer::drawTextScaled requires scale > 0");
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        throw std::invalid_argument("OverlayRenderer::drawTextScaled requires finite scale > 0");
     }
 
-    float textW = measureTextWidth(text) * scale;
+    float textW = measureTextWidth(text, UITheme::Typography::ReferenceSize) * scale;
     expandDirtyRect(
         static_cast<int>(pos.x),
         static_cast<int>(pos.y),
@@ -353,8 +365,9 @@ void OverlayRenderer::drawTextScaled(
     }
 }
 
-float OverlayRenderer::measureTextWidth(const std::string& text) const
+float OverlayRenderer::measureTextWidth(const std::string& text, float size) const
 {
+    const float scale = typographyScale(size);
     if (!m_fontLoaded || text.empty()) return 0.0f;
     float width = 0.0f;
     size_t i = 0;
@@ -368,14 +381,15 @@ float OverlayRenderer::measureTextWidth(const std::string& text) const
         }
         width += it->second.xadvance;
     }
-    return width;
+    return width * scale;
 }
 
 std::vector<std::string> OverlayRenderer::wrapText(const std::string& text,
-                                                   float maxWidth) const
+                                                   float maxWidth, float size) const
 {
-    if (maxWidth <= 0.0f)
-        throw std::invalid_argument("OverlayRenderer::wrapText requires maxWidth > 0");
+    typographyScale(size); // Validate even when wrapping empty text.
+    if (!std::isfinite(maxWidth) || maxWidth <= 0.0f)
+        throw std::invalid_argument("OverlayRenderer::wrapText requires finite maxWidth > 0");
 
     std::vector<std::string> wrappedLines;
     size_t logicalStart = 0;
@@ -398,7 +412,7 @@ std::vector<std::string> OverlayRenderer::wrapText(const std::string& text,
                     decodeUtf8(logicalLine, cursor);
                     if (logicalLine[codepointStart] == ' ')
                         lastSpace = codepointStart;
-                    if (measureTextWidth(logicalLine.substr(lineStart, cursor - lineStart))
+                    if (measureTextWidth(logicalLine.substr(lineStart, cursor - lineStart), size)
                         > maxWidth) {
                         break;
                     }

@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "helpers/vector2.hpp"
 #include "ui/icon_codepoints.hpp"
+#include "ui/ui_theme.hpp"
 
 struct ClipRect {
     int x1, y1, x2, y2;
@@ -37,14 +38,19 @@ public:
                         uintptr_t panelId = 0, bool deferGlassRefresh = false);
     void drawSoftGlow(const Vec2& pos, const Vec2& size, float radius,
                       uint32_t color, float spread);
-    void drawText(const Vec2& pos, const std::string& text, uint32_t color);
+    // Sizes use theme typography units; setFont's size renders ReferenceSize.
+    // The global Font Size setting scales all requested sizes proportionally.
+    void drawText(const Vec2& pos, const std::string& text, uint32_t color,
+                  float size = UITheme::Typography::BodySize);
     void drawTextScaled(const Vec2& pos, const std::string& text,
                         uint32_t color, float scale);
-    float measureTextWidth(const std::string& text) const;
-    std::vector<std::string> wrapText(const std::string& text, float maxWidth) const;
+    float measureTextWidth(const std::string& text,
+                           float size = UITheme::Typography::BodySize) const;
+    std::vector<std::string> wrapText(const std::string& text, float maxWidth,
+                                      float size = UITheme::Typography::BodySize) const;
     void drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness = 1.0f);
     
-    // Load a TTF/OTF font from a file path. fontSize is in pixels.
+    // Load a TTF/OTF font. fontSize is the pixel size at Typography::ReferenceSize.
     void setFont(const std::string& fontPath, int fontSize = 16);
 
     // Load an icon font (FontAwesome, Material Icons, etc.) to merge into the atlas.
