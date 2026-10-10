@@ -91,7 +91,7 @@ void forwardToWorker(
 {
     httplib::Client client("127.0.0.1", worker_port);
     client.set_connection_timeout(2, 0);
-    client.set_read_timeout(600, 0);
+    client.set_read_timeout(std::string(worker_path)=="/internal/inspect"?3600:600, 0);
     auto worker_response = client.Post(worker_path, req.body, "application/json");
     if (!worker_response) {
         res.status = 503;
@@ -156,6 +156,20 @@ int main(int argc, char** argv)
         std::cout << "[GRIM-text] Router state: unloaded\n";
 
         httplib::Server svr;
+
+        // Bridge liveness does not depend on a loaded model or its execution lock.
+        svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(json({{"status", "ok"}, {"service", "grim_text_server"}}).dump(),
+                            "application/json");
+        });
+
+        svr.Post("/api/tokenizer/run", [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, "/internal/tokenizer/run", req, res);
+        });
+
+        svr.Post("/api/tokenizer/encode", [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, "/internal/tokenizer/encode", req, res);
+        });
 
         svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
             json response = { 

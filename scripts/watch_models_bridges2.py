@@ -9,6 +9,8 @@ Ctrl+C stops the watcher; disconnects retry automatically. --prune-remote remove
 archived checkpoints from the HPC, keeping the latest PT and SFT in each directory
 and their optimizer sidecars. Local files and remote configurations are retained.
 Changed remote files replace their local counterparts.
+Model-store configuration files are excluded; Git manages them.
+vocab.bin and vocab.txt in training/data also sync automatically, download-only.
 
 Files must remain unchanged across two successful polls before download. Remote
 metadata is checked before/after streaming, and local replacement is atomic.
@@ -20,6 +22,7 @@ Interrupted files restart on the next poll (no rsync dependency or resume).
 
 import argparse
 import base64
+from contextlib import ExitStack
 import hashlib
 import inspect
 import json
@@ -36,6 +39,8 @@ import time
 
 
 MODEL_STORE = "resources/models/model_store"
+TRAINING_DATA = "resources/models/GRIM-text/training/data"
+VOCAB_FILES = ("vocab.bin", "vocab.txt")
 DEFAULT_REPO = "/ocean/projects/cis250124p/uwadkins/G.R.I.M"
 LOG = logging.getLogger("model-watch")
 
@@ -50,6 +55,8 @@ def signature(s):
     return [s.st_size, s.st_mtime_ns, s.st_ctime_ns if os.name != 'nt' else 0, s.st_ino]
 def temporary(name):
     return name.startswith('.') or name.endswith(('~', '.tmp', '.partial', '.part', '.lock', '.writing.grimlorackpt')) or '.transfer.' in name
+def configuration(name):
+    return Path(name).suffix.lower() in ('.grimcfg', '.json', '.jsonc', '.json5', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf')
 '''
 REMOTE_INVENTORY = '''
 def inventory(root):
@@ -61,7 +68,7 @@ def inventory(root):
     for directory, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = [d for d in dirs if not temporary(d) and not (Path(directory)/d).is_symlink()]
         for name in files:
-            if temporary(name):
+            if temporary(name) or configuration(name):
                 continue
             path = Path(directory)/name
             try:
@@ -74,6 +81,24 @@ def inventory(root):
 '''
 REMOTE_LIST = REMOTE_COMMON + REMOTE_INVENTORY + '''
 print(json.dumps(inventory(Path(sys.argv[1]))))
+'''
+REMOTE_LIST_FILES = REMOTE_COMMON + '''
+root = Path(sys.argv[1])
+result = {}
+if root.exists():
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError('Remote vocabulary directory must be a real directory')
+    for name in json.loads(sys.argv[2]):
+        if Path(name).name != name or temporary(name):
+            raise RuntimeError('Invalid vocabulary filename')
+        path = root/name
+        try:
+            s = path.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(s.st_mode):
+            result[name] = signature(s)
+print(json.dumps(result))
 '''
 REMOTE_CHECK = REMOTE_COMMON + '''
 root = Path(sys.argv[1])
@@ -236,12 +261,15 @@ def error_message(error):
 
 class Watcher:
     def __init__(self, host, remote_root, local_root, state_file, ssh="ssh", prune_remote=False,
-                 control_host=None, sftp="sftp"):
+                 control_host=None, sftp="sftp", include_files=None):
+        if include_files is not None and prune_remote:
+            raise ValueError("Vocabulary downloads must never enable remote cleanup")
         self.host, self.remote_root = host, remote_root
         self.local_root, self.state_file = local_root, state_file
         self.ssh = ssh
         self.control_host = control_host or host
         self.sftp = sftp
+        self.include_files = include_files
         self.previous = {}
         self.prune_remote = prune_remote
         self.prune_failed = False
@@ -261,7 +289,9 @@ class Watcher:
                 self.control_host, remote]
 
     def inventory(self):
-        result = subprocess.run(self.command(REMOTE_LIST), stdout=subprocess.PIPE,
+        command = (self.command(REMOTE_LIST) if self.include_files is None
+                   else self.command(REMOTE_LIST_FILES, json.dumps(self.include_files)))
+        result = subprocess.run(command, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=120, check=True)
         return json.loads(result.stdout)
 
@@ -373,7 +403,7 @@ class Watcher:
     def poll(self):
         self.prune_failed = False
         current = self.inventory()
-        LOG.info("Heartbeat: scan OK; %d remote files", len(current))
+        LOG.info("Heartbeat: scan OK; %d remote files (%s)", len(current), self.remote_root)
         for relative, signature in sorted(current.items()):
             target = local_path(self.local_root, relative)
             saved = self.state.get(relative, {})
@@ -429,6 +459,9 @@ def main():
     parser.add_argument("--control-host", default=os.environ.get("GRIM_BRIDGES2_SSH", "bridges2"),
                         help="Login-node SSH alias for metadata/checksums/cleanup (env: GRIM_BRIDGES2_SSH; default: bridges2)")
     parser.add_argument("--local-dir", type=Path, default=Path(__file__).resolve().parent.parent / MODEL_STORE)
+    parser.add_argument("--vocab-local-dir", type=Path, default=Path(__file__).resolve().parent.parent / TRAINING_DATA,
+                        help="Local destination for vocab.bin/vocab.txt (always download-only)")
+    parser.add_argument("--no-sync-vocab", action="store_true", help="Disable automatic vocabulary downloads")
     parser.add_argument("--interval", type=float, default=60, help="Seconds between polls (default: 60)")
     parser.add_argument("--ssh", default="ssh", help="OpenSSH executable path")
     parser.add_argument("--sftp", default="sftp", help="OpenSSH SFTP executable path")
@@ -450,34 +483,52 @@ def main():
     # and destination, but serialize all watchers writing the same local store.
     cache = Path(__file__).resolve().parent.parent / ".cache" / "bridges2-model-watch"
     key = hashlib.sha256(f"{args.host}\0{remote_root}\0{local_root}".encode()).hexdigest()[:20]
-    lock_key = hashlib.sha256(str(local_root.resolve()).encode()).hexdigest()[:20]
     watcher = Watcher(args.host, remote_root, local_root, cache / f"{key}.json", args.ssh, args.prune_remote,
                       args.control_host, args.sftp)
+    watchers = [watcher]
+    if not args.no_sync_vocab:
+        vocab_root = args.vocab_local_dir.absolute()
+        if vocab_root.is_symlink() or (hasattr(vocab_root, "is_junction") and vocab_root.is_junction()):
+            parser.error("--vocab-local-dir must not be a symlink or junction")
+        vocab_remote = args.remote_repo.rstrip("/") + "/" + TRAINING_DATA
+        vocab_key = hashlib.sha256(f"{args.host}\0{vocab_remote}\0{vocab_root}".encode()).hexdigest()[:20]
+        vocabulary = Watcher(args.host, vocab_remote, vocab_root, cache / f"{vocab_key}.json", args.ssh,
+                             False, args.control_host, args.sftp, VOCAB_FILES)
+        # Download vocab before potentially lengthy model transfers.
+        watchers.insert(0, vocabulary)
     logging.basicConfig(level=logging.INFO, format="[model-watch] %(asctime)s %(message)s", datefmt="%H:%M:%S")
     LOG.info("Watching %s:%s -> %s (every %gs; Ctrl+C to stop)", args.host, remote_root, local_root, args.interval)
     LOG.info("Metadata/cleanup via %s; file downloads via SFTP on %s", args.control_host, args.host)
+    if not args.no_sync_vocab:
+        LOG.info("Vocabulary sync enabled: vocab.bin + vocab.txt -> %s (remote files always retained)", vocab_root)
     if args.prune_remote:
         LOG.info("Remote cleanup enabled: retain latest PT + SFT checkpoint and sidecars per directory")
     try:
-        with InstanceLock(cache / f"{lock_key}.lock"):
+        with ExitStack() as locks:
+            for active in watchers:
+                active_lock = hashlib.sha256(str(active.local_root.resolve()).encode()).hexdigest()[:20]
+                locks.enter_context(InstanceLock(cache / f"{active_lock}.lock"))
             polls = 0
             while True:
-                try:
-                    watcher.poll()
-                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
-                    watcher.previous = {}
-                    LOG.warning("Poll failed: %s; retrying in %gs", error_message(error), args.interval)
-                    if args.once:
-                        return 1
+                poll_failed = False
+                for active in watchers:
+                    try:
+                        active.poll()
+                    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                        active.previous = {}
+                        LOG.warning("Poll failed (%s): %s; retrying in %gs", active.remote_root, error_message(error), args.interval)
+                        poll_failed = True
+                if args.once and poll_failed:
+                    return 1
                 polls += 1
                 if args.once and polls >= 2:
-                    if watcher.prune_failed:
-                        return 1
                     # A failed/deferred transfer must not report a successful sync.
-                    for relative, signature in watcher.previous.items():
-                        saved = watcher.state.get(relative, {})
-                        if saved.get("remote") != signature or saved.get("local") != local_signature(local_path(local_root, relative)):
+                    for active in watchers:
+                        if active.prune_failed:
                             return 1
+                        for relative, signature in active.previous.items():
+                            if not active.archived(relative, signature):
+                                return 1
                     return 0
                 time.sleep(args.interval)
     except KeyboardInterrupt:

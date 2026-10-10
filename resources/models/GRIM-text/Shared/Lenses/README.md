@@ -8,6 +8,23 @@ inference lifecycle. There is no separate checkpoint loader or inspection execut
 
 ## Observatory interface
 
+**Jacobian row** opts into hidden-state inspection. `capture_jacobian`
+requests the derivative of final post-block hidden dimension
+`jacobian_output_dimension` (default `0`) at `jacobian_target_position`
+(`-1`: last real position), with respect to every source hidden dimension,
+position and layer. Phase 2 runs one activation-only forward/backward pair.
+Parameters and LoRA views are detached; dropout and KV caching are disabled.
+Normal inspection below still uses cached inference.
+
+`LensSnapshot::hidden_jacobian` contains `d_model` entries. The result has
+`jacobian_rows == 1` and explicit `jacobian_output_dimension` metadata. The
+JSON adapter preserves exact finite FP32 values and accepts older complete
+matrices without output-dimension metadata. Partial unlabeled matrices remain
+invalid. Capture checks the final-layer identity row and zero at other source
+positions. See `docs/UI_OBSERVATORY.md` for controls, wire fields and memory
+limits. The existing `JacobianIdentity` readout remains an implicit LM-head
+control.
+
 Select the matching model-store entry, enter inference input, set top-k and the
 capture scratch budget in MiB, and choose **Run inspection**. The panel sends
 `/api/inspect` through the existing HTTP bridge to `/internal/inspect` on the

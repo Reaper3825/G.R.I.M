@@ -42,7 +42,7 @@ class WatchTests(unittest.TestCase):
     def test_stable_files_download_and_restart_skips_completed_files(self):
         self.write_remote("model/checkpoint.grimckpt", b"checkpoint")
         self.write_remote("model/checkpoint.opt", b"optimizer")
-        self.write_remote("model/model.grimcfg", b"config")
+        self.write_remote("model/adapter.grimlorackpt", b"adapter")
         self.watcher.poll()
         self.assertEqual(list(self.local.iterdir()), [])
         self.watcher.poll()
@@ -92,13 +92,28 @@ class WatchTests(unittest.TestCase):
     def test_temporary_files_ignored_and_remote_deletion_keeps_local_copy(self):
         for name in ("model/save.tmp", "model/save.id.tmp", "model/save.partial", ".hidden/file", "model/.lock"):
             self.write_remote(name, b"unfinished")
-        source = self.write_remote("model/model.grimcfg", b"config")
-        self.assertEqual(list(self.watcher.inventory()), ["model/model.grimcfg"])
+        source = self.write_remote("model/checkpoint.grimckpt", b"checkpoint")
+        self.assertEqual(list(self.watcher.inventory()), ["model/checkpoint.grimckpt"])
         self.watcher.poll()
         self.watcher.poll()
         source.unlink()
         self.watcher.poll()
-        self.assertEqual((self.local / "model/model.grimcfg").read_bytes(), b"config")
+        self.assertEqual((self.local / "model/checkpoint.grimckpt").read_bytes(), b"checkpoint")
+
+    def test_git_managed_configs_are_never_downloaded_or_overwritten(self):
+        names = ("model.grimcfg", "model_config.json", "Router_configuration.json", "settings.yaml", "settings.toml")
+        (self.local / "model").mkdir()
+        for name in names:
+            self.write_remote("model/" + name, b"remote configuration")
+            (self.local / "model" / name).write_bytes(b"local git configuration")
+        self.write_remote("model/checkpoint_PT_epoch_1.grimckpt", b"checkpoint")
+        self.watcher.prune_remote = True
+        self.watcher.poll()
+        self.watcher.poll()
+        for name in names:
+            self.assertEqual((self.local / "model" / name).read_bytes(), b"local git configuration")
+            self.assertTrue((self.remote / "model" / name).exists())
+            self.assertNotIn("model/" + name, self.watcher.state)
 
     def test_source_changed_during_stream_never_publishes_download(self):
         self.write_remote("checkpoint.grimckpt", b"checkpoint bytes")
@@ -163,6 +178,34 @@ class WatchTests(unittest.TestCase):
         message = error_message(error)
         self.assertIn("Login denied", message)
         self.assertNotIn("base64", message)
+
+    def test_vocab_sync_only_downloads_vocab_and_never_removes_remote_files(self):
+        data = self.root / "data"
+        data.mkdir()
+        (data / "vocab.bin").write_bytes(b"binary vocabulary")
+        (data / "vocab.txt").write_bytes(b"text vocabulary")
+        (data / "training_data.grmt").write_bytes(b"large corpus excluded")
+        (data / "checkpoint_PT_epoch_1.grimckpt").write_bytes(b"never prune training data")
+        vocab = LocalWatcher("test", str(data), self.local, self.state, include_files=("vocab.bin", "vocab.txt"))
+        vocab.poll()
+        vocab.poll()
+        self.assertEqual(set(p.name for p in self.local.iterdir()), {"vocab.bin", "vocab.txt"})
+        self.assertEqual((self.local / "vocab.bin").read_bytes(), b"binary vocabulary")
+        self.assertTrue((data / "vocab.bin").exists())
+        self.assertTrue((data / "vocab.txt").exists())
+        (data / "vocab.bin").write_bytes(b"updated binary vocabulary")
+        vocab.poll()
+        self.assertEqual((self.local / "vocab.bin").read_bytes(), b"binary vocabulary")
+        vocab.poll()
+        self.assertEqual((self.local / "vocab.bin").read_bytes(), b"updated binary vocabulary")
+        self.assertTrue((data / "vocab.bin").exists())
+
+    def test_vocab_cannot_enable_pruning_and_missing_vocab_is_optional(self):
+        with self.assertRaises(ValueError):
+            LocalWatcher("test", str(self.remote), self.local, self.state, prune_remote=True,
+                         include_files=("vocab.bin", "vocab.txt"))
+        vocab = LocalWatcher("test", str(self.remote), self.local, self.state, include_files=("vocab.bin", "vocab.txt"))
+        self.assertEqual(vocab.inventory(), {})
 
     def checkpoint_pair(self, directory, stage, epoch, mtime):
         prefix = f"{directory}/checkpoint_{stage}_epoch_{epoch}"

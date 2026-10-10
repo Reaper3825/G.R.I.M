@@ -1,6 +1,7 @@
 // UITrainingPanel: shared lifecycle, tab dispatch, and server polling
 #include "training_panel/ui_training_panel_internal.hpp"
 #include "observatory/ui_observatory_view.hpp"
+#include "ai/grim_text_server_manager.hpp"
 
 using namespace GRIMText;
 using namespace UITheme;
@@ -19,20 +20,6 @@ UITrainingPanel::UITrainingPanel()
     setBackground(Colors::PanelBg);
 
     if (position.y < 50.0f) position.y = 50.0f;
-
-    // ── Training controller ──
-    std::string host = "127.0.0.1";
-    int port = 11436;
-    try {
-        host = aiConfig.at("training").value("server_host", host);
-        port = aiConfig.at("training").value("server_port", port);
-    } catch (...) {
-    }
-    try {
-        trainingController = std::make_unique<GRIM::UI::UITrainingController>(host, port);
-    } catch (const std::exception& e) {
-        LOG_ERROR("UITrainingPanel", std::string("Controller init failed: ") + e.what());
-    }
 
     // ══════════════════════════════════════════════════════
     //  Tab buttons (DataHub pattern)
@@ -214,6 +201,7 @@ UITrainingPanel::UITrainingPanel()
     encodeButton_->setSize(90.0f, Sizes::ButtonHeight);
 
     clearEncodeButton_ = std::make_shared<UIButton>("Clear", [this]() {
+        if (encodeRunning_) return;
         encodeInputBuffer_.clear();
         encodeComplete_ = false;
         encodeSuccess_ = false;
@@ -245,6 +233,7 @@ UITrainingPanel::~UITrainingPanel() = default;
 void UITrainingPanel::setView(TrainingPanelTab tab) {
     if (observatory_ && tab != TrainingPanelTab::Observatory) observatory_->hide();
     activeTab_ = tab;
+    if (tab == TrainingPanelTab::Tokenizer) pollServer();
     if (tab == TrainingPanelTab::Home) {
         refreshModelList();
         updateResourceBars();
@@ -275,6 +264,7 @@ void UITrainingPanel::collectPassThroughRects(std::vector<PanelRect>& rects) con
 // ============================================================
 
 void UITrainingPanel::update(const InputState& input, float dt) {
+    applyTokenizerResults();
     if (!isVisible()) { if (observatory_) observatory_->hide(); return; }
     UIPanel::update(input, dt);
     if (!isVisible() || isMinimized()) { if (observatory_) observatory_->hide(); return; }
@@ -374,7 +364,11 @@ void UITrainingPanel::update(const InputState& input, float dt) {
 // ============================================================
 
 void UITrainingPanel::pollServer() {
-    serverConnected = trainingController && trainingController->isServerRunning();
+    if (tokenizerHealthFuture_.valid()) return;
+    const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
+    tokenizerHealthFuture_ = std::async(std::launch::async, [url]() {
+        return GRIMText::TokenizerClient(url).isServerRunning();
+    });
 }
 
 // ============================================================
@@ -417,8 +411,8 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     // ── Status pill (top-right) ──
     if (activeTab_ == TrainingPanelTab::Tokenizer) {
         const std::string stateText = serverConnected
-            ? "Tokenizer service online"
-            : "Tokenizer service offline";
+            ? "GRIM-text bridge online"
+            : "GRIM-text bridge offline";
         const uint32_t stateColor = serverConnected ? Colors::Success : Colors::TextMuted;
         const float textWidth = UIDrawHelpers::getTextWidth(stateText);
         const float textX = position.x + size.x - textWidth - Spacing::Large;

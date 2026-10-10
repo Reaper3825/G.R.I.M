@@ -388,6 +388,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
+    const bool jacobian_graph=request.lens_capture && request.lens_capture->capture_jacobian;
+    if(jacobian_graph && (connect_parameter_graph || request.kv_cache || request.graph.enable_dropout || request.graph.emit_local_atom_retrieval))
+        throw std::invalid_argument("Jacobian inspection requires isolated activation gradients, no KV cache, dropout or retrieval branch");
     const bool dropout_enabled = request.graph.enable_dropout;
     std::unique_ptr<Lenses::LensCaptureSession> lens_capture;
     if (request.lens_capture) {
@@ -469,8 +472,15 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     forward_outputs.encoder_layer_outputs.clear();
     forward_outputs.clearRetainedLayerOutputs();
     forward_outputs.embedding_tensor.is_leaf = false;
+    if(jacobian_graph) {
+        // Detached parameter views remain frozen; this temporary activation is
+        // the only leaf. Its gradient belongs to this forward, never the registry.
+        forward_outputs.embedding_tensor.requires_grad=true;
+        forward_outputs.embedding_tensor.is_leaf=true;
+        forward_outputs.embedding_tensor.grad_fn.reset();
+    }
 
-    if (!connect_parameter_graph) {
+    if (!connect_parameter_graph && !jacobian_graph) {
         Tensor running;
         forward_outputs.reserveLayerOutputs(num_layers);
         MFWD_INFO("Step 2: Running " << num_layers << " encoder layers (no_grad)...");
@@ -620,7 +630,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 *request.parameter_registry,
                 lora_hp,
                 layer_idx,
-                true,
+                connect_parameter_graph,
                 request.stream);
 
             const Tensor* layer_input = (layer_idx == 0)
@@ -641,6 +651,13 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 layer_idx,
                 "executeModelForward(retained_graph)");
 
+            auto detached_encoding=jacobian_graph?detachEncodingLayerParameters(encoding_parameters,
+                encoder_hp.attention_qkv_bias_enabled,encoder_hp.attention_output_bias_enabled,use_layer_scale,
+                encoder_hp.attention_residual_gate_enabled,encoder_hp.attention_head_gate_enabled,request.stream)
+                :GRIM::EncodingLayerParameterTensors{};
+            auto detached_ffn=jacobian_graph?detachFeedForwardParameters(ffn_parameters,encoder_hp.ffn_output_bias_enabled,request.stream)
+                :GRIM::FeedForwardParameterTensors{};
+
             forwardEncodingLayer(
                 enc_layer->hp(),
                 enc_layer->requireFeedForwardCompute("executeModelForward(retained_graph)"),
@@ -654,15 +671,18 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 request.batch_idx,
                 dropout_enabled,
                 layer_idx,
-                &encoding_parameters,
-                &ffn_parameters);
+                jacobian_graph?&detached_encoding:&encoding_parameters,
+                jacobian_graph?&detached_ffn:&ffn_parameters);
             Tensor layer_output = viewCommittedTensor(
                 forward_outputs.output_per_layer[static_cast<size_t>(layer_idx)],
                 request.stream,
                 "enc_layer_output",
                 "executeModelForward(retained_graph)");
 
-            if (lens_capture) lens_capture->captureLayer(layer_idx, layer_output);
+            if (lens_capture) {
+                lens_capture->captureLayer(layer_idx, layer_output);
+                lens_capture->attachJacobianTap(layer_idx,layer_output);
+            }
 
             forward_outputs.encoder_layer_outputs.push_back(std::move(layer_output));
         }
@@ -724,10 +744,19 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             request.cublas_handle,
             forward_outputs);
     } else {
+        Tensor detached_head_input;
+        const Tensor* head_input=&forward_outputs.encoder_output_tensor;
+        if(jacobian_graph) {
+            // The measured output is the final encoder state. Ordinary logits
+            // remain available for comparison, without retaining a vocabulary
+            // projection graph that the hidden-state Jacobian never traverses.
+            detached_head_input=head_input->detach(request.stream);
+            head_input=&detached_head_input;
+        }
         forwardLmHead(
             lm_head_hp,
             *lm_head_parameter_ptr,
-            forward_outputs.encoder_output_tensor,
+            *head_input,
             payload,
             request.stream,
             request.cublas_handle,
@@ -750,6 +779,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     if (lens_capture) {
         lens_capture->captureLayer(num_layers - 1, forward_outputs.encoder_output_tensor,
                                    &forward_outputs.logits_tensor);
+        lens_capture->captureJacobian(forward_outputs.encoder_output_tensor,*bindings);
         lens_capture->publish(forward_outputs);
     }
 

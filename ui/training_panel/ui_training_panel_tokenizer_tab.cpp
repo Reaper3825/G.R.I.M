@@ -1,5 +1,6 @@
 // UITrainingPanel: Tokenizer tab
 #include "ui_training_panel_internal.hpp"
+#include "ai/grim_text_server_manager.hpp"
 
 using namespace GRIMText;
 using namespace UITheme;
@@ -10,51 +11,41 @@ using namespace UITrainingPanelDetail;
 // ============================================================
 
 void UITrainingPanel::handleRunTokenizer() {
-    if (tokenizerRunning_) {
-        LOG_DEBUG("UITrainingPanel", "Tokenizer already running");
-        return;
-    }
-    if (!trainingController) {
-        LOG_ERROR("UITrainingPanel", "Cannot run tokenizer: controller not initialized");
-        return;
-    }
-    if (!serverConnected) {
-        pollServer();
-        if (!serverConnected) {
-            LOG_ERROR("UITrainingPanel", "Cannot run tokenizer: server not connected");
-            return;
-        }
-    }
-    
+    if (tokenizerFuture_.valid()) return;
+    const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
     tokenizerRunning_ = true;
     tokenizerComplete_ = false;
     tokenizerSuccess_ = false;
-    tokenizerStatusMessage_ = "Running tokenizer validation...";
-    LOG_DEBUG("UITrainingPanel", "Starting tokenizer validation...");
-    
-    // Run async to avoid blocking UI
-    std::thread([this]() {
-        auto result = trainingController->runTokenizer();
-        
-        lastTokenizerResult_ = result;
-        tokenizerSuccess_ = result.success;
+    tokenizerStatusMessage_ = "Validating the loaded model tokenizer...";
+    tokenizerFuture_ = std::async(std::launch::async, [url]() {
+        return TokenizerClient(url).runTokenizer();
+    });
+}
+
+// Background tasks return values; only the UI thread publishes widget state.
+void UITrainingPanel::applyTokenizerResults() {
+    const auto ready = [](auto& future) {
+        return future.valid() && future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    };
+    if (ready(tokenizerHealthFuture_)) serverConnected = tokenizerHealthFuture_.get();
+    if (ready(tokenizerFuture_)) {
+        lastTokenizerResult_ = tokenizerFuture_.get();
+        tokenizerSuccess_ = lastTokenizerResult_.success;
         tokenizerComplete_ = true;
         tokenizerRunning_ = false;
-        
-        if (result.success) {
-            tokenizerStatusMessage_ = "Tokenizer OK: " + 
-                std::to_string(result.total_vocab_size) + " tokens (" +
-                std::to_string(result.validation_tests_passed) + "/" +
-                std::to_string(result.validation_tests_total) + " tests passed)";
-            LOG_DEBUG("UITrainingPanel", tokenizerStatusMessage_);
-        } else {
-            tokenizerStatusMessage_ = "Tokenizer FAILED: " + result.error;
-            LOG_ERROR("UITrainingPanel", tokenizerStatusMessage_);
-            for (const auto& f : result.failures) {
-                LOG_ERROR("UITrainingPanel", "  - " + f);
-            }
-        }
-    }).detach();
+        const auto& r = lastTokenizerResult_;
+        tokenizerStatusMessage_ = r.success
+            ? "Tokenizer OK: " + std::to_string(r.total_vocab_size) + " tokens (" +
+              std::to_string(r.validation_tests_passed) + "/" + std::to_string(r.validation_tests_total) + " checks passed)"
+            : "Tokenizer FAILED: " + r.error;
+    }
+    if (ready(encodeFuture_)) {
+        lastEncodeResult_ = encodeFuture_.get();
+        encodeSuccess_ = lastEncodeResult_.success;
+        encodeErrorMessage_ = lastEncodeResult_.error;
+        encodeComplete_ = true;
+        encodeRunning_ = false;
+    }
 }
 
 void UITrainingPanel::drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width) {
@@ -74,8 +65,10 @@ void UITrainingPanel::drawTokenizerStatus(OverlayRenderer& renderer, float x, fl
         auto& r = lastTokenizerResult_;
         std::string details = "Vocab: " + std::to_string(r.unigram_vocab_size) + " unigram + " +
             std::to_string(r.byte_vocab_size) + " byte + " +
-            std::to_string(r.atom_vocab_size) + " atom | " +
-            "Load: " + std::to_string(static_cast<int>(r.load_time_ms)) + "ms | " +
+            std::to_string(r.atom_vocab_size) + " atom + " +
+            std::to_string(r.numeric_vocab_size) + " numeric + " +
+            std::to_string(r.newline_vocab_size) + " newline + " +
+            std::to_string(r.special_token_count) + " special | " +
             "Val: " + std::to_string(static_cast<int>(r.validation_time_ms)) + "ms";
         renderer.drawText({x + Spacing::Small, detailY}, details, Colors::TextSecondary);
     }
@@ -102,8 +95,12 @@ void UITrainingPanel::drawTokenizerTab(OverlayRenderer& renderer, const PanelRec
 
     // ── Section 1: Validation ──
     UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
-                                     "Tokenizer Validation", Colors::SectionAI);
+                                     "Loaded Model Tokenizer Validation", Colors::SectionAI);
     y += Sizes::HeaderHeight + Spacing::Small;
+
+    renderer.drawText({x, y}, "Load a model first. Validation checks token metadata, ID ranges and decoding.",
+                      Colors::TextSecondary);
+    y += 20.0f;
 
     // Run Validation button
     tokenizerRunValidationBtn_->setPosition(x, y);
@@ -148,7 +145,7 @@ void UITrainingPanel::drawTokenizerTab(OverlayRenderer& renderer, const PanelRec
         drawStatCard(renderer, {x + cardW + kStatCardGap, y}, {cardW, kStatCardH},
                      "Unigram", std::to_string(r.unigram_vocab_size), Colors::AccentBlue);
         drawStatCard(renderer, {x + 2.0f * (cardW + kStatCardGap), y}, {cardW, kStatCardH},
-                     "Byte + Atom", std::to_string(r.byte_vocab_size + r.atom_vocab_size), Colors::Warning);
+                     "Fixed Tokens", std::to_string(r.total_vocab_size - r.unigram_vocab_size), Colors::Warning);
         y += kStatCardH + Spacing::Large;
 
         // Special token IDs
@@ -179,7 +176,7 @@ void UITrainingPanel::drawTokenizerTab(OverlayRenderer& renderer, const PanelRec
     clearEncodeButton_->setPosition(x + inputW + Spacing::Small + 90.0f + Spacing::Small, y - 2.0f);
     clearEncodeButton_->drawOverlay(renderer, position);
 
-    if (encodeRunning_.load()) {
+    if (encodeRunning_) {
         renderer.drawText({x, y + 32.0f}, "Encoding...", Colors::Warning);
     }
 
@@ -193,7 +190,7 @@ void UITrainingPanel::drawTokenizerTab(OverlayRenderer& renderer, const PanelRec
 }
 
 void UITrainingPanel::drawEncodeResults(OverlayRenderer& renderer, float x, float y, float width, float maxHeight) {
-    if (!encodeComplete_ && !encodeRunning_.load()) return;
+    if (!encodeComplete_ && !encodeRunning_) return;
 
     if (!encodeSuccess_ && encodeComplete_) {
         // Error display
@@ -205,7 +202,6 @@ void UITrainingPanel::drawEncodeResults(OverlayRenderer& renderer, float x, floa
 
     if (!encodeComplete_) return;
 
-    std::lock_guard<std::mutex> lock(encodeMutex_);
     auto& r = lastEncodeResult_;
 
     // Summary bar
@@ -285,7 +281,7 @@ void UITrainingPanel::drawEncodeResults(OverlayRenderer& renderer, float x, floa
     chipY += chipH + Spacing::Medium;
     if (chipY < y + maxHeight - 20.0f) {
         renderer.drawText({x, chipY},
-                          "Types: special | byte | atom | unigram", Colors::TextSecondary);
+                          "Types: special | byte | numeric | atom | newline | unigram", Colors::TextSecondary);
     }
 }
 
@@ -306,46 +302,14 @@ void UITrainingPanel::drawTokenizerBottomBar(OverlayRenderer& renderer, float ba
 }
 
 void UITrainingPanel::handleEncodeText() {
-    if (encodeRunning_.load()) return;
-    if (encodeInputBuffer_.empty()) return;
-    if (!trainingController) {
-        encodeErrorMessage_ = "Controller not initialized";
-        encodeComplete_ = true;
-        encodeSuccess_ = false;
-        return;
-    }
-    if (!serverConnected) {
-        pollServer();
-        if (!serverConnected) {
-            encodeErrorMessage_ = "Server not connected";
-            encodeComplete_ = true;
-            encodeSuccess_ = false;
-            return;
-        }
-    }
-
-    encodeRunning_.store(true);
+    if (encodeFuture_.valid() || encodeInputBuffer_.empty()) return;
+    const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
+    const auto text = encodeInputBuffer_;
+    encodeRunning_ = true;
     encodeComplete_ = false;
     encodeSuccess_ = false;
     encodeErrorMessage_.clear();
-
-    std::string textCopy = encodeInputBuffer_;
-    std::thread([this, textCopy]() {
-        auto result = trainingController->encodeText(textCopy);
-
-        {
-            std::lock_guard<std::mutex> lock(encodeMutex_);
-            lastEncodeResult_ = result;
-        }
-        encodeSuccess_ = result.success;
-        encodeComplete_ = true;
-        encodeRunning_.store(false);
-
-        if (!result.success) {
-            encodeErrorMessage_ = result.error;
-            LOG_ERROR("UITrainingPanel", "Encode failed: " + result.error);
-        } else {
-            LOG_DEBUG("UITrainingPanel", "Encoded " + std::to_string(result.token_count) + " tokens");
-        }
-    }).detach();
+    encodeFuture_ = std::async(std::launch::async, [url, text]() {
+        return TokenizerClient(url).encodeText(text);
+    });
 }

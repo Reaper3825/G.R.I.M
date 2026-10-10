@@ -55,6 +55,10 @@ struct LensCaptureRequest {
     std::uint64_t temporary_memory_budget_bytes = 64ULL * 1024 * 1024;
     bool retain_readout_input = false;
     bool replay_identity_control = false;
+    // Capture one selected row of the hidden-to-hidden Jacobian.
+    bool capture_jacobian = false;
+    int jacobian_target_position = -1; // -1: last real input position.
+    int jacobian_output_dimension = 0; // Selected final hidden dimension.
     // Maximum rows per readout chunk (kept for existing diagnostic callers).
     int max_replay_rows = 1024;
 };
@@ -115,17 +119,25 @@ struct LensSnapshot {
     std::vector<float> readout_input; // selected row, owned host FP32
     std::vector<LensReadout> readouts;
     std::optional<double> identity_max_abs_logit_error;
+    // d(final post-block hidden[target_position,out])/d(this post-block hidden[in]).
+    // Row-major [output_dimension,input_dimension] after inspection assembly.
+    // A selected-row capture contains d_model entries and explicit output metadata.
+    std::vector<float> hidden_jacobian;
     // Identity J is implicit. Direct and J-identity share one head replay;
     // neither denotes a fitted Jacobian.
 };
 
-// One forward's complete host-owned capture. No live device views escape.
+// Host-owned capture from one forward, or an assembled full Jacobian inspection.
+// No live device views escape.
 // Ordered by layer, then row-local position; only the selected batch row.
 struct LensCaptureResult {
     std::vector<LensSnapshot> snapshots;
     std::uint64_t temporary_memory_budget_bytes = 0;
     std::uint64_t planned_temporary_bytes = 0;
     int chunk_rows = 0;
+    std::optional<int> jacobian_target_position;
+    std::optional<int> jacobian_output_dimension; // Present for a selected row; absent for full matrices.
+    int jacobian_rows = 0; // 1 for a selected row; d_model for an assembled full matrix.
 };
 
 // Conservative scratch plan for detached FP32 row-local LM-head readout.

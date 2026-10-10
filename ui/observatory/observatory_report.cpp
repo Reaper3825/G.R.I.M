@@ -1,4 +1,5 @@
 #include "observatory_report.hpp"
+#include "resources/models/GRIM-text/Shared/Lenses/JacobianCapture.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -7,6 +8,9 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace GRIM::Observatory {
 namespace {
@@ -23,6 +27,28 @@ std::string configDigest(const Config::CompiledModelConfigSnapshot& config) {
     for(auto b:config.integrity.semantic_sha256) out<<std::hex<<std::setw(2)<<std::setfill('0')<<unsigned(b);
     return out.str();
 }
+nlohmann::json parseInspectionResponse(int status,const std::string& body) {
+    require(body.size()<=512ULL*1024*1024,"Inspection exceeds the 512 MiB host response budget");
+    // Missing routes commonly return an empty or HTML body. Preserve the HTTP
+    // failure instead of reporting it as malformed capture JSON.
+    const auto json=nlohmann::json::parse(body,nullptr,false);
+    if(status!=200) {
+        const auto prefix="Inspection HTTP "+std::to_string(status)+": ";
+        if(status==404)
+            throw std::runtime_error(prefix+"Inspection endpoint is unavailable. Rebuild and restart the GRIM-text bridge and inference worker with inspection support.");
+        if(json.is_object()) {
+            for(const char* key:{"message","error"}) {
+                const auto found=json.find(key);
+                if(found!=json.end() && found->is_string() && !found->get_ref<const std::string&>().empty())
+                    throw std::runtime_error(prefix+found->get<std::string>());
+            }
+        }
+        throw std::runtime_error(prefix+"The server returned an error without a JSON message. Check the GRIM-text bridge and loaded inference worker.");
+    }
+    require(!json.is_discarded(),"Inspection endpoint returned empty or invalid JSON (HTTP 200). Check the GRIM-text server response.");
+    require(json.is_object(),"Inspection endpoint returned a JSON value instead of a capture object (HTTP 200).");
+    return json;
+}
 Report parseReport(const nlohmann::json& j,const Config::CompiledModelConfigSnapshot& config) {
     require(number(j.at("schema_version"))==1,"Unsupported Observatory capture schema");
     Report r;
@@ -38,8 +64,22 @@ Report parseReport(const nlohmann::json& j,const Config::CompiledModelConfigSnap
     r.checkpoint=j.at("checkpoint").get<std::string>();
     require(!r.checkpoint.empty() && r.checkpoint.size()<4096,"Missing or excessive checkpoint identity");
     r.synthetic=j.value("synthetic",false);
+    if(j.contains("jacobian")) {
+        const auto& jacobian=j.at("jacobian");
+        require(!r.synthetic && jacobian.at("kind")=="final_hidden" && jacobian.at("layout")=="output_by_input" &&
+            jacobian.at("encoding")=="ieee754_f32_hex" && jacobian.at("boundary")=="post_encoder_block","Unknown Jacobian contract");
+        if(jacobian.contains("output_dimension")) {
+            r.jacobianOutputDimension=number(jacobian.at("output_dimension"));
+            require(*r.jacobianOutputDimension<r.dModel,"Jacobian output dimension is out of range");
+        }
+        require(number(jacobian.at("rows"))==(r.jacobianOutputDimension?1u:r.dModel) && number(jacobian.at("columns"))==r.dModel,"Jacobian/model dimension mismatch");
+        r.jacobianTargetPosition=number(jacobian.at("target_position"));
+        require(*r.jacobianTargetPosition<config.architecture.max_seq_len,"Jacobian target position is out of range");
+    }
     const auto& positions=j.at("positions");
     require(positions.is_array()&&!positions.empty()&&positions.size()<=config.architecture.max_seq_len,"Invalid capture position count");
+    if(r.jacobianTargetPosition)
+        require(GRIM::Lenses::hiddenJacobianBytes(int(r.dModel),int(positions.size()),int(r.layerCount))/(r.jacobianOutputDimension?r.dModel:1u)<=192ULL*1024*1024,"Jacobian matrix exceeds the host capture limit");
     std::set<unsigned> seenPositions;
     for(const auto& item:positions) {
         PositionReadout p;p.position=number(item.at("position"));p.inputText=item.at("input_text").get<std::string>();
@@ -49,6 +89,9 @@ Report parseReport(const nlohmann::json& j,const Config::CompiledModelConfigSnap
         std::set<unsigned> seenLayers;
         for(const auto& source:layers) {
             LayerReadout l;l.layer=number(source.at("layer"));
+            if(r.jacobianTargetPosition) {
+                l.hiddenJacobian=std::make_shared<const std::vector<float>>(GRIM::Lenses::decodeJacobian(source.at("hidden_jacobian_f32_hex").get_ref<const std::string&>(),size_t(r.dModel)*(r.jacobianOutputDimension?1u:r.dModel)));
+            } else require(!source.contains("hidden_jacobian_f32_hex"),"Jacobian matrix has no target metadata");
             require(l.layer<r.layerCount && seenLayers.insert(l.layer).second,"Invalid or repeated layer index");
             const auto readouts=source.contains("readouts") ? source.at("readouts") : nlohmann::json::array({source});
             require(readouts.is_array()&&!readouts.empty()&&readouts.size()<=3,"Invalid readout count");
@@ -89,12 +132,44 @@ Report parseReport(const nlohmann::json& j,const Config::CompiledModelConfigSnap
         std::sort(p.layers.begin(),p.layers.end(),[](const auto& a,const auto& b){return a.layer<b.layer;});
         r.positions.push_back(std::move(p));
     }
+    if(r.jacobianTargetPosition) {
+        require(seenPositions.count(*r.jacobianTargetPosition)!=0,"Jacobian target position is not captured");
+        for(const auto& p:r.positions)require(p.position<r.positions.size() && p.layers.size()==r.layerCount,"Jacobian is missing source positions or encoder layers");
+    }
     return r;
 }
 Report loadReport(const std::filesystem::path& path,const Config::CompiledModelConfigSnapshot& config) {
     require(std::filesystem::file_size(path)<=512ULL*1024*1024,"Capture exceeds the 512 MiB host file budget");
     std::ifstream stream(path);if(!stream)throw std::runtime_error("Cannot open capture file");
-    nlohmann::json json;stream>>json;return parseReport(json,config);
+    nlohmann::json json;stream>>json;
+    require(!json.value("capture_pending",false),"No saved inspection yet. Enter input and choose Run inspection.");
+    return parseReport(json,config);
+}
+std::filesystem::path defaultCapturePath(const std::filesystem::path& configPath) {
+    return configPath.parent_path()/"observatory_capture.json";
+}
+void saveCaptureFile(const std::filesystem::path& path,const nlohmann::json& json) {
+    // Replace only after a complete write, preserving the previous capture on failure.
+    auto temporary=path;temporary+=".tmp";
+    try {
+        std::ofstream stream(temporary,std::ios::binary|std::ios::trunc);
+        if(!stream)throw std::runtime_error("Cannot create Observatory capture file");
+        stream<<json.dump()<<'\n';stream.close();
+        if(!stream)throw std::runtime_error("Cannot write Observatory capture file");
+        require(std::filesystem::file_size(temporary)<=512ULL*1024*1024,"Capture exceeds the 512 MiB host file budget");
+#ifdef _WIN32
+        if(!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
+            throw std::runtime_error("Cannot replace Observatory capture file");
+#else
+        std::filesystem::rename(temporary,path);
+#endif
+    } catch(...) {
+        std::error_code ignored;std::filesystem::remove(temporary,ignored);throw;
+    }
+}
+void ensureCaptureFile(const std::filesystem::path& path) {
+    if(!std::filesystem::exists(path))
+        saveCaptureFile(path,{{"schema_version",1},{"capture_pending",true}});
 }
 void selectReadout(Report& report,const std::string& kind) {
     for(auto& position:report.positions)for(auto& layer:position.layers) {

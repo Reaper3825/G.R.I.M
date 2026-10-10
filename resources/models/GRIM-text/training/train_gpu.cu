@@ -35,6 +35,7 @@
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
 #include "../Shared/Lenses/LensInspectionReport.hpp"
+#include "Diagnostics/TokenizerDiagnostics.hpp"
 #include <mutex>
 #include <filesystem>
 #include <chrono>
@@ -244,6 +245,38 @@ int runInferenceWorker(
         res.set_content(response.dump(), "application/json");
     });
 
+    const auto tokenizer_request = [&](const httplib::Request& req, httplib::Response& res, bool encode) {
+        try {
+            const auto request = json::parse(req.body);
+            if (!request.is_object()) throw std::invalid_argument("Expected a JSON object");
+            if (request.contains("vocab_path") || request.contains("data_path") || request.contains("config_path"))
+                throw std::invalid_argument("Tokenizer diagnostics use the loaded model's artifacts");
+            // Do not wait behind a long generation request: the UI can retry.
+            std::unique_lock<std::mutex> lock(execution_mutex, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                res.status = 409;
+                res.set_content(json({{"error", "Model worker is busy; retry when the current operation finishes"}}).dump(), "application/json");
+                return;
+            }
+            auto response = encode
+                ? GRIMText::Diagnostics::encodeTokenizerText(tokenizer, requireJsonString(request, "text"))
+                : GRIMText::Diagnostics::validateLoadedTokenizer(tokenizer);
+            response["vocab_path"] = paths_hp.vocab_path;
+            response["loaded_checkpoint_path"] = ctx.loaded_checkpoint_path;
+            res.status = response.value("status", std::string{}) == "success" ? 200 : 422;
+            res.set_content(response.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json({{"status", "error"}, {"error", e.what()}}).dump(), "application/json");
+        }
+    };
+    svr.Post("/internal/tokenizer/run", [&](const httplib::Request& req, httplib::Response& res) {
+        tokenizer_request(req, res, false);
+    });
+    svr.Post("/internal/tokenizer/encode", [&](const httplib::Request& req, httplib::Response& res) {
+        tokenizer_request(req, res, true);
+    });
+
     svr.Post("/internal/inspect", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const auto request = json::parse(req.body);
@@ -265,6 +298,24 @@ int runInferenceWorker(
                 throw std::invalid_argument("Inspection scratch budget must be a positive integer");
             capture.temporary_memory_budget_bytes = budget.get<uint64_t>();
             capture.replay_identity_control = true;
+            if(request.contains("jacobian")) {
+                const auto& jacobian=request.at("jacobian");
+                if(!jacobian.is_object() || jacobian.value("kind",std::string{})!="final_hidden")
+                    throw std::invalid_argument("Jacobian kind must be final_hidden");
+                capture.capture_jacobian=true;
+                if(jacobian.contains("output_dimension")) {
+                    const auto& dimension=jacobian.at("output_dimension");
+                    if(!dimension.is_number_integer() || dimension<0 || dimension>=compiled.architecture.d_model)
+                        throw std::invalid_argument("Invalid Jacobian output dimension");
+                    capture.jacobian_output_dimension=dimension.get<int>();
+                }
+                if(jacobian.contains("target_position")) {
+                    const auto& position=jacobian.at("target_position");
+                    if(!position.is_number_integer() || position.get<int64_t>() < -1 || position.get<int64_t>()>std::numeric_limits<int>::max())
+                        throw std::invalid_argument("Invalid Jacobian target position");
+                    capture.jacobian_target_position=position.get<int>();
+                }
+            }
             if (tokenizer_identity.empty())throw std::runtime_error("Cannot identify the loaded tokenizer artifact");
             capture.identity.execution_session_id = ctx.logging.session_id;
             capture.identity.tokenizer_fingerprint = tokenizer_identity;

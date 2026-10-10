@@ -13,6 +13,9 @@ $common += @('', '/helpers','/core','/deps/include','/vcpkg_installed/x64-window
 $arguments = $common + @('"' + $workspace + '/tests/ui_observatory_report_tests.cpp"', '"' + $workspace + '/ui/observatory/observatory_report.cpp"', '/Fe:ui_observatory_report_tests.exe')
 Set-Content -LiteralPath (Join-Path $output 'report.rsp') -Value $arguments -Encoding ascii
 $commands = @('@echo off', ('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'), 'if errorlevel 1 exit /b %errorlevel%', 'cl @report.rsp', 'if errorlevel 1 exit /b %errorlevel%', 'ui_observatory_report_tests.exe', 'if errorlevel 1 exit /b %errorlevel%')
+$geometry = $common + @('"' + $workspace + '/tests/ui_observatory_geometry_tests.cpp"', '/Fe:ui_observatory_geometry_tests.exe')
+Set-Content -LiteralPath (Join-Path $output 'geometry.rsp') -Value $geometry -Encoding ascii
+$commands += @('cl @geometry.rsp','if errorlevel 1 exit /b %errorlevel%','ui_observatory_geometry_tests.exe','if errorlevel 1 exit /b %errorlevel%')
 if ($CheckPanelSyntax) {
     # Validate the real config reader against freshly generated desktop-schema APIs.
     $flatc = Join-Path $workspace 'vcpkg_installed/x64-windows/tools/flatbuffers/flatc.exe'
@@ -37,6 +40,7 @@ if ($CheckRuntimeSyntax) {
     $runtimeSyntax += '/I"' + $cudaInclude + '"'
     $runtimeSyntax += '/I"' + (Join-Path $workspace 'resources/models/GRIM-text') + '"'
     $runtimeSyntax += @('resources/models/GRIM-text/training/Phases/Phase2_InferenceLoop.cu','resources/models/GRIM-text/training/train_gpu.cu','resources/models/GRIM-text/GRIM/grim_text_server.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+    $runtimeSyntax += @('resources/models/GRIM-text/Shared/Lenses/LensCapture_GPU.cu','resources/models/GRIM-text/Shared/Forward/ModelForward_GPU.cu') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
     Set-Content -LiteralPath (Join-Path $output 'runtime-syntax.rsp') -Value $runtimeSyntax -Encoding ascii
     $commands += @('cl @runtime-syntax.rsp','if errorlevel 1 exit /b %errorlevel%')
 }

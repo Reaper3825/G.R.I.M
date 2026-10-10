@@ -10,11 +10,21 @@ training is submitted normally:
 This Bash entry point launches the Python watcher. It also works directly as
 `python scripts/watch_models_bridges2.py --prune-remote`.
 
+The same loop also downloads new or changed `vocab.bin` and `vocab.txt` from
+`resources/models/GRIM-text/training/data` into that directory locally. Vocabulary
+files are **always retained on the HPC**, including when `--prune-remote` is enabled.
+Other training data files, including the GRMT corpus and caches, are excluded.
+Missing vocabulary files are skipped until they appear. Vocabulary uses the
+same stability checks, atomic local replacement, and retry behavior as model files.
+
 The watcher recursively copies new or changed files from
 `/ocean/projects/cis250124p/uwadkins/G.R.I.M/resources/models/model_store`
-into this checkout's `resources/models/model_store`. All model subdirectories
-and regular files are included, including checkpoints, optimizer sidecars,
-and model configurations. **Changed remote files replace matching local files.**
+into this checkout's `resources/models/model_store`. Model subdirectories are
+scanned recursively for checkpoints, optimizer sidecars, and other artifacts.
+Configuration files are managed by Git and excluded from downloads: `.grimcfg`,
+`.json`, `.jsonc`, `.json5`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, and `.conf`.
+This includes `model.grimcfg`, `model_config.json`, and `*_configuration.json`.
+**Changed remote artifacts replace matching local files.**
 Local files are never deleted. With `--prune-remote`, archived `.grimckpt` and
 `.opt` files are removed from the HPC, except the **latest PT and latest SFT
 checkpoint in each directory and their matching optimizer sidecars**.
@@ -78,6 +88,10 @@ Then test `sftp bridges2-data` and run:
 - `--remote-repo /ocean/projects/.../G.R.I.M`: override the remote repository;
   defaults to `GRIM_BRIDGES2_DIR` when set, otherwise the path above.
 - `--local-dir D:/somewhere/model_store`: override the local destination.
+- `--vocab-local-dir D:/somewhere/data`: override the vocabulary destination
+  (defaults to this checkout's `resources/models/GRIM-text/training/data`,
+  independently of `--local-dir`).
+- `--no-sync-vocab`: disable vocabulary downloads; enabled by default.
 - `--ssh C:/Windows/System32/OpenSSH/ssh.exe`: choose an SSH executable.
 - `--sftp C:/Windows/System32/OpenSSH/sftp.exe`: choose an SFTP executable.
 - `--once --interval 5`: take two polls, copy stable files, then exit. Returns

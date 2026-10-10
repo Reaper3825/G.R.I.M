@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <functional>
+#include "../TensorContract/AutogradEngine.hpp"
 
 namespace GRIM::Lenses {
 namespace {
@@ -33,6 +35,22 @@ std::vector<float> copyRow(const Tensor& tensor, std::size_t row, int width,
     }
     return host;
 }
+class JacobianTap final : public GradFn {
+public:
+    std::shared_ptr<GradFn> producer;
+    std::function<void(const Tensor&,cudaStream_t)> capture;
+    JacobianTap(std::shared_ptr<GradFn> input,std::function<void(const Tensor&,cudaStream_t)> callback)
+        :producer(std::move(input)),capture(std::move(callback)) {
+        op_name="lens_jacobian_tap";register_input(producer);
+    }
+protected:
+    void apply_impl(const Tensor& gradient,cudaStream_t stream,
+                    const Batching::BatchPayload* payload,const Batching::BatchDeviceBindings* bindings) override {
+        if(applied)return;
+        applied=true;capture(gradient,stream);
+        producer->apply(gradient,stream,payload,bindings);
+    }
+};
 }
 
 std::uint64_t nextForwardInvocationId() {
@@ -75,6 +93,24 @@ LensCaptureSession::LensCaptureSession(
         parameters.bias.data != nullptr, kEnableLmHeadTokenTypeGateExperiment,
         result_->planned_temporary_bytes);
     result_->snapshots.reserve(static_cast<std::size_t>(count) * (request.all_layers ? layer_count : 1));
+    if(request.capture_jacobian) {
+        if(!request.all_layers || !request.all_positions || cache_prefix_length || dropout_enabled)
+            throw std::invalid_argument("Jacobian capture requires all layers/positions, no cached prefix, and dropout disabled");
+        const int target=request.jacobian_target_position<0?payload.seq_lengths.at(request.batch_row)-1:request.jacobian_target_position;
+        if(request.jacobian_target_position < -1 || target<0 || target>=payload.seq_lengths.at(request.batch_row) ||
+           request.jacobian_output_dimension < 0 || request.jacobian_output_dimension>=hp.d_model)
+            throw std::invalid_argument("Jacobian target position or output dimension is out of range");
+        // Activation graph/backward workspace is separate from capture scratch.
+        // Bound the three root-gradient buffers plus retained host derivatives.
+        const long double bytes=sizeof(float)*(3.L*payload.total_tokens*hp.d_model+
+            static_cast<long double>(count)*layer_count*hp.d_model+
+            (kEnableLmHeadTokenTypeGateExperiment?static_cast<long double>(hp.vocab_size)*hp.d_model:0.L));
+        if(bytes>request.temporary_memory_budget_bytes)
+            throw std::invalid_argument("Jacobian root gradients and host capture exceed scratch MiB; shorten input or increase the budget (activation graph memory is additional)");
+        result_->jacobian_target_position=target;
+        result_->jacobian_output_dimension=request.jacobian_output_dimension;
+        result_->planned_temporary_bytes=std::max(result_->planned_temporary_bytes,static_cast<std::uint64_t>(bytes));
+    }
     next_layer_ = request.all_layers ? 0 : layer_count - 1;
     parameters_.owns_weights = false;
     parameters_.weights = parameters.weights.detach(stream);
@@ -174,6 +210,50 @@ void LensCaptureSession::publish(Forward::ModelForwardOutputs& outputs) {
     outputs.lens_snapshot = std::shared_ptr<const LensSnapshot>(
         outputs.lens_capture_result, &result_->snapshots.back());
     result_.reset();
+}
+
+void LensCaptureSession::attachJacobianTap(int layer,Tensor& hidden) {
+    if(!request_.capture_jacobian)return;
+    if(!hidden.requires_grad || !hidden.grad_fn)
+        throw std::runtime_error("Jacobian capture: encoder output has no activation graph");
+    auto result=result_;
+    const int row=request_.batch_row,width=hp_.d_model,stride=payload_.max_seq_len;
+    hidden.grad_fn=std::make_shared<JacobianTap>(hidden.grad_fn,
+        [result,layer,row,width,stride](const Tensor& gradient,cudaStream_t stream) {
+            for(auto& snapshot:result->snapshots)if(snapshot.metadata.layer_index==layer) {
+                snapshot.hidden_jacobian=copyRow(gradient,size_t(row)*stride+snapshot.metadata.token_position,width,stream);
+                for(float value:snapshot.hidden_jacobian)if(!std::isfinite(value))
+                    throw std::runtime_error("Jacobian capture: nonfinite hidden-state derivative");
+            }
+        });
+}
+
+void LensCaptureSession::captureJacobian(Tensor& final_hidden,const Batching::BatchDeviceBindings& bindings) {
+    if(!request_.capture_jacobian)return;
+    if(!final_hidden.requires_grad || !final_hidden.grad_fn)
+        throw std::runtime_error("Jacobian capture: final hidden state has no activation graph");
+    const size_t row=size_t(request_.batch_row)*payload_.max_seq_len+*result_->jacobian_target_position;
+    Tensor seed=Tensor::zeros(final_hidden.shape,false,stream_,"lens_jacobian_seed");
+    const float one=1.f;
+    check(cudaMemcpyAsync(seed.data+row*hp_.d_model+request_.jacobian_output_dimension,&one,sizeof(one),cudaMemcpyHostToDevice,stream_));
+    check(cudaStreamSynchronize(stream_));
+    // Invoke the fan-in engine explicitly, independent of training's legacy DFS switch.
+    final_hidden.grad_fn->receive_gradient(seed,stream_);
+    autograd::AutogradEngine engine(stream_,&payload_,&bindings);
+    engine.run(final_hidden.grad_fn.get());
+    check(cudaStreamSynchronize(stream_));
+    for(const auto& snapshot:result_->snapshots)if(snapshot.hidden_jacobian.size()!=size_t(hp_.d_model))
+        throw std::runtime_error("Jacobian capture: incomplete backward layer/position coverage");
+    // The measured final-hidden-to-itself block must be identity at the target
+    // position, and zero at every other source position. Check captured values.
+    for(const auto& snapshot:result_->snapshots)if(snapshot.metadata.layer_index+1==snapshot.metadata.layer_count)
+        for(int dimension=0;dimension<hp_.d_model;++dimension) {
+            const float expected=snapshot.metadata.token_position==*result_->jacobian_target_position &&
+                dimension==request_.jacobian_output_dimension?1.f:0.f;
+            if(snapshot.hidden_jacobian[dimension]!=expected)
+                throw std::runtime_error("Jacobian capture: final hidden identity/position check failed");
+        }
+    result_->jacobian_rows=1;
 }
 
 } // namespace GRIM::Lenses

@@ -1,0 +1,10 @@
+{
+  "fetchLimit": 100,
+  "generatorCount": 25,
+  "generatorRunMode": 0,
+  "generatorSeed": 1337,
+  "generatorSeedPolicy": 0,
+  "generatorTraversal": 1,
+  "maxHFResults": 4,
+  "verificationThreshold": 0.699999988079071
+}

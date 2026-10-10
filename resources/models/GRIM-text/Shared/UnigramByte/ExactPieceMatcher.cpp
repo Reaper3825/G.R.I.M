@@ -52,9 +52,11 @@ void ExactPieceMatcher::rebuild(
         }
         int node = 0;
         for (const unsigned char byte : definition.text) {
-            int& child = trie_[static_cast<std::size_t>(node)].children[byte];
+            int child = trie_[static_cast<std::size_t>(node)].children[byte];
             if (child < 0) {
                 child = static_cast<int>(trie_.size());
+                trie_[static_cast<std::size_t>(node)].children[byte] = child;
+                // Growing the vector can invalidate references into the parent.
                 trie_.emplace_back();
             }
             node = child;

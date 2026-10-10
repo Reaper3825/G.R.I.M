@@ -2,6 +2,7 @@
 // HTTP presentation adapter over the canonical host-owned capture. This is not
 // the compact .grimlens persistence format and never reruns readout math.
 #include "LensMetadata.hpp"
+#include "JacobianCapture.hpp"
 #include "../ModelConfig/CompiledModelConfig.hpp"
 #include <nlohmann/json.hpp>
 #include <map>
@@ -39,6 +40,16 @@ nlohmann::json inspectionReport(const LensCaptureResult& capture,
         {"attention_visibility", first.attention.kind == VisibilityKind::CausalPrefix ? "causal" : "full_sequence"},
         {"positions", json::array()}, {"chunk_rows", capture.chunk_rows},
         {"planned_temporary_bytes", capture.planned_temporary_bytes}};
+    if(capture.jacobian_target_position) {
+        if(capture.jacobian_output_dimension) {
+            if(capture.jacobian_rows!=1 || *capture.jacobian_output_dimension<0 || *capture.jacobian_output_dimension>=first.d_model)
+                throw std::invalid_argument("Invalid selected Jacobian row");
+        } else if(capture.jacobian_rows!=first.d_model)throw std::invalid_argument("Cannot export a partial Jacobian matrix");
+        report["jacobian"]={{"kind","final_hidden"},{"target_position",*capture.jacobian_target_position},
+            {"rows",capture.jacobian_rows},{"columns",first.d_model},{"layout","output_by_input"},
+            {"encoding","ieee754_f32_hex"},{"boundary","post_encoder_block"}};
+        if(capture.jacobian_output_dimension)report["jacobian"]["output_dimension"]=*capture.jacobian_output_dimension;
+    }
     std::map<int, json> positions;
     std::map<int, std::string> text;
     auto tokenText = [&](int id) -> const std::string& {
@@ -66,6 +77,11 @@ nlohmann::json inspectionReport(const LensCaptureResult& capture,
         }
         if (snapshot.identity_max_abs_logit_error)
             layer["identity_max_abs_logit_error"] = *snapshot.identity_max_abs_logit_error;
+        if(capture.jacobian_target_position) {
+            if(snapshot.hidden_jacobian.size()!=size_t(first.d_model)*capture.jacobian_rows)
+                throw std::invalid_argument("Incomplete Jacobian matrix in layer capture");
+            layer["hidden_jacobian_f32_hex"]=encodeJacobian(snapshot.hidden_jacobian);
+        }
         it->second["layers"].push_back(std::move(layer));
     }
     for (auto& [position, value] : positions) report["positions"].push_back(std::move(value));

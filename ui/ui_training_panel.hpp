@@ -11,7 +11,7 @@
 //  - Knowledge Gaps: gap queue (router misses → create model)
 //  - Tool Gaps:      tool-gap proposals (ToolGapPlanner)
 //  - Model Config:   edit a snapshot and compile a per-model .grimcfg
-//  - Tokenizer:      standalone tokenizer validation & encode
+//  - Tokenizer:      loaded model tokenizer diagnostics through GRIM-text
 //  - Observatory:    post-run per-layer capture visualization
 //======================================================//
 
@@ -22,7 +22,7 @@
 #include "primitives/ui_dropdown.hpp"
 #include "primitives/ui_label.hpp"
 #include "primitives/ui_scrollbox.hpp"
-#include "control/training_controller.hpp"
+#include "control/tokenizer_client.hpp"
 #include "control/hyperparameter_registry.hpp"
 #include "../MMO/Shared/MMD.hpp"
 #include "../MMO/Core/ToolGapPlanner.hpp"
@@ -206,11 +206,12 @@ private:
 
     // Tokenizer service connectivity. Config compilation is local and never
     // starts a training process.
-    std::unique_ptr<GRIM::UI::UITrainingController> trainingController;
+    std::future<bool> tokenizerHealthFuture_;
     bool serverConnected = false;
     float pollTimer = 0.0f;
-    float pollInterval = 0.2f;
+    float pollInterval = 2.0f;
     void pollServer();
+    void applyTokenizerResults();
 
     // Model configuration preset creator.
     nlohmann::json configPresetDocument_;
@@ -253,7 +254,8 @@ private:
     bool tokenizerComplete_ = false;
     bool tokenizerSuccess_ = false;
     std::string tokenizerStatusMessage_;
-    GRIMText::TrainingControlClient::TokenizerResult lastTokenizerResult_;
+    GRIMText::TokenizerClient::TokenizerResult lastTokenizerResult_;
+    std::future<GRIMText::TokenizerClient::TokenizerResult> tokenizerFuture_;
     void handleRunTokenizer();
     void drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width);
     void drawStatCard(OverlayRenderer& renderer, const Vec2& pos, const Vec2& size,
@@ -272,12 +274,12 @@ private:
     std::shared_ptr<UIButton> tokenizerRunValidationBtn_;
     std::shared_ptr<UIButton> tokenizerCloseBtn_;
     std::shared_ptr<UIScrollBox> tokenizerScrollBox_;
-    std::atomic<bool> encodeRunning_{false};
+    bool encodeRunning_ = false;
+    std::future<GRIMText::TokenizerClient::EncodeResult> encodeFuture_;
     bool encodeComplete_ = false;
     bool encodeSuccess_ = false;
     std::string encodeErrorMessage_;
-    GRIMText::TrainingControlClient::EncodeResult lastEncodeResult_;
-    std::mutex encodeMutex_;
+    GRIMText::TokenizerClient::EncodeResult lastEncodeResult_;
 
     // Tokenizer tab draw methods
     void drawTokenizerTab(OverlayRenderer& renderer, const PanelRect& content);

@@ -19,6 +19,8 @@ public:
     void captureLayer(int layer, const Tensor& hidden,
                       const Tensor* actual_logits = nullptr);
     void publish(Forward::ModelForwardOutputs& outputs);
+    void attachJacobianTap(int layer, Tensor& hidden);
+    void captureJacobian(Tensor& final_hidden, const Batching::BatchDeviceBindings& bindings);
 private:
     LensCaptureRequest request_;
     const Batching::BatchPayload& payload_;

@@ -1,5 +1,6 @@
 #pragma once
 #include "observatory_report.hpp"
+#include "observatory_geometry.hpp"
 #include "ui/primitives/ui_3d_viewport.hpp"
 #include <optional>
 
@@ -11,7 +12,8 @@ public:
     ~ObservatoryViewport();
     void setReport(std::shared_ptr<const GRIM::Observatory::Report> report, size_t position,
                    unsigned layer, int tokenId);
-    void draw(OverlayRenderer& renderer, Vec2 origin, Vec2 size);
+    void setVerticalAxis(GRIM::Observatory::VerticalAxis axis);
+    void draw(OverlayRenderer& renderer, Vec2 origin, Vec2 size, Vec2 mousePosition);
     void hide();
     void resetCamera();
     std::optional<Selection> takeSelection();

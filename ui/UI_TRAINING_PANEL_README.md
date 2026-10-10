@@ -11,8 +11,29 @@ same core-plus-tab layout as DataHub.
 - **Tool Gaps** — review proposed missing tools.
 - **Model Config** — edit an in-memory model configuration snapshot and compile
   it into an immutable `.grimcfg` artifact.
-- **Tokenizer** — validate the tokenizer and inspect text encoding through the
-  tokenizer control service.
+- **Tokenizer** — inspect the loaded model's tokenizer through `grim_text_server`.
+- **Observatory** — inspect the loaded model through the same public bridge.
+
+## Tokenizer diagnostics
+
+Load a model through the model loader before validating or encoding text. The
+panel uses the server URL from `GRIMTextServerManager` and posts to
+`/api/tokenizer/run` and `/api/tokenizer/encode`. The bridge forwards to the
+model worker, which owns the loaded vocabulary and tokenizer. There is no
+dependency on `training_control_server` or the retired `tokenizer_runner`.
+
+Validation runs six smoke checks for metadata alignment, token ID ranges, and
+decoding across empty, ordinary, whitespace, numeric, structural, and Unicode
+inputs. It is not the offline tokenizer self-test suite. Encoding displays token
+pieces, IDs, timing, and the decoded text; structural boundary tokens can make
+the decoded text differ from the original input.
+
+All requests run in background futures with values applied on the UI thread.
+The online indicator checks the bridge's `/health` endpoint every two seconds,
+with at most one check in flight. Bridge liveness is independent of model
+readiness. Tokenizer requests return a busy error rather than waiting behind
+generation or inspection. Closing or switching tabs is safe while work runs;
+background tasks do not capture the panel.
 
 ## Model Config workflow
 
