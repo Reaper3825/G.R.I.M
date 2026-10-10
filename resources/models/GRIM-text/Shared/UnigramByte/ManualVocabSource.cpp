@@ -60,10 +60,8 @@ std::vector<UnigramPiece> loadManualVocabPieces(const std::string& path) {
 void appendManualVocabPieces(UnigramLM& unigram,
                              const std::vector<UnigramPiece>& pieces,
                              int target_vocab_size) {
-    if (target_vocab_size <= 0 ||
-        pieces.size() > static_cast<std::size_t>(target_vocab_size)) {
-        throw std::runtime_error("[UnigramLM] manual entries exceed target learned vocabulary size");
-    }
+    // Manual entries are an allowance on top of the ordinary learned budget.
+    (void)unigramPieceBudgetWithManualAllowanceOrThrow(target_vocab_size, pieces.size());
     for (const auto& piece : pieces) {
         applyUnigramVocabWriteOp(UnigramVocabWriteRequest{
             UnigramVocabWriteTarget{unigram.pieces_, unigram.piece_to_id_},

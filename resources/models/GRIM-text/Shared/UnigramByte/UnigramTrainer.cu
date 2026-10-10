@@ -634,6 +634,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  const std::vector<UnigramPiece>& manual_pieces) {
     validateTrainFromCorpusParameters(texts, target_vocab_size, character_coverage,
                                       min_subword_freq, subword_mining_workers);
+    const int total_piece_target = unigramPieceBudgetWithManualAllowanceOrThrow(
+        target_vocab_size, manual_pieces.size());
 
     // An empty atom_spans vector means "no atom spans for any text". Expand it
     // to a per-text empty list so the rest of the pipeline can index uniformly.
@@ -650,7 +652,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     last_training_runtime_report_ = UnigramTrainingRuntimeReport{};
 
     std::cout << "[UnigramLM] Training vocabulary from " << texts.size() 
-              << " texts (target_vocab_size=" << target_vocab_size << ")" << std::endl;
+              << " texts (ordinary_piece_target=" << target_vocab_size
+              << ", manual_piece_allowance=" << manual_pieces.size()
+              << ", total_piece_target=" << total_piece_target << ")" << std::endl;
     std::cout << "[UnigramLM] min_subword_freq=" << min_subword_freq 
               << ", prune_during_mining=" << (prune_during_mining ? "true" : "false")
               << ", parallel_subword_mining=" << (enable_parallel_subword_mining ? "true" : "false")
@@ -1001,7 +1005,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // Starting from the full data-selected candidate vocab, we:
     //   1. Run true Unigram forward-backward EM to convergence (Phase-A).
     //   2. Iteratively prune the lowest-likelihood-contribution pieces toward
-    //      target_vocab_size, re-fitting with a few EM sub-iterations each
+    //      ordinary target + manual allowance, re-fitting with a few EM sub-iterations each
     //      round, always protecting single-codepoint / user-defined / no-alt
     //      coverage pieces (Prune rounds).
     //   3. Re-converge EM on the final vocab (Final).
@@ -1171,7 +1175,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     // ---- Phase A: EM to convergence on the full data-selected candidate vocab ----
     std::cout << "[UnigramLM] Phase-A: forward-backward EM on data-selected candidate vocab ("
-              << pieces_.size() << " pieces; pruning toward target_vocab_size=" << target_vocab_size
+              << pieces_.size() << " pieces; pruning toward total_piece_target=" << total_piece_target
               << ")" << std::endl;
     EMConvergenceResult em_result = runEMToConvergence("Phase-A");
     requireConvergedPhaseNotFallbackDominated(em_result, "Phase-A");
@@ -1182,7 +1186,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // single-codepoint / user-defined / no-alternative coverage pieces, then
     // re-fits scores with a few EM sub-iterations.
     int prune_round = 0;
-    while (static_cast<int>(pieces_.size()) > target_vocab_size) {
+    while (static_cast<int>(pieces_.size()) > total_piece_target) {
         std::vector<double> freq_by_index(pieces_.size(), 0.0);
         for (const auto& token_count : em_result.learned_token_counts) {
             const int idx = indexForTokenId(token_count.first);
@@ -1195,7 +1199,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         UnigramLikelihoodLossPruneResult prune = selectUnigramSurvivorsByLikelihoodLoss(
             pieces_,
             freq_by_index,
-            target_vocab_size,
+            total_piece_target,
             PRUNE_SHRINK_FACTOR,
             subword_mining_workers,
             "UnigramLM::trainFromCorpus likelihood-loss prune");
@@ -1203,8 +1207,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         if (prune.removed <= 0) {
             std::cout << "[UnigramLM] Likelihood-loss prune: no further prunable pieces (protected="
                       << prune.protected_count << ", irreplaceable_no_alt=" << prune.irreplaceable_no_alt
-                      << "); stopping at " << before << " pieces, above target_vocab_size="
-                      << target_vocab_size << " (coverage pieces cannot be pruned)" << std::endl;
+                      << "); stopping at " << before << " pieces, above total_piece_target="
+                      << total_piece_target << " (coverage pieces cannot be pruned)" << std::endl;
             break;
         }
 

@@ -14,6 +14,7 @@ std::vector<UnigramPiece> loadManualVocabPieces(const std::string& path);
 // Reserve the authored entries in the learned token-ID range. They are emitted
 // by the exact pre-Viterbi matcher, excluded from EM, and protected from pruning.
 // Subsequent mined admission skips exact duplicate text.
+// target_vocab_size is the ordinary-piece budget; manual pieces are additional.
 void appendManualVocabPieces(UnigramLM& unigram,
                              const std::vector<UnigramPiece>& pieces,
                              int target_vocab_size);

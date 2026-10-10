@@ -3,7 +3,7 @@
 All tokenizer configuration lives in `ai_config.json`.
 
 `training.config.tokenizer_manual_vocab_path` optionally names a JSON source
-for protected ordinary unigram pieces. The tracked empty example is
+for protected exact pieces in the learned token-ID range. The tracked source is
 `resources/models/GRIM-text/training/manual_vocab.json`:
 
 ```json
@@ -12,8 +12,14 @@ for protected ordinary unigram pieces. The tracked empty example is
 
 Each key is the exact normalized piece text (word-initial spaces use `▁`),
 and each value is a retained negative diagnostic score. Entries enter the
-learned token-ID range before ordinary mined pieces and count toward
-`tokenizer_target_vocab_size`, but they do not enter the Viterbi trie or EM
+learned token-ID range before ordinary mined pieces as an allowance on top of
+`tokenizer_target_vocab_size`. The configured target (and its configured maximum)
+covers ordinary corpus-learned pieces; pruning targets that budget plus the manual
+entry count. For example, 10,000 ordinary pieces plus 587 manual entries target
+10,587 learned-range entries and 10,906 total token IDs with the current
+`TokenLayout.hpp` fixed ranges. Coverage protection can still leave the result
+above target, and insufficient candidates can leave it below target.
+Manual entries do not enter the Viterbi trie or EM
 posterior. A deterministic pre-Viterbi trie emits the longest valid exact match
 directly. Entries beginning with `▁` require a lexical boundary after the match,
 so `▁are` does not capture the prefix of `▁area`; punctuation, another `▁`, or

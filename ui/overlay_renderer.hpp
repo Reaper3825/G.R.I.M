@@ -160,6 +160,16 @@ private:
     };
     std::unordered_map<uint32_t, BakedChar> m_glyphMap;
 
+    struct RasterGlyph {
+        int width = 0, height = 0;
+        int xoff = 0, yoff = 0;
+        float advance = 0.0f;
+        std::vector<uint8_t> coverage;
+    };
+    // Sized glyphs are rasterized from the font, never enlarged from the atlas.
+    std::unordered_map<float, std::unordered_map<uint32_t, RasterGlyph>> m_sizedGlyphs;
+    const RasterGlyph& sizedGlyph(uint32_t codepoint, float pixelSize);
+
     // Decode one UTF-8 codepoint from a byte sequence.
     // Returns the codepoint and advances `pos` past the consumed bytes.
     static uint32_t decodeUtf8(const std::string& text, size_t& pos);

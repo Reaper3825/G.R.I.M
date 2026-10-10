@@ -257,7 +257,7 @@ private:
     GRIMText::TokenizerClient::TokenizerResult lastTokenizerResult_;
     std::future<GRIMText::TokenizerClient::TokenizerResult> tokenizerFuture_;
     void handleRunTokenizer();
-    void drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width);
+    float drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width);
     void drawStatCard(OverlayRenderer& renderer, const Vec2& pos, const Vec2& size,
                       const std::string& label, const std::string& value,
                       uint32_t accentColor);

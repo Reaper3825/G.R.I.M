@@ -194,6 +194,10 @@ UITrainingPanel::UITrainingPanel()
     encodeInputBox_ = std::make_shared<UIInputBox>(&encodeInputBuffer_);
     encodeInputBox_->setSize(500.0f, 28.0f);
     encodeInputBox_->setPlaceholder("Enter text to encode...");
+    encodeInputBox_->OnTextSubmitted.Bind([this](const std::string& text) {
+        encodeInputBuffer_ = text;
+        handleEncodeText();
+    });
 
     encodeButton_ = std::make_shared<UIButton>("Encode", [this]() {
         handleEncodeText();

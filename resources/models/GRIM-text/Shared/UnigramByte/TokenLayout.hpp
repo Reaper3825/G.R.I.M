@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -190,6 +191,20 @@ struct TokenLayout {
 
     int firstContentTokenId() const { return num_special; }
 };
+
+// The configured budget covers corpus-learned pieces. Authored exact pieces
+// occupy additional slots in the same learned range, after the fixed ranges.
+inline int unigramPieceBudgetWithManualAllowanceOrThrow(
+    int ordinary_piece_budget,
+    std::size_t manual_piece_count)
+{
+    const int max_piece_count = std::numeric_limits<int>::max() - UNIGRAM_VOCAB_OFFSET;
+    if (ordinary_piece_budget <= 0 || ordinary_piece_budget > max_piece_count ||
+        manual_piece_count > static_cast<std::size_t>(max_piece_count - ordinary_piece_budget)) {
+        throw std::runtime_error("Unigram vocabulary budget plus manual allowance exceeds token layout capacity or has an invalid ordinary budget");
+    }
+    return ordinary_piece_budget + static_cast<int>(manual_piece_count);
+}
 
 inline TokenLayout tokenLayoutFromActualVocabOrThrow(
     std::uint32_t actual_vocab_size,

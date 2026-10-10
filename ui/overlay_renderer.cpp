@@ -129,6 +129,7 @@ void OverlayRenderer::shutdown()
     m_fontFileData.clear();
     m_iconFontFileData.clear();
     m_fontAtlas.clear();
+    m_sizedGlyphs.clear();
     m_fontLoaded = false;
     m_glassCache.clear();
     m_lastBlurStyleGeneration = 0;

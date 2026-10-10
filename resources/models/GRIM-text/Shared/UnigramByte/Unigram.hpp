@@ -110,6 +110,8 @@ public:
     // texts[i] (parallel arrays); atom regions are SKIPPED during character
     // counting, subword mining, and EM iterations. Pass an empty atom_spans
     // vector to train with no atom spans at all.
+    // target_vocab_size covers ordinary pieces; manual_pieces add an allowance
+    // in the same learned ID range without reducing that ordinary budget.
     bool trainFromCorpus(const std::vector<std::string>& texts,
                          const std::vector<std::vector<AtomSpan>>& atom_spans,
                          int target_vocab_size,

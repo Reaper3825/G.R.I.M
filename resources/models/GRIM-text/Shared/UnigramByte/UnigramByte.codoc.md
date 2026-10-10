@@ -236,7 +236,10 @@ flowchart LR
    surrogate rejection, truncation checks, and max-codepoint validation belong to `TextUtils`.
 - Candidate selection is corpus/data driven: subwords must pass the frequency, validity,
    repetition-noise, and structural-dedup filters. `target_vocab_size`
-  is only the final learned-piece cap used by pruning; do not derive a seed-vocab size
+  is the ordinary corpus-learned budget used by pruning; authored exact pieces
+  receive an additional allowance, so the combined pruning target is
+  `target_vocab_size + manual_pieces.size()`. The full token-space size remains
+  `UNIGRAM_VOCAB_OFFSET + pieceCount()`; do not derive a seed-vocab size
   or candidate-selection cap from it.
 - Do not reject prefix-extension candidates before EM. Equal corpus counts do not prove
    redundancy; longer pieces may still earn their slot through better likelihood/compression.

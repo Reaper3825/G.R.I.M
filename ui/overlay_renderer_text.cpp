@@ -64,6 +64,7 @@ void OverlayRenderer::setFont(const std::string& fontPath, int fontSize)
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     m_fontFileData = readFontFile(fontPath);
+    m_sizedGlyphs.clear();
     if (m_fontFileData.empty()) {
         m_fontLoaded = false;
         return;
@@ -95,6 +96,7 @@ void OverlayRenderer::loadIconFont(const std::string& fontPath)
 
 void OverlayRenderer::rebuildAtlas()
 {
+    m_sizedGlyphs.clear();
     m_glyphMap.clear();
     m_fontLoaded = false;
 
@@ -241,6 +243,39 @@ void OverlayRenderer::rebuildAtlas()
     LOG_ERROR("OverlayRenderer", "Failed to bake font atlas (tried up to 4096x4096)");
 }
 
+const OverlayRenderer::RasterGlyph& OverlayRenderer::sizedGlyph(uint32_t codepoint, float pixelSize)
+{
+    auto& glyphs = m_sizedGlyphs[pixelSize];
+    const auto cached = glyphs.find(codepoint);
+    if (cached != glyphs.end()) return cached->second;
+
+    const bool icon = codepoint >= 0xE000 && codepoint <= 0xF8FF && !m_iconFontFileData.empty();
+    const auto& data = icon ? m_iconFontFileData : m_fontFileData;
+    stbtt_fontinfo font{};
+    const int offset = stbtt_GetFontOffsetForIndex(data.data(), 0);
+    if (offset < 0 || !stbtt_InitFont(&font, data.data(), offset))
+        throw std::runtime_error("Cannot rasterize glyph from invalid font");
+    const float fontScale = stbtt_ScaleForPixelHeight(&font, pixelSize);
+    RasterGlyph glyph;
+    int advance = 0, bearing = 0;
+    stbtt_GetCodepointHMetrics(&font, codepoint, &advance, &bearing);
+    glyph.advance = advance * fontScale;
+    unsigned char* bitmap = stbtt_GetCodepointBitmap(&font, fontScale, fontScale, codepoint,
+        &glyph.width, &glyph.height, &glyph.xoff, &glyph.yoff);
+    if (bitmap) {
+        try {
+            glyph.coverage.assign(bitmap, bitmap + glyph.width * glyph.height);
+        } catch (...) {
+            stbtt_FreeBitmap(bitmap, nullptr);
+            throw;
+        }
+        stbtt_FreeBitmap(bitmap, nullptr);
+    } else if (glyph.width > 0 && glyph.height > 0) {
+        throw std::runtime_error("Failed to rasterize font glyph");
+    }
+    return glyphs.emplace(codepoint, std::move(glyph)).first->second;
+}
+
 // Keep drawing, measurement, and wrapping on the same theme-relative scale.
 static float typographyScale(float size)
 {
@@ -279,6 +314,12 @@ void OverlayRenderer::drawTextScaled(
     if (!m_pixels || !m_fontLoaded || text.empty())
         return;
 
+    const float pixelSize = m_fontSize * scale;
+    if (!std::isfinite(pixelSize) || pixelSize <= 0.0f)
+        throw std::invalid_argument("Rendered font size must be finite and > 0");
+    // Bound the number of size variants if a caller animates text size.
+    if (scale != 1.0f && m_sizedGlyphs.size() >= 32 && m_sizedGlyphs.find(pixelSize) == m_sizedGlyphs.end())
+        m_sizedGlyphs.clear();
     ClipRect clip = activeClip();
 
     uint8_t a = (color >> 24) & 0xFF;
@@ -309,35 +350,25 @@ void OverlayRenderer::drawTextScaled(
 
         const BakedChar& bc = it->second;
 
-        int glyphW = bc.x1 - bc.x0;
-        int glyphH = bc.y1 - bc.y0;
+        const RasterGlyph* raster = scale == 1.0f ? nullptr : &sizedGlyph(it->first, pixelSize);
+        const int glyphW = raster ? raster->width : bc.x1 - bc.x0;
+        const int glyphH = raster ? raster->height : bc.y1 - bc.y0;
+        const float advance = raster ? raster->advance : bc.xadvance;
         if (glyphW <= 0 || glyphH <= 0) {
-            cursorX += bc.xadvance * scale;
+            cursorX += advance;
             continue;
         }
 
-        int dstX0 = static_cast<int>(std::floor(cursorX + bc.xoff * scale));
-        int dstY0 = static_cast<int>(
-            std::floor(cursorY + (bc.yoff + m_fontSize) * scale));
-        int dstGlyphW = static_cast<int>(std::ceil(glyphW * scale));
-        int dstGlyphH = static_cast<int>(std::ceil(glyphH * scale));
-
-        for (int gy = 0; gy < dstGlyphH; ++gy) {
-            int dy = dstY0 + gy;
+        const int dstX0 = static_cast<int>(std::floor(cursorX + (raster ? raster->xoff : bc.xoff)));
+        const int dstY0 = static_cast<int>(std::floor(cursorY + pixelSize + (raster ? raster->yoff : bc.yoff)));
+        for (int gy = 0; gy < glyphH; ++gy) {
+            const int dy = dstY0 + gy;
             if (dy < clip.y1 || dy >= clip.y2) continue;
-            int sourceY = std::min(
-                glyphH - 1,
-                static_cast<int>(std::floor(static_cast<float>(gy) / scale)));
-
-            for (int gx = 0; gx < dstGlyphW; ++gx) {
-                int dx = dstX0 + gx;
+            for (int gx = 0; gx < glyphW; ++gx) {
+                const int dx = dstX0 + gx;
                 if (dx < clip.x1 || dx >= clip.x2) continue;
-                int sourceX = std::min(
-                    glyphW - 1,
-                    static_cast<int>(std::floor(static_cast<float>(gx) / scale)));
-
-                uint8_t coverage = m_fontAtlas[
-                    (bc.y0 + sourceY) * m_atlasWidth + (bc.x0 + sourceX)];
+                const uint8_t coverage = raster ? raster->coverage[gy * glyphW + gx] :
+                    m_fontAtlas[(bc.y0 + gy) * m_atlasWidth + bc.x0 + gx];
                 if (coverage == 0) continue;
 
                 uint8_t ca = (uint8_t)((a * coverage) / 255);
@@ -361,7 +392,7 @@ void OverlayRenderer::drawTextScaled(
             }
         }
 
-        cursorX += bc.xadvance * scale;
+        cursorX += advance;
     }
 }
 
