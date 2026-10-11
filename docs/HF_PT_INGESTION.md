@@ -94,6 +94,14 @@ No training or model runtime is launched by the importer.
 
 ## Expanding the pilot to 10,000 entries
 
+The 8,800-entry expansion uses direct Parquet acquisition after dataset-viewer
+errors. `scripts/fetch_hf_pt_shards.py` downloads and checks the LFS SHA-256 of one
+first shard per source at a pinned commit. The existing `.venv-cosyvoice` Python
+environment supplies PyArrow; no dependency installation is needed. Sampling is
+random within those first shards, so it is not representative of every shard in
+the full source datasets. Decoded source pages and shard identity are retained
+for independent chunk verification.
+
 The requested second batch adds 3,600 how-to, 3,600 education, and 1,600 mathematics
 entries. Existing corpus content is excluded before counting these quotas, so
 the batch contains 8,800 novel entries, rather than repeating the pilot.
@@ -101,6 +109,15 @@ the batch contains 8,800 novel entries, rather than repeating the pilot.
 ```powershell
 python scripts/generate_hf_pt.py --howto-sequences 3600 --education-sequences 3600 --math-sequences 1600 --exclude-existing --page-size 100 --max-pages 1000 --output resources/models/GRIM-text/training/data/hf_pt_provenance/expansion_8800
 python scripts/verify_hf_pt.py --output resources/models/GRIM-text/training/data/hf_pt_provenance/expansion_8800 --append
+```
+
+For the direct Parquet route used in this run:
+
+```powershell
+python scripts/fetch_hf_pt_shards.py
+& .venv-cosyvoice/Scripts/python.exe scripts/generate_hf_pt.py --howto-sequences 3600 --education-sequences 3600 --math-sequences 1600 --exclude-existing --page-size 100 --max-pages 1000 --output resources/models/GRIM-text/training/data/hf_pt_provenance/expansion_8800 --parquet-manifest resources/models/GRIM-text/training/data/hf_pt_provenance/expansion_8800/parquet_manifest.json
+python scripts/verify_hf_pt.py --output resources/models/GRIM-text/training/data/hf_pt_provenance/expansion_8800 --append
+python scripts/audit_hf_pt_expansion.py
 ```
 
 To retry an already staged batch, rerun the verifier/append command. Re-running

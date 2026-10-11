@@ -21,14 +21,14 @@
 #include "NumericTokens.hpp"
 #include "TextUtils.hpp"
 #include "Training/SubwordMining.hpp"
-#include "Training/UnigramForwardBackward.hpp"
+#include "Training/UnigramExpectationStep.hpp"
+#include "Training/UnigramMaximizationStep.hpp"
+#include "Training/UnigramLikelihoodPruning.hpp"
 #include "VocabWriteOp.hpp"
 #include "HyperParameters/HyperparameterGroupings.hpp"
 #include "ManualVocabSource.hpp"
 
 #include <algorithm>
-#include <array>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
@@ -40,7 +40,6 @@
 #include <mutex>
 #include <queue>
 #include <sstream>
-#include <thread>
 #include <unordered_set>
 
 namespace GRIM {
@@ -211,213 +210,6 @@ void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
                                  std::to_string(learned_to_fallback_ratio) +
                                  ", required_ratio>=1.0. Training MUST fail instead of treating fallback-dominated evidence as a learned-piece distribution");
     }
-}
-
-//======================================================//
-//  Likelihood-loss pruning (SentencePiece-style)
-//
-//  Gold-standard Unigram-LM vocabulary reduction. After EM has fit the
-//  piece probabilities, each learned piece is scored by its contribution
-//  to corpus likelihood: how much log-probability is lost per use if the
-//  piece is removed and its surface is re-encoded by the next-best
-//  combination of OTHER learned pieces. The lowest-contribution pieces
-//  (dead prefix fragments like "traditio"/"recogn" sit at ~0) are dropped
-//  toward target_vocab_size.
-//
-//  Coverage is always preserved. A piece is protected from pruning when:
-//    - it is user-defined / special, OR
-//    - it is a single Unicode codepoint (single-char coverage comes from
-//      single-char UNIGRAM pieces, never from byte fallback), OR
-//    - its surface has no alternative learned-piece segmentation at all
-//      (removing it would force byte fallback).
-//  Byte fallback (the fixed UNKNOWN_SCORE path) is never a protected vocab
-//  entry; it stays the unnormalized last-resort coverage path only.
-//======================================================//
-
-static bool isSingleCodepointPiece(const std::string& text) {
-    if (text.empty()) return false;
-    uint32_t cp = 0;
-    size_t len = 0;
-    if (!utf8DecodeAt(text, 0, &cp, &len)) return false;
-    return len == text.size();
-}
-
-namespace {
-struct LikelihoodLossTrieNode {
-    std::array<int, 256> children;
-    int piece_index = -1;
-    double score = 0.0;
-    LikelihoodLossTrieNode() { children.fill(-1); }
-};
-}  // namespace
-
-// Best total log-probability of segmenting `surface` using OTHER learned
-// pieces only — i.e., excluding the single whole-surface piece. Returns
-// -inf when no alternative learned-piece segmentation exists; such pieces
-// are irreplaceable coverage and must never be pruned.
-static double bestAlternativeSegmentationScore(
-    const std::vector<LikelihoodLossTrieNode>& trie,
-    const std::string& surface) {
-    const size_t n = surface.size();
-    const double neg_inf = -std::numeric_limits<double>::infinity();
-    std::vector<double> best(n + 1, neg_inf);
-    best[0] = 0.0;
-    for (size_t start = 0; start < n; ++start) {
-        if (best[start] == neg_inf) continue;
-        int node = 0;
-        const size_t max_end = std::min(n, start + static_cast<size_t>(MAX_PIECE_LENGTH));
-        for (size_t end = start + 1; end <= max_end; ++end) {
-            const unsigned char byte = static_cast<unsigned char>(surface[end - 1]);
-            const int child = trie[static_cast<size_t>(node)].children[byte];
-            if (child < 0) break;
-            node = child;
-            const LikelihoodLossTrieNode& cur = trie[static_cast<size_t>(node)];
-            if (cur.piece_index < 0) continue;
-            if (start == 0 && end == n) continue;  // exclude the whole-surface piece itself
-            const double candidate = best[start] + cur.score;
-            if (candidate > best[end]) best[end] = candidate;
-        }
-    }
-    return best[n];
-}
-
-struct UnigramLikelihoodLossPruneResult {
-    std::vector<UnigramPiece> survivors;
-    int removed = 0;
-    int protected_count = 0;
-    int irreplaceable_no_alt = 0;
-};
-
-// Select the highest-likelihood-contribution pieces toward a target size,
-// always retaining protected (single-codepoint / user-defined / no-alt)
-// pieces. Survivors are moved out of `pieces` in original order so token
-// IDs stay position-derived after rewriteUnigramVocab().
-static UnigramLikelihoodLossPruneResult selectUnigramSurvivorsByLikelihoodLoss(
-    std::vector<UnigramPiece>& pieces,
-    const std::vector<double>& freq_by_index,
-    int target_vocab_size,
-    double shrink_factor,
-    int worker_count,
-    const char* caller) {
-    if (caller == nullptr || caller[0] == '\0') {
-        throw std::runtime_error("selectUnigramSurvivorsByLikelihoodLoss: caller label is empty");
-    }
-    const size_t n = pieces.size();
-    if (freq_by_index.size() != n) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": freq_by_index size=" + std::to_string(freq_by_index.size()) +
-                                 " != pieces size=" + std::to_string(n));
-    }
-    if (!(shrink_factor > 0.0 && shrink_factor < 1.0)) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": shrink_factor must be in (0,1), got " + std::to_string(shrink_factor));
-    }
-
-    std::vector<LikelihoodLossTrieNode> trie;
-    trie.reserve(n + 1);
-    trie.emplace_back();
-    for (size_t i = 0; i < n; ++i) {
-        if (pieces[i].is_user_defined) continue;
-        int node = 0;
-        for (unsigned char byte : pieces[i].text) {
-            int child = trie[static_cast<size_t>(node)].children[byte];
-            if (child < 0) {
-                child = static_cast<int>(trie.size());
-                trie[static_cast<size_t>(node)].children[byte] = child;
-                trie.emplace_back();
-            }
-            node = child;
-        }
-        trie[static_cast<size_t>(node)].piece_index = static_cast<int>(i);
-        trie[static_cast<size_t>(node)].score = static_cast<double>(pieces[i].score);
-    }
-
-    std::vector<char> is_protected(n, 0);
-    std::vector<double> loss(n, 0.0);
-    std::atomic<int> irreplaceable{0};
-
-    auto compute_range = [&](size_t begin, size_t end) {
-        for (size_t i = begin; i < end; ++i) {
-            if (pieces[i].is_user_defined || isSingleCodepointPiece(pieces[i].text)) {
-                is_protected[i] = 1;
-                continue;
-            }
-            const double alt = bestAlternativeSegmentationScore(trie, pieces[i].text);
-            if (!std::isfinite(alt)) {
-                is_protected[i] = 1;
-                irreplaceable.fetch_add(1, std::memory_order_relaxed);
-                continue;
-            }
-            const double keep_logprob = static_cast<double>(pieces[i].score);
-            loss[i] = freq_by_index[i] * (keep_logprob - alt);
-        }
-    };
-
-    int workers = worker_count > 0 ? worker_count : static_cast<int>(std::thread::hardware_concurrency());
-    if (workers < 1) workers = 1;
-    if (static_cast<size_t>(workers) > n) workers = static_cast<int>(std::max<size_t>(1, n));
-    if (workers == 1) {
-        compute_range(0, n);
-    } else {
-        std::vector<std::thread> pool;
-        const size_t chunk = (n + static_cast<size_t>(workers) - 1) / static_cast<size_t>(workers);
-        for (int w = 0; w < workers; ++w) {
-            const size_t begin = static_cast<size_t>(w) * chunk;
-            if (begin >= n) break;
-            const size_t end = std::min(n, begin + chunk);
-            pool.emplace_back(compute_range, begin, end);
-        }
-        for (auto& t : pool) t.join();
-    }
-
-    int protected_count = 0;
-    std::vector<int> prunable;
-    prunable.reserve(n);
-    for (size_t i = 0; i < n; ++i) {
-        if (is_protected[i]) {
-            ++protected_count;
-        } else {
-            prunable.push_back(static_cast<int>(i));
-        }
-    }
-
-    const int desired = std::max(target_vocab_size,
-                                 static_cast<int>(std::floor(shrink_factor * static_cast<double>(n))));
-    int keep_prunable = desired - protected_count;
-    if (keep_prunable < 0) keep_prunable = 0;
-    if (keep_prunable > static_cast<int>(prunable.size())) {
-        keep_prunable = static_cast<int>(prunable.size());
-    }
-
-    // Highest likelihood contribution = most valuable = kept first.
-    std::sort(prunable.begin(), prunable.end(), [&](int a, int b) {
-        if (loss[static_cast<size_t>(a)] != loss[static_cast<size_t>(b)]) {
-            return loss[static_cast<size_t>(a)] > loss[static_cast<size_t>(b)];
-        }
-        return a < b;
-    });
-
-    std::vector<char> keep(n, 0);
-    for (size_t i = 0; i < n; ++i) {
-        if (is_protected[i]) keep[i] = 1;
-    }
-    for (int k = 0; k < keep_prunable; ++k) {
-        keep[static_cast<size_t>(prunable[static_cast<size_t>(k)])] = 1;
-    }
-
-    UnigramLikelihoodLossPruneResult result;
-    result.protected_count = protected_count;
-    result.irreplaceable_no_alt = irreplaceable.load();
-    result.survivors.reserve(static_cast<size_t>(protected_count) + static_cast<size_t>(keep_prunable));
-    int kept = 0;
-    for (size_t i = 0; i < n; ++i) {
-        if (keep[i]) {
-            result.survivors.push_back(std::move(pieces[i]));
-            ++kept;
-        }
-    }
-    result.removed = static_cast<int>(n) - kept;
-    return result;
 }
 
 struct AtomSpanValidationTotals {
@@ -1022,94 +814,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     constexpr double PRUNE_SHRINK_FACTOR   = 0.75;  // max fraction kept per prune round
     constexpr int    PRUNE_SUB_ITERATIONS  = 2;     // EM re-fit iterations after each prune round
 
-    struct EStepResult {
-        std::unordered_map<int, double> learned_token_counts;
-        double expected_learned_piece_tokens = 0.0;
-        double expected_fixed_penalty_byte_fallback_tokens = 0.0;
-        double log_likelihood = 0.0;
-    };
-
-    auto runEStep = [&]() -> EStepResult {
-        UnigramForwardBackwardLattice lattice(
-            pieces_, enable_byte_fallback_, "UnigramLM::trainFromCorpus forward-backward E-step");
-        UnigramForwardBackwardStats stats(pieces_.size());
-        std::unordered_map<int, double> token_counts;
-
-        for (size_t text_idx = 0; text_idx < norm_texts.size(); ++text_idx) {
-            const auto& text = norm_texts[text_idx];
-            const auto& spans = norm_training_exclusion_spans[text_idx];
-            if (text.empty()) continue;
-
-            auto processSegment = [&](const std::string& segment) {
-                size_t pos = 0;
-                while (pos < segment.size()) {
-                    const size_t newline = segment.find('\n', pos);
-                    const size_t end = newline == std::string::npos ? segment.size() : newline;
-                    if (end > pos) {
-                        lattice.accumulateSegment(
-                            segment.substr(pos, end - pos), stats,
-                            "UnigramLM::trainFromCorpus forward-backward E-step");
-                    }
-                    if (newline == std::string::npos) break;
-                    pos = newline + 1;
-                }
-            };
-
-            if (spans.empty()) {
-                processSegment(text);
-            } else {
-                size_t pos = 0;
-                for (const auto& span : spans) {
-                    if (span.start > pos) {
-                        processSegment(text.substr(pos, span.start - pos));
-                    }
-                    pos = span.end;
-                }
-                if (pos < text.size()) {
-                    processSegment(text.substr(pos));
-                }
-            }
-        }
-
-        token_counts.reserve(stats.piece_expected_counts.size());
-        for (size_t i = 0; i < stats.piece_expected_counts.size(); ++i) {
-            const double expected_count = stats.piece_expected_counts[i];
-            if (expected_count == 0.0) continue;
-            token_counts[tokenIdForIndex(static_cast<int>(i))] = expected_count;
-        }
-        return EStepResult{std::move(token_counts),
-                           stats.expected_learned_piece_tokens,
-                           stats.expected_fixed_penalty_byte_fallback_tokens,
-                           stats.log_likelihood};
-    };
-
-    auto runMStep = [&](const std::unordered_map<int, double>& token_counts, double learned_total_tokens) -> int {
-        // Byte fallback remains outside the normalized learned-piece distribution.
-        // Its UNKNOWN_SCORE path is a fixed unnormalized per-byte coverage penalty, so the
-        // M-step normalizer is learned-piece posterior mass + learned-piece smoothing only.
-        const size_t ordinary_piece_count = static_cast<size_t>(std::count_if(
-            pieces_.begin(), pieces_.end(),
-            [](const UnigramPiece& piece) { return !piece.is_user_defined; }));
-        double smoothed_total = learned_total_tokens +
-            SMOOTHING * static_cast<double>(ordinary_piece_count);
-        int zero_count = 0;
-        for (size_t i = 0; i < pieces_.size(); ++i) {
-            auto& piece = pieces_[i];
-            if (piece.is_user_defined) continue;
-            int tid = tokenIdForIndex(static_cast<int>(i));
-            double expected_count = 0.0;
-            auto count_it = token_counts.find(tid);
-            if (count_it != token_counts.end()) {
-                expected_count = count_it->second;
-            }
-            double count = expected_count + SMOOTHING;
-            piece.score = static_cast<float>(std::log(count / smoothed_total));
-            if (expected_count == 0.0) {
-                zero_count++;
-            }
-        }
-        return zero_count;
-    };
+    const UnigramExpectationStepRequest expectation_request{
+        pieces_, norm_texts, norm_training_exclusion_spans, enable_byte_fallback_};
 
     struct EMConvergenceResult {
         std::unordered_map<int, double> learned_token_counts;
@@ -1130,11 +836,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     auto runEMToConvergence = [&](const char* phase_label) -> EMConvergenceResult {
         double prev_ll = -1e30;
-        EStepResult last_e_step;
+        UnigramExpectationStepResult last_e_step;
         int iter = 0;
         for (; iter < EM_MAX_ITERATIONS; ++iter) {
-            EStepResult e_step = runEStep();
-            int unused = runMStep(e_step.learned_token_counts, e_step.expected_learned_piece_tokens);
+            UnigramExpectationStepResult e_step = runUnigramExpectationStep(expectation_request);
+            int unused = runUnigramMaximizationStep(UnigramMaximizationStepRequest{
+                pieces_, e_step.learned_token_counts, e_step.expected_learned_piece_tokens, SMOOTHING});
 
             double relative_change = 1.0;
             if (prev_ll >= -1e20) {
@@ -1196,7 +903,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         }
 
         const int before = static_cast<int>(pieces_.size());
-        UnigramLikelihoodLossPruneResult prune = selectUnigramSurvivorsByLikelihoodLoss(
+        UnigramLikelihoodPruningResult prune = runUnigramLikelihoodPruning(
             pieces_,
             freq_by_index,
             total_piece_target,
@@ -1223,10 +930,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                   << ", irreplaceable_no_alt=" << prune.irreplaceable_no_alt << ")" << std::endl;
 
         // Re-fit scores on the smaller vocab before the next loss estimate.
-        EStepResult sub_e_step;
+        UnigramExpectationStepResult sub_e_step;
         for (int sub_iter = 0; sub_iter < PRUNE_SUB_ITERATIONS; ++sub_iter) {
-            sub_e_step = runEStep();
-            runMStep(sub_e_step.learned_token_counts, sub_e_step.expected_learned_piece_tokens);
+            sub_e_step = runUnigramExpectationStep(expectation_request);
+            runUnigramMaximizationStep(UnigramMaximizationStepRequest{
+                pieces_, sub_e_step.learned_token_counts, sub_e_step.expected_learned_piece_tokens, SMOOTHING});
         }
         em_result.learned_token_counts = std::move(sub_e_step.learned_token_counts);
         em_result.expected_learned_piece_tokens = sub_e_step.expected_learned_piece_tokens;

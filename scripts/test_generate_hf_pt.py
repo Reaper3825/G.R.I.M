@@ -1,4 +1,5 @@
 import json
+import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,23 @@ from test_generate_developer_pt import setup_target
 
 
 class HFIngestionTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("pyarrow"), "Existing PyArrow environment required")
+    def test_parquet_pages_preserve_rows_and_reject_changed_shard(self):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / "source.parquet"
+            pq.write_table(pa.Table.from_pylist([{"text": f"Document {i}"} for i in range(5)]), path, row_group_size=2)
+            spec = dict(path=str(path), sha256=hf.digest(path.read_bytes()), size=path.stat().st_size,
+                        dataset="org/dataset", config="config", revision="revision", repository_path="train-0.parquet")
+            pages = list(hf.parquet_pages(spec, [3, 0], 2, root / "cache"))
+            self.assertEqual([r["row"]["text"] for p in pages for r in p["rows"]],
+                             ["Document 3", "Document 4", "Document 0", "Document 1"])
+            path.write_bytes(path.read_bytes() + b"corruption")
+            with self.assertRaises(ValueError):
+                list(hf.parquet_pages(spec, [0], 2, root / "cache"))
+
     def test_prefetch_preserves_sampling_order_and_bounds(self):
         with patch.object(hf, "get_page", side_effect=lambda dataset, config, offset, *rest: offset) as fetch:
             pages = hf.source_pages("dataset", "config", [40, 10, 90, 0, 70, 20, 30, 50], 10, 100, "rev", Path("cache"))

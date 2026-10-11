@@ -804,6 +804,9 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/Detectors/TextFeatureDetectors.cu
     ../../Shared/UnigramByte/Training/SubwordMining.cu
     ../../Shared/UnigramByte/Training/UnigramForwardBackward.cu
+    ../../Shared/UnigramByte/Training/UnigramExpectationStep.cu
+    ../../Shared/UnigramByte/Training/UnigramMaximizationStep.cu
+    ../../Shared/UnigramByte/Training/UnigramLikelihoodPruning.cu
     ../../Shared/UnigramByte/UnigramTrainer.cu
     ../../Shared/UnigramByte/ManualVocabSource.cpp
     ../../Shared/UnigramByte/ExactPieceMatcher.cpp
