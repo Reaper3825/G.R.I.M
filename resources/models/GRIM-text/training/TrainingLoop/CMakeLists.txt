@@ -807,6 +807,14 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/Training/UnigramExpectationStep.cu
     ../../Shared/UnigramByte/Training/UnigramMaximizationStep.cu
     ../../Shared/UnigramByte/Training/UnigramLikelihoodPruning.cu
+    ../../Shared/UnigramByte/Training/UnigramTrainingValidation.cu
+    ../../Shared/UnigramByte/Training/UnigramCorpusPreparation.cu
+    ../../Shared/UnigramByte/Training/UnigramTrainingPrepass.cu
+    ../../Shared/UnigramByte/Training/UnigramCharacterDiagnostics.cu
+    ../../Shared/UnigramByte/Training/UnigramCandidateAdmission.cu
+    ../../Shared/UnigramByte/Training/UnigramEMConvergence.cu
+    ../../Shared/UnigramByte/Training/UnigramVocabularyFitting.cu
+    ../../Shared/UnigramByte/Training/UnigramTrainingFinalization.cu
     ../../Shared/UnigramByte/UnigramTrainer.cu
     ../../Shared/UnigramByte/ManualVocabSource.cpp
     ../../Shared/UnigramByte/ExactPieceMatcher.cpp

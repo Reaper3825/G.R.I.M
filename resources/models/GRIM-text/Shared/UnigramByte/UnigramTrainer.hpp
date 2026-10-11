@@ -6,7 +6,8 @@
 //  in Unigram.hpp. This header exists solely as a forward
 //  reference for build systems that want to express the
 //  training dependency explicitly. The implementation is
-//  in UnigramTrainer.cu (split compilation unit).
+//  coordinated in UnigramTrainer.cu; named stage implementations
+//  live in Training/ (see Training/README.md).
 //
 //  Author: GRIM Team
 //  Date: December 2025
@@ -14,7 +15,7 @@
 
 #pragma once
 
-// Training implementation lives in UnigramTrainer.cu.
+// Training orchestration lives in UnigramTrainer.cu, stages in Training/.
 // trainFromCorpus() is a method on UnigramLM declared in Unigram.hpp.
 // This header serves as documentation — include Unigram.hpp for the API.
 

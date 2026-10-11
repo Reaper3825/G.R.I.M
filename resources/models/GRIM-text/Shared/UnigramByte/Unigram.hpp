@@ -178,6 +178,9 @@ public:
 
 private:
     friend class UnigramViterbiSession;
+
+    // Finalize the fitted vocabulary's encoding runtime and training report.
+    void finalizeTrainingRuntime(size_t training_segment_max_length);
     
     bool enable_byte_fallback_ = true;
     
