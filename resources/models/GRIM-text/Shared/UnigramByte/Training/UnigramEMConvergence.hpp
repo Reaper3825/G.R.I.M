@@ -3,7 +3,6 @@
 #include "UnigramExpectationStep.hpp"
 
 namespace GRIM::Tokenizer {
-inline constexpr double kUnigramPieceCountSmoothing = 0.1;
 
 struct UnigramEMConvergenceResult {
     std::unordered_map<int, double> learned_token_counts;
@@ -16,7 +15,7 @@ struct UnigramEMConvergenceResult {
 UnigramEMConvergenceResult runUnigramEMToConvergence(
     std::vector<UnigramPiece>& pieces_,
     const UnigramExpectationStepRequest& expectation_request,
-    const char* phase_label);
+    const ::GRIM::HyperParameters::TokenizerHP& hp, const char* phase_label);
 void requireUnigramConvergedPhaseNotFallbackDominated(
-    const UnigramEMConvergenceResult& result, const char* phase_label);
+    const UnigramEMConvergenceResult& result, const ::GRIM::HyperParameters::TokenizerHP& hp, const char* phase_label);
 } // namespace GRIM::Tokenizer

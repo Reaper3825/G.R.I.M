@@ -7,5 +7,5 @@ void fitUnigramVocabulary(UnigramVocabWriteTarget target,
     const std::vector<std::string>& norm_texts,
     const std::vector<std::vector<AtomSpan>>& norm_training_exclusion_spans,
     bool enable_byte_fallback_, int total_piece_target,
-    int subword_mining_workers);
+    const ::GRIM::HyperParameters::TokenizerHP& hp);
 } // namespace GRIM::Tokenizer

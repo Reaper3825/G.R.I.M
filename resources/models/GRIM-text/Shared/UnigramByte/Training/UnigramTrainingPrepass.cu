@@ -1,6 +1,7 @@
 // Detector and numeric exclusion prepass for the TokenizerHP entrypoint.
 
 #include "../Unigram.hpp"
+#include "UnigramTrainingValidation.hpp"
 #include "../AtomTable.hpp"
 #include "../Detectors/DetectorRegistry.hpp"
 #include "../NumericTokens.hpp"
@@ -17,6 +18,7 @@ namespace Tokenizer {
 
 bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  const ::GRIM::HyperParameters::TokenizerHP& tokenizer_hp) {
+    validateTrainFromCorpusParameters(texts, tokenizer_hp);
     Detector::DetectorRegistry detector_registry;
     if (tokenizer_hp.enable_atom_reasoning) {
         detector_registry = Detector::makeDefaultRawTextDetectorRegistry();
@@ -75,15 +77,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
               << std::endl;
 
     const auto manual_pieces = loadManualVocabPieces(tokenizer_hp.manual_vocab_path);
-    const bool trained = trainFromCorpus(texts, all_atom_spans,
-                                         tokenizer_hp.target_vocab_size,
-                                         tokenizer_hp.character_coverage,
-                                         tokenizer_hp.min_subword_freq,
-                                         tokenizer_hp.prune_during_mining,
-                                         tokenizer_hp.enable_parallel_subword_mining,
-                                         tokenizer_hp.subword_mining_workers,
-                                         tokenizer_hp.subword_mining_max_bytes,
-                                         manual_pieces);
+    const bool trained = trainFromCorpus(texts, all_atom_spans, tokenizer_hp, manual_pieces);
     if (trained) {
         requireRuntimeReadyForLastTraining("UnigramLM::trainFromCorpus(TokenizerHP)");
     }

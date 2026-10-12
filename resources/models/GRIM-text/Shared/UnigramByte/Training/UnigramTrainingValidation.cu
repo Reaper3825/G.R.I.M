@@ -1,6 +1,7 @@
 // Training preconditions and learned-posterior guards.
 
 #include "UnigramTrainingValidation.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -10,10 +11,12 @@ namespace GRIM {
 namespace Tokenizer {
 
 void validateTrainFromCorpusParameters(const std::vector<std::string>& texts,
-                                              int target_vocab_size,
-                                              float character_coverage,
-                                              int min_subword_freq,
-                                              int subword_mining_workers) {
+                                              const ::GRIM::HyperParameters::TokenizerHP& hp) {
+    const auto target_vocab_size = hp.target_vocab_size;
+    const auto character_coverage = hp.character_coverage;
+    const auto min_subword_freq = hp.min_subword_freq;
+    const auto subword_mining_workers = hp.subword_mining_workers;
+    validateTokenizerTrainingHP(hp, "UnigramLM::trainFromCorpus");
     if (texts.empty()) {
         throw std::runtime_error("UnigramLM::trainFromCorpus: texts is empty - caller MUST provide at least one training text");
     }
@@ -84,9 +87,12 @@ void requireUnigramAcceptedCandidateSetIsScorable(size_t accepted_count,
 void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
     double expected_learned_piece_tokens,
     double expected_fixed_penalty_byte_fallback_tokens,
+    double minimum_learned_to_fallback_ratio,
     const char* phase_label,
     const char* caller) {
-    constexpr double kMinimumLearnedToByteFallbackPosteriorRatio = 1.0;
+    if (!std::isfinite(minimum_learned_to_fallback_ratio) || minimum_learned_to_fallback_ratio <= 0) {
+        throw std::runtime_error("minimum_learned_to_fallback_ratio must be positive and finite");
+    }
 
     if (phase_label == nullptr || phase_label[0] == '\0') {
         throw std::runtime_error("requireUnigramLearnedPosteriorMassNotByteFallbackDominated: phase label is empty at " +
@@ -113,7 +119,7 @@ void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
 
     const double learned_to_fallback_ratio =
         expected_learned_piece_tokens / expected_fixed_penalty_byte_fallback_tokens;
-    if (learned_to_fallback_ratio < kMinimumLearnedToByteFallbackPosteriorRatio) {
+    if (learned_to_fallback_ratio < minimum_learned_to_fallback_ratio) {
         throw std::runtime_error(std::string(caller) + ": " + phase_label +
                                  " byte fallback dominated posterior mass after EM convergence; "
                                  "expected_learned_piece_tokens=" +
@@ -122,7 +128,7 @@ void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
                                  std::to_string(expected_fixed_penalty_byte_fallback_tokens) +
                                  ", learned_to_fallback_ratio=" +
                                  std::to_string(learned_to_fallback_ratio) +
-                                 ", required_ratio>=1.0. Training MUST fail instead of treating fallback-dominated evidence as a learned-piece distribution");
+                                 ", required_ratio>=" + std::to_string(minimum_learned_to_fallback_ratio) + ". Training MUST fail instead of treating fallback-dominated evidence as a learned-piece distribution");
     }
 }
 

@@ -83,6 +83,7 @@ void requireUnigramAcceptedCandidateSetIsScorable(size_t accepted_count,
 void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
     double expected_learned_piece_tokens,
     double expected_fixed_penalty_byte_fallback_tokens,
+    double minimum_learned_to_fallback_ratio,
     const char* phase_label,
     const char* caller);
 uint64_t addUnigramSubwordCountsForTraining(uint64_t current,
@@ -105,7 +106,56 @@ static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
     hp.enable_atom_reasoning = true;
     hp.enable_byte_fallback = true;
     hp.vocab_score_multiplier = 1.0f;
+    hp.em_max_iterations = 50;
+    hp.em_convergence_tolerance = 0.0001;
+    hp.piece_count_smoothing = 0.1;
+    hp.prune_shrink_factor = 0.75;
+    hp.prune_em_iterations = 2;
+    hp.minimum_learned_to_fallback_ratio = 1.0;
+    hp.subword_mining_parallel_min_texts = 1024;
+    hp.subword_mining_fallback_workers = 4;
+    hp.subword_mining_reserved_cores = 2;
+    hp.subword_mining_chunks_per_worker = 8;
+    hp.subword_mining_min_chunk_texts = 64;
+    hp.subword_mining_max_chunk_texts = 4096;
+    hp.subword_mining_sample_span_bytes = 8192;
+    hp.repetition_max_alpha_run = 3;
+    hp.repetition_max_digit_run = 6;
+    hp.repetition_max_punctuation_run = 4;
+    hp.repetition_max_whitespace_run = 1;
+    hp.repetition_pattern_min_bytes = 6;
+    hp.repetition_pattern_max_bytes = 4;
+    hp.repetition_pattern_min_repeats = 3;
+    hp.repetition_doubled_min_half_bytes = 4;
+    hp.repetition_stutter_min_words = 3;
+    hp.exclude_unicode_controls = true;
+    hp.exclude_unicode_formatting = true;
+    hp.exclude_unicode_private_use = true;
+    hp.exclude_nonbreaking_space = true;
+    hp.structural_dedup_trim_edges = true;
+    hp.em_fail_on_iteration_limit = false;
+    hp.diagnostic_min_char_frequency = 10;
+    hp.diagnostic_min_char_seeds = 256;
+    hp.subword_mining_initial_count_reserve = 1000000;
+    hp.subword_mining_worker_count_reserve = 6000000;
     return hp;
+}
+
+static bool trainSelfTestUnigram(UnigramLM& unigram,
+    const std::vector<std::string>& texts,
+    const std::vector<std::vector<AtomSpan>>& spans, int target,
+    float coverage = 0.9995f, int frequency = 3, bool prune = false,
+    bool parallel = true, int workers = 0, size_t cap = 0,
+    const std::vector<UnigramPiece>& manual = {}) {
+    auto hp = makeSelfTestTokenizerHP();
+    hp.target_vocab_size = target;
+    hp.character_coverage = coverage;
+    hp.min_subword_freq = frequency;
+    hp.prune_during_mining = prune;
+    hp.enable_parallel_subword_mining = parallel;
+    hp.subword_mining_workers = workers;
+    hp.subword_mining_max_bytes = cap;
+    return unigram.trainFromCorpus(texts, spans, hp, manual);
 }
 
 static void appendSelfTestUnigramPiece(UnigramLM& unigram,
@@ -428,6 +478,7 @@ bool testUnigramTrainRejectsFallbackDominatedPosteriorMass(std::string& message)
         requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
             0.25,
             1.0,
+            1.0,
             "test-phase",
             "testUnigramTrainRejectsFallbackDominatedPosteriorMass dominated");
     } catch (const std::runtime_error& e) {
@@ -445,11 +496,13 @@ bool testUnigramTrainRejectsFallbackDominatedPosteriorMass(std::string& message)
         requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
             1.0,
             1.0,
+            1.0,
             "test-phase",
             "testUnigramTrainRejectsFallbackDominatedPosteriorMass balanced");
         requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
             0.0,
             0.0,
+            1.0,
             "test-phase",
             "testUnigramTrainRejectsFallbackDominatedPosteriorMass no-fallback");
     } catch (const std::exception& e) {
@@ -469,7 +522,7 @@ bool testUnigramTrainByteFallbackDisabledAddsCharacterSeeds(std::string& message
     }
     std::vector<std::string> corpus = {repeated};
 
-    const bool trained = unigram.trainFromCorpus(
+    const bool trained = trainSelfTestUnigram(unigram,
         corpus,
         {},     // atom_spans: none
         100,    // target_vocab_size: enough room for required char seeds and mined pieces
@@ -493,7 +546,7 @@ bool testUnigramTrainByteFallbackDisabledFailsOnUncoveredCharacterSeed(std::stri
     bool threw = false;
     std::string error_text;
     try {
-        unigram.trainFromCorpus(
+        trainSelfTestUnigram(unigram,
             corpus,
             {},
             100,
@@ -568,7 +621,7 @@ bool testUnigramTrainLikelihoodLossPrunesTowardTarget(std::string& message) {
 
     // Reference run: target far above the candidate set, so nothing is pruned.
     UnigramLM unpruned(true);
-    const bool unpruned_trained = unpruned.trainFromCorpus(
+    const bool unpruned_trained = trainSelfTestUnigram(unpruned,
         corpus, {}, 100000, 1.0f, 2, false, false, 1, 0);
     ASSERT_TRUE(unpruned_trained, "Reference (no-prune) training should succeed");
     const int full_count = unpruned.pieceCount();
@@ -578,7 +631,7 @@ bool testUnigramTrainLikelihoodLossPrunesTowardTarget(std::string& message) {
     // Pruned run: small target forces likelihood-loss prune rounds.
     const int target = 40;
     UnigramLM pruned(true);
-    const bool pruned_trained = pruned.trainFromCorpus(
+    const bool pruned_trained = trainSelfTestUnigram(pruned,
         corpus, {}, target, 1.0f, 2, false, false, 1, 0);
     ASSERT_TRUE(pruned_trained, "Likelihood-loss prune training should succeed");
     const int pruned_count = pruned.pieceCount();
@@ -606,7 +659,7 @@ bool testUnigramTrainFiltersRepetitionNoise(std::string& message) {
         "callcall callcall callcall should be stripped"
     };
 
-    const bool trained = unigram.trainFromCorpus(
+    const bool trained = trainSelfTestUnigram(unigram,
         corpus,
         {},     // atom_spans: none
         600,    // target_vocab_size
@@ -636,7 +689,7 @@ bool testUnigramTrainDedupsRepeatedVariants(std::string& message) {
         "soooo good soooo good soooo good"
     };
 
-    const bool trained = unigram.trainFromCorpus(
+    const bool trained = trainSelfTestUnigram(unigram,
         corpus,
         {},     // atom_spans: none
         400,    // target_vocab_size
@@ -664,7 +717,7 @@ bool testUnigramTrainPreservesSpieceUnderlineDedupBoundary(std::string& message)
         "word sword word sword word sword word sword"
     };
 
-    const bool trained = unigram.trainFromCorpus(
+    const bool trained = trainSelfTestUnigram(unigram,
         corpus,
         {},     // atom_spans: none
         5000,   // target_vocab_size; keep candidate vocab above this tiny fixture size
@@ -697,7 +750,7 @@ bool testUnigramTrainStridedMiningKeepsLateDocumentPatterns(std::string& message
 
     std::vector<std::string> corpus = {long_document};
 
-    const bool trained = unigram.trainFromCorpus(
+    const bool trained = trainSelfTestUnigram(unigram,
         corpus,
         {},     // atom_spans: none
         5000,   // target_vocab_size; avoid pruning this small candidate set
@@ -729,7 +782,7 @@ bool testUnigramTrainStridedMiningOverlapsBoundaryCandidates(std::string& messag
         "yzabcdef";
     std::vector<std::string> corpus(10, boundary_crossing_document);
 
-    const bool trained = unigram.trainFromCorpus(
+    const bool trained = trainSelfTestUnigram(unigram,
         corpus,
         {},     // atom_spans: none
         5000,   // target_vocab_size; keep candidate vocab above this fixture size
@@ -770,7 +823,7 @@ bool testUnigramTrainEnforcesBytePieceLimit(std::string& message) {
         thirty_three_byte_piece + " gamma " + thirty_three_byte_piece
     };
 
-    const bool trained = unigram.trainFromCorpus(
+    const bool trained = trainSelfTestUnigram(unigram,
         corpus,
         {},     // atom_spans: none
         300,    // target_vocab_size

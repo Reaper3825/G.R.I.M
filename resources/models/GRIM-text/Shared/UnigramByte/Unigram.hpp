@@ -114,14 +114,8 @@ public:
     // in the same learned ID range without reducing that ordinary budget.
     bool trainFromCorpus(const std::vector<std::string>& texts,
                          const std::vector<std::vector<AtomSpan>>& atom_spans,
-                         int target_vocab_size,
-                           float character_coverage = 0.9995f,
-                           int min_subword_freq = 3,
-                           bool prune_during_mining = false,
-                           bool enable_parallel_subword_mining = true,
-                           int subword_mining_workers = 0,
-                           size_t subword_mining_max_bytes = 0,
-                           const std::vector<UnigramPiece>& manual_pieces = {});
+                         const ::GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
+                         const std::vector<UnigramPiece>& manual_pieces = {});
     
     // Transitional learned-vocab storage while UnigramLM is being split apart.
     // Mutate these only through VocabWriteOp.hpp targets; direct vector/map writes

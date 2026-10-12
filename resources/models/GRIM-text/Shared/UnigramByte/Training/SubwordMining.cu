@@ -32,7 +32,7 @@ bool isUtf8ContinuationByte(unsigned char c) {
     return (c & 0xC0) == 0x80;
 }
 
-bool hasExcessiveRunLength(const std::string& s) {
+bool hasExcessiveRunLength(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     if (s.empty()) return false;
 
     char prev = s[0];
@@ -50,27 +50,27 @@ bool hasExcessiveRunLength(const std::string& s) {
         const bool is_alpha = (uc >= 'A' && uc <= 'Z') || (uc >= 'a' && uc <= 'z');
         const bool is_digit = (uc >= '0' && uc <= '9');
 
-        if (is_alpha && run > 3) return true;
-        if (is_digit && run > 6) return true;
-        if (uc < 128 && isPunct(c) && run > 4) return true;
-        if (isWhitespaceASCII(uc) && run > 1) return true;
+        if (is_alpha && run > hp.repetition_max_alpha_run) return true;
+        if (is_digit && run > hp.repetition_max_digit_run) return true;
+        if (uc < 128 && isPunct(c) && run > hp.repetition_max_punctuation_run) return true;
+        if (isWhitespaceASCII(uc) && run > hp.repetition_max_whitespace_run) return true;
     }
 
     return false;
 }
 
-bool isRepeatedPatternNoise(const std::string& s) {
-    if (s.size() < 6) return false;
+bool isRepeatedPatternNoise(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp) {
+    if (s.size() < static_cast<size_t>(hp.repetition_pattern_min_bytes)) return false;
 
     for (unsigned char c : s) {
         if (isWhitespaceASCII(c)) return false;
     }
 
-    const size_t max_pattern_len = std::min<size_t>(4, s.size() / 3);
+    const size_t max_pattern_len = std::min<size_t>(hp.repetition_pattern_max_bytes, s.size() / hp.repetition_pattern_min_repeats);
     for (size_t pattern_len = 1; pattern_len <= max_pattern_len; ++pattern_len) {
         if (s.size() % pattern_len != 0) continue;
         const size_t repeats = s.size() / pattern_len;
-        if (repeats < 3) continue;
+        if (repeats < static_cast<size_t>(hp.repetition_pattern_min_repeats)) continue;
 
         bool repeated = true;
         for (size_t i = pattern_len; i < s.size(); ++i) {
@@ -85,15 +85,15 @@ bool isRepeatedPatternNoise(const std::string& s) {
     return false;
 }
 
-bool isDoubledTokenNoise(const std::string& s) {
-    if (s.size() < 8 || (s.size() % 2) != 0) return false;
+bool isDoubledTokenNoise(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp) {
+    if (s.size() / 2 < static_cast<size_t>(hp.repetition_doubled_min_half_bytes) || (s.size() % 2) != 0) return false;
 
     for (unsigned char c : s) {
         if (isWhitespaceASCII(c)) return false;
     }
 
     const size_t half = s.size() / 2;
-    if (half < 4) return false;
+    if (half < static_cast<size_t>(hp.repetition_doubled_min_half_bytes)) return false;
 
     for (size_t i = 0; i < half; ++i) {
         if (s[i] != s[i + half]) return false;
@@ -102,7 +102,7 @@ bool isDoubledTokenNoise(const std::string& s) {
     return true;
 }
 
-bool isWordLevelStutter(const std::string& s) {
+bool isWordLevelStutter(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     size_t i = 0;
     while (i < s.size() && isWhitespaceASCII(static_cast<unsigned char>(s[i]))) ++i;
     if (i >= s.size()) return false;
@@ -129,10 +129,10 @@ bool isWordLevelStutter(const std::string& s) {
         word_count++;
     }
 
-    return word_count >= 3;
+    return word_count >= hp.repetition_stutter_min_words;
 }
 
-bool isValidUnigramVocabCharacterImpl(const std::string& ch) {
+bool isValidUnigramVocabCharacterImpl(const std::string& ch, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     if (ch.empty()) return false;
 
     uint32_t codepoint = 0;
@@ -145,25 +145,25 @@ bool isValidUnigramVocabCharacterImpl(const std::string& ch) {
     if (codepoint == 0x09 || codepoint == 0x0A || codepoint == 0x0D) return true;
     if (codepoint < 0x80) return false;
 
-    if (codepoint >= 0x0080 && codepoint <= 0x009F) return false;
-    if (codepoint == 0x00A0) return false;
-    if (codepoint == 0x00AD) return false;
-    if (codepoint == 0x034F) return false;
-    if (codepoint >= 0x200B && codepoint <= 0x200F) return false;
-    if (codepoint >= 0x202A && codepoint <= 0x202E) return false;
-    if (codepoint == 0x2060) return false;
-    if (codepoint >= 0x2066 && codepoint <= 0x2069) return false;
-    if (codepoint == 0xFEFF) return false;
-    if (codepoint >= 0xFFF0 && codepoint <= 0xFFFF) return false;
-    if (codepoint >= 0xE0000 && codepoint <= 0xE007F) return false;
-    if (codepoint >= 0xE000 && codepoint <= 0xF8FF) return false;
-    if (codepoint >= 0xF0000 && codepoint <= 0x10FFFF) return false;
+    if (hp.exclude_unicode_controls && codepoint >= 0x0080 && codepoint <= 0x009F) return false;
+    if (hp.exclude_nonbreaking_space && codepoint == 0x00A0) return false;
+    if (hp.exclude_unicode_formatting && (codepoint == 0x00AD)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint == 0x034F)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint >= 0x200B && codepoint <= 0x200F)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint >= 0x202A && codepoint <= 0x202E)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint == 0x2060)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint >= 0x2066 && codepoint <= 0x2069)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint == 0xFEFF)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint >= 0xFFF0 && codepoint <= 0xFFFF)) return false;
+    if (hp.exclude_unicode_formatting && (codepoint >= 0xE0000 && codepoint <= 0xE007F)) return false;
+    if (hp.exclude_unicode_private_use && (codepoint >= 0xE000 && codepoint <= 0xF8FF)) return false;
+    if (hp.exclude_unicode_private_use && (codepoint >= 0xF0000 && codepoint <= 0x10FFFF)) return false;
     if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
 
     return true;
 }
 
-bool isValidUnigramSubwordImpl(const std::string& s) {
+bool isValidUnigramSubwordImpl(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     if (s.empty()) return false;
 
     // Canonical LF is represented by NEWLINE_TOKEN_ID and must never become
@@ -171,10 +171,10 @@ bool isValidUnigramSubwordImpl(const std::string& s) {
     if (s.find('\n') != std::string::npos) return false;
 
     if (s.size() == 1 || utf8SequenceLength(static_cast<unsigned char>(s[0])) == s.size()) {
-        return isValidUnigramVocabCharacterImpl(s);
+        return isValidUnigramVocabCharacterImpl(s, hp);
     }
 
-    if (isUnigramRepetitionNoise(s)) return false;
+    if (isUnigramRepetitionNoise(s, hp)) return false;
 
     for (unsigned char c : s) {
         if ((c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D) || c == 0x7F)
@@ -191,41 +191,25 @@ bool isValidUnigramSubwordImpl(const std::string& s) {
 }
 
 unsigned int resolveSubwordMiningWorkerCount(
-    bool enable_parallel_subword_mining,
-    int configured_workers,
-    size_t sentence_count) {
-    if (!enable_parallel_subword_mining) return 1;
-    if (sentence_count < 1024) return 1;
-
+    const ::GRIM::HyperParameters::TokenizerHP& hp, size_t sentence_count) {
+    if (!hp.enable_parallel_subword_mining) return 1;
+    if (sentence_count < static_cast<size_t>(hp.subword_mining_parallel_min_texts)) return 1;
     unsigned int workers = std::thread::hardware_concurrency();
-    if (workers == 0) workers = 4;
-    workers = workers > 2 ? workers - 2 : 1;
-
-    if (configured_workers > 0) {
-        workers = static_cast<unsigned int>(configured_workers);
-    }
-
-    if (const char* env_workers = std::getenv("GRIM_SUBWORD_MINING_WORKERS")) {
-        const std::string env_text(env_workers);
-        size_t consumed = 0;
-        const int parsed = std::stoi(env_text, &consumed);
-        if (consumed != env_text.size() || parsed <= 0) {
-            throw std::runtime_error("resolveSubwordMiningWorkerCount: GRIM_SUBWORD_MINING_WORKERS must be a positive integer, got '" +
-                                     env_text + "'");
-        }
-        workers = static_cast<unsigned int>(parsed);
-    }
-
-    workers = std::min<unsigned int>(workers, static_cast<unsigned int>(sentence_count));
+    if (workers == 0) workers = static_cast<unsigned int>(hp.subword_mining_fallback_workers);
+    const auto reserved = static_cast<unsigned int>(hp.subword_mining_reserved_cores);
+    workers = workers > reserved ? workers - reserved : 1;
+    if (hp.subword_mining_workers > 0) workers = static_cast<unsigned int>(hp.subword_mining_workers);
+    workers = static_cast<unsigned int>(std::min<size_t>(workers, sentence_count));
     return std::max(1u, workers);
 }
 
-size_t resolveSubwordMiningChunkSize(unsigned int workers, size_t sentence_count) {
+size_t resolveSubwordMiningChunkSize(unsigned int workers, size_t sentence_count, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     if (workers <= 1 || sentence_count == 0) return sentence_count;
 
-    size_t chunk = (sentence_count + (workers * 8) - 1) / (workers * 8);
-    chunk = std::max<size_t>(64, chunk);
-    chunk = std::min<size_t>(4096, chunk);
+    const size_t chunks = static_cast<size_t>(workers) * hp.subword_mining_chunks_per_worker;
+    size_t chunk = sentence_count / chunks + (sentence_count % chunks != 0);
+    chunk = std::max<size_t>(hp.subword_mining_min_chunk_texts, chunk);
+    chunk = std::min<size_t>(hp.subword_mining_max_chunk_texts, chunk);
     return chunk;
 }
 
@@ -304,7 +288,7 @@ SubwordMiningPlan buildSubwordMiningPlan(
     const std::vector<std::string>& training_units,
     size_t total_sentence_bytes,
     size_t max_subword_mining_bytes,
-    bool use_sampling) {
+    bool use_sampling, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     if (total_sentence_bytes == 0) {
         throw std::runtime_error("buildSubwordMiningPlan: total_sentence_bytes is zero - caller MUST provide non-empty normalized training text");
     }
@@ -320,7 +304,7 @@ SubwordMiningPlan buildSubwordMiningPlan(
                               static_cast<double>(total_sentence_bytes);
     }
 
-    constexpr size_t kTargetSpanBytes = 8192;
+    const size_t kTargetSpanBytes = hp.subword_mining_sample_span_bytes;
     const size_t two_span_budget = static_cast<size_t>(MAX_PIECE_LENGTH) * 2;
     size_t sampled_span_context_overlap = 0;
     if (static_cast<size_t>(MAX_PIECE_LENGTH) > 0) {
@@ -514,7 +498,7 @@ void countSubwordsFromCharacterPositions(const std::string& text,
                                          size_t count_start,
                                          size_t count_end,
                                          UnigramSubwordCountMap& subword_counts,
-                                         const char* increment_context) {
+                                         const char* increment_context, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     const size_t num_chars = char_positions.size() - 1;
     for (size_t ci = 0; ci < num_chars; ++ci) {
         if (char_in_atom != nullptr && (*char_in_atom)[ci]) continue;
@@ -534,7 +518,7 @@ void countSubwordsFromCharacterPositions(const std::string& text,
             if (byte_end - byte_start > max_len) break;
 
             std::string subword = text.substr(byte_start, byte_end - byte_start);
-            if (!isValidUnigramSubwordImpl(subword)) continue;
+            if (!isValidUnigramSubwordImpl(subword, hp)) continue;
             if (crossesSentencePieceWordBoundary(subword)) continue;
 
             incrementUnigramSubwordCountForTraining(
@@ -551,7 +535,7 @@ void mineSubwordsFromSentence(const std::string& text,
                               size_t context_start,
                               size_t context_end,
                               size_t count_start,
-                              size_t count_end) {
+                              size_t count_end, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     validateSubwordMiningCountingRange(text, context_start, context_end, count_start, count_end,
                                        "mineSubwordsFromSentence");
     if (context_start == context_end || count_start == count_end) return;
@@ -569,7 +553,7 @@ void mineSubwordsFromSentence(const std::string& text,
         count_start,
         count_end,
         subword_counts,
-        "mineSubwordsFromSentence subword count increment");
+        "mineSubwordsFromSentence subword count increment", hp);
 }
 
 void mineSubwordsFromSentence(const std::string& text,
@@ -579,12 +563,12 @@ void mineSubwordsFromSentence(const std::string& text,
                               size_t context_start,
                               size_t context_end,
                               size_t count_start,
-                              size_t count_end) {
+                              size_t count_end, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     validateSubwordMiningCountingRange(text, context_start, context_end, count_start, count_end,
                                        "mineSubwordsFromSentence atom-aware");
     if (context_start == context_end || count_start == count_end) return;
     if (atom_spans.empty()) {
-        mineSubwordsFromSentence(text, max_len, subword_counts, context_start, context_end, count_start, count_end);
+        mineSubwordsFromSentence(text, max_len, subword_counts, context_start, context_end, count_start, count_end, hp);
         return;
     }
 
@@ -616,7 +600,7 @@ void mineSubwordsFromSentence(const std::string& text,
         count_start,
         count_end,
         subword_counts,
-        "mineSubwordsFromSentence atom-aware subword count increment");
+        "mineSubwordsFromSentence atom-aware subword count increment", hp);
 }
 
 void mergeUnigramSubwordCounts(UnigramSubwordCountMap& dst,
@@ -636,6 +620,7 @@ void mergeUnigramSubwordCounts(UnigramSubwordCountMap& dst,
 }
 
 void validateSubwordMiningRequest(const UnigramSubwordMiningRequest& request) {
+    ::GRIM::HyperParameters::validateTokenizerTrainingHP(request.hp, "mineUnigramSubwordsFromTrainingUnits");
     if (request.log_prefix == nullptr || request.log_prefix[0] == '\0') {
         throw std::runtime_error("mineUnigramSubwordsFromTrainingUnits: log_prefix is empty - caller MUST provide a diagnostic prefix");
     }
@@ -647,25 +632,25 @@ void validateSubwordMiningRequest(const UnigramSubwordMiningRequest& request) {
                                  std::to_string(request.atom_spans.size()) +
                                  " != training_units.size()=" + std::to_string(request.training_units.size()));
     }
-    if (request.configured_worker_count < 0) {
+    if (request.hp.subword_mining_workers < 0) {
         throw std::runtime_error("mineUnigramSubwordsFromTrainingUnits: configured_worker_count must be >= 0, got " +
-                                 std::to_string(request.configured_worker_count));
+                                 std::to_string(request.hp.subword_mining_workers));
     }
 }
 
 } // namespace
 
-bool isValidUnigramVocabCharacter(const std::string& ch) {
-    return isValidUnigramVocabCharacterImpl(ch);
+bool isValidUnigramVocabCharacter(const std::string& ch, const ::GRIM::HyperParameters::TokenizerHP& hp) {
+    return isValidUnigramVocabCharacterImpl(ch, hp);
 }
 
-bool isUnigramRepetitionNoise(const std::string& s) {
-    return hasExcessiveRunLength(s) || isRepeatedPatternNoise(s) ||
-           isDoubledTokenNoise(s) || isWordLevelStutter(s);
+bool isUnigramRepetitionNoise(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp) {
+    return hasExcessiveRunLength(s, hp) || isRepeatedPatternNoise(s, hp) ||
+           isDoubledTokenNoise(s, hp) || isWordLevelStutter(s, hp);
 }
 
-bool isValidUnigramSubword(const std::string& s) {
-    return isValidUnigramSubwordImpl(s);
+bool isValidUnigramSubword(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp) {
+    return isValidUnigramSubwordImpl(s, hp);
 }
 
 UnigramSubwordCount addUnigramSubwordCountsForTraining(UnigramSubwordCount current,
@@ -694,13 +679,13 @@ UnigramSubwordMiningResult mineUnigramSubwordsFromTrainingUnits(
         result.total_training_bytes += sent.size();
     }
 
-    result.max_mining_bytes = request.configured_max_mining_bytes;
+    result.max_mining_bytes = request.hp.subword_mining_max_bytes;
     if (result.max_mining_bytes == 0) {
         result.max_mining_bytes = result.total_training_bytes;
     }
     result.used_sampling = result.total_training_bytes > result.max_mining_bytes;
 
-    if (request.configured_max_mining_bytes == 0) {
+    if (request.hp.subword_mining_max_bytes == 0) {
         std::cout << request.log_prefix << " Subword mining byte cap: uncapped (full corpus)" << std::endl;
     } else {
         std::cout << request.log_prefix << " Subword mining byte cap: "
@@ -711,7 +696,7 @@ UnigramSubwordMiningResult mineUnigramSubwordsFromTrainingUnits(
         request.training_units,
         result.total_training_bytes,
         result.max_mining_bytes,
-        result.used_sampling);
+        result.used_sampling, request.hp);
     result.sampling_ratio = mining_plan.sampling_ratio;
     result.sampled_start_bytes = mining_plan.sampled_bytes;
     result.context_bytes = mining_plan.context_bytes;
@@ -726,16 +711,13 @@ UnigramSubwordMiningResult mineUnigramSubwordsFromTrainingUnits(
                   << request.training_units.size() << " documents" << std::defaultfloat << std::endl;
     }
 
-    result.subword_counts.reserve(1000000);
+    result.subword_counts.reserve(request.hp.subword_mining_initial_count_reserve);
 
     const size_t num_texts_to_process = request.training_units.size();
     const size_t progress_interval = std::max<size_t>(1, num_texts_to_process / 20);
     const size_t max_len = static_cast<size_t>(MAX_PIECE_LENGTH);
 
-    result.worker_count = resolveSubwordMiningWorkerCount(
-        request.enable_parallel_subword_mining,
-        request.configured_worker_count,
-        num_texts_to_process);
+    result.worker_count = resolveSubwordMiningWorkerCount(request.hp, num_texts_to_process);
 
     std::cout << request.log_prefix << " Mining subwords from " << num_texts_to_process
               << " documents (workers=" << result.worker_count
@@ -754,7 +736,7 @@ UnigramSubwordMiningResult mineUnigramSubwordsFromTrainingUnits(
 
             for (const SubwordMiningSpan& span : mining_plan.spans_by_text[ti]) {
                 mineSubwordsFromSentence(text, max_len, request.atom_spans[ti], result.subword_counts,
-                                         span.context_start, span.context_end, span.start, span.end);
+                                         span.context_start, span.context_end, span.start, span.end, request.hp);
             }
         }
         const double mining_elapsed = std::chrono::duration<double>(
@@ -762,12 +744,12 @@ UnigramSubwordMiningResult mineUnigramSubwordsFromTrainingUnits(
         std::cout << request.log_prefix << " Subword mining pass finished in "
                   << mining_elapsed << "s" << std::endl;
     } else {
-        const size_t chunk_size = resolveSubwordMiningChunkSize(result.worker_count, num_texts_to_process);
+        const size_t chunk_size = resolveSubwordMiningChunkSize(result.worker_count, num_texts_to_process, request.hp);
         std::cout << request.log_prefix << " Parallel subword mining: workers=" << result.worker_count
                   << ", chunk_size=" << chunk_size << std::endl;
 
         std::vector<UnigramSubwordCountMap> local_counts(result.worker_count);
-        constexpr size_t kReservePerWorker = 6000000;
+        const size_t kReservePerWorker = request.hp.subword_mining_worker_count_reserve;
         for (auto& map : local_counts) {
             map.reserve(kReservePerWorker);
         }
@@ -793,7 +775,7 @@ UnigramSubwordMiningResult mineUnigramSubwordsFromTrainingUnits(
                         const std::string& text = request.training_units[ti];
                         for (const SubwordMiningSpan& span : mining_plan.spans_by_text[ti]) {
                             mineSubwordsFromSentence(text, max_len, request.atom_spans[ti], local,
-                                                     span.context_start, span.context_end, span.start, span.end);
+                                                     span.context_start, span.context_end, span.start, span.end, request.hp);
                         }
                     }
 

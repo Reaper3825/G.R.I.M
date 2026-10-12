@@ -20,6 +20,7 @@
 #include <vector>
 
 namespace GRIM {
+namespace HyperParameters { struct TokenizerHP; }
 namespace Tokenizer {
 
 struct AtomSpan;
@@ -30,9 +31,7 @@ using UnigramSubwordCountMap = std::unordered_map<std::string, UnigramSubwordCou
 struct UnigramSubwordMiningRequest {
     const std::vector<std::string>& training_units;
     const std::vector<std::vector<AtomSpan>>& atom_spans;
-    bool enable_parallel_subword_mining = false;
-    int configured_worker_count = 0;
-    std::size_t configured_max_mining_bytes = 0;
+    const ::GRIM::HyperParameters::TokenizerHP& hp;
     const char* log_prefix = "[SubwordMining]";
 };
 
@@ -48,9 +47,9 @@ struct UnigramSubwordMiningResult {
     unsigned int worker_count = 1;
 };
 
-bool isValidUnigramVocabCharacter(const std::string& ch);
-bool isUnigramRepetitionNoise(const std::string& s);
-bool isValidUnigramSubword(const std::string& s);
+bool isValidUnigramVocabCharacter(const std::string& ch, const ::GRIM::HyperParameters::TokenizerHP& hp);
+bool isUnigramRepetitionNoise(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp);
+bool isValidUnigramSubword(const std::string& s, const ::GRIM::HyperParameters::TokenizerHP& hp);
 
 UnigramSubwordCount addUnigramSubwordCountsForTraining(UnigramSubwordCount current,
                                                        UnigramSubwordCount delta,

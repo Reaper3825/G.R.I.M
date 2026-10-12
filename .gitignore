@@ -255,3 +255,4 @@ cache/geospatial/*.sqlite-wal
 # Model checkpoints and optimizer state (large generated files)
 *.grimckpt
 *.opt
+/resources/models/model_store/**/.checkpoint_*.partial

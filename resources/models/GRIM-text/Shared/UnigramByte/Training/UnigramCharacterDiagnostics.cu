@@ -1,6 +1,7 @@
 // Character coverage telemetry and initial vocabulary reset.
 
 #include "UnigramCharacterDiagnostics.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 #include "SubwordMining.hpp"
 #include "../TextUtils.hpp"
 
@@ -18,7 +19,7 @@ namespace Tokenizer {
 void runUnigramCharacterDiagnostics(
     const std::vector<std::string>& norm_texts,
     const std::vector<std::vector<AtomSpan>>& norm_training_exclusion_spans,
-    float character_coverage, UnigramVocabWriteTarget target) {
+    const ::GRIM::HyperParameters::TokenizerHP& hp, UnigramVocabWriteTarget target) {
     auto& pieces_ = target.pieces;
     auto& piece_to_id_ = target.piece_to_id;
     // Step 1: Count character frequencies (use ALL normalized texts)
@@ -80,22 +81,22 @@ void runUnigramCharacterDiagnostics(
         "UnigramLM::trainFromCorpus initial learned-vocab reset");
 
     size_t covered = 0;
-    size_t coverage_target = static_cast<size_t>(total_chars * character_coverage);
-    const int MIN_CHAR_FREQUENCY = 10;
+    size_t coverage_target = static_cast<size_t>(total_chars * hp.character_coverage);
+    const int MIN_CHAR_FREQUENCY = hp.diagnostic_min_char_frequency;
 
     std::unordered_set<std::string> char_seeds;
 
     int chars_rejected = 0;
     int chars_too_rare = 0;
     for (const auto& [ch, count] : sorted_chars) {
-        if (covered >= coverage_target && char_seeds.size() >= 256) break;
+        if (covered >= coverage_target && char_seeds.size() >= static_cast<size_t>(hp.diagnostic_min_char_seeds)) break;
 
         if (count < MIN_CHAR_FREQUENCY) {
             chars_too_rare++;
             continue;
         }
 
-        if (!isValidUnigramVocabCharacter(ch)) {
+        if (!isValidUnigramVocabCharacter(ch, hp)) {
             chars_rejected++;
             continue;
         }

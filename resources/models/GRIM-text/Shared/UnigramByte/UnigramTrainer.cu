@@ -1,6 +1,7 @@
 // Unigram training entrypoint: validates settings and coordinates named stages.
 
 #include "Unigram.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 #include "Training/UnigramTrainingValidation.hpp"
 #include "Training/UnigramCorpusPreparation.hpp"
 #include "Training/UnigramCharacterDiagnostics.hpp"
@@ -17,16 +18,14 @@ namespace Tokenizer {
 
 bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  const std::vector<std::vector<AtomSpan>>& atom_spans,
-                                 int target_vocab_size,
-                                 float character_coverage,
-                                 int min_subword_freq,
-                                 bool prune_during_mining,
-                                 bool enable_parallel_subword_mining,
-                                 int subword_mining_workers,
-                                 size_t subword_mining_max_bytes,
+                                 const ::GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
                                  const std::vector<UnigramPiece>& manual_pieces) {
-    validateTrainFromCorpusParameters(texts, target_vocab_size, character_coverage,
-                                      min_subword_freq, subword_mining_workers);
+    validateTrainFromCorpusParameters(texts, tokenizer_hp);
+    const auto target_vocab_size = tokenizer_hp.target_vocab_size;
+    const auto min_subword_freq = tokenizer_hp.min_subword_freq;
+    const auto prune_during_mining = tokenizer_hp.prune_during_mining;
+    const auto enable_parallel_subword_mining = tokenizer_hp.enable_parallel_subword_mining;
+    const auto subword_mining_workers = tokenizer_hp.subword_mining_workers;
     const int total_piece_target = unigramPieceBudgetWithManualAllowanceOrThrow(
         target_vocab_size, manual_pieces.size());
 
@@ -80,20 +79,17 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         UnigramSubwordMiningRequest{
             training_units,
             norm_training_exclusion_spans,
-            enable_parallel_subword_mining,
-            subword_mining_workers,
-            subword_mining_max_bytes,
+            tokenizer_hp,
             "[UnigramLM]"});
     
     runUnigramCharacterDiagnostics(norm_texts, norm_training_exclusion_spans,
-        character_coverage, UnigramVocabWriteTarget{pieces_, piece_to_id_});
+        tokenizer_hp, UnigramVocabWriteTarget{pieces_, piece_to_id_});
 
-    admitUnigramVocabularyCandidates(*this, mining_result, min_subword_freq,
-        target_vocab_size, manual_pieces);
+    admitUnigramVocabularyCandidates(*this, mining_result, tokenizer_hp, manual_pieces);
 
     fitUnigramVocabulary(UnigramVocabWriteTarget{pieces_, piece_to_id_},
         norm_texts, norm_training_exclusion_spans, enable_byte_fallback_,
-        total_piece_target, subword_mining_workers);
+        total_piece_target, tokenizer_hp);
 
     finalizeTrainingRuntime(training_segment_max_length);
 

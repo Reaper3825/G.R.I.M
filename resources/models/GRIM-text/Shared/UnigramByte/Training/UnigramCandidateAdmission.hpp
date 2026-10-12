@@ -6,6 +6,5 @@
 namespace GRIM::Tokenizer {
 // Appends manual pieces and all qualifying mined candidates to the reset vocab.
 void admitUnigramVocabularyCandidates(UnigramLM& unigram,
-    const UnigramSubwordMiningResult& mining_result, int min_subword_freq,
-    int target_vocab_size, const std::vector<UnigramPiece>& manual_pieces);
+    const UnigramSubwordMiningResult& mining_result, const ::GRIM::HyperParameters::TokenizerHP& hp, const std::vector<UnigramPiece>& manual_pieces);
 } // namespace GRIM::Tokenizer

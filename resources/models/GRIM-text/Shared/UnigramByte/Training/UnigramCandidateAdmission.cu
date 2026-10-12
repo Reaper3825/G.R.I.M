@@ -1,6 +1,7 @@
 // Mined candidate filtering, structural dedup, and initial scoring.
 
 #include "UnigramCandidateAdmission.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 #include "UnigramTrainingValidation.hpp"
 #include "../ManualVocabSource.hpp"
 #include "../TextUtils.hpp"
@@ -69,9 +70,10 @@ static std::string structuralDedupKeyForCandidate(const std::string& s) {
 }
 
 void admitUnigramVocabularyCandidates(
-    UnigramLM& unigram, const UnigramSubwordMiningResult& mining_result,
-    int min_subword_freq, int target_vocab_size,
+    UnigramLM& unigram, const UnigramSubwordMiningResult& mining_result, const ::GRIM::HyperParameters::TokenizerHP& hp,
     const std::vector<UnigramPiece>& manual_pieces) {
+    const int min_subword_freq = hp.min_subword_freq;
+    const int target_vocab_size = hp.target_vocab_size;
     auto& pieces_ = unigram.pieces_;
     auto& piece_to_id_ = unigram.piece_to_id_;
     const UnigramSubwordCount MIN_SUBWORD_FREQ = static_cast<UnigramSubwordCount>(min_subword_freq);
@@ -137,16 +139,16 @@ void admitUnigramVocabularyCandidates(
         const UnigramSubwordCount count = entry->second;
         if (unigram.hasPiece(subword)) continue;
 
-        if (isUnigramRepetitionNoise(subword)) {
+        if (isUnigramRepetitionNoise(subword, hp)) {
             repetition_filtered++;
             continue;
         }
-        if (!isValidUnigramSubword(subword)) {
+        if (!isValidUnigramSubword(subword, hp)) {
             filtered++;
             continue;
         }
 
-        std::string dedup_key = structuralDedupKeyForCandidate(subword);
+        std::string dedup_key = hp.structural_dedup_trim_edges ? structuralDedupKeyForCandidate(subword) : subword;
         if (dedup_key.empty()) {
             filtered++;
             continue;

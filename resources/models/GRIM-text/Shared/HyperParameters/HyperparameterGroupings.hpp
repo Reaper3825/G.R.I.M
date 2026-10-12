@@ -72,6 +72,39 @@ struct TokenizerHP {
     bool prune_during_mining = false;
     bool enable_parallel_subword_mining = false;
     int subword_mining_workers = 0;
+    // Authored training policies are required from ai_config.json.
+    int em_max_iterations = 0;
+    double em_convergence_tolerance = 0;
+    double piece_count_smoothing = 0;
+    double prune_shrink_factor = 0;
+    int prune_em_iterations = 0;
+    double minimum_learned_to_fallback_ratio = 0;
+    int subword_mining_parallel_min_texts = 0;
+    int subword_mining_fallback_workers = 0;
+    int subword_mining_reserved_cores = 0;
+    int subword_mining_chunks_per_worker = 0;
+    int subword_mining_min_chunk_texts = 0;
+    int subword_mining_max_chunk_texts = 0;
+    int subword_mining_sample_span_bytes = 0;
+    int repetition_max_alpha_run = 0;
+    int repetition_max_digit_run = 0;
+    int repetition_max_punctuation_run = 0;
+    int repetition_max_whitespace_run = 0;
+    int repetition_pattern_min_bytes = 0;
+    int repetition_pattern_max_bytes = 0;
+    int repetition_pattern_min_repeats = 0;
+    int repetition_doubled_min_half_bytes = 0;
+    int repetition_stutter_min_words = 0;
+    bool exclude_unicode_controls = false;
+    bool exclude_unicode_formatting = false;
+    bool exclude_unicode_private_use = false;
+    bool exclude_nonbreaking_space = false;
+    bool structural_dedup_trim_edges = false;
+    bool em_fail_on_iteration_limit = false;
+    int diagnostic_min_char_frequency = 0;
+    int diagnostic_min_char_seeds = 0;
+    int subword_mining_initial_count_reserve = 0;
+    int subword_mining_worker_count_reserve = 0;
     std::size_t subword_mining_max_bytes = 0;
 
     bool enable_atom_reasoning = false;
@@ -88,6 +121,39 @@ struct TokenizerHP {
     std::string training_curriculum;
     std::string current_model_training;
 };
+// Adapt this read view to the bounds owned by HyperParameters_GPU.hpp.
+inline void validateTokenizerTrainingHP(const TokenizerHP& hp, const char* caller) {
+    validateTokenizerTrainingPolicies([&](const char* name) -> double {
+        if (std::string_view(name) == "em_max_iterations") return hp.em_max_iterations;
+        if (std::string_view(name) == "em_convergence_tolerance") return hp.em_convergence_tolerance;
+        if (std::string_view(name) == "piece_count_smoothing") return hp.piece_count_smoothing;
+        if (std::string_view(name) == "prune_shrink_factor") return hp.prune_shrink_factor;
+        if (std::string_view(name) == "prune_em_iterations") return hp.prune_em_iterations;
+        if (std::string_view(name) == "minimum_learned_to_fallback_ratio") return hp.minimum_learned_to_fallback_ratio;
+        if (std::string_view(name) == "subword_mining_parallel_min_texts") return hp.subword_mining_parallel_min_texts;
+        if (std::string_view(name) == "subword_mining_fallback_workers") return hp.subword_mining_fallback_workers;
+        if (std::string_view(name) == "subword_mining_reserved_cores") return hp.subword_mining_reserved_cores;
+        if (std::string_view(name) == "subword_mining_chunks_per_worker") return hp.subword_mining_chunks_per_worker;
+        if (std::string_view(name) == "subword_mining_min_chunk_texts") return hp.subword_mining_min_chunk_texts;
+        if (std::string_view(name) == "subword_mining_max_chunk_texts") return hp.subword_mining_max_chunk_texts;
+        if (std::string_view(name) == "subword_mining_sample_span_bytes") return hp.subword_mining_sample_span_bytes;
+        if (std::string_view(name) == "repetition_max_alpha_run") return hp.repetition_max_alpha_run;
+        if (std::string_view(name) == "repetition_max_digit_run") return hp.repetition_max_digit_run;
+        if (std::string_view(name) == "repetition_max_punctuation_run") return hp.repetition_max_punctuation_run;
+        if (std::string_view(name) == "repetition_max_whitespace_run") return hp.repetition_max_whitespace_run;
+        if (std::string_view(name) == "repetition_pattern_min_bytes") return hp.repetition_pattern_min_bytes;
+        if (std::string_view(name) == "repetition_pattern_max_bytes") return hp.repetition_pattern_max_bytes;
+        if (std::string_view(name) == "repetition_pattern_min_repeats") return hp.repetition_pattern_min_repeats;
+        if (std::string_view(name) == "repetition_doubled_min_half_bytes") return hp.repetition_doubled_min_half_bytes;
+        if (std::string_view(name) == "repetition_stutter_min_words") return hp.repetition_stutter_min_words;
+        if (std::string_view(name) == "diagnostic_min_char_frequency") return hp.diagnostic_min_char_frequency;
+        if (std::string_view(name) == "diagnostic_min_char_seeds") return hp.diagnostic_min_char_seeds;
+        if (std::string_view(name) == "subword_mining_initial_count_reserve") return hp.subword_mining_initial_count_reserve;
+        if (std::string_view(name) == "subword_mining_worker_count_reserve") return hp.subword_mining_worker_count_reserve;
+        throw std::logic_error("Unknown tokenizer training policy");
+    }, caller);
+}
+
 
 struct LearningRateScheduleInputs {
     float learning_rate = 0.0f;
@@ -933,6 +999,38 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.prune_during_mining = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_prune_during_mining");
     view.enable_parallel_subword_mining = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_parallel_subword_mining");
     view.subword_mining_workers = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_workers");
+    view.em_max_iterations = snapshotTrainingConfigField<int>(snapshot, "tokenizer_em_max_iterations");
+    view.em_convergence_tolerance = snapshotTrainingConfigField<double>(snapshot, "tokenizer_em_convergence_tolerance");
+    view.piece_count_smoothing = snapshotTrainingConfigField<double>(snapshot, "tokenizer_piece_count_smoothing");
+    view.prune_shrink_factor = snapshotTrainingConfigField<double>(snapshot, "tokenizer_prune_shrink_factor");
+    view.prune_em_iterations = snapshotTrainingConfigField<int>(snapshot, "tokenizer_prune_em_iterations");
+    view.minimum_learned_to_fallback_ratio = snapshotTrainingConfigField<double>(snapshot, "tokenizer_minimum_learned_to_fallback_ratio");
+    view.subword_mining_parallel_min_texts = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_parallel_min_texts");
+    view.subword_mining_fallback_workers = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_fallback_workers");
+    view.subword_mining_reserved_cores = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_reserved_cores");
+    view.subword_mining_chunks_per_worker = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_chunks_per_worker");
+    view.subword_mining_min_chunk_texts = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_min_chunk_texts");
+    view.subword_mining_max_chunk_texts = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_max_chunk_texts");
+    view.subword_mining_sample_span_bytes = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_sample_span_bytes");
+    view.repetition_max_alpha_run = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_max_alpha_run");
+    view.repetition_max_digit_run = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_max_digit_run");
+    view.repetition_max_punctuation_run = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_max_punctuation_run");
+    view.repetition_max_whitespace_run = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_max_whitespace_run");
+    view.repetition_pattern_min_bytes = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_pattern_min_bytes");
+    view.repetition_pattern_max_bytes = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_pattern_max_bytes");
+    view.repetition_pattern_min_repeats = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_pattern_min_repeats");
+    view.repetition_doubled_min_half_bytes = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_doubled_min_half_bytes");
+    view.repetition_stutter_min_words = snapshotTrainingConfigField<int>(snapshot, "tokenizer_repetition_stutter_min_words");
+    view.exclude_unicode_controls = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_exclude_unicode_controls");
+    view.exclude_unicode_formatting = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_exclude_unicode_formatting");
+    view.exclude_unicode_private_use = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_exclude_unicode_private_use");
+    view.exclude_nonbreaking_space = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_exclude_nonbreaking_space");
+    view.structural_dedup_trim_edges = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_structural_dedup_trim_edges");
+    view.em_fail_on_iteration_limit = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_em_fail_on_iteration_limit");
+    view.diagnostic_min_char_frequency = snapshotTrainingConfigField<int>(snapshot, "tokenizer_diagnostic_min_char_frequency");
+    view.diagnostic_min_char_seeds = snapshotTrainingConfigField<int>(snapshot, "tokenizer_diagnostic_min_char_seeds");
+    view.subword_mining_initial_count_reserve = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_initial_count_reserve");
+    view.subword_mining_worker_count_reserve = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_worker_count_reserve");
     view.subword_mining_max_bytes = snapshotTrainingConfigField<std::size_t>(snapshot, "tokenizer_subword_mining_max_bytes");
     view.enable_atom_reasoning = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_atom_reasoning");
     view.enable_byte_fallback = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_byte_fallback");

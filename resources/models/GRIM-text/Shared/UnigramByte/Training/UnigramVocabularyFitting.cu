@@ -1,6 +1,7 @@
 // Initial EM, likelihood pruning with refits, and final EM.
 
 #include "UnigramVocabularyFitting.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 #include "UnigramEMConvergence.hpp"
 #include "UnigramMaximizationStep.hpp"
 #include "UnigramLikelihoodPruning.hpp"
@@ -15,7 +16,7 @@ void fitUnigramVocabulary(
     UnigramVocabWriteTarget target,
     const std::vector<std::string>& norm_texts,
     const std::vector<std::vector<AtomSpan>>& norm_training_exclusion_spans,
-    bool enable_byte_fallback_, int total_piece_target, int subword_mining_workers) {
+    bool enable_byte_fallback_, int total_piece_target, const ::GRIM::HyperParameters::TokenizerHP& hp) {
     auto& pieces_ = target.pieces;
     auto& piece_to_id_ = target.piece_to_id;
     // Step 5: Soft EM + likelihood-loss prune-to-target (SentencePiece-style)
@@ -33,10 +34,10 @@ void fitUnigramVocabulary(
     // can, which is why pruning is posterior/likelihood-driven, not a
     // frequency cap. Single-char coverage is provided by single-char unigram
     // pieces; byte fallback is never a protected vocab entry.
-    constexpr double SMOOTHING = kUnigramPieceCountSmoothing;
+    const double SMOOTHING = hp.piece_count_smoothing;
     // SentencePiece-style EM + likelihood-loss prune-to-target controls.
-    constexpr double PRUNE_SHRINK_FACTOR   = 0.75;  // max fraction kept per prune round
-    constexpr int    PRUNE_SUB_ITERATIONS  = 2;     // EM re-fit iterations after each prune round
+    const double PRUNE_SHRINK_FACTOR = hp.prune_shrink_factor;  // max fraction kept per prune round
+    const int PRUNE_SUB_ITERATIONS = hp.prune_em_iterations;     // EM re-fit iterations after each prune round
 
     const UnigramExpectationStepRequest expectation_request{
         pieces_, norm_texts, norm_training_exclusion_spans, enable_byte_fallback_};
@@ -45,8 +46,8 @@ void fitUnigramVocabulary(
     std::cout << "[UnigramLM] Phase-A: forward-backward EM on data-selected candidate vocab ("
               << pieces_.size() << " pieces; pruning toward total_piece_target=" << total_piece_target
               << ")" << std::endl;
-    UnigramEMConvergenceResult em_result = runUnigramEMToConvergence(pieces_, expectation_request, "Phase-A");
-    requireUnigramConvergedPhaseNotFallbackDominated(em_result, "Phase-A");
+    UnigramEMConvergenceResult em_result = runUnigramEMToConvergence(pieces_, expectation_request, hp, "Phase-A");
+    requireUnigramConvergedPhaseNotFallbackDominated(em_result, hp, "Phase-A");
 
     // ---- Prune rounds: drop lowest-likelihood-contribution pieces toward target ----
     // Each round computes per-piece likelihood loss from the current EM
@@ -69,7 +70,7 @@ void fitUnigramVocabulary(
             freq_by_index,
             total_piece_target,
             PRUNE_SHRINK_FACTOR,
-            subword_mining_workers,
+            hp.subword_mining_workers,
             "UnigramLM::trainFromCorpus likelihood-loss prune");
 
         if (prune.removed <= 0) {
@@ -106,8 +107,8 @@ void fitUnigramVocabulary(
     // ---- Final: re-converge EM on the pruned vocab ----
     std::cout << "[UnigramLM] Final: re-converging EM after " << prune_round
               << " prune round(s) (vocab now " << pieces_.size() << " pieces)" << std::endl;
-    UnigramEMConvergenceResult final_result = runUnigramEMToConvergence(pieces_, expectation_request, "Final");
-    requireUnigramConvergedPhaseNotFallbackDominated(final_result, "Final");
+    UnigramEMConvergenceResult final_result = runUnigramEMToConvergence(pieces_, expectation_request, hp, "Final");
+    requireUnigramConvergedPhaseNotFallbackDominated(final_result, hp, "Final");
 
 }
 

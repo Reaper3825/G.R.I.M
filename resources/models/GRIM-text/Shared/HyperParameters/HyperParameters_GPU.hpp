@@ -605,6 +605,39 @@ struct LanguageModelConfig {
     bool tokenizer_prune_during_mining = false;
     bool tokenizer_enable_parallel_subword_mining = false;
     int tokenizer_subword_mining_workers = 0;
+    // Authored training policies are required from ai_config.json.
+    int tokenizer_em_max_iterations = 0;
+    double tokenizer_em_convergence_tolerance = 0;
+    double tokenizer_piece_count_smoothing = 0;
+    double tokenizer_prune_shrink_factor = 0;
+    int tokenizer_prune_em_iterations = 0;
+    double tokenizer_minimum_learned_to_fallback_ratio = 0;
+    int tokenizer_subword_mining_parallel_min_texts = 0;
+    int tokenizer_subword_mining_fallback_workers = 0;
+    int tokenizer_subword_mining_reserved_cores = 0;
+    int tokenizer_subword_mining_chunks_per_worker = 0;
+    int tokenizer_subword_mining_min_chunk_texts = 0;
+    int tokenizer_subword_mining_max_chunk_texts = 0;
+    int tokenizer_subword_mining_sample_span_bytes = 0;
+    int tokenizer_repetition_max_alpha_run = 0;
+    int tokenizer_repetition_max_digit_run = 0;
+    int tokenizer_repetition_max_punctuation_run = 0;
+    int tokenizer_repetition_max_whitespace_run = 0;
+    int tokenizer_repetition_pattern_min_bytes = 0;
+    int tokenizer_repetition_pattern_max_bytes = 0;
+    int tokenizer_repetition_pattern_min_repeats = 0;
+    int tokenizer_repetition_doubled_min_half_bytes = 0;
+    int tokenizer_repetition_stutter_min_words = 0;
+    bool tokenizer_exclude_unicode_controls = false;
+    bool tokenizer_exclude_unicode_formatting = false;
+    bool tokenizer_exclude_unicode_private_use = false;
+    bool tokenizer_exclude_nonbreaking_space = false;
+    bool tokenizer_structural_dedup_trim_edges = false;
+    bool tokenizer_em_fail_on_iteration_limit = false;
+    int tokenizer_diagnostic_min_char_frequency = 0;
+    int tokenizer_diagnostic_min_char_seeds = 0;
+    int tokenizer_subword_mining_initial_count_reserve = 0;
+    int tokenizer_subword_mining_worker_count_reserve = 0;
     std::size_t tokenizer_subword_mining_max_bytes = 0;
     std::string tokenizer_model_type;
     std::vector<std::string> tokenizer_special_tokens;
@@ -1193,6 +1226,59 @@ inline void deriveTrainingRuntimeConfig(LanguageModelConfig& params) {
 // Throws std::runtime_error on any invalid required field.
 // Pure: does not mutate, does not log.
 //======================================================//
+// Shared bounds for authored tokenizer training policies. Getter returns a
+// numeric field by its unprefixed name; both finalized config and TokenizerHP
+// use this policy before any training work.
+template <typename Getter>
+inline void validateTokenizerTrainingPolicies(Getter get, const char* caller) {
+    const char* positive_fields[] = {
+        "em_max_iterations",
+        "em_convergence_tolerance",
+        "piece_count_smoothing",
+        "prune_shrink_factor",
+        "prune_em_iterations",
+        "minimum_learned_to_fallback_ratio",
+        "subword_mining_parallel_min_texts",
+        "subword_mining_fallback_workers",
+        "subword_mining_chunks_per_worker",
+        "subword_mining_min_chunk_texts",
+        "subword_mining_max_chunk_texts",
+        "subword_mining_sample_span_bytes",
+        "repetition_max_alpha_run",
+        "repetition_max_digit_run",
+        "repetition_max_punctuation_run",
+        "repetition_max_whitespace_run",
+        "repetition_pattern_min_bytes",
+        "repetition_pattern_max_bytes",
+        "repetition_pattern_min_repeats",
+        "repetition_doubled_min_half_bytes",
+        "repetition_stutter_min_words",
+        "diagnostic_min_char_frequency",
+        "diagnostic_min_char_seeds",
+    };
+    for (const char* name : positive_fields) {
+        const double value = get(name);
+        if (!std::isfinite(value) || value <= 0) {
+            throw std::runtime_error(std::string(caller) + ": tokenizer_" + name + " must be positive and finite");
+        }
+    }
+    for (const char* name : {"subword_mining_reserved_cores", "subword_mining_initial_count_reserve", "subword_mining_worker_count_reserve"}) {
+        const double value = get(name);
+        if (!std::isfinite(value) || value < 0) {
+            throw std::runtime_error(std::string(caller) + ": tokenizer_" + name + " must be nonnegative and finite");
+        }
+    }
+    if (get("prune_shrink_factor") >= 1 || get("em_convergence_tolerance") > 1) {
+        throw std::runtime_error(std::string(caller) + ": tokenizer_prune_shrink_factor must be < 1 and em_convergence_tolerance must be <= 1");
+    }
+    if (get("repetition_pattern_min_repeats") < 2 || get("repetition_stutter_min_words") < 2) {
+        throw std::runtime_error(std::string(caller) + ": tokenizer repetition repeat/word thresholds must be >= 2");
+    }
+    if (get("subword_mining_min_chunk_texts") > get("subword_mining_max_chunk_texts")) {
+        throw std::runtime_error(std::string(caller) + ": tokenizer_subword_mining_min_chunk_texts exceeds max_chunk_texts");
+    }
+}
+
 inline void validateRootConfigDocument(
     const LanguageModelConfig& params,
     const char* caller)
@@ -1480,6 +1566,35 @@ inline void validateRootConfigDocument(
         validationField("tokenizer_target_vocab_size", &LanguageModelConfig::tokenizer_target_vocab_size),
         validationField("tokenizer_min_cleaned_text_length", &LanguageModelConfig::tokenizer_min_cleaned_text_length),
         validationField("tokenizer_min_subword_freq", &LanguageModelConfig::tokenizer_min_subword_freq)
+    }, caller);
+    validateTokenizerTrainingPolicies([&](const char* name) -> double {
+        if (std::string_view(name) == "em_max_iterations") return params.tokenizer_em_max_iterations;
+        if (std::string_view(name) == "em_convergence_tolerance") return params.tokenizer_em_convergence_tolerance;
+        if (std::string_view(name) == "piece_count_smoothing") return params.tokenizer_piece_count_smoothing;
+        if (std::string_view(name) == "prune_shrink_factor") return params.tokenizer_prune_shrink_factor;
+        if (std::string_view(name) == "prune_em_iterations") return params.tokenizer_prune_em_iterations;
+        if (std::string_view(name) == "minimum_learned_to_fallback_ratio") return params.tokenizer_minimum_learned_to_fallback_ratio;
+        if (std::string_view(name) == "subword_mining_parallel_min_texts") return params.tokenizer_subword_mining_parallel_min_texts;
+        if (std::string_view(name) == "subword_mining_fallback_workers") return params.tokenizer_subword_mining_fallback_workers;
+        if (std::string_view(name) == "subword_mining_reserved_cores") return params.tokenizer_subword_mining_reserved_cores;
+        if (std::string_view(name) == "subword_mining_chunks_per_worker") return params.tokenizer_subword_mining_chunks_per_worker;
+        if (std::string_view(name) == "subword_mining_min_chunk_texts") return params.tokenizer_subword_mining_min_chunk_texts;
+        if (std::string_view(name) == "subword_mining_max_chunk_texts") return params.tokenizer_subword_mining_max_chunk_texts;
+        if (std::string_view(name) == "subword_mining_sample_span_bytes") return params.tokenizer_subword_mining_sample_span_bytes;
+        if (std::string_view(name) == "repetition_max_alpha_run") return params.tokenizer_repetition_max_alpha_run;
+        if (std::string_view(name) == "repetition_max_digit_run") return params.tokenizer_repetition_max_digit_run;
+        if (std::string_view(name) == "repetition_max_punctuation_run") return params.tokenizer_repetition_max_punctuation_run;
+        if (std::string_view(name) == "repetition_max_whitespace_run") return params.tokenizer_repetition_max_whitespace_run;
+        if (std::string_view(name) == "repetition_pattern_min_bytes") return params.tokenizer_repetition_pattern_min_bytes;
+        if (std::string_view(name) == "repetition_pattern_max_bytes") return params.tokenizer_repetition_pattern_max_bytes;
+        if (std::string_view(name) == "repetition_pattern_min_repeats") return params.tokenizer_repetition_pattern_min_repeats;
+        if (std::string_view(name) == "repetition_doubled_min_half_bytes") return params.tokenizer_repetition_doubled_min_half_bytes;
+        if (std::string_view(name) == "repetition_stutter_min_words") return params.tokenizer_repetition_stutter_min_words;
+        if (std::string_view(name) == "diagnostic_min_char_frequency") return params.tokenizer_diagnostic_min_char_frequency;
+        if (std::string_view(name) == "diagnostic_min_char_seeds") return params.tokenizer_diagnostic_min_char_seeds;
+        if (std::string_view(name) == "subword_mining_initial_count_reserve") return params.tokenizer_subword_mining_initial_count_reserve;
+        if (std::string_view(name) == "subword_mining_worker_count_reserve") return params.tokenizer_subword_mining_worker_count_reserve;
+        throw std::logic_error("Unknown tokenizer training policy");
     }, caller);
     if (params.tokenizer_character_coverage > 1.0f) {
         throw std::runtime_error(std::string(caller) + ": tokenizer_character_coverage must be <= 1, got " +
@@ -1943,6 +2058,38 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(tokenizer_min_cleaned_text_length);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_min_subword_freq);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_workers);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_em_max_iterations);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_em_convergence_tolerance);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_piece_count_smoothing);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_prune_shrink_factor);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_prune_em_iterations);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_minimum_learned_to_fallback_ratio);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_parallel_min_texts);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_fallback_workers);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_reserved_cores);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_chunks_per_worker);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_min_chunk_texts);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_max_chunk_texts);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_sample_span_bytes);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_max_alpha_run);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_max_digit_run);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_max_punctuation_run);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_max_whitespace_run);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_pattern_min_bytes);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_pattern_max_bytes);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_pattern_min_repeats);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_doubled_min_half_bytes);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_repetition_stutter_min_words);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_exclude_unicode_controls);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_exclude_unicode_formatting);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_exclude_unicode_private_use);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_exclude_nonbreaking_space);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_structural_dedup_trim_edges);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_em_fail_on_iteration_limit);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_diagnostic_min_char_frequency);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_diagnostic_min_char_seeds);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_initial_count_reserve);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_worker_count_reserve);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_parallel_threshold);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_character_coverage);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_vocab_score_multiplier);
@@ -2554,6 +2701,38 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_prune_during_mining);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_parallel_subword_mining);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_workers);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_em_max_iterations);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_em_convergence_tolerance);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_piece_count_smoothing);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_prune_shrink_factor);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_prune_em_iterations);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_minimum_learned_to_fallback_ratio);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_parallel_min_texts);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_fallback_workers);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_reserved_cores);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_chunks_per_worker);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_min_chunk_texts);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_max_chunk_texts);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_sample_span_bytes);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_max_alpha_run);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_max_digit_run);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_max_punctuation_run);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_max_whitespace_run);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_pattern_min_bytes);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_pattern_max_bytes);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_pattern_min_repeats);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_doubled_min_half_bytes);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_repetition_stutter_min_words);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_exclude_unicode_controls);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_exclude_unicode_formatting);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_exclude_unicode_private_use);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_exclude_nonbreaking_space);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_structural_dedup_trim_edges);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_em_fail_on_iteration_limit);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_diagnostic_min_char_frequency);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_diagnostic_min_char_seeds);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_initial_count_reserve);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_worker_count_reserve);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_max_bytes);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_model_type);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_special_tokens);

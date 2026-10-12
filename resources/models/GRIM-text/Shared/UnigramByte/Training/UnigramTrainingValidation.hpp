@@ -4,8 +4,7 @@
 
 namespace GRIM::Tokenizer {
 void validateTrainFromCorpusParameters(const std::vector<std::string>& texts,
-    int target_vocab_size, float character_coverage, int min_subword_freq,
-    int subword_mining_workers);
+    const ::GRIM::HyperParameters::TokenizerHP& hp);
 void requireUnigramFinalCleanupLeavesLearnedPiece(size_t piece_count,
     size_t dead_count, const char* caller);
 void requireUnigramAcceptedCandidateSetIsScorable(size_t accepted_count,
@@ -13,5 +12,6 @@ void requireUnigramAcceptedCandidateSetIsScorable(size_t accepted_count,
 void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
     double expected_learned_piece_tokens,
     double expected_fixed_penalty_byte_fallback_tokens,
+    double minimum_learned_to_fallback_ratio,
     const char* phase_label, const char* caller);
 } // namespace GRIM::Tokenizer
