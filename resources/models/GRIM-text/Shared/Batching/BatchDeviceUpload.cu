@@ -228,10 +228,6 @@ BatchDeviceBindings uploadBatchToDevice(
     if (!cached_atom_mask_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_mask_tensor.data is NULL");
     }
-    int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(storage.token_to_slot_index_map_tensor.data);
-    if (!cached_slot_map_ptr) {
-        throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.token_to_slot_index_map_tensor.data is NULL");
-    }
     uint32_t* cached_atom_entry_ids_ptr =
         reinterpret_cast<uint32_t*>(storage.atom_entry_ids_tensor.data);
     if (!cached_atom_entry_ids_ptr) {
@@ -313,7 +309,6 @@ BatchDeviceBindings uploadBatchToDevice(
     if (!storage.atom_flags_tensor.data && !payload.atom_flags.empty()) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_flags_tensor.data is NULL but payload.atom_flags is populated");
     }
-    const size_t slot_map_bytes  = payload.slotMapBytes();
     const size_t atom_position_bytes = payload.atomPositionBytes();
     const size_t atom_type_bytes = payload.atomTypeBytes();
     const size_t local_atom_index_bytes = local_atom_retrieval_enabled
@@ -395,13 +390,7 @@ BatchDeviceBindings uploadBatchToDevice(
             stream));
     }
 
-    // Round 4: token_to_slot_index_map.
-    BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
-    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, payload.token_to_slot_index_map.data(),
-        slot_map_bytes, cudaMemcpyHostToDevice, stream));
-    BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    // Round 5: compact authored atom positions/types.
+    // Round 4: compact authored atom positions/types.
     if (payload.authoredAtomCount() > payload.total_tokens) {
         throw std::runtime_error(
             "uploadBatchToDevice: payload.authoredAtomCount()=" +
@@ -500,7 +489,6 @@ BatchDeviceBindings uploadBatchToDevice(
         : nullptr;
     bindings.d_atom_entry_ids   = cached_atom_entry_ids_ptr;
     bindings.d_token_local_atom_indices = cached_local_atom_indices_ptr;
-    bindings.d_token_to_slot_index_map = cached_slot_map_ptr;
     bindings.d_atom_positions   = cached_atom_positions_ptr;
     bindings.d_atom_types       = cached_atom_types_ptr;
     bindings.d_local_atom_query_positions = cached_local_query_positions_ptr;
@@ -632,11 +620,6 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_entry_ids");
-    storage->token_to_slot_index_map_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, max_tokens),
-        false,
-        stream,
-        "batch_token_to_slot_index_map");
     storage->atom_positions_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,

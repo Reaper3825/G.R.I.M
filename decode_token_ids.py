@@ -79,7 +79,7 @@ UNIGRAM_TOKEN_START = NEWLINE_TOKEN_ID + NEWLINE_VOCAB_SIZE  # 319
 KTMG_VOCAB_VERSION = 9
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 29
+GRMT_FORMAT_VERSION = 35
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
@@ -92,20 +92,11 @@ class GrmtSequenceRecord:
     token_atom_mask: list[int]
     token_atom_flags: list[int]
     atom_texts: list[str]
-    execution_active: bool
+    targets: list[int]
+    concept_block_id: str
     prompt_end_pos: int
     prompt_length: int
-    answer_span: tuple[int, int] | None
-    target_state_token_ids: list[int] | None
-    target_state_span: tuple[int, int] | None
-    criteria_span: tuple[int, int] | None
-    success_criteria: list[
-        tuple[list[int], tuple[int, int], list[int], tuple[int, int]]
-    ]
-    constraints_span: tuple[int, int] | None
-    constraints: list[tuple[list[int], tuple[int, int]]]
-    knowns: list[tuple[list[int], tuple[int, int]]]
-    unknowns: list[tuple[list[int], tuple[int, int]]]
+    named_spans: list[tuple[str, int, int, int]]
 
 
 # ── Binary helpers ───────────────────────────────────────────────────────────
@@ -228,19 +219,6 @@ def read_sequence_local_atom_table(f, source: str) -> list[list[str]]:
         values_by_type.append(values)
     return values_by_type
 
-
-def read_concept_block_entry_spans(
-    f, source: str
-) -> list[tuple[list[int], tuple[int, int]]]:
-    entries = []
-    for _ in range(read_u32(f, source)):
-        token_ids = read_i32_array(f, read_u32(f, source), source)
-        span = (read_i32(f, source), read_i32(f, source))
-        entries.append((token_ids, span))
-    return entries
-
-
-# ── Token layout helpers ─────────────────────────────────────────────────────
 
 def is_special_token_id(token_id: int) -> bool:
     return SPECIAL_TOKEN_OFFSET <= token_id < SPECIAL_TOKEN_OFFSET + NUM_SPECIAL_TOKENS
@@ -469,113 +447,18 @@ def read_grmt_header(path: Path) -> dict:
     }
 
 
-def read_goal_metadata(
-    f,
-    source: str,
-) -> tuple[
-    list[int] | None,
-    tuple[int, int] | None,
-    tuple[int, int] | None,
-    list[tuple[list[int], tuple[int, int], list[int], tuple[int, int]]],
-    list[tuple[list[int], tuple[int, int]]],
-]:
-    has_goal = read_u8(f, source)
-    if has_goal not in (0, 1):
-        raise ValueError(f"invalid GRMT goal flag in {source}: {has_goal}")
-    if has_goal == 0:
-        return None, None, None, [], []
-
-    has_target_state = read_u8(f, source)
-    if has_target_state not in (0, 1):
-        raise ValueError(
-            f"invalid GRMT target_state flag in {source}: {has_target_state}"
-        )
-    target_state_token_ids = None
-    target_state_span = None
-    if has_target_state:
-        target_state_token_ids = read_i32_array(f, read_u32(f, source), source)
-        target_state_span = (read_i32(f, source), read_i32(f, source))
-
-    has_success_criteria = read_u8(f, source)
-    if has_success_criteria not in (0, 1):
-        raise ValueError(
-            f"invalid GRMT success_criteria flag in {source}: {has_success_criteria}"
-        )
-    success_criteria = []
-    criteria_span = None
-    if has_success_criteria:
-        criteria_span = (read_i32(f, source), read_i32(f, source))
-        entry_count = read_u32(f, source)
-        for _ in range(entry_count):
-            criterion = read_i32_array(f, read_u32(f, source), source)
-            criterion_span = (read_i32(f, source), read_i32(f, source))
-            evidence = read_i32_array(f, read_u32(f, source), source)
-            evidence_span = (read_i32(f, source), read_i32(f, source))
-            success_criteria.append(
-                (criterion, criterion_span, evidence, evidence_span)
-            )
-
-    has_constraints = read_u8(f, source)
-    if has_constraints not in (0, 1):
-        raise ValueError(
-            f"invalid GRMT constraints flag in {source}: {has_constraints}"
-        )
-    constraints = []
-    constraints_span = None
-    if has_constraints:
-        constraints_span = (read_i32(f, source), read_i32(f, source))
-        entry_count = read_u32(f, source)
-        for _ in range(entry_count):
-            token_ids = read_i32_array(f, read_u32(f, source), source)
-            span = (read_i32(f, source), read_i32(f, source))
-            constraints.append((token_ids, span))
-
-    return (
-        target_state_token_ids,
-        target_state_span,
-        criteria_span,
-        success_criteria,
-        constraints_span,
-        constraints,
-    )
-
-
 def iter_grmt_sequences(path: Path):
-    """Yield decoded GRMT rows using the current persisted row layout.
-
-    GRMT v28 per-sequence layout (must read ALL fields to stay in sync):
-      uint32         seq_len
-      int32[seq_len] token_ids
-      int32[seq_len] targets
-      float[seq_len] numeric_values
-      uint8[seq_len] atom_mask
-      uint32[seq_len] atom_flags
-      uint32[seq_len] atom_entry_ids
-      uint8 has_atom_table + optional AtomTable payload
-      uint32[seq_len] token_local_atom_indices
-      uint8 has_local_atom_table + optional SequenceLocalAtomTable payload
-      uint8 execution_active, int8 execution_gate_target
-      int32 prompt_end_pos, int32 prompt_length
-      uint8 has_answer_span + optional int32 answer_begin, int32 answer_end
-      uint8 has_goal + optional target-state, criterion/evidence, and
-          outer-plus-per-entry constraint token spans
-      uint32 known_count + known token IDs/spans
-      uint32 unknown_count + unknown token IDs/spans
-      int32[seq_len] token_exec_slots
-      uint32 compiled_slot_binding_count, then {uint64 SlotId, int32 SlotIndex}
-      uint32 compiled_transition_binding_count, then
-          {uint64 TransitionId, int32 TransitionIndex}
-      uint32 compiled_bootstrap_binding_count, then 12 bytes each
-      uint32 transition_target_count, then variable-arity TransitionInvocation
-    """
+    """Yield GRMT v35 rows, including typed atom metadata and named spans."""
     with open(path, "rb") as f:
         source = str(path)
         header = read_grmt_header(path)
         f.seek(16)
+        read_exact(f, read_u32(f, source), source).decode("utf-8")  # corpus span layout
         num_sequences = header["num_sequences"]
 
         for idx in range(num_sequences):
             row_source = f"{source}#seq{idx}"
+            concept_block_id = read_exact(f, read_u32(f, row_source), row_source).decode("utf-8")
             seq_len = read_u32(f, row_source)
             if seq_len == 0:
                 raise ValueError(f"GRMT sequence length is zero in {row_source}")
@@ -584,7 +467,7 @@ def iter_grmt_sequences(path: Path):
 
             tokens = read_i32_array(f, seq_len, row_source)
 
-            skip_exact(f, 4 * seq_len, row_source)                # targets (int32)
+            targets = read_i32_array(f, seq_len, row_source)
             token_numeric_values = read_f32_array(f, seq_len, row_source)
             token_atom_mask = list(read_exact(f, seq_len, row_source))
             token_atom_flags = read_u32_array(f, seq_len, row_source)
@@ -652,44 +535,16 @@ def iter_grmt_sequences(path: Path):
                         f"in {row_source} index={token_index}"
                     )
 
-            execution_active = (read_u8(f, row_source) != 0)
-            skip_exact(f, 1, row_source)                          # execution_gate_target (int8)
             prompt_end_pos = read_i32(f, row_source)
             prompt_length = read_i32(f, row_source)
-            has_answer_span = read_u8(f, row_source)
-            if has_answer_span not in (0, 1):
-                raise ValueError(f"invalid GRMT answer span flag in {row_source}")
-            answer_span = None
-            if has_answer_span:
-                answer_span = (read_i32(f, row_source), read_i32(f, row_source))
-            (
-                target_state_token_ids,
-                target_state_span,
-                criteria_span,
-                success_criteria,
-                constraints_span,
-                constraints,
-            ) = read_goal_metadata(f, row_source)
-            knowns = read_concept_block_entry_spans(f, row_source)
-            unknowns = read_concept_block_entry_spans(f, row_source)
-            skip_exact(f, 4 * seq_len, row_source)                # token_exec_slots (int32)
-
-            csb_count = read_u32(f, row_source)
-            skip_exact(f, 12 * csb_count, row_source)             # CompiledSlotBinding
-
-            ctb_count = read_u32(f, row_source)
-            skip_exact(f, 12 * ctb_count, row_source)             # CompiledTransitionBinding
-
-            cbb_count = read_u32(f, row_source)
-            skip_exact(f, 12 * cbb_count, row_source)             # CompiledBootstrapBinding
-
-            transition_target_count = read_u32(f, row_source)
-            for _ in range(transition_target_count):
-                skip_exact(f, 8, row_source)                      # TransitionId
-                argument_count = read_u32(f, row_source)
-                skip_exact(f, 8 * argument_count, row_source)     # argument SlotIds
-                result_count = read_u32(f, row_source)
-                skip_exact(f, 8 * result_count, row_source)       # result SlotIds
+            named_spans = []
+            for _ in range(read_u32(f, row_source)):
+                name = read_exact(f, read_u32(f, row_source), row_source).decode("utf-8")
+                parent = read_i32(f, row_source)
+                begin, end = read_i32(f, row_source), read_i32(f, row_source)
+                if not (0 <= begin <= end <= seq_len) or parent < -1 or parent >= len(named_spans):
+                    raise ValueError(f"invalid named span in {row_source}")
+                named_spans.append((name, parent, begin, end))
 
             yield GrmtSequenceRecord(
                 index=idx,
@@ -698,18 +553,11 @@ def iter_grmt_sequences(path: Path):
                 token_atom_mask=token_atom_mask,
                 token_atom_flags=token_atom_flags,
                 atom_texts=atom_texts,
-                execution_active=execution_active,
+                targets=targets,
+                concept_block_id=concept_block_id,
                 prompt_end_pos=prompt_end_pos,
                 prompt_length=prompt_length,
-                answer_span=answer_span,
-                target_state_token_ids=target_state_token_ids,
-                target_state_span=target_state_span,
-                criteria_span=criteria_span,
-                success_criteria=success_criteria,
-                constraints_span=constraints_span,
-                constraints=constraints,
-                knowns=knowns,
-                unknowns=unknowns,
+                named_spans=named_spans,
             )
 
 
@@ -796,6 +644,11 @@ def decode_sequence(
                     tid,
                     vocab,
                     atom_texts=atom_texts,
+                targets=targets,
+                concept_block_id=concept_block_id,
+                prompt_end_pos=prompt_end_pos,
+                prompt_length=prompt_length,
+                named_spans=named_spans,
                     token_numeric_values=token_numeric_values,
                     token_atom_mask=token_atom_mask,
                 )
@@ -928,8 +781,7 @@ def cmd_decode_sequences(args, vocab: dict[int, str]):
         )
 
         print(f"{'═' * 80}")
-        exec_tag = "exec-active" if record.execution_active else "exec-inactive"
-        print(f"  Sequence {record.index}  |  {len(record.token_ids)} tokens  |  {len(text)} chars  |  {exec_tag}")
+        print(f"  Sequence {record.index}  |  {len(record.token_ids)} tokens  |  {len(text)} chars")
         if record.prompt_length > 0:
             prompt_start = record.prompt_end_pos - record.prompt_length + 1
             response_start = record.prompt_end_pos + 1
@@ -1053,7 +905,6 @@ def cmd_stats(args, vocab: dict[int, str]):
     total_tokens = 0
     seq_lengths = []
     unknown_ids = set()
-    execution_active_count = 0
     atom_token_count = 0
     prompt_lengths = []
     response_lengths = []
@@ -1066,8 +917,6 @@ def cmd_stats(args, vocab: dict[int, str]):
     for record in iter_grmt_sequences(grmt):
         seq_lengths.append(len(record.token_ids))
         total_tokens += len(record.token_ids)
-        if record.execution_active:
-            execution_active_count += 1
         if len(record.token_ids) > 1024:
             over_window_count += 1
         if record.prompt_length == 0:
@@ -1100,7 +949,6 @@ def cmd_stats(args, vocab: dict[int, str]):
     print("═══ Sequence Statistics ═══")
     print(f"  Total tokens   : {total_tokens:,}")
     print(f"  Total sequences: {len(seq_lengths):,}")
-    print(f"  Exec-active seq: {execution_active_count:,}")
     print(f"  Atom tokens    : {atom_token_count:,}")
     if seq_lengths:
         print(f"  Avg seq length : {sum(seq_lengths) / len(seq_lengths):.1f}")

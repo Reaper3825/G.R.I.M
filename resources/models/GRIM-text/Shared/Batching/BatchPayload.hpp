@@ -134,8 +134,6 @@ struct BatchPayload {
     // host-only until a future typed-span objective defines its own device ABI.
     std::vector<uint8_t> atom_aux_target_mask; // [total_tokens] padded with 0
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (opening-only metadata from AtomTable)
-    // Dense bootstrap slot addresses used to materialize authored ARG seeds.
-    std::vector<int32_t> token_to_slot_index_map; // [total_tokens], -1 = non-state-bearing
 
     // Compact authored atom facts. Each position identifies a metadata-bearing
     // typed opening boundary, never span content or a closing boundary. These
@@ -145,8 +143,7 @@ struct BatchPayload {
     std::vector<int> atom_positions;          // [num_atoms] flat token indices into input_ids/numeric_values/atom_flags
     std::vector<int> atom_types;              // [num_atoms] Tokenizer::AtomType enum values aligned with atom_positions
 
-    // NOTE: Device pointers used to live here as `mutable d_token_to_slot_index_map`
-    // and `mutable d_atom_mask`, written by the upload path and read by the
+    // NOTE: Device pointers were moved out of this payload and are read by the
     // forward/loss path. They have moved to `GRIM::Batching::BatchDeviceBindings`
     // (Shared/Batching/BatchDeviceBindings.hpp). The underlying device buffer
     // ownership is explicit on this payload via `device_storage`; callers may
@@ -249,8 +246,7 @@ struct BatchPayload {
                !atom_aux_target_mask.empty() ||
                !atom_flags.empty() ||
                !atom_entry_ids.empty() ||
-               !token_local_atom_indices.empty() ||
-               !token_to_slot_index_map.empty();
+               !token_local_atom_indices.empty();
     }
     bool hasTrainingTargets() const {
         return mode == BatchPayloadMode::Training && !EnableAtomIdentification;
@@ -672,12 +668,6 @@ struct BatchPayload {
                 }
             }
         }
-        if (ownsHostInputData() && static_cast<int>(token_to_slot_index_map.size()) != total_tokens) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.token_to_slot_index_map.size()=" +
-                std::to_string(token_to_slot_index_map.size()) + " != total_tokens=" +
-                std::to_string(total_tokens));
-        }
         if (static_cast<int>(atom_positions.size()) != static_cast<int>(atom_types.size())) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.atom_positions.size()=" +
@@ -1029,7 +1019,6 @@ struct BatchPayload {
     size_t numericValueBytes() const { return static_cast<size_t>(total_tokens) * sizeof(float); }
     size_t atomMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
     size_t atomFlagBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint32_t); }
-    size_t slotMapBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int32_t); }
     size_t atomPositionBytes() const { return atom_positions.size() * sizeof(int); }
     size_t atomTypeBytes()     const { return atom_types.size() * sizeof(int); }
     size_t localAtomIndexBytes() const {
@@ -1072,7 +1061,7 @@ struct BatchPayload {
                (hasTrainingTargets() ? targetIdBytes() : 0) +
                atomInsertionGapTargetBytes() +
                atomInsertionGapMaskBytes() + numericValueBytes() +
-               atomMaskBytes() + atomFlagBytes() + slotMapBytes() +
+               atomMaskBytes() + atomFlagBytes() +
                atomPositionBytes() + atomTypeBytes() + localAtomIndexBytes() +
                localAtomQueryPositionBytes() + localAtomQueryTypeBytes() +
                localAtomQueryTargetBytes() + localAtomRowTypeOffsetBytes() +

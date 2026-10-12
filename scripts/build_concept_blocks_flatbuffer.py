@@ -42,9 +42,6 @@ def write_dataset_envelope(jsonl_path: Path, output_path: Path) -> int:
                 raise ValueError(
                     f"{jsonl_path}:{line_number}: missing non-empty prompt or raw text")
 
-            entry.pop("execution_gate_target", None)
-            entry.pop("state_0", None)
-            entry.pop("state_1", None)
             if count:
                 output.write(",")
             # Preserve numeric JSON types while normalizing syntax for flatc.

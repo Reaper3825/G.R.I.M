@@ -26,7 +26,6 @@ inline std::optional<TokenizerArtifacts::GrmtSequence> encodeConceptBlockRender(
     if (!encoded.spans->empty()) seq.named_concept_spans = std::move(encoded.spans);
     seq.targets.assign(seq.token_ids.size(), -1);
     for (size_t j = 0; j + 1 < seq.token_ids.size(); ++j) seq.targets[j] = seq.token_ids[j + 1];
-    seq.token_exec_slot_indices.assign(seq.token_ids.size(), -1);
     return seq;
 }
 

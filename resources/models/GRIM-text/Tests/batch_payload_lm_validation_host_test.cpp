@@ -27,7 +27,6 @@ BatchPayload lmPayload() {
     p.atom_flags.assign(4, 0);
     p.atom_entry_ids.assign(4, GRIM::Tokenizer::kAtomEntryNone);
     p.token_local_atom_indices.assign(4, GRIM::Tokenizer::kLocalAtomIndexNone);
-    p.token_to_slot_index_map.assign(4, -1);
     p.fits_in_cache = true;
     return p;
 }

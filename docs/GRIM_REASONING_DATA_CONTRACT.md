@@ -866,7 +866,10 @@ duplicated in metadata. A corpus-level structural layout identity is stored once
 and shared by all loaded rows. Changed names, paths, order, nesting, repetition,
 or delimiters require corpus regeneration; changed supervision policies do not.
 Adding a span does **not** require a GRMT binary format/version change.
-Pre-v34 files must be regenerated; there is no legacy reader.
+GRMT v35 removes retired execution gate, slot, bootstrap, and transition
+metadata from every row. Prefix geometry and named spans remain; typed atom
+channels and tables retain their encoding. Pre-v35 GRMT files must be
+regenerated; there is no legacy reader.
 
 SFT projects policies before windowing. Ignore filtering remaps every aligned
 token channel and the tree. Windowing clips intersecting ranges and rebuilds
@@ -897,6 +900,12 @@ following fields do not become canonical model-visible text:
 `raw:string` is the exception: when non-empty it replaces the entire structured
 rendering. It has no structured goal/state/reasoning spans and is rejected as a
 structured reasoning prompt.
+
+The retired register-machine payload is absent from ConceptBlock authoring,
+JSON adapters, corpus compilation, and DataHub. Its former FlatBuffer field slot
+is deprecated and reserved to preserve offsets in existing datasets; readers
+ignore it and writers omit it. The model-visible `execute` text span and typed
+atom annotations remain part of the current contract.
 
 ## 9. Data-example review checklist
 

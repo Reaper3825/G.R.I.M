@@ -195,7 +195,6 @@ BatchPayload buildBatchPayload(
         std::shared_ptr<const GRIM::Tokenizer::SequenceLocalAtomTable>
             local_atom_table;
         const std::vector<uint32_t>* local_atom_indices;
-        const std::vector<int32_t>* exec_slots;
         int length;
 
     };
@@ -308,17 +307,6 @@ BatchPayload buildBatchPayload(
 
         }
 
-        const std::vector<int32_t>* exec_slots_ptr = nullptr;
-        if (!seq->token_exec_slot_indices.empty()) {
-            if (static_cast<int>(seq->token_exec_slot_indices.size()) != seq_len) {
-                throw std::runtime_error(
-                    "buildBatchPayload: sequence " + std::to_string(sid) +
-                    " token_exec_slot_indices.size()=" + std::to_string(seq->token_exec_slot_indices.size()) +
-                    " != token_ids.size()=" + std::to_string(seq_len));
-            }
-            exec_slots_ptr = &seq->token_exec_slot_indices;
-        }
-
         raw.push_back({
             &seq->token_ids,
             &seq->targets,
@@ -330,7 +318,6 @@ BatchPayload buildBatchPayload(
             &seq->atom_entry_ids,
             seq->local_atom_table,
             &seq->token_local_atom_indices,
-            exec_slots_ptr,
             seq_len
         });
 
@@ -409,7 +396,6 @@ BatchPayload buildBatchPayload(
     payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
     payload.token_local_atom_indices.assign(
         flat_size, GRIM::Tokenizer::kLocalAtomIndexNone);
-    payload.token_to_slot_index_map.assign(flat_size, -1);
     payload.seq_atom_tables.resize(payload.batch_size);
     payload.seq_local_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
@@ -495,14 +481,6 @@ BatchPayload buildBatchPayload(
         std::memcpy(&payload.token_local_atom_indices[row_offset],
                     r.local_atom_indices->data(),
                     seq_len * sizeof(uint32_t));
-
-        // Copy ARG bootstrap slot map (-1 for tokens that do not seed a slot).
-        if (r.exec_slots) {
-            std::memcpy(&payload.token_to_slot_index_map[row_offset],
-                        r.exec_slots->data(),
-                        seq_len * sizeof(int32_t));
-        }
-        // else: stays -1 (default) — dataset doesn't yet provide slot assignments
 
         // Store AtomTable reference for this batch row
         payload.seq_atom_tables[b] = r.atom_table;
@@ -631,7 +609,6 @@ BatchPayload buildInferenceBatchPayload(
     payload.atom_flags = atom_flags;
     payload.atom_entry_ids = atom_entry_ids;
     payload.token_local_atom_indices = token_local_atom_indices;
-    payload.token_to_slot_index_map.assign(static_cast<size_t>(seq_len), -1);
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;
     payload.seq_local_atom_tables.resize(1);

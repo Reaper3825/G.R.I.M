@@ -390,14 +390,14 @@ struct LanguageModelConfig {
     float learning_rate_lora = 0.0f;
 
     // Separate full-context byte-gap atom-insertion model. This compiled model
-    // semantic is distinct from use_atom_data, which feeds ExecutionBlock.
+    // semantic is distinct from use_atom_data, which enables typed atom data.
     bool atom_insertion_enabled = false;
 
     // Causal sequence-local typed-atom retrieval. This is a compiled model
     // semantic shared by training, validation, and inference.
     bool local_atom_retrieval_enabled = false;
 
-    // Atom-data pipeline config (consumed by ExecutionBlock)
+    // Typed atom-data pipeline config
     bool use_atom_data = false;
     int atom_embedding_dim = 0;
 

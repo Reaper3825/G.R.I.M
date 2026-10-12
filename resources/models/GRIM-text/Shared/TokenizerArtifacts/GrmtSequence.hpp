@@ -2,7 +2,6 @@
 
 #include "../UnigramByte/AtomTable.hpp"
 #include "../UnigramByte/SequenceLocalAtomTable.hpp"
-#include "../Execution/ExecutionMetadata.hpp"
 #include "../Goal/GoalTokenSpan.hpp"
 
 #include <cstdint>
@@ -41,21 +40,9 @@ struct GrmtSequence {
     // 0 because LM supervision resumes there. This derived channel is never
     // serialized in GRMT.
     std::vector<std::uint8_t> token_atom_aux_target_mask;
-    // Compiled dense runtime indices only. Semantic identities are carried by
-    // compiled_slot_bindings and never inferred from these tensor addresses.
-    std::vector<std::int32_t> token_exec_slot_indices;
-
-    bool execution_active = false;
-    GRIM::Execution::ExecutionGateTarget execution_gate_target =
-        GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
     // Runtime prefix geometry: all tokens before the first supervised token.
     std::int32_t prompt_end_pos = -1;
     std::int32_t prompt_length = 0;
-    std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
-    std::vector<GRIM::Execution::CompiledTransitionBinding> compiled_transition_bindings;
-    std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
-    std::vector<GRIM::Execution::TransitionInvocation> transition_targets;
-
     // Generic tree over the owning token row. Persisted without field enums.
     std::shared_ptr<const GRIM::NamedConceptSpans> named_concept_spans;
     // Corpus-level structural schema, excluding supervision policy.

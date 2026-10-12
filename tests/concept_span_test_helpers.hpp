@@ -28,7 +28,6 @@ inline GRIM::TokenizerArtifacts::GrmtSequence testSpanSequence(
     row.token_atom_flags.assign(n, 0);
     row.atom_entry_ids.assign(n, GRIM::Tokenizer::kAtomEntryNone);
     row.token_local_atom_indices.assign(n, GRIM::Tokenizer::kLocalAtomIndexNone);
-    row.token_exec_slot_indices.assign(n, -1);
     auto spans = std::make_shared<GRIM::NamedConceptSpans>();
     for (const auto& e : rendered.named_spans)
         spans->entries.push_back({e.name, {static_cast<int32_t>(e.span.begin), static_cast<int32_t>(e.span.end)},

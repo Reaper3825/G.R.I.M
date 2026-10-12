@@ -52,19 +52,6 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.raw = stringValue(source.raw());
     block.explanation = stringVectorValue(source.explanation());
 
-    if (const auto* steps = source.execution()) {
-        block.execution.reserve(steps->size());
-        for (const auto* source_step : *steps) {
-            if (!source_step) continue;
-            ConceptExecutionStep step;
-            step.op = stringValue(source_step->op());
-            step.args = scalarVectorValue(source_step->args());
-            step.arg_slots = scalarVectorValue(source_step->arg_slots());
-            step.result = source_step->result();
-            block.execution.push_back(std::move(step));
-        }
-    }
-
     block.intermediate_count = source.intermediate_count();
     block.step_index = scalarVectorValue(source.step_index());
     block.format_type = stringValue(source.format_type());
@@ -117,18 +104,6 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     const auto raw = builder.CreateString(block.raw);
     const auto explanation = createStringVector(builder, block.explanation);
 
-    std::vector<flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> steps;
-    steps.reserve(block.execution.size());
-    for (const auto& step : block.execution) {
-        steps.push_back(GRIMConcept::CreateConceptExecutionStep(
-            builder,
-            builder.CreateString(step.op),
-            builder.CreateVector(step.args),
-            builder.CreateVector(step.arg_slots),
-            step.result));
-    }
-    const auto execution = builder.CreateVector(steps);
-
     const auto step_index = builder.CreateVector(block.step_index);
     const auto format_type = builder.CreateString(block.format_type);
     const auto source_sequence_id = builder.CreateString(block.source_sequence_id);
@@ -157,7 +132,6 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
         intermediates,
         answer,
         explanation,
-        execution,
         block.intermediate_count,
         step_index,
         format_type,
@@ -203,10 +177,6 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
                 add(8 + constraint.size());
         }
         add(block.step_index.size() * sizeof(int32_t));
-        for (const auto& step : block.execution) {
-            add(96 + step.op.size() + step.args.size() * sizeof(double)
-                + step.arg_slots.size() * sizeof(int32_t));
-        }
     }
     constexpr size_t kMaxInitialSize = 1024ull * 1024ull * 1024ull;
     return std::max<size_t>(1024, std::min(estimate, kMaxInitialSize));

@@ -298,7 +298,6 @@ GRIM::GeneratedSequence generateOneSequence(
     const auto& prompt_numeric_values = prompt_payload.numeric_values;
     const auto& prompt_atom_mask = prompt_payload.atom_mask;
     const auto& prompt_atom_flags = prompt_payload.atom_flags;
-    const auto& prompt_token_to_slot_index_map = prompt_payload.token_to_slot_index_map;
     const auto& prompt_atom_entry_ids = prompt_payload.atom_entry_ids;
     const auto& prompt_local_atom_indices =
         prompt_payload.token_local_atom_indices;
@@ -324,10 +323,6 @@ GRIM::GeneratedSequence generateOneSequence(
     sequence.token_atom_mask = prompt_atom_mask;
     sequence.context_atom_table = prompt_atom_table;
     sequence.context_local_atom_table = generation_local_atom_table;
-    if (prompt_token_to_slot_index_map.size() != prompt_tokens.size()) {
-        throw std::runtime_error("Phase2 payload inference: token_to_slot_index_map length mismatch");
-    }
-    sequence.token_to_slot_index_map = prompt_token_to_slot_index_map;
     if (prompt_atom_entry_ids.size() != prompt_tokens.size()) {
         throw std::runtime_error("Phase2 payload inference: atom_entry_ids length mismatch");
     }
@@ -608,7 +603,6 @@ GRIM::GeneratedSequence generateOneSequence(
         sequence.token_scores.push_back(s.log_probability);
         sequence.token_numeric_values.push_back(0.0f);
         sequence.token_atom_mask.push_back(0);
-        sequence.token_to_slot_index_map.push_back(-1);
         sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
         sequence.token_local_atom_indices.push_back(
             GRIM::Tokenizer::kLocalAtomIndexNone);

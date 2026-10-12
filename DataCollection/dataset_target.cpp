@@ -112,26 +112,6 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
         }
     }
 
-    if (j.contains("execution") && j["execution"].is_array()) {
-        for (const auto& e : j["execution"]) {
-            if (!e.is_object()) continue;
-            GRIM::ConceptExecutionStep step;
-            step.op     = e.value("op", std::string());
-            step.result = e.value("result", 0.0);
-            if (e.contains("args") && e["args"].is_array()) {
-                for (const auto& a : e["args"]) {
-                    if (a.is_number()) step.args.push_back(a.get<double>());
-                }
-            }
-            if (e.contains("arg_slots") && e["arg_slots"].is_array()) {
-                for (const auto& s : e["arg_slots"]) {
-                    if (s.is_number_integer()) step.arg_slots.push_back(s.get<int>());
-                }
-            }
-            cb.execution.push_back(std::move(step));
-        }
-    }
-
     cb.recomputeDerived();
     return cb;
 }

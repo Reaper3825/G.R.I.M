@@ -49,8 +49,7 @@ void validateDeviceBindingsForPayload(
         ? bindings.d_atom_insertion_gap_targets &&
             bindings.d_atom_insertion_valid_gap_mask
         : bindings.d_target_ids != nullptr;
-    if (!bindings.d_input_ids || !supervision_uploaded ||
-        !bindings.d_token_to_slot_index_map) {
+    if (!bindings.d_input_ids || !supervision_uploaded) {
         throw std::runtime_error(
             std::string(caller) + ": BatchDeviceBindings has NULL device pointers - "
             "caller must invoke Batching::uploadBatchToDevice(config, training_state, payload) before initializing autograd context");

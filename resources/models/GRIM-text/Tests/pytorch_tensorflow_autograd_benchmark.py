@@ -90,68 +90,18 @@ class GRMTSequence:
     
 def load_grmt_sequences(path: Path, max_sequences: int = 100) -> List[GRMTSequence]:
     """Load sequences from the current GRMT binary file."""
-    sequences = []
-    
-    with open(path, 'rb') as f:
-        # Read header
-        magic = struct.unpack('<I', f.read(4))[0]
-        version = struct.unpack('<I', f.read(4))[0]
-        num_sequences = struct.unpack('<I', f.read(4))[0]
-        vocab_size = struct.unpack('<I', f.read(4))[0]
-        
-        # Validate
-        if magic != 0x474D5254:  # "GRMT"
-            raise ValueError(f"Invalid GRMT magic: {hex(magic)}")
-        if version != 12:
-            raise ValueError(f"Unsupported GRMT version: {version}")
-            
-        print(f"[GRMT] Loading {path.name}")
-        print(f"[GRMT] version={version} sequences={num_sequences} vocab_size={vocab_size}")
-        
-        for seq_idx in range(min(num_sequences, max_sequences)):
-            # Read sequence length
-            seq_len = struct.unpack('<I', f.read(4))[0]
-            if seq_len == 0 or seq_len > 100000:
-                break
-                
-            # Read token IDs
-            token_ids = np.frombuffer(f.read(seq_len * 4), dtype=np.uint32)
-            
-            # Read precomputed targets.
-            targets = np.frombuffer(f.read(seq_len * 4), dtype=np.int32)
-            
-            # Read numeric values
-            numeric_values = np.frombuffer(f.read(seq_len * 4), dtype=np.float32)
-            
-            # Read atom mask.
-            numeric_mask = np.frombuffer(f.read(seq_len), dtype=np.uint8)
-            
-            # Skip atom_flags.
-            f.read(seq_len * 4)
+    # Share the current corpus reader rather than maintaining a legacy wire layout.
+    if str(GRIM_ROOT) not in sys.path:
+        sys.path.insert(0, str(GRIM_ROOT))
+    from decode_token_ids import iter_grmt_sequences
+    from itertools import islice
 
-            # Skip per-token atom text strings.
-            for _ in range(seq_len):
-                slen = struct.unpack('<H', f.read(2))[0]
-                if slen > 0:
-                    f.read(slen)
-
-            # Skip compiled structured-execution payload.
-            f.read(1)  # execution_active uint8
-            f.read(seq_len * 4)  # token_exec_slots int32[len]
-            cbb_count = struct.unpack('<I', f.read(4))[0]
-            f.read(cbb_count * 12)
-            ts_count = struct.unpack('<I', f.read(4))[0]
-            f.read(ts_count * 20)
-            sst_count = struct.unpack('<I', f.read(4))[0]
-            f.read(sst_count * 5)
-            
-            sequences.append(GRMTSequence(
-                token_ids=token_ids.astype(np.int64),
-                targets=targets.astype(np.int64),
-                numeric_values=numeric_values,
-                numeric_mask=numeric_mask
-            ))
-            
+    sequences = [GRMTSequence(
+        token_ids=np.asarray(row.token_ids, dtype=np.int64),
+        targets=np.asarray(row.targets, dtype=np.int64),
+        numeric_values=np.asarray(row.token_numeric_values, dtype=np.float32),
+        numeric_mask=np.asarray(row.token_atom_mask, dtype=np.uint8),
+    ) for row in islice(iter_grmt_sequences(path), max_sequences)]
     print(f"[GRMT] Loaded {len(sequences)} sequences")
     return sequences
 

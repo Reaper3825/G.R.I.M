@@ -2795,7 +2795,6 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
     sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
     sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
-    sequence.token_exec_slot_indices.assign(n, -1);
     auto named_spans = std::make_shared<GRIM::NamedConceptSpans>();
     named_spans->entries.push_back({"knowns", {0, 2}});
     named_spans->entries.push_back({"answer", {2, 4}});
@@ -2934,7 +2933,6 @@ bool testGrmtFixedNumericTokenRoundTripAndRangeValidation(std::string& message) 
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
     sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
     sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
-    sequence.token_exec_slot_indices.assign(n, -1);
 
     std::filesystem::create_directories("output");
     const std::string round_trip_path = "output/test_grmt_fixed_numeric.grmt";
@@ -3018,7 +3016,6 @@ static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     sequence.token_atom_flags.assign(n, 0);
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
     sequence.token_local_atom_indices.assign(n, kLocalAtomIndexNone);
-    sequence.token_exec_slot_indices.assign(n, -1);
     sequence.atom_table = std::make_shared<AtomTable>();
     sequence.local_atom_table = std::make_shared<SequenceLocalAtomTable>();
 

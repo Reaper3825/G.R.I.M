@@ -9,13 +9,6 @@
 // explicit migration behavior.
 namespace GRIMConcept;
 
-table ConceptExecutionStep {
-    op: string;
-    args: [double];
-    arg_slots: [int];
-    result: double;
-}
-
 table SuccessCriterion {
     criterion: string;
     evidence: string;
@@ -34,7 +27,7 @@ table ConceptBlock {
     intermediates: [string];
     answer: string;
     explanation: [string];
-    execution: [ConceptExecutionStep];
+    retired_payload: [ubyte] (deprecated); // Reserved field slot; never read or written.
     intermediate_count: int;
     step_index: [int];
     format_type: string;

@@ -52,8 +52,7 @@ void validateLossBoundaryInputs(
             ctx.device_bindings->d_atom_insertion_valid_gap_mask
         : ctx.device_bindings->d_target_ids != nullptr;
     if (!ctx.device_bindings->d_input_ids ||
-        !supervision_uploaded ||
-        !ctx.device_bindings->d_token_to_slot_index_map) {
+        !supervision_uploaded) {
         throw std::runtime_error(
             std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
     }

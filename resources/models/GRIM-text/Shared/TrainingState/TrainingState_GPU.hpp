@@ -59,7 +59,7 @@ struct TrainingState {
     
     //======================================================//
     //  TRAINING EXECUTION TRACE (per-forward lifecycle)
-    //  Reset at the start of every training/eval forward that runs ExecutionBlock.
+    //  Reset at the start of each training/eval forward.
     //  Inference/session trace state lives in GenerationState.
     //======================================================//
     Forward::ModelForwardExecutionRuntime execution_runtime;

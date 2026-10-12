@@ -58,8 +58,7 @@ enum class ModuleId : int {
     Loss = 13,
     Attention = 14,
     Custom = 15,
-    Autograd = 16,
-    ExecutionBlock = 17
+    Autograd = 16
 };
 
 const char* ModuleIdToString(ModuleId id);

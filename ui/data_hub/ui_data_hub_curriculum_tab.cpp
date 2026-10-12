@@ -459,88 +459,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         ey += 16.0f;
     }
 
-    // ─── EXEC: Execution Steps ──────────────────────────
-    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
-    ey += sectionGap;
-    {
-        float execStartY = ey;
-        ey += sectionPad;
-        float innerLeft = editorX + ePad + sectionPad;
-        float innerW = eInnerW - 2.0f * sectionPad;
-
-        renderer.drawText({innerLeft, ey}, "EXEC Steps",
-                          UITheme::Colors::TextSecondary);
-        ey += 20.0f;
-
-        float opW    = 80.0f;
-        float slotsW = 90.0f;
-        float colGap = 6.0f;
-        float controlW = 74.0f;
-        float argsW  = (innerW - opW - slotsW - controlW - colGap * 4.0f) * 0.5f;
-        float resW   = argsW;
-
-        // Column sub-headers
-        if (!cbExecStepRows_.empty()) {
-            float hx = innerLeft;
-            renderer.drawText({hx, ey}, "op", UITheme::Colors::TextMuted);
-            hx += opW + colGap;
-            renderer.drawText({hx, ey}, "arg_slots", UITheme::Colors::TextMuted);
-            hx += slotsW + colGap;
-            renderer.drawText({hx, ey}, "args", UITheme::Colors::TextMuted);
-            hx += argsW + colGap;
-            renderer.drawText({hx, ey}, "=> result", UITheme::Colors::TextMuted);
-            hx += resW + colGap;
-            renderer.drawText({hx, ey}, "control", UITheme::Colors::TextMuted);
-            ey += 16.0f;
-        }
-
-        for (size_t ei = 0; ei < cbExecStepRows_.size(); ++ei) {
-            auto& row = cbExecStepRows_[ei];
-
-            float cx = innerLeft;
-            row.opDropdown->setPosition(cx, ey);
-            row.opDropdown->setSize(opW, fieldH);
-            row.opDropdown->drawOverlay(renderer, position);
-            cx += opW + colGap;
-
-            row.argSlotsInput->setPosition(cx, ey);
-            row.argSlotsInput->setSize(slotsW, fieldH);
-            row.argSlotsInput->drawOverlay(renderer, position);
-            cx += slotsW + colGap;
-
-            row.argsInput->setPosition(cx, ey);
-            row.argsInput->setSize(argsW, fieldH);
-            row.argsInput->drawOverlay(renderer, position);
-            cx += argsW + colGap;
-
-            row.resultInput->setPosition(cx, ey);
-            row.resultInput->setSize(resW, fieldH);
-            row.resultInput->drawOverlay(renderer, position);
-            cx += resW + colGap;
-
-            const bool final_step = ei + 1 == cbExecStepRows_.size();
-            renderer.drawText({cx, ey + 7.0f}, final_step ? "STOP" : "CONTINUE",
-                              final_step ? UITheme::Colors::Danger
-                                         : UITheme::Colors::Success);
-
-            ey += fieldH + 8.0f;
-        }
-
-        // Exec step add/remove menu
-        execStepActionMenu_->setPosition(innerLeft, ey);
-        execStepActionMenu_->setSize(120.0f, 26.0f);
-        execStepActionMenu_->drawOverlay(renderer, position);
-        ey += 32.0f;
-
-        ey += sectionPad;
-
-        // Section background
-        renderer.drawRoundedRect({editorX + ePad, execStartY},
-                                 {eInnerW, ey - execStartY}, 0x0CFFFFFF, sectionRad);
-    }
-    ey += 16.0f;
-
-    } // end if (conceptMode) — EXP / EXEC hidden in PT mode
+    } // end if (conceptMode) — EXP hidden in PT mode
 
     // ─── Determine / Define / Execute / Update (concept mode only) ─
     if (structuredEditorMode) {
@@ -809,39 +728,6 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
         cbIntermediateAreas_[i]->setText(cb.intermediates[i]);
     }
 
-    // Execution steps
-    syncExecStepRows(static_cast<int>(cb.execution.size()));
-    for (size_t i = 0; i < cb.execution.size() && i < cbExecStepRows_.size(); ++i) {
-        const auto& step = cb.execution[i];
-        auto& row = cbExecStepRows_[i];
-
-        // Map op string to dropdown index
-        int opIdx = 0;
-        if (step.op == "add") opIdx = 0;
-        else if (step.op == "sub") opIdx = 1;
-        else if (step.op == "mul") opIdx = 2;
-        else if (step.op == "div") opIdx = 3;
-        if (row.opDropdown) row.opDropdown->setSelectedIndex(opIdx);
-
-        if (row.argSlotsInput) {
-            std::ostringstream oss;
-            for (size_t j = 0; j < step.arg_slots.size(); ++j) {
-                if (j > 0) oss << ", ";
-                oss << step.arg_slots[j];
-            }
-            row.argSlotsInput->setText(oss.str());
-        }
-        if (row.argsInput) {
-            std::ostringstream oss;
-            for (size_t j = 0; j < step.args.size(); ++j) {
-                if (j > 0) oss << ", ";
-                oss << step.args[j];
-            }
-            row.argsInput->setText(oss.str());
-        }
-        if (row.resultInput) row.resultInput->setText(std::to_string(step.result));
-    }
-
     cbEditorScrollOffset_ = 0.0f;
 }
 
@@ -859,7 +745,6 @@ void UIDataHubPanel::clearCBEditor() {
     cbKnownAreas_.clear();
     cbUnknownAreas_.clear();
     cbIntermediateAreas_.clear();
-    cbExecStepRows_.clear();
     cbEditorScrollOffset_ = 0.0f;
 }
 
@@ -923,27 +808,6 @@ void UIDataHubPanel::syncIntermediateAreas(int count) {
     }
     while (static_cast<int>(cbIntermediateAreas_.size()) > count) {
         cbIntermediateAreas_.pop_back();
-    }
-}
-
-void UIDataHubPanel::syncExecStepRows(int count) {
-    if (count < 0) count = 0;
-    while (static_cast<int>(cbExecStepRows_.size()) < count) {
-        CBExecStepRow row;
-        row.opDropdown = std::make_shared<UIDropdown>(
-            "", std::vector<std::string>{"add", "sub", "mul", "div"}, 0,
-            [](int, const std::string&) {});
-        row.opDropdown->setMaxVisibleItems(4);
-        row.argSlotsInput = std::make_shared<UIInputBox>();
-        row.argSlotsInput->setPlaceholder("slots: 0, 1");
-        row.argsInput = std::make_shared<UIInputBox>();
-        row.argsInput->setPlaceholder("args: 2.0, 3.0");
-        row.resultInput = std::make_shared<UIInputBox>();
-        row.resultInput->setPlaceholder("result");
-        cbExecStepRows_.push_back(std::move(row));
-    }
-    while (static_cast<int>(cbExecStepRows_.size()) > count) {
-        cbExecStepRows_.pop_back();
     }
 }
 
@@ -1045,87 +909,8 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
         out.intermediates.push_back(area ? area->getText() : "");
     }
 
-    auto parseDoubles = [&](const std::string& text, const std::string& field,
-                            std::vector<double>& values) {
-        if (trim(text).empty()) return true;
-        std::istringstream input(text);
-        std::string token;
-        while (std::getline(input, token, ',')) {
-            token = trim(token);
-            try {
-                size_t used = 0;
-                const double value = std::stod(token, &used);
-                if (token.empty() || used != token.size() || !std::isfinite(value)) {
-                    validation_error = field + " contains invalid number '" + token + "'";
-                    return false;
-                }
-                values.push_back(value);
-            } catch (...) {
-                validation_error = field + " contains invalid number '" + token + "'";
-                return false;
-            }
-        }
-        return true;
-    };
-    auto parseInts = [&](const std::string& text, const std::string& field,
-                         std::vector<int>& values) {
-        if (trim(text).empty()) return true;
-        std::istringstream input(text);
-        std::string token;
-        while (std::getline(input, token, ',')) {
-            token = trim(token);
-            try {
-                size_t used = 0;
-                const int value = std::stoi(token, &used);
-                if (token.empty() || used != token.size()) {
-                    validation_error = field + " contains invalid integer '" + token + "'";
-                    return false;
-                }
-                values.push_back(value);
-            } catch (...) {
-                validation_error = field + " contains invalid integer '" + token + "'";
-                return false;
-            }
-        }
-        return true;
-    };
-
-    static const char* op_names[] = {"add", "sub", "mul", "div"};
-    for (size_t i = 0; i < cbExecStepRows_.size(); ++i) {
-        const auto& row = cbExecStepRows_[i];
-        GRIM::ConceptExecutionStep step;
-        const int op_index = row.opDropdown ? row.opDropdown->getSelectedIndex() : 0;
-        step.op = (op_index >= 0 && op_index < 4) ? op_names[op_index] : "add";
-        const std::string field_prefix = "EXEC step " + std::to_string(i + 1);
-        if (row.argSlotsInput
-            && !parseInts(row.argSlotsInput->getText(), field_prefix + " arg_slots",
-                          step.arg_slots)) {
-            return false;
-        }
-        if (row.argsInput
-            && !parseDoubles(row.argsInput->getText(), field_prefix + " args", step.args)) {
-            return false;
-        }
-        const std::string result_text = row.resultInput
-            ? trim(row.resultInput->getText()) : std::string{};
-        try {
-            size_t used = 0;
-            step.result = std::stod(result_text, &used);
-            if (result_text.empty() || used != result_text.size()
-                || !std::isfinite(step.result)) {
-                validation_error = field_prefix + " has an invalid result";
-                return false;
-            }
-        } catch (...) {
-            validation_error = field_prefix + " has an invalid result";
-            return false;
-        }
-        out.execution.push_back(std::move(step));
-    }
-
     out.recomputeDerived();
-    validation_error = GRIM::validateConceptBlockExecutionControl(out);
-    return validation_error.empty();
+    return true;
 }
 
 std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const {

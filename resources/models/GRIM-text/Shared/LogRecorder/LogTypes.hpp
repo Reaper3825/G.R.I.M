@@ -95,7 +95,6 @@ enum class LogGroup : uint8_t {
     RMSNorm        = 4,
     ScratchBlock   = 5,
     Reserved6      = 6,
-    ExecutionBlock = 7,
     SlotSelector   = 8,
     // System groups
     Loss           = 9,
@@ -119,7 +118,6 @@ inline const char* logGroupToString(LogGroup group) {
         case LogGroup::RMSNorm:        return "NORM";
         case LogGroup::ScratchBlock:   return "SB";
         case LogGroup::Reserved6:      return "RESERVED6";
-        case LogGroup::ExecutionBlock: return "EB";
         case LogGroup::SlotSelector:   return "SLOT";
         case LogGroup::Loss:           return "LOSS";
         case LogGroup::Optimizer:      return "OPT";
@@ -143,7 +141,6 @@ inline LogGroup logGroupFromString(const char* str) {
     if (std::strcmp(str, "FFN")   == 0 || std::strcmp(str, "FFN")            == 0) return LogGroup::FFN;
     if (std::strcmp(str, "NORM")  == 0 || std::strcmp(str, "RMSNorm")        == 0) return LogGroup::RMSNorm;
     if (std::strcmp(str, "SB")    == 0 || std::strcmp(str, "ScratchBlock")   == 0) return LogGroup::ScratchBlock;
-    if (std::strcmp(str, "EB")    == 0 || std::strcmp(str, "ExecutionBlock") == 0) return LogGroup::ExecutionBlock;
     if (std::strcmp(str, "SLOT")  == 0 || std::strcmp(str, "SlotSelector")   == 0) return LogGroup::SlotSelector;
     if (std::strcmp(str, "LOSS")  == 0 || std::strcmp(str, "Loss")           == 0) return LogGroup::Loss;
     if (std::strcmp(str, "OPT")   == 0 || std::strcmp(str, "Optimizer")      == 0) return LogGroup::Optimizer;
@@ -447,7 +444,7 @@ inline LogGroup moduleIdToLogGroup(int module_id) {
     //   Activations=4, Validation=5, Checkpoint=6, DataLoader=7,
     //   Inference=8, LogRecorder=9, Training=10,
     //   TrainingOrchestrator=11, StreamController=12, Loss=13,
-    //   Attention=14, Custom=15, Autograd=16, ExecutionBlock=17
+    //   Attention=14, Custom=15, Autograd=16
     switch (module_id) {
         case 0:  return LogGroup::System;          // ForwardPass
         case 1:  return LogGroup::System;          // BackwardPass
@@ -466,7 +463,6 @@ inline LogGroup moduleIdToLogGroup(int module_id) {
         case 14: return LogGroup::Attention;       // Attention
         case 15: return LogGroup::System;          // Custom
         case 16: return LogGroup::System;          // Autograd
-        case 17: return LogGroup::ExecutionBlock;  // ExecutionBlock
         default: return LogGroup::System;
     }
 }

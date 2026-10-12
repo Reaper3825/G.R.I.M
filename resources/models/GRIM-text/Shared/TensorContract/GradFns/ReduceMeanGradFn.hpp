@@ -1,7 +1,7 @@
 #pragma once
 //======================================================//
 //  ReduceMeanGradFn.hpp
-//  Backward node for the execution block's row-local masked mean.
+//  Backward node for a row-local masked mean.
 //======================================================//
 
 #include "../TensorContract_GPU.hpp"

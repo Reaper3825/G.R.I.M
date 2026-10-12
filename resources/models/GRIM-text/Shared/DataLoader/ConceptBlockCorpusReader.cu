@@ -79,25 +79,6 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 		for (const auto value : *values) j["step_index"].push_back(value);
 	}
 
-	if (const auto* steps = source.execution()) {
-		j["execution"] = json::array();
-		for (const auto* source_step : *steps) {
-			if (!source_step) continue;
-			json step;
-			step["op"] = fbString(source_step->op());
-			step["result"] = source_step->result();
-			step["args"] = json::array();
-			if (const auto* args = source_step->args()) {
-				for (const auto value : *args) step["args"].push_back(value);
-			}
-			step["arg_slots"] = json::array();
-			if (const auto* slots = source_step->arg_slots()) {
-				for (const auto value : *slots) step["arg_slots"].push_back(value);
-			}
-			j["execution"].push_back(std::move(step));
-		}
-	}
-
 	return j;
 }
 

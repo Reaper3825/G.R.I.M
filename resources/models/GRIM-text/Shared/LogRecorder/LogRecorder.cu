@@ -37,7 +37,6 @@ bool g_layer_enables[static_cast<int>(LayerType::kCount)] = {
     true,   // kResidual
     true,   // kEncoding
     true,   // kSerialization
-    true    // kExecutionBlock
 };
 
 std::string SafeString(const char* buffer, std::size_t max_len) {
@@ -119,7 +118,6 @@ std::string layerTypeToString(LayerType type) {
         case LayerType::kResidual: return "Residual";
         case LayerType::kEncoding: return "Encoding";
         case LayerType::kSerialization: return "Serialization";
-        case LayerType::kExecutionBlock: return "ExecutionBlock";
         case LayerType::kUnknown:
         default:
             return "Unknown";
@@ -159,7 +157,6 @@ const char* ModuleIdToString(ModuleId id) {
         case ModuleId::Loss: return "Loss";
         case ModuleId::Attention: return "Attention";
         case ModuleId::Autograd: return "Autograd";
-        case ModuleId::ExecutionBlock: return "ExecutionBlock";
         case ModuleId::Custom:
         default:
             return "Custom";
@@ -279,7 +276,6 @@ void EmitModuleLog(const std::string& module_name,
         else if (module_name == "Attention")        group = moduleIdToLogGroup(14);
         else if (module_name == "Custom")           group = moduleIdToLogGroup(15);
         else if (module_name == "Autograd")         group = moduleIdToLogGroup(16);
-        else if (module_name == "ExecutionBlock")   group = moduleIdToLogGroup(17);
         
         if (!tape->accepts(log_level, group)) {
             return;
@@ -335,7 +331,6 @@ void ConfigureLayerLogging(bool master_enabled,
     g_layer_enables[static_cast<int>(LayerType::kResidual)] = residual;
     g_layer_enables[static_cast<int>(LayerType::kEncoding)] = encoding;
     g_layer_enables[static_cast<int>(LayerType::kSerialization)] = serialization;
-    g_layer_enables[static_cast<int>(LayerType::kExecutionBlock)] = false;
 }
 
 bool IsLayerLoggingEnabled(LayerType type) {

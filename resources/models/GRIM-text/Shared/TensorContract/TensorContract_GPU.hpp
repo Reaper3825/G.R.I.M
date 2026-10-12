@@ -1487,7 +1487,7 @@ Tensor select_fixed_group_rows(
  * Backward: d_logits[i] = softmax(z)[i] - 1_{i == target}
  *
  * Creates CrossEntropyLogitsGradFn if input requires_grad.
- * Designed for small classification heads (selector, execution block).
+ * Designed for small classification heads.
  */
 Tensor cross_entropy_logits(const Tensor& logits, int target_idx, cudaStream_t stream = nullptr);
 

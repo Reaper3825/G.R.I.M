@@ -197,7 +197,6 @@ bool PrepareTrainingDataFromCache(
 	size_t raw_text_count = 0;
 	size_t concept_build_failures = 0;
 	size_t selected_entries_skipped = 0;  // short text / encoder returned nullopt
-	bool warned_execution_bridge_stub = false;
 	for (const auto& cj : concept_json_entries) {
 		try {
 			bool is_raw_text = cj.value("format_type", std::string{}) == "raw" ||
@@ -218,19 +217,6 @@ bool PrepareTrainingDataFromCache(
             if (!seq) { ++selected_entries_skipped; continue; }
             if (is_raw_text) ++raw_text_count;
 
-			const bool has_internal_execution_state =
-				(cj.contains("state_0") && cj["state_0"].is_object()) ||
-				(cj.contains("execution") && cj["execution"].is_array() &&
-				 !cj["execution"].empty());
-			if (has_internal_execution_state && !warned_execution_bridge_stub) {
-				std::cerr
-					<< "[DataLoader] WARNING: execution supervision is stubbed: "
-					<< "STATE0/EXEC are not rendered as tokens, and the AtomTable-entry "
-					<< "to execution-slot compiler is not implemented yet. Affected rows "
-					<< "remain execution-unsupervised."
-					<< std::endl;
-				warned_execution_bridge_stub = true;
-			}
 			seq->concept_block_id = cj.at("id").get<std::string>();
 			all_tokens.push_back(std::move(*seq));
 		} catch (const std::exception& e) {

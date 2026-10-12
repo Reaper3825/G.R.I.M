@@ -15,7 +15,8 @@ namespace GRIM {
 // v34 replaces fixed Goal/ConceptBlock/Answer records with recursive named
 // span ranges and a corpus-level structural schema. Adding configured spans
 // changes the layout identity, not this binary format. Regenerate older GRMT.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 34;
+// v35 removes retired register-machine metadata; atom channels are unchanged.
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 35;
 
 } // namespace GRIM
 

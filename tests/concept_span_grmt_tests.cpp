@@ -58,7 +58,7 @@ int main() try {
     GRIM::TokenizerArtifacts::GrmtCorpusReader reader(path);
     assert(reader.conceptSpanLayout() == *layout);
     const auto loaded = reader.readAll();
-    assert(loaded.header.version == 34 && loaded.sequences.size() == 2);
+    assert(loaded.header.version == GRIM::GRMT_FORMAT_VERSION && loaded.sequences.size() == 2);
     assert(loaded.sequences[0].token_ids == row.token_ids);
     assert(loaded.sequences[0].concept_span_layout == loaded.sequences[1].concept_span_layout);
     const auto& tree = *loaded.sequences[0].named_concept_spans;

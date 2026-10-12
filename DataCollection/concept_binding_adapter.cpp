@@ -59,7 +59,7 @@ std::string OllamaConceptBindingAdapter::buildSystemPrompt(
         << "Read and understand the document, then generate the semantic content "
            "for every required slot. Do not merely copy the entire document.\n"
         << "Return ONLY one strict JSON object. Do not use markdown fences.\n"
-        << "Do not emit state_0. Do not add facts unsupported by the document.\n"
+        << "Do not add facts unsupported by the document.\n"
         << "Every evidence.quote and non-derived atom.source_quote must be an exact "
            "substring of the source document.\n"
         << "When text refers to an atom, write {{atom:ATOM_ID}} instead of repeating "

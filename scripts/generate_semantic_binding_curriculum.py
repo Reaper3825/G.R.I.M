@@ -627,7 +627,7 @@ def validate_entry(entry: dict[str, Any], seen_ids: set[str], seen_prompts: set[
     for marker in ATOM_MARKERS:
         if marker in encoded:
             raise ValueError(f"{block_id}: authored atom marker {marker} is forbidden")
-    for forbidden in ("execution", "state_0", "state_1", "raw"):
+    for forbidden in ("raw",):
         if forbidden in entry:
             raise ValueError(f"{block_id}: atom/execution field {forbidden} is forbidden")
 

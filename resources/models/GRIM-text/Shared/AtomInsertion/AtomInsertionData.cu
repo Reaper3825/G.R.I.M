@@ -465,8 +465,6 @@ Batching::BatchPayload buildAtomInsertionBatchPayload(
     payload.atom_entry_ids.assign(
         static_cast<std::size_t>(total_tokens),
         Tokenizer::kAtomEntryNone);
-    payload.token_to_slot_index_map.assign(
-        static_cast<std::size_t>(total_tokens), -1);
 
     payload.atom_insertion_gap_rows_per_sequence = gap_rows_per_sequence;
     payload.atom_insertion_gap_targets.assign(
@@ -613,8 +611,6 @@ Batching::BatchPayload buildAtomInsertionInferencePayload(
         static_cast<std::size_t>(sequence_length), 0);
     payload.atom_entry_ids.assign(
         static_cast<std::size_t>(sequence_length), Tokenizer::kAtomEntryNone);
-    payload.token_to_slot_index_map.assign(
-        static_cast<std::size_t>(sequence_length), -1);
     payload.seq_atom_tables.assign(1, nullptr);
 
     payload.atom_insertion_gap_rows_per_sequence = gap_count;

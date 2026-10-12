@@ -12,7 +12,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
-#include <unordered_set>
 #include <utility>
 
 #ifdef _WIN32
@@ -71,70 +70,6 @@ T readScalar(std::istream& input, const std::string& source) {
     T value{};
     readExact(input, &value, sizeof(T), source);
     return value;
-}
-
-void writeSlotId(
-    std::ostream& output,
-    GRIM::Execution::SlotId id,
-    const std::string& sink)
-{
-    writeScalar(output, id.serialized(), sink);
-}
-
-GRIM::Execution::SlotId readSlotId(
-    std::istream& input,
-    const std::string& source)
-{
-    return GRIM::Execution::SlotId::fromSerialized(
-        readScalar<GRIM::Execution::SlotId::Storage>(input, source));
-}
-
-void writeSlotIndex(
-    std::ostream& output,
-    GRIM::Execution::SlotIndex index,
-    const std::string& sink)
-{
-    writeScalar(output, index.dense(), sink);
-}
-
-GRIM::Execution::SlotIndex readSlotIndex(
-    std::istream& input,
-    const std::string& source)
-{
-    return GRIM::Execution::SlotIndex::fromDense(
-        readScalar<GRIM::Execution::SlotIndex::Storage>(input, source));
-}
-
-void writeTransitionId(
-    std::ostream& output,
-    GRIM::Execution::TransitionId id,
-    const std::string& sink)
-{
-    writeScalar(output, id.serialized(), sink);
-}
-
-GRIM::Execution::TransitionId readTransitionId(
-    std::istream& input,
-    const std::string& source)
-{
-    return GRIM::Execution::TransitionId::fromSerialized(
-        readScalar<GRIM::Execution::TransitionId::Storage>(input, source));
-}
-
-void writeTransitionIndex(
-    std::ostream& output,
-    GRIM::Execution::TransitionIndex index,
-    const std::string& sink)
-{
-    writeScalar(output, index.dense(), sink);
-}
-
-GRIM::Execution::TransitionIndex readTransitionIndex(
-    std::istream& input,
-    const std::string& source)
-{
-    return GRIM::Execution::TransitionIndex::fromDense(
-        readScalar<GRIM::Execution::TransitionIndex::Storage>(input, source));
 }
 
 std::uint32_t checkedCount(std::size_t count,
@@ -369,20 +304,6 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                  std::to_string(token_local_atom_indices.size()) +
                                  " != token_ids.size()=" + std::to_string(n));
     }
-    if (token_exec_slot_indices.size() != n) {
-        throw std::runtime_error("[GRMT] " + source + ": token_exec_slot_indices.size()=" +
-                                 std::to_string(token_exec_slot_indices.size()) +
-                                 " != token_ids.size()=" + std::to_string(n));
-    }
-    if (!GRIM::Execution::isValidExecutionGateTarget(execution_gate_target)) {
-        throw std::runtime_error("[GRMT] " + source + ": invalid execution_gate_target");
-    }
-    const bool gate_supervised =
-        execution_gate_target != GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-    if (gate_supervised && prompt_length <= 0) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": supervised execution gate requires a non-empty prompt span");
-    }
     if (prompt_length == 0) {
         if (prompt_end_pos != -1) {
             throw std::runtime_error("[GRMT] " + source +
@@ -400,17 +321,6 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                      ": prompt_length extends before the sequence start");
         }
     }
-    if (execution_active &&
-        execution_gate_target != GRIM::Execution::ExecutionGateTarget::EXECUTE) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": execution-active row must carry EXECUTE gate target");
-    }
-    if (!execution_active &&
-        execution_gate_target == GRIM::Execution::ExecutionGateTarget::EXECUTE) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": EXECUTE gate target requires execution_active=true");
-    }
-
     bool saw_atom_entry = false;
     bool saw_local_atom = false;
     for (std::size_t i = 0; i < n; ++i) {
@@ -501,133 +411,8 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
         }
     }
 
-    if (execution_active && transition_targets.empty()) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": execution_active sequence has no transition_targets");
-    }
-    if (execution_active && compiled_slot_bindings.empty()) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": execution_active sequence has no compiled_slot_bindings");
-    }
-    if (execution_active && compiled_transition_bindings.empty()) {
-        throw std::runtime_error(
-            "[GRMT] " + source +
-            ": execution_active sequence has no compiled_transition_bindings");
-    }
-    if (execution_active && compiled_bootstrap_bindings.empty()) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": execution_active sequence has no compiled_bootstrap_bindings");
-    }
-    if (!execution_active &&
-        (!compiled_slot_bindings.empty() ||
-         !compiled_transition_bindings.empty() ||
-         !compiled_bootstrap_bindings.empty() ||
-         !transition_targets.empty())) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": inactive sequence carries execution metadata");
-    }
-
     if (named_concept_spans) GRIM::validateNamedConceptSpans(*named_concept_spans, n);
 
-    std::unordered_set<std::uint64_t> slot_ids;
-    std::unordered_set<std::int32_t> slot_indices;
-    for (const auto& binding : compiled_slot_bindings) {
-        if (!binding.slot_id.valid() || !binding.slot_index.valid()) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": compiled slot binding contains an invalid primitive");
-        }
-        if (static_cast<std::size_t>(binding.slot_index.dense()) >=
-            compiled_slot_bindings.size()) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": compiled SlotIndex is outside its dense table");
-        }
-        if (!slot_ids.insert(binding.slot_id.serialized()).second ||
-            !slot_indices.insert(binding.slot_index.dense()).second) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": compiled slot bindings are not bijective");
-        }
-    }
-
-    std::unordered_set<std::uint64_t> transition_ids;
-    std::unordered_set<std::int32_t> transition_indices;
-    for (const auto& binding : compiled_transition_bindings) {
-        if (!binding.transition_id.valid() ||
-            !binding.transition_index.valid()) {
-            throw std::runtime_error(
-                "[GRMT] " + source +
-                ": compiled transition binding contains an invalid primitive");
-        }
-        if (static_cast<std::size_t>(binding.transition_index.dense()) >=
-            compiled_transition_bindings.size()) {
-            throw std::runtime_error(
-                "[GRMT] " + source +
-                ": compiled TransitionIndex is outside its dense table");
-        }
-        if (!transition_ids.insert(
-                binding.transition_id.serialized()).second ||
-            !transition_indices.insert(
-                binding.transition_index.dense()).second) {
-            throw std::runtime_error(
-                "[GRMT] " + source +
-                ": compiled transition bindings are not bijective");
-        }
-    }
-
-    std::vector<std::int32_t> expected_slot_indices(n, -1);
-    std::unordered_set<std::int32_t> bootstrap_positions;
-    std::unordered_set<std::int32_t> bootstrap_slot_indices;
-    for (std::size_t i = 0; i < compiled_bootstrap_bindings.size(); ++i) {
-        const auto& binding = compiled_bootstrap_bindings[i];
-        if (binding.binding_id != static_cast<std::int32_t>(i)) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": bootstrap binding_id is not its row-local ordinal");
-        }
-        if (binding.token_pos < 0 ||
-            static_cast<std::size_t>(binding.token_pos) >= n) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": bootstrap token_pos is outside the sequence");
-        }
-        if (!GRIM::Execution::findSlotId(
-                compiled_slot_bindings, binding.slot_index).has_value()) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": bootstrap SlotIndex has no semantic binding");
-        }
-        if (!bootstrap_positions.insert(binding.token_pos).second ||
-            !bootstrap_slot_indices.insert(binding.slot_index.dense()).second) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": bootstrap bindings are not injective");
-        }
-        expected_slot_indices[static_cast<std::size_t>(binding.token_pos)] =
-            binding.slot_index.dense();
-    }
-    if (token_exec_slot_indices != expected_slot_indices) {
-        throw std::runtime_error("[GRMT] " + source +
-                                 ": token_exec_slot_indices do not match bootstrap bindings");
-    }
-    for (const auto& invocation : transition_targets) {
-        if (!GRIM::Execution::findTransitionIndex(
-                compiled_transition_bindings,
-                invocation.transition_id).has_value()) {
-            throw std::runtime_error("[GRMT] " + source +
-                                     ": TransitionId has no compiled runtime binding");
-        }
-        for (const auto slot : invocation.arguments) {
-            if (!GRIM::Execution::findSlotIndex(
-                    compiled_slot_bindings, slot).has_value()) {
-                throw std::runtime_error(
-                    "[GRMT] " + source +
-                    ": transition argument SlotId has no compiled runtime binding");
-            }
-        }
-        for (const auto slot : invocation.results) {
-            if (!GRIM::Execution::findSlotIndex(
-                    compiled_slot_bindings, slot).has_value()) {
-                throw std::runtime_error(
-                    "[GRMT] " + source +
-                    ": transition result SlotId has no compiled runtime binding");
-            }
-        }
-    }
 }
 
 GrmtCorpusWriter::GrmtCorpusWriter(
@@ -709,59 +494,9 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
                static_cast<std::size_t>(len) * sizeof(std::uint32_t), sink);
     writeLocalAtomTableForSequence(file_, sequence, sink);
 
-    const std::uint8_t exec_active = sequence.execution_active ? 1 : 0;
-    writeScalar(file_, exec_active, sink);
-    const std::int8_t gate_target = static_cast<std::int8_t>(sequence.execution_gate_target);
-    writeScalar(file_, gate_target, sink);
     writeScalar(file_, sequence.prompt_end_pos, sink);
     writeScalar(file_, sequence.prompt_length, sink);
     writeNamedConceptSpansForSequence(file_, sequence, sink);
-    writeExact(file_, sequence.token_exec_slot_indices.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
-
-    const std::uint32_t csb_count =
-        static_cast<std::uint32_t>(sequence.compiled_slot_bindings.size());
-    writeScalar(file_, csb_count, sink);
-    for (const auto& binding : sequence.compiled_slot_bindings) {
-        writeSlotId(file_, binding.slot_id, sink);
-        writeSlotIndex(file_, binding.slot_index, sink);
-    }
-
-    const std::uint32_t ctb_count =
-        static_cast<std::uint32_t>(
-            sequence.compiled_transition_bindings.size());
-    writeScalar(file_, ctb_count, sink);
-    for (const auto& binding : sequence.compiled_transition_bindings) {
-        writeTransitionId(file_, binding.transition_id, sink);
-        writeTransitionIndex(file_, binding.transition_index, sink);
-    }
-
-    const std::uint32_t cbb_count = static_cast<std::uint32_t>(sequence.compiled_bootstrap_bindings.size());
-    writeScalar(file_, cbb_count, sink);
-    for (const auto& binding : sequence.compiled_bootstrap_bindings) {
-        writeScalar(file_, binding.binding_id, sink);
-        writeScalar(file_, binding.token_pos, sink);
-        writeSlotIndex(file_, binding.slot_index, sink);
-    }
-
-    const std::uint32_t target_count =
-        static_cast<std::uint32_t>(sequence.transition_targets.size());
-    writeScalar(file_, target_count, sink);
-    for (const auto& invocation : sequence.transition_targets) {
-        writeTransitionId(file_, invocation.transition_id, sink);
-        const std::uint32_t argument_count =
-            static_cast<std::uint32_t>(invocation.arguments.size());
-        writeScalar(file_, argument_count, sink);
-        for (const GRIM::Execution::SlotId slot : invocation.arguments) {
-            writeSlotId(file_, slot, sink);
-        }
-        const std::uint32_t result_count =
-            static_cast<std::uint32_t>(invocation.results.size());
-        writeScalar(file_, result_count, sink);
-        for (const GRIM::Execution::SlotId slot : invocation.results) {
-            writeSlotId(file_, slot, sink);
-        }
-    }
-
     ++written_sequences_;
 }
 
@@ -857,69 +592,10 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
               static_cast<std::size_t>(seq_len) * sizeof(std::uint32_t), source);
     seq.local_atom_table = readLocalAtomTableForSequence(file_, source);
 
-    const std::uint8_t exec_active = readScalar<std::uint8_t>(file_, source);
-    seq.execution_active = (exec_active != 0);
-    const std::int8_t gate_target = readScalar<std::int8_t>(file_, source);
-    seq.execution_gate_target = static_cast<GRIM::Execution::ExecutionGateTarget>(gate_target);
     seq.prompt_end_pos = readScalar<std::int32_t>(file_, source);
     seq.prompt_length = readScalar<std::int32_t>(file_, source);
     seq.named_concept_spans =
         readNamedConceptSpansForSequence(file_, source);
-
-    seq.token_exec_slot_indices.resize(seq_len);
-    readExact(file_, seq.token_exec_slot_indices.data(), static_cast<std::size_t>(seq_len) * sizeof(std::int32_t), source);
-
-    const std::uint32_t csb_count = readScalar<std::uint32_t>(file_, source);
-    seq.compiled_slot_bindings.reserve(csb_count);
-    for (std::uint32_t i = 0; i < csb_count; ++i) {
-        seq.compiled_slot_bindings.push_back(GRIM::Execution::CompiledSlotBinding{
-            readSlotId(file_, source),
-            readSlotIndex(file_, source)});
-    }
-
-    const std::uint32_t ctb_count = readScalar<std::uint32_t>(file_, source);
-    seq.compiled_transition_bindings.reserve(ctb_count);
-    for (std::uint32_t i = 0; i < ctb_count; ++i) {
-        seq.compiled_transition_bindings.push_back(
-            GRIM::Execution::CompiledTransitionBinding{
-                readTransitionId(file_, source),
-                readTransitionIndex(file_, source)});
-    }
-
-    const std::uint32_t cbb_count = readScalar<std::uint32_t>(file_, source);
-    seq.compiled_bootstrap_bindings.reserve(cbb_count);
-    for (std::uint32_t i = 0; i < cbb_count; ++i) {
-        seq.compiled_bootstrap_bindings.push_back(
-            GRIM::Execution::CompiledBootstrapBinding{
-                readScalar<std::int32_t>(file_, source),
-                readScalar<std::int32_t>(file_, source),
-                readSlotIndex(file_, source)});
-    }
-
-    const std::uint32_t target_count =
-        readScalar<std::uint32_t>(file_, source);
-    seq.transition_targets.reserve(target_count);
-    for (std::uint32_t i = 0; i < target_count; ++i) {
-        GRIM::Execution::TransitionInvocation invocation;
-        invocation.transition_id = readTransitionId(file_, source);
-        const std::uint32_t argument_count =
-            readScalar<std::uint32_t>(file_, source);
-        invocation.arguments.reserve(argument_count);
-        for (std::uint32_t argument = 0;
-             argument < argument_count;
-             ++argument) {
-            invocation.arguments.push_back(readSlotId(file_, source));
-        }
-        const std::uint32_t result_count =
-            readScalar<std::uint32_t>(file_, source);
-        invocation.results.reserve(result_count);
-        for (std::uint32_t result = 0;
-             result < result_count;
-             ++result) {
-            invocation.results.push_back(readSlotId(file_, source));
-        }
-        seq.transition_targets.push_back(std::move(invocation));
-    }
 
     seq.validateForWrite(source);
     validateSequenceTokenRange(seq, header_.vocab_size, source);

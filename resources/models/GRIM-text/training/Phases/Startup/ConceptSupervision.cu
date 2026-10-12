@@ -36,12 +36,6 @@ bool projectConceptSupervision(
     const auto prefix = static_cast<int32_t>(first - kept_policy.begin());
     if (prefix == 0)
         throw std::runtime_error(source + ": first supervised span needs a preceding causal token; enable BOS");
-    for (auto& binding : sequence.compiled_bootstrap_bindings) {
-        const auto pos = static_cast<std::size_t>(binding.token_pos);
-        if (pos >= n || map[pos] == map[pos + 1])
-            throw std::runtime_error(source + ": ignored span contains an execution bootstrap binding");
-        binding.token_pos = map[pos];
-    }
     const auto select = [&](auto& values) {
         if (values.empty()) return;
         if (values.size() != n) throw std::runtime_error(source + ": unaligned token metadata");
@@ -57,7 +51,6 @@ bool projectConceptSupervision(
     select(sequence.atom_entry_ids);
     select(sequence.token_local_atom_indices);
     select(sequence.token_atom_aux_target_mask);
-    select(sequence.token_exec_slot_indices);
     sequence.targets.assign(sequence.token_ids.size(), -1);
     for (std::size_t i = 1; i < kept_policy.size(); ++i)
         if (kept_policy[i] == Policy::Supervised) sequence.targets[i - 1] = sequence.token_ids[i];

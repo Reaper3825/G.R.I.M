@@ -265,11 +265,6 @@ void appendSftTokenRange(GrmtSequence& destination,
     destination.token_atom_flags.insert(destination.token_atom_flags.end(),
         source.token_atom_flags.begin() + static_cast<ptrdiff_t>(begin),
         source.token_atom_flags.begin() + static_cast<ptrdiff_t>(end));
-    if (!source.token_exec_slot_indices.empty()) {
-        destination.token_exec_slot_indices.insert(destination.token_exec_slot_indices.end(),
-            source.token_exec_slot_indices.begin() + static_cast<ptrdiff_t>(begin),
-            source.token_exec_slot_indices.begin() + static_cast<ptrdiff_t>(end));
-    }
 }
 
 SftWindowConstruction constructSftWindows(
@@ -345,13 +340,6 @@ SftWindowConstruction constructSftWindows(
                 std::to_string(response_capacity) +
                 " cannot preserve configured response overlap=" +
                 std::to_string(response_overlap));
-        }
-        if (fragmented &&
-            (sequence.execution_active ||
-             sequence.execution_gate_target != GRIM::Execution::ExecutionGateTarget::UNSUPERVISED)) {
-            throw std::runtime_error(
-                "Execution-control-supervised SFT sequence exceeds max_seq_len; "
-                "execution-control rows cannot be fragmented");
         }
 
         const size_t response_hop = fragmented
@@ -509,12 +497,6 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
                     ? -1
                     : old_first_token;
             seq.targets.insert(seq.targets.begin(), bos_target);
-            if (!seq.token_exec_slot_indices.empty())
-                seq.token_exec_slot_indices.insert(seq.token_exec_slot_indices.begin(), static_cast<int32_t>(-1));
-            // BOS insertion shifted all existing token positions right by 1.
-            // Remap compiled_bootstrap_bindings token_pos to match.
-            for (auto& b : seq.compiled_bootstrap_bindings)
-                b.token_pos += 1;
             if (seq.prompt_end_pos >= 0) {
                 seq.prompt_end_pos += 1;
             }
@@ -543,8 +525,6 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
                     : -1;
             }
             seq.targets.push_back(-1);  // EOS position itself: nothing follows
-            if (!seq.token_exec_slot_indices.empty())
-                seq.token_exec_slot_indices.push_back(static_cast<int32_t>(-1));
             added_eos_out++;
         }
     }
@@ -658,18 +638,6 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             continue;
         }
 
-        // Execution-active rows MUST NOT be fragmented — compiled_bootstrap_bindings
-        // and transition_targets are whole-sequence structures with no windowing semantics.
-        if (seq.execution_active ||
-            seq.execution_gate_target != GRIM::Execution::ExecutionGateTarget::UNSUPERVISED) {
-            throw std::runtime_error(
-                "Execution-control-supervised sequence exceeds max_seq_len (" +
-                std::to_string(seq.token_ids.size()) + " > " +
-                std::to_string(max_seq_len) +
-                "). Execution-control rows cannot be split by sliding window. "
-                "Increase max_seq_len or shorten the source data.");
-        }
-
         long_seq_count++;
         const size_t seq_len = seq.token_ids.size();
         const bool has_prompt_span = seq.prompt_length > 0;
@@ -762,8 +730,6 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                 window.token_local_atom_indices.push_back(
                     GRIM::Tokenizer::kLocalAtomIndexNone);
                 window.token_atom_flags.push_back(0);
-                if (!seq.token_exec_slot_indices.empty())
-                    window.token_exec_slot_indices.push_back(static_cast<int32_t>(-1));
                 bos_prepended++;
             }
 
@@ -787,11 +753,6 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             window.token_atom_flags.insert(window.token_atom_flags.end(),
                 seq.token_atom_flags.begin() + start, seq.token_atom_flags.begin() + end);
 
-            if (!seq.token_exec_slot_indices.empty()) {
-                window.token_exec_slot_indices.insert(window.token_exec_slot_indices.end(),
-                    seq.token_exec_slot_indices.begin() + static_cast<ptrdiff_t>(start),
-                    seq.token_exec_slot_indices.begin() + static_cast<ptrdiff_t>(end));
-            }
             // Issue #143: Mask overlap prefix targets in non-first windows.
             // With stride < max_seq_len, the first (prev_source_end - start)
             // tokens were already trained on in the previous window. Mask them

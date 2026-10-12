@@ -12,23 +12,12 @@
 
 #pragma once
 
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace GRIM {
-
-struct ConceptExecutionStep {
-    std::string          op;
-    std::vector<double>  args;
-    std::vector<int>     arg_slots;  // Optional: canonical slot indices for args.
-                                     // When present, slot identity is explicit —
-                                     // no value-based resolution needed.
-    double               result = 0.0;
-};
 
 // Optional evidence stays nested with its criterion so downstream verification
 // never has to infer the association from parallel arrays or criterion text
@@ -66,7 +55,6 @@ struct ConceptBlock {
     /// NL steps parallel to `intermediates`; JSON field `explanation`.
     std::vector<std::string> explanation;
 
-    std::vector<ConceptExecutionStep> execution;
     std::optional<ConceptBlockGoal> goal;
 
     int intermediate_count = 0;
@@ -88,40 +76,6 @@ struct ConceptBlock {
             step_index[i] = i;
     }
 };
-
-// Returns an empty string when the block is safe to persist for the GRIM-text
-// concept loader. The loader performs the same arithmetic checks again while
-// compiling the training corpus; this provides immediate authoring feedback.
-inline std::string validateConceptBlockExecutionControl(const ConceptBlock& cb) {
-    for (size_t step_index = 0; step_index < cb.execution.size(); ++step_index) {
-        const auto& step = cb.execution[step_index];
-        const std::string prefix = "EXEC step " + std::to_string(step_index + 1) + ": ";
-        if (step.args.size() < 2) return prefix + "requires two args";
-        if (!step.arg_slots.empty() && step.arg_slots.size() != 2)
-            return prefix + "requires exactly two arg_slots when provided";
-        if (!std::isfinite(step.result)) return prefix + "result is not finite";
-        if (!std::isfinite(step.args[0]) || !std::isfinite(step.args[1]))
-            return prefix + "args must be finite";
-
-        double computed = 0.0;
-        if (step.op == "add") computed = step.args[0] + step.args[1];
-        else if (step.op == "sub") computed = step.args[0] - step.args[1];
-        else if (step.op == "mul") computed = step.args[0] * step.args[1];
-        else if (step.op == "div") {
-            if (step.args[1] == 0.0) return prefix + "division by zero";
-            computed = step.args[0] / step.args[1];
-        } else {
-            return prefix + "unknown operation '" + step.op + "'";
-        }
-
-        const double tolerance = 1e-9 * std::max(1.0, std::fabs(step.result));
-        if (std::fabs(computed - step.result) > tolerance) {
-            return prefix + "args compute " + std::to_string(computed)
-                + " but result is " + std::to_string(step.result);
-        }
-    }
-    return {};
-}
 
 // ── Format presets ──────────────────────────────────────
 

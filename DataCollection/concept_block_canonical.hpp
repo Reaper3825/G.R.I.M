@@ -82,17 +82,6 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
         goal["constraints"] = cb.goal->constraints;
         j["goal"] = std::move(goal);
     }
-    if (!cb.execution.empty()) {
-        j["execution"] = nlohmann::json::array();
-        for (const auto& step : cb.execution) {
-            j["execution"].push_back(nlohmann::json{
-                {"op", step.op},
-                {"args", step.args},
-                {"arg_slots", step.arg_slots},
-                {"result", step.result}
-            });
-        }
-    }
     return j;
 }
 

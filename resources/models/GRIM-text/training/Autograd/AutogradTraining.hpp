@@ -148,8 +148,7 @@ struct AutogradContext {
             ? device_bindings->d_atom_insertion_gap_targets &&
                 device_bindings->d_atom_insertion_valid_gap_mask
             : device_bindings->d_target_ids != nullptr;
-        if (!device_bindings->d_input_ids || !supervision_uploaded ||
-            !device_bindings->d_token_to_slot_index_map) {
+        if (!device_bindings->d_input_ids || !supervision_uploaded) {
             throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
         }
     }

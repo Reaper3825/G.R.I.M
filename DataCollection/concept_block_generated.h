@@ -15,9 +15,6 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
 
 namespace GRIMConcept {
 
-struct ConceptExecutionStep;
-struct ConceptExecutionStepBuilder;
-
 struct SuccessCriterion;
 struct SuccessCriterionBuilder;
 
@@ -29,97 +26,6 @@ struct ConceptBlockBuilder;
 
 struct ConceptBlockDataset;
 struct ConceptBlockDatasetBuilder;
-
-struct ConceptExecutionStep FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ConceptExecutionStepBuilder Builder;
-  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_OP = 4,
-    VT_ARGS = 6,
-    VT_ARG_SLOTS = 8,
-    VT_RESULT = 10
-  };
-  const ::flatbuffers::String *op() const {
-    return GetPointer<const ::flatbuffers::String *>(VT_OP);
-  }
-  const ::flatbuffers::Vector<double> *args() const {
-    return GetPointer<const ::flatbuffers::Vector<double> *>(VT_ARGS);
-  }
-  const ::flatbuffers::Vector<int32_t> *arg_slots() const {
-    return GetPointer<const ::flatbuffers::Vector<int32_t> *>(VT_ARG_SLOTS);
-  }
-  double result() const {
-    return GetField<double>(VT_RESULT, 0.0);
-  }
-  bool Verify(::flatbuffers::Verifier &verifier) const {
-    return VerifyTableStart(verifier) &&
-           VerifyOffset(verifier, VT_OP) &&
-           verifier.VerifyString(op()) &&
-           VerifyOffset(verifier, VT_ARGS) &&
-           verifier.VerifyVector(args()) &&
-           VerifyOffset(verifier, VT_ARG_SLOTS) &&
-           verifier.VerifyVector(arg_slots()) &&
-           VerifyField<double>(verifier, VT_RESULT, 8) &&
-           verifier.EndTable();
-  }
-};
-
-struct ConceptExecutionStepBuilder {
-  typedef ConceptExecutionStep Table;
-  ::flatbuffers::FlatBufferBuilder &fbb_;
-  ::flatbuffers::uoffset_t start_;
-  void add_op(::flatbuffers::Offset<::flatbuffers::String> op) {
-    fbb_.AddOffset(ConceptExecutionStep::VT_OP, op);
-  }
-  void add_args(::flatbuffers::Offset<::flatbuffers::Vector<double>> args) {
-    fbb_.AddOffset(ConceptExecutionStep::VT_ARGS, args);
-  }
-  void add_arg_slots(::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> arg_slots) {
-    fbb_.AddOffset(ConceptExecutionStep::VT_ARG_SLOTS, arg_slots);
-  }
-  void add_result(double result) {
-    fbb_.AddElement<double>(ConceptExecutionStep::VT_RESULT, result, 0.0);
-  }
-  explicit ConceptExecutionStepBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
-        : fbb_(_fbb) {
-    start_ = fbb_.StartTable();
-  }
-  ::flatbuffers::Offset<ConceptExecutionStep> Finish() {
-    const auto end = fbb_.EndTable(start_);
-    auto o = ::flatbuffers::Offset<ConceptExecutionStep>(end);
-    return o;
-  }
-};
-
-inline ::flatbuffers::Offset<ConceptExecutionStep> CreateConceptExecutionStep(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::String> op = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<double>> args = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> arg_slots = 0,
-    double result = 0.0) {
-  ConceptExecutionStepBuilder builder_(_fbb);
-  builder_.add_result(result);
-  builder_.add_arg_slots(arg_slots);
-  builder_.add_args(args);
-  builder_.add_op(op);
-  return builder_.Finish();
-}
-
-inline ::flatbuffers::Offset<ConceptExecutionStep> CreateConceptExecutionStepDirect(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    const char *op = nullptr,
-    const std::vector<double> *args = nullptr,
-    const std::vector<int32_t> *arg_slots = nullptr,
-    double result = 0.0) {
-  auto op__ = op ? _fbb.CreateString(op) : 0;
-  auto args__ = args ? _fbb.CreateVector<double>(*args) : 0;
-  auto arg_slots__ = arg_slots ? _fbb.CreateVector<int32_t>(*arg_slots) : 0;
-  return GRIMConcept::CreateConceptExecutionStep(
-      _fbb,
-      op__,
-      args__,
-      arg_slots__,
-      result);
-}
 
 struct SuccessCriterion FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef SuccessCriterionBuilder Builder;
@@ -276,7 +182,6 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_INTERMEDIATES = 10,
     VT_ANSWER = 12,
     VT_EXPLANATION = 14,
-    VT_EXECUTION = 16,
     VT_INTERMEDIATE_COUNT = 18,
     VT_STEP_INDEX = 20,
     VT_FORMAT_TYPE = 22,
@@ -308,9 +213,6 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *explanation() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_EXPLANATION);
-  }
-  const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> *execution() const {
-    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> *>(VT_EXECUTION);
   }
   int32_t intermediate_count() const {
     return GetField<int32_t>(VT_INTERMEDIATE_COUNT, 0);
@@ -367,9 +269,6 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_EXPLANATION) &&
            verifier.VerifyVector(explanation()) &&
            verifier.VerifyVectorOfStrings(explanation()) &&
-           VerifyOffset(verifier, VT_EXECUTION) &&
-           verifier.VerifyVector(execution()) &&
-           verifier.VerifyVectorOfTables(execution()) &&
            VerifyField<int32_t>(verifier, VT_INTERMEDIATE_COUNT, 4) &&
            VerifyOffset(verifier, VT_STEP_INDEX) &&
            verifier.VerifyVector(step_index()) &&
@@ -421,9 +320,6 @@ struct ConceptBlockBuilder {
   }
   void add_explanation(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> explanation) {
     fbb_.AddOffset(ConceptBlock::VT_EXPLANATION, explanation);
-  }
-  void add_execution(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>>> execution) {
-    fbb_.AddOffset(ConceptBlock::VT_EXECUTION, execution);
   }
   void add_intermediate_count(int32_t intermediate_count) {
     fbb_.AddElement<int32_t>(ConceptBlock::VT_INTERMEDIATE_COUNT, intermediate_count, 0);
@@ -483,7 +379,6 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> intermediates = 0,
     ::flatbuffers::Offset<::flatbuffers::String> answer = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> explanation = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>>> execution = 0,
     int32_t intermediate_count = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> step_index = 0,
     ::flatbuffers::Offset<::flatbuffers::String> format_type = 0,
@@ -511,7 +406,6 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
   builder_.add_format_type(format_type);
   builder_.add_step_index(step_index);
   builder_.add_intermediate_count(intermediate_count);
-  builder_.add_execution(execution);
   builder_.add_explanation(explanation);
   builder_.add_answer(answer);
   builder_.add_intermediates(intermediates);
@@ -529,7 +423,6 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *intermediates = nullptr,
     const char *answer = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *explanation = nullptr,
-    const std::vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> *execution = nullptr,
     int32_t intermediate_count = 0,
     const std::vector<int32_t> *step_index = nullptr,
     const char *format_type = nullptr,
@@ -549,7 +442,6 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
   auto intermediates__ = intermediates ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*intermediates) : 0;
   auto answer__ = answer ? _fbb.CreateString(answer) : 0;
   auto explanation__ = explanation ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*explanation) : 0;
-  auto execution__ = execution ? _fbb.CreateVector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>>(*execution) : 0;
   auto step_index__ = step_index ? _fbb.CreateVector<int32_t>(*step_index) : 0;
   auto format_type__ = format_type ? _fbb.CreateString(format_type) : 0;
   auto source_sequence_id__ = source_sequence_id ? _fbb.CreateString(source_sequence_id) : 0;
@@ -568,7 +460,6 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
       intermediates__,
       answer__,
       explanation__,
-      execution__,
       intermediate_count,
       step_index__,
       format_type__,

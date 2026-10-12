@@ -605,7 +605,6 @@ UIDataHubPanel::UIDataHubPanel()
                 cb.answer.clear();
                 cb.intermediates.clear();
                 cb.explanation.clear();
-                cb.execution.clear();
                 cb.goal.reset();
             } else if (cb.format_type == "raw") {
                 cb.prompt = std::move(cb.raw);
@@ -733,15 +732,6 @@ UIDataHubPanel::UIDataHubPanel()
     stepActionMenu_->addItem("- Step", [this]() {
         if (!cbIntermediateAreas_.empty())
             cbIntermediateAreas_.pop_back();
-    }, UITheme::Colors::Danger);
-
-    execStepActionMenu_ = std::make_shared<UIActionMenu>("Exec Steps");
-    execStepActionMenu_->addItem("+ Exec Step", [this]() {
-        syncExecStepRows(static_cast<int>(cbExecStepRows_.size()) + 1);
-    }, UITheme::Colors::Success);
-    execStepActionMenu_->addItem("- Exec Step", [this]() {
-        if (!cbExecStepRows_.empty())
-            cbExecStepRows_.pop_back();
     }, UITheme::Colors::Danger);
 
     blockActionMenu_ = std::make_shared<UIActionMenu>("Block");
@@ -998,7 +988,7 @@ UIDataHubPanel::UIDataHubPanel()
         cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbDetermineArea_, cbDefineArea_, cbExecuteArea_,
         cbUpdateArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, successCriteriaActionMenu_, constraintsActionMenu_, knownsActionMenu_, unknownsActionMenu_,
-        stepActionMenu_, execStepActionMenu_, blockActionMenu_,
+        stepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_
     };
 
@@ -1505,13 +1495,6 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                 if (area) area->update(input, dt);
             for (auto& area : cbUnknownAreas_)
                 if (area) area->update(input, dt);
-            for (auto& row : cbExecStepRows_) {
-                if (row.opDropdown)    row.opDropdown->update(input, dt);
-                if (row.argSlotsInput) row.argSlotsInput->update(input, dt);
-                if (row.argsInput)     row.argsInput->update(input, dt);
-                if (row.resultInput)   row.resultInput->update(input, dt);
-            }
-
             {
                 std::string curSearch = cbSearchInput_ ? cbSearchInput_->getText() : "";
                 if (curSearch != cbFilterSearch_) {
@@ -1700,14 +1683,8 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         knownsActionMenu_->drawExpandedList(renderer, position);
     if (unknownsActionMenu_ && unknownsActionMenu_->isExpanded())
         unknownsActionMenu_->drawExpandedList(renderer, position);
-    if (execStepActionMenu_ && execStepActionMenu_->isExpanded())
-        execStepActionMenu_->drawExpandedList(renderer, position);
     if (stepActionMenu_ && stepActionMenu_->isExpanded())
         stepActionMenu_->drawExpandedList(renderer, position);
-    for (const auto& row : cbExecStepRows_) {
-        if (row.opDropdown && row.opDropdown->isExpanded())
-            row.opDropdown->drawExpandedList(renderer, position);
-    }
     if (currListActionMenu_ && currListActionMenu_->isExpanded())
         currListActionMenu_->drawExpandedList(renderer, position);
 
