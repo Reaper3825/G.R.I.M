@@ -82,6 +82,7 @@ struct ClipResult {
     float encoder_rms_pre = 0.0f;
     ClipMetrics metrics{};
     std::array<TopGroup, kTopGroupCount> top_groups{};
+    std::array<TopGroup, kTopGroupCount> top_energy_groups{}; ///< Descending pre-clip sum_sq, independent of RMS rank
 
     bool clipped = false;
     bool any_clipped() const { return clipped; }

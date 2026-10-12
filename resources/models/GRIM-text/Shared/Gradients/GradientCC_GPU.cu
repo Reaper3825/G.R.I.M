@@ -290,10 +290,16 @@ void recordTopGroup(
 	candidate.type = static_cast<int>(group.type);
 	candidate.layer_index = group.layer_index;
 	candidate.valid = true;
+	auto energy_candidate = candidate;
 
 	for (auto& top : result.top_groups) {
 		if (!top.valid || candidate.rms > top.rms) {
 			std::swap(candidate, top);
+		}
+	}
+	for (auto& top : result.top_energy_groups) {
+		if (!top.valid || energy_candidate.sum_sq > top.sum_sq) {
+			std::swap(energy_candidate, top);
 		}
 	}
 }

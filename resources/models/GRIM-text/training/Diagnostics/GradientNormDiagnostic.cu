@@ -149,20 +149,22 @@ float computeEncoderTelemetryRms(const GRIM::GradClip::ClipMetrics& gm, int batc
     return rmsOrThrow(sum_sq, count, "encoder_telemetry", batch_idx);
 }
 
-std::string formatTopGradientGroups(
+std::string formatTopGroups(
     const GRIM::GradClip::ClipResult& clip,
-    const std::vector<GRIM::ParameterGroup>& groups)
+    const std::vector<GRIM::ParameterGroup>& groups,
+    bool rank_by_energy)
 {
     std::ostringstream oss;
-    oss << "[GradTrace] TOP-GRAD-GROUPS";
-    for (const auto& top : clip.top_groups) {
+    oss << (rank_by_energy ? "[GradTrace] TOP-ENERGY-GROUPS" : "[GradTrace] TOP-GRAD-GROUPS");
+    const auto& top_groups = rank_by_energy ? clip.top_energy_groups : clip.top_groups;
+    for (const auto& top : top_groups) {
         if (!top.valid) {
             continue;
         }
         const std::string group_name = top.index < groups.size()
             ? groups[top.index].name
             : std::string("<out-of-range>");
-        // RMS determines rank; energy share uses all registered groups as the denominator.
+        // Both rankings use all registered groups as the energy-share denominator.
         // An all-zero gradient has no energy, so report a zero share.
         const double energy_pct = clip.global_sum_sq_pre > 0.0
             ? 100.0 * static_cast<double>(top.sum_sq) / clip.global_sum_sq_pre
@@ -218,7 +220,8 @@ void runGradientNormClipDiagnostic(
                             " clipped=" + (clip.clipped ? "YES" : "NO") +
                             " emb_rms_pre=" + formatScalar(emb_rms_pre, 6) +
                             " enc_rms_pre=" + formatScalar(enc_rms_pre, 6));
-    ctx.logging.logger->log(formatTopGradientGroups(clip, groups));
+    ctx.logging.logger->log(formatTopGroups(clip, groups, false));
+    ctx.logging.logger->log(formatTopGroups(clip, groups, true));
 
     if (!lora_model) {
         runPostClipParamGradEmbLmEquation(
