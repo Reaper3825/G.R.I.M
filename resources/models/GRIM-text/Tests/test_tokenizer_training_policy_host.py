@@ -10,6 +10,7 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--syntax', action='store_true')
+    parser.add_argument('--session', action='store_true')
     args = parser.parse_args()
     tests = Path(__file__).resolve().parent
     root = tests.parents[3]
@@ -33,9 +34,19 @@ def main():
             files = [shared / 'UnigramByte/UnigramTrainer.cu'] + [training / (stem + '.cu') for stem in (
                 'SubwordMining', 'UnigramTrainingPrepass', 'UnigramTrainingValidation',
                 'UnigramEMConvergence', 'UnigramVocabularyFitting',
-                'UnigramCandidateAdmission', 'UnigramCharacterDiagnostics')]
+                'UnigramCandidateAdmission', 'UnigramCharacterDiagnostics',
+                'UnigramCorpusPreparation', 'UnigramExpectationStep',
+                'UnigramForwardBackward', 'UnigramMaximizationStep', 'UnigramLikelihoodPruning')]
             subprocess.run(flags + ['/Zs'] + list(map(str, files)), cwd=out, env=env, check=True)
             print('Tokenizer training syntax checks passed')
+        elif args.session:
+            sources = [tests / 'tokenizer_training_session_host_test.cpp', shared / 'UnigramByte/TextUtils.cu'] + [training / (stem + '.cu') for stem in (
+                'UnigramExpectationStep', 'UnigramForwardBackward', 'UnigramMaximizationStep',
+                'UnigramLikelihoodPruning', 'UnigramVocabularyFitting',
+                'UnigramEMConvergence', 'UnigramTrainingValidation')]
+            exe = Path(out) / 'session_test.exe'
+            subprocess.run(flags + list(map(str, sources)) + ['/Fe:' + str(exe)], cwd=out, env=env, check=True)
+            subprocess.run([str(exe)], cwd=root, env=env, check=True)
         else:
             sources = [tests / 'tokenizer_training_policy_host_test.cpp', shared / 'UnigramByte/TextUtils.cu'] + [training / (stem + '.cu') for stem in (
                 'UnigramTrainingValidation', 'UnigramEMConvergence', 'UnigramMaximizationStep')]

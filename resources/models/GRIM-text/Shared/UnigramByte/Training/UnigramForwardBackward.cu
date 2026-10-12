@@ -311,5 +311,172 @@ void UnigramForwardBackwardLattice::accumulateSegment(
     stats.log_likelihood += log_z;
 }
 
+void UnigramForwardBackwardLattice::appendSegmentMatches(
+    std::string_view segment, size_t byte_offset,
+    UnigramTrainingStorage& storage) const {
+    for (size_t start = 0; start < segment.size(); ++start) {
+        storage.match_offsets.push_back(storage.matches.size());
+        int node = 0;
+        const size_t max_end = start + std::min(segment.size() - start,
+            static_cast<size_t>(MAX_PIECE_LENGTH));
+        for (size_t end = start + 1; end <= max_end; ++end) {
+            const int child = trie_[node].children[static_cast<unsigned char>(segment[end - 1])];
+            if (child < 0) break;
+            node = child;
+            if (trie_[node].piece_index >= 0) {
+                storage.matches.push_back({byte_offset + end, trie_[node].piece_index});
+            }
+        }
+    }
+}
+
+void accumulateUnigramTrainingSegment(UnigramTrainingSession& session,
+    const UnigramTrainingSegment& segment, const char* caller) {
+    requireCallerLabel(caller);
+    if (segment.byte_offset > session.corpus_byte_count ||
+        segment.byte_length > session.corpus_byte_count - segment.byte_offset ||
+        segment.byte_length >= session.workspace_capacity) {
+        throw std::runtime_error(std::string(caller) + ": training segment exceeds session bounds");
+    }
+    const size_t n = segment.byte_length;
+    if (n == 0) {
+        return;
+    }
+
+    double* alpha = session.alpha;
+    double* beta = session.beta;
+    std::fill_n(alpha, n + 1, kLogZero);
+    std::fill_n(beta, n + 1, kLogZero);
+    alpha[0] = 0.0;
+
+    for (size_t start = 0; start < n; ++start) {
+        if (!isLogReachable(alpha[start])) {
+            continue;
+        }
+
+        const size_t position = segment.byte_offset + start;
+        for (size_t edge = session.match_offsets[position];
+             edge < session.match_offsets[position + 1]; ++edge) {
+            const auto& match = session.matches[edge];
+            const size_t end = match.end_offset - segment.byte_offset;
+            const int piece_index = match.piece_index;
+            if (piece_index >= 0) {
+                const double candidate = alpha[start] + static_cast<double>(session.piece_scores[piece_index]);
+                alpha[end] = logAddExp(alpha[end], candidate);
+            }
+        }
+
+        if (session.enable_byte_fallback) {
+            // UNKNOWN_SCORE is an unnormalized fixed per-byte coverage penalty, not a
+            // trainable probability mass competing in the M-step normalizer.
+            // Fallback granularity is deliberately one raw byte, not one UTF-8 codepoint.
+            const double fallback_candidate = alpha[start] + static_cast<double>(UNKNOWN_SCORE);
+            alpha[start + kByteFallbackSpanBytes] = logAddExp(alpha[start + kByteFallbackSpanBytes], fallback_candidate);
+        }
+    }
+
+    const double log_z = alpha[n];
+    if (!isLogReachable(log_z)) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": forward-backward E-step cannot segment normalized segment and byte fallback is disabled; bytes=" +
+                                 std::to_string(n) + " at " + std::string(__FILE__) + ":" +
+                                 std::to_string(__LINE__));
+    }
+    if (!std::isfinite(log_z)) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": forward-backward partition value is not finite for segment bytes=" +
+                                 std::to_string(n) + " at " + std::string(__FILE__) + ":" +
+                                 std::to_string(__LINE__));
+    }
+
+    beta[n] = 0.0;
+    for (size_t reverse_start = n; reverse_start > 0; --reverse_start) {
+        const size_t start = reverse_start - 1;
+
+        const size_t position = segment.byte_offset + start;
+        for (size_t edge = session.match_offsets[position];
+             edge < session.match_offsets[position + 1]; ++edge) {
+            const auto& match = session.matches[edge];
+            const size_t end = match.end_offset - segment.byte_offset;
+            const int piece_index = match.piece_index;
+            if (piece_index >= 0 && isLogReachable(beta[end])) {
+                const double candidate = static_cast<double>(session.piece_scores[piece_index]) + beta[end];
+                beta[start] = logAddExp(beta[start], candidate);
+            }
+        }
+
+        if (session.enable_byte_fallback && isLogReachable(beta[start + kByteFallbackSpanBytes])) {
+            // Keep the backward lattice consistent with the same fixed penalty
+            // used by production Viterbi; do not infer a normalized fallback mass.
+            // Fallback granularity is deliberately one raw byte, not one UTF-8 codepoint.
+            const double fallback_candidate = static_cast<double>(UNKNOWN_SCORE) + beta[start + kByteFallbackSpanBytes];
+            beta[start] = logAddExp(beta[start], fallback_candidate);
+        }
+    }
+
+    if (!isLogReachable(beta[0])) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": backward lattice cannot reach the segment start for bytes=" +
+                                 std::to_string(n) + " at " + std::string(__FILE__) + ":" +
+                                 std::to_string(__LINE__));
+    }
+    const double consistency_error = std::abs(beta[0] - log_z);
+    const double scaled_tolerance = kForwardBackwardConsistencyTolerance *
+                                    std::max(1.0, std::abs(log_z));
+    if (consistency_error > scaled_tolerance) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": forward/backward partition mismatch: forward=" +
+                                 std::to_string(log_z) + ", backward=" + std::to_string(beta[0]) +
+                                 ", abs_error=" + std::to_string(consistency_error) +
+                                 ", tolerance=" + std::to_string(scaled_tolerance) + " at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+
+    for (size_t start = 0; start < n; ++start) {
+        if (!isLogReachable(alpha[start])) {
+            continue;
+        }
+
+        const size_t position = segment.byte_offset + start;
+        for (size_t edge = session.match_offsets[position];
+             edge < session.match_offsets[position + 1]; ++edge) {
+            const auto& match = session.matches[edge];
+            const size_t end = match.end_offset - segment.byte_offset;
+            const int piece_index = match.piece_index;
+            if (piece_index >= 0 && isLogReachable(beta[end])) {
+                const double log_posterior = alpha[start] + static_cast<double>(session.piece_scores[piece_index]) + beta[end] - log_z;
+                const double posterior = std::exp(log_posterior);
+                if (!std::isfinite(posterior)) {
+                    throw std::runtime_error(std::string(caller) +
+                                             ": non-finite posterior in forward-backward E-step: start=" +
+                                             std::to_string(start) + ", end=" + std::to_string(end) +
+                                             ", piece_index=" + std::to_string(piece_index) + " at " +
+                                             std::string(__FILE__) + ":" + std::to_string(__LINE__));
+                }
+                session.expected_counts[static_cast<size_t>(piece_index)] += posterior;
+                session.expected_learned_piece_tokens += posterior;
+            }
+        }
+
+        if (session.enable_byte_fallback && isLogReachable(beta[start + kByteFallbackSpanBytes])) {
+            // Telemetry only: this posterior measures how often the fixed
+            // penalty path is used under the current lattice. The tokenizer
+            // M-step deliberately excludes it from learned-piece normalization.
+            // A multibyte UTF-8 codepoint therefore contributes one fallback transition per byte.
+            const double log_posterior = alpha[start] + static_cast<double>(UNKNOWN_SCORE) + beta[start + kByteFallbackSpanBytes] - log_z;
+            const double posterior = std::exp(log_posterior);
+            if (!std::isfinite(posterior)) {
+                throw std::runtime_error(std::string(caller) +
+                                         ": non-finite byte-fallback posterior in forward-backward E-step: start=" +
+                                         std::to_string(start) + " at " + std::string(__FILE__) + ":" +
+                                         std::to_string(__LINE__));
+            }
+            session.expected_fixed_penalty_byte_fallback_tokens += posterior;
+        }
+    }
+
+    session.log_likelihood += log_z;
+}
+
 } // namespace Tokenizer
 } // namespace GRIM

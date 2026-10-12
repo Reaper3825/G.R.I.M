@@ -29,6 +29,17 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     const int total_piece_target = unigramPieceBudgetWithManualAllowanceOrThrow(
         target_vocab_size, manual_pieces.size());
 
+    // Both owners remain alive through all EM/prune phases. Only the session
+    // reference travels between numerical stages; no corpus/count copies.
+    UnigramTrainingStorage training_storage;
+    UnigramTrainingSession training_session;
+    training_session.hp = &tokenizer_hp;
+    training_session.pieces = &pieces_;
+    training_session.piece_to_id = &piece_to_id_;
+    training_session.storage = &training_storage;
+    training_session.total_piece_target = total_piece_target;
+    training_session.enable_byte_fallback = enable_byte_fallback_;
+
     // An empty atom_spans vector means "no atom spans for any text". Expand it
     // to a per-text empty list so the rest of the pipeline can index uniformly.
     std::vector<std::vector<AtomSpan>> expanded_empty_atom_spans;
@@ -68,6 +79,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     const auto& norm_training_exclusion_spans = prepared_corpus.normalized_exclusion_spans;
     const auto& training_units = norm_texts;
     const size_t training_segment_max_length = prepared_corpus.max_segment_length;
+    prepareUnigramTrainingSessionCorpus(training_session,
+        norm_texts, norm_training_exclusion_spans);
     
     size_t total_corpus_bytes = 0;
     for (const auto& text : texts) {
@@ -87,9 +100,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     admitUnigramVocabularyCandidates(*this, mining_result, tokenizer_hp, manual_pieces);
 
-    fitUnigramVocabulary(UnigramVocabWriteTarget{pieces_, piece_to_id_},
-        norm_texts, norm_training_exclusion_spans, enable_byte_fallback_,
-        total_piece_target, tokenizer_hp);
+    fitUnigramVocabulary(training_session);
 
     finalizeTrainingRuntime(training_segment_max_length);
 

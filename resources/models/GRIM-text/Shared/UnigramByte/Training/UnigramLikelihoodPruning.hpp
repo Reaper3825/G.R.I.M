@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "../Unigram.hpp"
+#include "UnigramTrainingSession.hpp"
 
 #include <vector>
 
@@ -24,12 +24,7 @@ struct UnigramLikelihoodPruningResult {
 // Expected counts are indexed by piece position. Survivors are moved out of
 // pieces in original order; the caller owns vocabulary rewriting and EM refits.
 UnigramLikelihoodPruningResult runUnigramLikelihoodPruning(
-    std::vector<UnigramPiece>& pieces,
-    const std::vector<double>& expected_counts_by_piece_index,
-    int target_vocab_size,
-    double shrink_factor,
-    int worker_count,
-    const char* caller);
+    UnigramTrainingSession& session, const char* caller);
 
 } // namespace Tokenizer
 } // namespace GRIM

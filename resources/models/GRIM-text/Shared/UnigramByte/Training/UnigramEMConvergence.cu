@@ -17,49 +17,48 @@ namespace GRIM {
 namespace Tokenizer {
 
 void requireUnigramConvergedPhaseNotFallbackDominated(
-    const UnigramEMConvergenceResult& result, const ::GRIM::HyperParameters::TokenizerHP& hp, const char* phase_label) {
+    const UnigramTrainingSession& session, const char* phase_label) {
+    requireUnigramTrainingSessionReady(session, "Unigram converged phase");
     requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
-        result.expected_learned_piece_tokens,
-        result.expected_fixed_penalty_byte_fallback_tokens,
-        hp.minimum_learned_to_fallback_ratio,
+        session.expected_learned_piece_tokens,
+        session.expected_fixed_penalty_byte_fallback_tokens,
+        session.hp->minimum_learned_to_fallback_ratio,
         phase_label,
         "UnigramLM::trainFromCorpus converged forward-backward phase");
 }
 
 UnigramEMConvergenceResult runUnigramEMToConvergence(
-    std::vector<UnigramPiece>& pieces_,
-    const UnigramExpectationStepRequest& expectation_request,
-    const ::GRIM::HyperParameters::TokenizerHP& hp, const char* phase_label) {
+    UnigramTrainingSession& session, const char* phase_label) {
+    requireUnigramTrainingSessionReady(session, "Unigram convergence");
+    if (!phase_label || !phase_label[0]) {
+        throw std::runtime_error("Unigram convergence: phase label is empty");
+    }
+    const auto& hp = *session.hp;
     const int EM_MAX_ITERATIONS = hp.em_max_iterations;
     const double EM_CONVERGENCE_THRESH = hp.em_convergence_tolerance;
-    const double SMOOTHING = hp.piece_count_smoothing;
     double prev_ll = -1e30;
-    UnigramExpectationStepResult last_e_step;
     int iter = 0;
     bool reached_convergence = false;
     for (; iter < EM_MAX_ITERATIONS; ++iter) {
-        UnigramExpectationStepResult e_step = runUnigramExpectationStep(expectation_request);
-        int unused = runUnigramMaximizationStep(UnigramMaximizationStepRequest{
-            pieces_, e_step.learned_token_counts, e_step.expected_learned_piece_tokens, SMOOTHING});
+        int unused = runUnigramEMIteration(session);
 
         double relative_change = 1.0;
         if (prev_ll >= -1e20) {
             relative_change = std::abs(
-                (e_step.log_likelihood - prev_ll) /
-                std::min(std::abs(prev_ll), std::abs(e_step.log_likelihood)));
+                (session.log_likelihood - prev_ll) /
+                std::min(std::abs(prev_ll), std::abs(session.log_likelihood)));
         }
 
         std::cout << "[UnigramLM] " << phase_label << " iter " << (iter + 1)
-                  << ": LL=" << std::fixed << std::setprecision(2) << e_step.log_likelihood
-                  << ", expected_learned_piece_tokens=" << e_step.expected_learned_piece_tokens
-                  << ", expected_fixed_penalty_byte_fallback_tokens=" << e_step.expected_fixed_penalty_byte_fallback_tokens
+                  << ": LL=" << std::fixed << std::setprecision(2) << session.log_likelihood
+                  << ", expected_learned_piece_tokens=" << session.expected_learned_piece_tokens
+                  << ", expected_fixed_penalty_byte_fallback_tokens=" << session.expected_fixed_penalty_byte_fallback_tokens
                   << ", unused=" << unused
                   << ", delta=" << std::scientific << std::setprecision(4) << relative_change
                   << std::defaultfloat << std::endl;
 
-        last_e_step = std::move(e_step);
         bool converged = (iter > 0 && relative_change < EM_CONVERGENCE_THRESH);
-        prev_ll = last_e_step.log_likelihood;
+        prev_ll = session.log_likelihood;
         if (converged) {
             reached_convergence = true;
             std::cout << "[UnigramLM] " << phase_label << " converged after " << (iter + 1)
@@ -76,11 +75,8 @@ UnigramEMConvergenceResult runUnigramEMToConvergence(
         std::cout << "[UnigramLM] " << phase_label << " hit max iterations ("
                   << EM_MAX_ITERATIONS << ") without full convergence" << std::endl;
     }
-    return UnigramEMConvergenceResult{std::move(last_e_step.learned_token_counts),
-                                     iter,
-                                     last_e_step.expected_learned_piece_tokens,
-                                     last_e_step.expected_fixed_penalty_byte_fallback_tokens,
-                                     last_e_step.log_likelihood};
+    return UnigramEMConvergenceResult{iter, reached_convergence};
+
 }
 
 } // namespace Tokenizer

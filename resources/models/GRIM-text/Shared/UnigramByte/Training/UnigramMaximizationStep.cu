@@ -1,40 +1,36 @@
-// Learned-piece probability normalization for the Unigram EM M-step.
-
+// Learned-piece normalization; fixed byte fallback is telemetry only.
 #include "UnigramMaximizationStep.hpp"
-
+#include "UnigramExpectationStep.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
-namespace GRIM {
-namespace Tokenizer {
-
-int runUnigramMaximizationStep(const UnigramMaximizationStepRequest& request) {
-    // Byte fallback remains outside the normalized learned-piece distribution.
-    // Its UNKNOWN_SCORE path is a fixed unnormalized per-byte coverage penalty, so the
-    // M-step normalizer is learned-piece posterior mass + learned-piece smoothing only.
-    const size_t ordinary_piece_count = static_cast<size_t>(std::count_if(
-        request.pieces.begin(), request.pieces.end(),
-        [](const UnigramPiece& piece) { return !piece.is_user_defined; }));
-    double smoothed_total = request.expected_learned_piece_tokens +
-        request.smoothing * static_cast<double>(ordinary_piece_count);
-    int zero_count = 0;
-    for (size_t i = 0; i < request.pieces.size(); ++i) {
-        auto& piece = request.pieces[i];
-        if (piece.is_user_defined) continue;
-        int tid = tokenIdForIndex(static_cast<int>(i));
-        double expected_count = 0.0;
-        auto count_it = request.learned_token_counts.find(tid);
-        if (count_it != request.learned_token_counts.end()) {
-            expected_count = count_it->second;
-        }
-        double count = expected_count + request.smoothing;
-        piece.score = static_cast<float>(std::log(count / smoothed_total));
-        if (expected_count == 0.0) {
-            zero_count++;
-        }
+namespace GRIM::Tokenizer {
+int runUnigramMaximizationStep(UnigramTrainingSession& session) {
+    requireUnigramTrainingSessionReady(session, "Unigram maximization");
+    if (session.expectation_generation != session.vocabulary_generation) {
+        throw std::runtime_error("Unigram maximization: counts do not belong to the current vocabulary");
     }
-    return zero_count;
+    auto& pieces = *session.pieces;
+    const size_t ordinary_count = static_cast<size_t>(std::count_if(
+        pieces.begin(), pieces.end(), [](const UnigramPiece& piece) { return !piece.is_user_defined; }));
+    const double total = session.expected_learned_piece_tokens +
+        session.hp->piece_count_smoothing * static_cast<double>(ordinary_count);
+    int unused = 0;
+    for (size_t i = 0; i < session.piece_count; ++i) {
+        if (pieces[i].is_user_defined) continue;
+        const double expected = session.expected_counts[i];
+        const float score = static_cast<float>(std::log(
+            (expected + session.hp->piece_count_smoothing) / total));
+        pieces[i].score = score;
+        session.piece_scores[i] = score;
+        if (expected == 0.0) ++unused;
+    }
+    return unused;
 }
-
-} // namespace Tokenizer
-} // namespace GRIM
+int runUnigramEMIteration(UnigramTrainingSession& session) {
+    runUnigramExpectationStep(session);
+    return runUnigramMaximizationStep(session);
+}
+} // namespace GRIM::Tokenizer

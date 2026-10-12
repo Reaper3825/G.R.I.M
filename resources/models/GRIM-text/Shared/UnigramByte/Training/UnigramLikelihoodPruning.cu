@@ -2,6 +2,7 @@
 
 #include "UnigramLikelihoodPruning.hpp"
 #include "../TextUtils.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 
 #include <algorithm>
 #include <array>
@@ -89,12 +90,16 @@ static double bestAlternativeSegmentationScore(
 // pieces. Survivors are moved out of `pieces` in original order so token
 // IDs stay position-derived after rewriteUnigramVocab().
 UnigramLikelihoodPruningResult runUnigramLikelihoodPruning(
-    std::vector<UnigramPiece>& pieces,
-    const std::vector<double>& expected_counts_by_piece_index,
-    int target_vocab_size,
-    double shrink_factor,
-    int worker_count,
-    const char* caller) {
+    UnigramTrainingSession& session, const char* caller) {
+    requireUnigramTrainingSessionReady(session, caller);
+    if (session.expectation_generation != session.vocabulary_generation) {
+        throw std::runtime_error("Unigram pruning: expected counts are stale");
+    }
+    auto& pieces = *session.pieces;
+    const auto& expected_counts_by_piece_index = session.storage->expected_counts;
+    const int target_vocab_size = session.total_piece_target;
+    const double shrink_factor = session.hp->prune_shrink_factor;
+    const int worker_count = session.hp->subword_mining_workers;
     if (caller == nullptr || caller[0] == '\0') {
         throw std::runtime_error("selectUnigramSurvivorsByLikelihoodLoss: caller label is empty");
     }
@@ -204,6 +209,11 @@ UnigramLikelihoodPruningResult runUnigramLikelihoodPruning(
     UnigramLikelihoodPruningResult result;
     result.protected_count = protected_count;
     result.irreplaceable_no_alt = irreplaceable.load();
+    // A no-progress round must leave the live vocabulary intact.
+    if (protected_count + keep_prunable == static_cast<int>(n)) return result;
+    // Moving survivors invalidates model contents before the coordinator rewrite.
+    session.matches_generation = 0;
+    session.expectation_generation = 0;
     result.survivors.reserve(static_cast<size_t>(protected_count) + static_cast<size_t>(keep_prunable));
     int kept = 0;
     for (size_t i = 0; i < n; ++i) {

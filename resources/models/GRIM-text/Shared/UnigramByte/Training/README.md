@@ -48,19 +48,57 @@ existing single-codepoint admission policy. Character seeds remain diagnostic.
 | `UnigramCharacterDiagnostics` | Report character coverage and reset the initial vocabulary. Character seeds remain diagnostic only. |
 | `UnigramCandidateAdmission` | Rank, filter, and deduplicate mined candidates; append manual pieces and initialize learned scores. |
 | `UnigramVocabularyFitting` | Coordinate initial EM, pruning rounds with EM refits, and final EM. |
+| `UnigramTrainingSession.hpp` | Plain session/storage structs, flat buffer addresses, segment and match records, and vocabulary generation checks. |
 | `UnigramEMConvergence` | Run E/M iterations, check convergence, and emit iteration telemetry. |
-| `UnigramExpectationStep` | Traverse eligible corpus segments and aggregate posterior counts and likelihood. |
+| `UnigramExpectationStep` | Prepare persistent session corpus/matches, traverse cached segment edges, and aggregate dense posterior counts and likelihood. |
 | `UnigramForwardBackward` | Compute segment-level forward/backward weights and occurrence posteriors. |
 | `UnigramMaximizationStep` | Update ordinary piece scores using smoothed learned counts. |
 | `UnigramLikelihoodPruning` | Estimate removal loss and select survivors while protecting coverage. |
 | `UnigramTrainingFinalization` | Build/upload the fitted trie and record runtime readiness. |
 
-The prepared corpus owns normalized text and exclusions for mining and all EM
-passes. Vocabulary order and its text index are changed together through
+The prepared corpus owns normalized text and exclusions for mining. A
+`UnigramTrainingSession` is created in the training entrypoint and passed by
+reference through fitting, convergence, E/M iterations, and pruning. Its
+`UnigramTrainingStorage` owner lives for the same call. The session packs
+eligible corpus bytes once and records exclusion/newline-separated ranges by
+offset and length; E-steps do not create substring copies. Host control pointers
+(`hp`, model vocabulary/index, and storage) are distinct from flat execution
+addresses. Those host C++ objects must never be passed to device kernels.
+
+Vocabulary order and its text index are changed together through
 `VocabWriteOp.hpp`. The M-step changes scores only. Pruning moves survivors out;
 the fitting coordinator rewrites the vocabulary before subsequent EM passes.
-Forward/backward uses a fresh trie snapshot for each E-step. Byte fallback
-remains a fixed penalty outside learned-piece probability normalization.
+Matching uses a temporary trie once after candidate admission and once after
+each pruning rewrite. It stores score-independent edges grouped by start byte
+in a flat CSR layout (`match_offsets`, `matches`), bounded by each segment.
+All EM iterations within that vocabulary shape reuse those edges. Scores and
+expected counts are dense arrays indexed by piece position; learned counts no
+longer travel through a token-ID hash map. Forward/backward scratch is allocated
+once for the longest eligible segment and reused by serial host execution.
+`runUnigramEMIteration` owns the shared E/M sequence for convergence and pruning
+refits. Byte fallback remains a fixed penalty outside learned-piece probability
+normalization, and manual pieces remain outside learned posterior counts.
+
+Vocabulary refresh invalidates prior counts, increments the vocabulary
+generation, rebuilds matching edges and rebinds all views. Readiness checks
+reject stale generations, reallocated backing storage, and unsupported address
+spaces. A no-progress prune leaves the live vocabulary untouched. The current
+backend remains CPU; the flat addresses prepare the execution boundary for a
+future GPU implementation, without introducing device allocation or kernels.
+
+Focused validation (no trainer/runtime target build):
+
+```text
+python resources/models/GRIM-text/Tests/test_tokenizer_training_policy_host.py
+python resources/models/GRIM-text/Tests/test_tokenizer_training_policy_host.py --session
+python resources/models/GRIM-text/Tests/test_tokenizer_training_policy_host.py --syntax
+```
+
+The session tests compare cached expectations against the existing trie-based
+forward/backward estimator and exercise score updates, pruning/refits, manual
+exclusion, raw-byte UTF-8 fallback, and stale-address rejection. Full-corpus
+timing is not established by these focused tests. Cached occurrence edges use
+additional memory proportional to corpus matching density.
 
 Stage-local preprocessing and admission temporaries expire when their stage
 returns. The mining result remains owned by the trainer for the training call.

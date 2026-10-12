@@ -10,10 +10,12 @@
 #pragma once
 
 #include "../Unigram.hpp"
+#include "UnigramTrainingSession.hpp"
 
 #include <array>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace GRIM {
@@ -43,6 +45,10 @@ public:
 
     size_t pieceCount() const noexcept { return piece_count_; }
 
+    // Export score-independent matching edges once per vocabulary shape.
+    void appendSegmentMatches(std::string_view segment, size_t byte_offset,
+                              UnigramTrainingStorage& storage) const;
+
 private:
     struct TrieNode final {
         std::array<int, 256> children;
@@ -63,3 +69,10 @@ private:
 
 } // namespace Tokenizer
 } // namespace GRIM
+
+namespace GRIM::Tokenizer {
+// Session path uses cached edges and reusable scratch, retaining the same
+// log-domain forward/backward and raw-byte fixed-penalty fallback math.
+void accumulateUnigramTrainingSegment(UnigramTrainingSession& session,
+    const UnigramTrainingSegment& segment, const char* caller);
+}

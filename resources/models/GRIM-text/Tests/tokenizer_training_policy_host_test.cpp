@@ -29,14 +29,16 @@ template <typename Fn> void requiresFailure(Fn fn) {
 }
 }
 
-// Replace only the corpus E-step for the convergence-control unit test.
+// Isolate convergence policy with a synthetic E-step. Real session address
+// validation and numerical parity are covered by the session host test.
 namespace GRIM::Tokenizer {
-UnigramExpectationStepResult runUnigramExpectationStep(const UnigramExpectationStepRequest&) {
-    UnigramExpectationStepResult result;
-    result.expected_learned_piece_tokens = 1;
-    result.learned_token_counts[tokenIdForIndex(0)] = 1;
-    result.log_likelihood = -100 + likelihood_delta * expectation_calls++;
-    return result;
+void requireUnigramTrainingSessionReady(const UnigramTrainingSession&, const char*) {}
+void runUnigramExpectationStep(UnigramTrainingSession& session) {
+    session.expected_learned_piece_tokens = 1;
+    session.expected_counts[0] = 1;
+    session.expected_counts[1] = 0;
+    session.expectation_generation = session.vocabulary_generation;
+    session.log_likelihood = -100 + likelihood_delta * expectation_calls++;
 }
 }
 
@@ -148,22 +150,34 @@ int main(int argc, char** argv) try {
     requireUnigramLearnedPosteriorMassNotByteFallbackDominated(0.75, 1, 0.5, "test", "test");
     requiresFailure([&] { requireUnigramLearnedPosteriorMassNotByteFallbackDominated(0.75, 1, 1, "test", "test"); });
     std::vector<UnigramPiece> pieces(2);
-    const UnigramExpectationStepRequest expectation{pieces, texts, spans, false};
+    UnigramTrainingStorage storage;
+    storage.piece_scores.resize(2);
+    storage.expected_counts.resize(2);
+    std::unordered_map<std::string, int> piece_index;
+    UnigramTrainingSession session;
+    session.hp = &hp;
+    session.pieces = &pieces;
+    session.piece_to_id = &piece_index;
+    session.storage = &storage;
+    session.piece_count = 2;
+    session.piece_scores = storage.piece_scores.data();
+    session.expected_counts = storage.expected_counts.data();
+    session.vocabulary_generation = 1;
     hp.em_max_iterations = 3;
     hp.em_convergence_tolerance = 0.001;
     hp.piece_count_smoothing = 0.5;
     hp.em_fail_on_iteration_limit = false;
     likelihood_delta = 1;
     expectation_calls = 0;
-    assert(runUnigramEMToConvergence(pieces, expectation, hp, "test").iterations == 3);
+    assert(runUnigramEMToConvergence(session, "test").iterations == 3);
     // Count=1 and count=0 with smoothing=.5 => probabilities .75 and .25.
     assert(std::abs(pieces[1].score - std::log(0.25)) < 1e-6);
     hp.em_fail_on_iteration_limit = true;
     expectation_calls = 0;
-    requiresFailure([&] { runUnigramEMToConvergence(pieces, expectation, hp, "test"); });
+    requiresFailure([&] { runUnigramEMToConvergence(session, "test"); });
     hp.em_convergence_tolerance = 0.02;
     expectation_calls = 0;
-    assert(runUnigramEMToConvergence(pieces, expectation, hp, "test").iterations == 2);
+    assert(runUnigramEMToConvergence(session, "test").iterations == 2);
     std::cout << "Tokenizer training policy host tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << std::endl;
