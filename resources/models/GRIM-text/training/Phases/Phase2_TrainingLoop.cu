@@ -1362,6 +1362,9 @@ EpochResult runEpoch(
     // MUST be the true held-out metric — not the training loss. The training-loss
     // average is still surfaced separately as result.avg_loss.
     result.validation = runValidation(ctx);
+    // Publish the completed boundary before finalizeEpochOutcome saves the
+    // optimizer sidecar. Its current_epoch is the authoritative resume cursor.
+    ctx.epochs_completed = epoch_idx + 1;
     finalizeEpochOutcome(ctx, state, result, epoch_idx, epoch_loss, epoch_start);
     
     return result;
@@ -1410,7 +1413,6 @@ bool executePhase2(TrainingContext& ctx) {
         }
         for (int epoch = ctx.epochs_completed; epoch < num_epochs; ++epoch) {
             EpochResult epoch_result = runEpoch(ctx, state, parameter_registry, epoch, num_epochs, accum_steps);
-            ctx.epochs_completed = epoch + 1;
             
             if (epoch_result.auto_stop_triggered) {
                 EmitModuleInfo(ModuleId::Training,
