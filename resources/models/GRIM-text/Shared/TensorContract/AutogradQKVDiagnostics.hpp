@@ -56,7 +56,7 @@ inline void logGradFlowBf16TensorStats(const char* tag,
     }
 }
 
-void logQKVProjectionEquation(const Tensor& ln1_out,
+void logQKVProjectionEquation(const Tensor& rms1_out,
                               const Tensor& W_qkv,
                               const Tensor& b_qkv,
                               const Tensor& qkv_out,

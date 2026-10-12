@@ -70,7 +70,7 @@ void routing() {
     }
 }
 void shared_producer() {
-    // Two branches from one ancestor, as with ln1_out -> QKV and gate matmul.
+    // Two branches from one ancestor, as with rms1_out -> QKV and gate matmul.
     // D=1 lets the host shape-adapter share storage without a data conversion.
     struct ShapeAdapter : GradFn {
         std::shared_ptr<GradFn> source;

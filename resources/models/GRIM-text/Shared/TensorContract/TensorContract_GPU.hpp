@@ -1367,7 +1367,7 @@ Tensor scaled_dot_product_attention(
  * that broke the autograd chain (Q/K/V had no grad_fn, causing zero gradients
  * for W_qkv).
  * 
- * @param qkv_out      Input tensor [tokens, d_model + 2*kv_dim] from matmul(ln1_out, W_qkv)
+ * @param qkv_out      Input tensor [tokens, d_model + 2*kv_dim] from matmul(rms1_out, W_qkv)
  * @param payload      BatchPayload source of truth for batch/sequence geometry
  * @param hp           Grouped attention HP source of truth for GQA/head geometry
  * @param stream       CUDA stream

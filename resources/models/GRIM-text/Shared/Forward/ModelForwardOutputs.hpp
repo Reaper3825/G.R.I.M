@@ -61,7 +61,7 @@ private:
     }
 
     void requireConsistentLayerStorage(const char* caller) const {
-        const size_t expected = ln1_out_per_layer.size();
+        const size_t expected = rms1_out_per_layer.size();
         auto requireSize = [&](const std::vector<Tensor>& tensors, const char* name) {
             if (tensors.size() != expected) {
                 throw std::runtime_error(std::string(caller) + ": per-layer tensor vector size mismatch for " +
@@ -70,7 +70,7 @@ private:
             }
         };
 
-        requireSize(ln2_out_per_layer, "ln2_out_per_layer");
+        requireSize(rms2_out_per_layer, "rms2_out_per_layer");
         requireSize(qkv_out_per_layer, "qkv_out_per_layer");
         requireSize(Q_bhsd_per_layer, "Q_bhsd_per_layer");
         requireSize(K_bhsd_per_layer, "K_bhsd_per_layer");
@@ -142,8 +142,8 @@ public:
     // Stored directly on ModelForwardOutputs so this header declares only the
     // single forward-owned sink type.
     // ═══════════════════════════════════════════════════════════════════════════
-    std::vector<Tensor> ln1_out_per_layer;
-    std::vector<Tensor> ln2_out_per_layer;
+    std::vector<Tensor> rms1_out_per_layer;
+    std::vector<Tensor> rms2_out_per_layer;
 
     std::vector<Tensor> qkv_out_per_layer;
 
@@ -185,8 +185,8 @@ public:
     std::vector<std::array<Tensor, 5>> lora_rank_out_per_layer;
 
     void reserveLayerOutputs(size_t num_layers) {
-        ln1_out_per_layer.reserve(num_layers);
-        ln2_out_per_layer.reserve(num_layers);
+        rms1_out_per_layer.reserve(num_layers);
+        rms2_out_per_layer.reserve(num_layers);
         qkv_out_per_layer.reserve(num_layers);
         Q_bhsd_per_layer.reserve(num_layers);
         K_bhsd_per_layer.reserve(num_layers);
@@ -213,8 +213,8 @@ public:
     }
 
     void pushLayerOutputs() {
-        ln1_out_per_layer.emplace_back();
-        ln2_out_per_layer.emplace_back();
+        rms1_out_per_layer.emplace_back();
+        rms2_out_per_layer.emplace_back();
         qkv_out_per_layer.emplace_back();
         Q_bhsd_per_layer.emplace_back();
         K_bhsd_per_layer.emplace_back();
@@ -312,21 +312,21 @@ public:
 
     size_t layerCount() const {
         requireConsistentLayerStorage("ModelForwardOutputs::layerCount");
-        return ln1_out_per_layer.size();
+        return rms1_out_per_layer.size();
     }
 
     void validateLayerIndex(size_t layer_idx, const char* caller) const {
         requireConsistentLayerStorage(caller);
-        if (layer_idx >= ln1_out_per_layer.size()) {
+        if (layer_idx >= rms1_out_per_layer.size()) {
             throw std::runtime_error(std::string(caller) + ": layer_idx=" + std::to_string(layer_idx) +
                                      " out of range for retained layer tensor count=" +
-                                     std::to_string(ln1_out_per_layer.size()));
+                                     std::to_string(rms1_out_per_layer.size()));
         }
     }
 
     void clearRetainedLayerOutputs() {
-        clearTensorVector(ln1_out_per_layer);
-        clearTensorVector(ln2_out_per_layer);
+        clearTensorVector(rms1_out_per_layer);
+        clearTensorVector(rms2_out_per_layer);
         clearTensorVector(qkv_out_per_layer);
         clearTensorVector(Q_bhsd_per_layer);
         clearTensorVector(K_bhsd_per_layer);
@@ -356,8 +356,8 @@ public:
         requireConsistentLayerStorage("ModelForwardOutputs::totalGradFnCount");
 
         int count = 0;
-        count += countGradFns(ln1_out_per_layer);
-        count += countGradFns(ln2_out_per_layer);
+        count += countGradFns(rms1_out_per_layer);
+        count += countGradFns(rms2_out_per_layer);
         count += countGradFns(qkv_out_per_layer);
         count += countGradFns(Q_bhsd_per_layer);
         count += countGradFns(K_bhsd_per_layer);
@@ -557,8 +557,8 @@ public:
         };
 
         // Per-layer retained tensors
-        reportVector("ln1_out_per_layer", ln1_out_per_layer);
-        reportVector("ln2_out_per_layer", ln2_out_per_layer);
+        reportVector("rms1_out_per_layer", rms1_out_per_layer);
+        reportVector("rms2_out_per_layer", rms2_out_per_layer);
         reportVector("qkv_out_per_layer", qkv_out_per_layer);
         reportVector("Q_bhsd_per_layer", Q_bhsd_per_layer);
         reportVector("K_bhsd_per_layer", K_bhsd_per_layer);

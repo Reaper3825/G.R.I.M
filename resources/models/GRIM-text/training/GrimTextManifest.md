@@ -677,7 +677,7 @@ For each encoding layer (Layer 0 → Layer 11):
 #### 2.5c QKV Projection
 
 - [x] **TensorContract/autograd QKV path**
-  - QKV projection is `autograd::matmul(ln1_out, W_qkv, transpose_b=true)` so gradients stay on the tape.
+  - QKV projection is `autograd::matmul(rms1_out, W_qkv, transpose_b=true)` so gradients stay on the tape.
   - `Layers/Attention/QKV_Projector.{hpp,cu}` is deleted; do not recreate it.
   - Pattern to check: `qkv_out -> autograd::split_and_reshape_qkv() -> Flash Attention`, with split/merge backed only by TensorConversion raw layout kernels.
 

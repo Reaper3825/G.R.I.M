@@ -37,7 +37,7 @@ Historical note: TrainingState-owned `grad_encoder`, `grad_ffn_*`, `grad_attn_*`
 
 ## First forward/backward (autograd intermediates)
 
-Per-layer tensors owned directly by `ModelForwardOutputs` (one retained slot per layer across 12 layers): ln1_out, ln2_out, qkv_out, Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd, attn_out, proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output, ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out. Shapes [8192, d_model] or [8192, d_ff] or [8192, kv_dim] with d_model=768, d_ff=3072, qkv fused 1280, kv_dim=256.
+Per-layer tensors owned directly by `ModelForwardOutputs` (one retained slot per layer across 12 layers): rms1_out, rms2_out, qkv_out, Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd, attn_out, proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output, ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out. Shapes [8192, d_model] or [8192, d_ff] or [8192, kv_dim] with d_model=768, d_ff=3072, qkv fused 1280, kv_dim=256.
 
 Approximate per-layer total: 704 MiB. Over 12 layers: 704 × 12 = 8,448 MiB ≈ **8.25 GiB**.
 
@@ -185,7 +185,7 @@ Every GPU allocation site that can run during training, with source and size for
 | | dsoftmax_sum | TensorContract_GPU.cu | `round(seq,128)×batch×n_heads×4` |
 | | dq_bf16, dout_bf16 | TensorContract_GPU.cu | `batch×seq×num_heads×head_dim×2` each |
 | | dk_bf16, dv_bf16 | TensorContract_GPU.cu | `batch×seq×num_heads×head_dim×2` each (sized for num_heads) |
-| **ModelForwardOutputs per-layer retained tensors** (per layer × 12) | ln1_out, ln2_out, qkv_out, Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd, attn_out, proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output, FFN intermediate tensors | ModelForwardOutputs.hpp / Encoding | `[tokens, d_model]` or `[tokens, kv_dim]` or `[tokens, d_ff]`; see Geometry map |
+| **ModelForwardOutputs per-layer retained tensors** (per layer × 12) | rms1_out, rms2_out, qkv_out, Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd, attn_out, proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output, FFN intermediate tensors | ModelForwardOutputs.hpp / Encoding | `[tokens, d_model]` or `[tokens, kv_dim]` or `[tokens, d_ff]`; see Geometry map |
 | | qkv_out | Encoding | `[tokens, d_model + 2×kv_dim]×4` |
 | | Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd | Encoding | `[batch, heads, seq, head_dim]×4` |
 | | ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out | Encoding | `[tokens, d_ff]×4` |
@@ -215,7 +215,7 @@ Symbols: **T** = max_tokens (batch × seq_len), **T_logit** = max_logit_tokens, 
 | sequence_weights_tensor | [B, 1] | `B × 4` | 32 B |
 | class_weights_tensor | [V] | `V × 4` | 2512×4 = 10 KiB |
 | **Per-layer tensors on ModelForwardOutputs** | | | |
-| ln1_out, ln2_out | [T, D] | `T × D × 4` | 25.2 MiB each |
+| rms1_out, rms2_out | [T, D] | `T × D × 4` | 25.2 MiB each |
 | qkv_out | [T, D + 2×H_kv×d] | `T × (D + 2×H_kv×d) × 4` | 8192×1280×4 = 41.9 MiB |
 | proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output | [T, D] | `T × D × 4` | 25.2 MiB each |
 | Q_bhsd, attn_out_bhsd | [B, H, S, d] | `B × H × S × d × 4` | 8×12×1024×64×4 = 25.2 MiB each |

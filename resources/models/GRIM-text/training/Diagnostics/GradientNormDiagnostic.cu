@@ -162,11 +162,17 @@ std::string formatTopGradientGroups(
         const std::string group_name = top.index < groups.size()
             ? groups[top.index].name
             : std::string("<out-of-range>");
+        // RMS determines rank; energy share uses all registered groups as the denominator.
+        // An all-zero gradient has no energy, so report a zero share.
+        const double energy_pct = clip.global_sum_sq_pre > 0.0
+            ? 100.0 * static_cast<double>(top.sum_sq) / clip.global_sum_sq_pre
+            : 0.0;
         oss << " #" << top.index
             << "(" << group_name
             << ",type=" << top.type
             << ",layer=" << top.layer_index
             << ",rms=" << formatScalar(top.rms, 6)
+            << ",energy_pct=" << energy_pct
             << ",count=" << top.count
             << ")";
     }

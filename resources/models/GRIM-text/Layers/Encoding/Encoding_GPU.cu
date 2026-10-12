@@ -226,9 +226,9 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     if (!ffn_parameters) {
         throw std::runtime_error("forwardEncodingLayer: ffn_parameters is NULL - caller must pass registry-derived FFN parameter tensors");
     }
-    Tensor& ln1_out = forward_outputs.ln1_out_per_layer[layer_slot];
+    Tensor& rms1_out = forward_outputs.rms1_out_per_layer[layer_slot];
     Tensor& residual1 = forward_outputs.residual1_per_layer[layer_slot];
-    Tensor& ln2_out = forward_outputs.ln2_out_per_layer[layer_slot];
+    Tensor& rms2_out = forward_outputs.rms2_out_per_layer[layer_slot];
     Tensor& scaled_proj = forward_outputs.scaled_proj_per_layer[layer_slot];
     Tensor& attention_gate_logits =
         forward_outputs.attention_residual_gate_logits_per_layer[layer_slot];
@@ -301,14 +301,14 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     const uint64_t dropout_batch_seed = mixEncoderForwardSeed(batch_idx, static_cast<uint64_t>(layer_idx) + 1ULL);
     
     //--------------------------------------------------
-    // 1. RMSNorm1: input -> ln1_out
+    // 1. RMSNorm1: input -> rms1_out
     // Retained in ModelForwardOutputs.
     //--------------------------------------------------
-    ln1_out = autograd::rms_norm(input, rms1_gamma, hp.rms_epsilon, stream);
+    rms1_out = autograd::rms_norm(input, rms1_gamma, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
     //--------------------------------------------------
-    // 2. Attention sublayer: ln1_out -> proj_out
+    // 2. Attention sublayer: rms1_out -> proj_out
     // Attention owns QKV projection, RoPE/ALiBi, SDPA, diagnostics, dropout seed,
     // BHSD flattening, and output projection. Encoder only supplies the PBM spec.
     //--------------------------------------------------
@@ -328,7 +328,7 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
         // per-layer cache. cache_seqlens is advanced once per forward by the
         // shared forward primitive, AFTER all layers.
         Attention::encoderSelfAttentionForwardCached(
-            ln1_out,
+            rms1_out,
             W_qkv,
             b_qkv_ref,
             W_o,
@@ -341,7 +341,7 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
             forward_outputs);
     } else {
         Attention::encoderSelfAttentionForward(
-            ln1_out,
+            rms1_out,
             W_qkv,
             b_qkv_ref,
             W_o,
@@ -371,7 +371,7 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
 
         // Token-wise decision: [tokens,d_model] @ [d_model,1] -> [tokens,1].
         attention_gate_logits = autograd::matmul(
-            ln1_out, gate_parameters.W_gate, stream);
+            rms1_out, gate_parameters.W_gate, stream);
         attention_gate_logits = autograd::broadcast_add(
             attention_gate_logits, gate_parameters.b_gate, stream);
 
@@ -423,7 +423,7 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
     //
     // Architecture: residual1 = input + LayerScale(
-    //     residual_scale * token_gate(ln1_out) * attn_out)
+    //     residual_scale * token_gate(rms1_out) * attn_out)
     // token_gate is exactly 1 when the learned gate is disabled.
     //
     // Standard pre-norm transformer residual connection. Hidden state norms
@@ -442,19 +442,19 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     
     
     //--------------------------------------------------
-    // 8. RMSNorm2: residual1 -> ln2_out
+    // 8. RMSNorm2: residual1 -> rms2_out
     // Retained in ModelForwardOutputs.
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
-    ln2_out = autograd::rms_norm(residual1, rms2_gamma, hp.rms_epsilon, stream);
+    rms2_out = autograd::rms_norm(residual1, rms2_gamma, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
     
     //--------------------------------------------------
-    // 9. FFN: ln2_out -> ffn_out (already using autograd)
+    // 9. FFN: rms2_out -> ffn_out (already using autograd)
     // Retained in ModelForwardOutputs.
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
-    ffn_compute.forward(ln2_out,
+    ffn_compute.forward(rms2_out,
                         stream, cublas_handle,
                         forward_outputs,
                         layer_idx,

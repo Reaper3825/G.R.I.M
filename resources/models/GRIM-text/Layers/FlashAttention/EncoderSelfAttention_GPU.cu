@@ -202,7 +202,7 @@ void encoderSelfAttentionForward(
     }
 
     if (qkv_debug >= 3) {
-        autograd::checkQKVTensorFinite("AutogradQKV:ln1_out", norm_input, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:rms1_out", norm_input, request.stream);
         autograd::checkQKVTensorFinite("AutogradQKV:W_qkv", W_qkv, request.stream);
         if (request.hp.qkv_bias_enabled) {
             autograd::checkQKVTensorFinite("AutogradQKV:b_qkv", b_qkv, request.stream);

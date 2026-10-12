@@ -822,7 +822,7 @@ For each encoding layer (Layer 0 → Layer 11):
 #### 2.5c QKV Projection
 
 - [x] **Layers/Attention/QKV_Projector.{hpp,cu}** — DELETED (Rule 26)
-  - QKV projection kernels were already dead and superseded by `autograd::matmul(ln1_out, W_qkv, transpose_b=true)`.
+  - QKV projection kernels were already dead and superseded by `autograd::matmul(rms1_out, W_qkv, transpose_b=true)`.
   - The last remaining `launchReshapeFromBHSD()` wrapper only forwarded to TensorConversion; `autograd::reshape_bhsd_to_flat()` now calls `TensorConversion::convert_BHSD_to_BSM()` directly.
   - Do not recreate a QKV projector layer path; TensorContract/autograd owns projection, split/merge, and reshape tape boundaries.
 

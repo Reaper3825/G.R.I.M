@@ -517,7 +517,7 @@ void checkQKVTensorFinite(const char* tag,
     checkNonFiniteStats(checked_tag, tensor.data, count, stream);
 }
 
-void logQKVProjectionEquation(const Tensor& ln1_out,
+void logQKVProjectionEquation(const Tensor& rms1_out,
                               const Tensor& W_qkv,
                               const Tensor& b_qkv,
                               const Tensor& qkv_out,
@@ -535,8 +535,8 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
     if (!stream) {
         throw std::runtime_error("logQKVProjectionEquation: stream is NULL");
     }
-    if (!ln1_out.data) {
-        throw std::runtime_error("logQKVProjectionEquation: ln1_out.data is NULL");
+    if (!rms1_out.data) {
+        throw std::runtime_error("logQKVProjectionEquation: rms1_out.data is NULL");
     }
     if (!W_qkv.data) {
         throw std::runtime_error("logQKVProjectionEquation: W_qkv.data is NULL");
@@ -547,7 +547,7 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
     if (hp.qkv_bias_enabled && !b_qkv.data) {
         throw std::runtime_error("logQKVProjectionEquation: qkv_bias_enabled=true but b_qkv.data is NULL");
     }
-    ln1_out.shape.require("logQKVProjectionEquation ln1_out");
+    rms1_out.shape.require("logQKVProjectionEquation rms1_out");
     W_qkv.shape.require("logQKVProjectionEquation W_qkv");
     qkv_out.shape.require("logQKVProjectionEquation qkv_out");
     if (b_qkv.data) {
@@ -556,8 +556,8 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
             throw std::runtime_error("logQKVProjectionEquation: b_qkv numel mismatch for hp.qkv_dim");
         }
     }
-    if (!ln1_out.shape.is_2d_layout() || !W_qkv.shape.is_2d_layout() || !qkv_out.shape.is_2d_layout()) {
-        throw std::runtime_error("logQKVProjectionEquation: ln1_out, W_qkv, and qkv_out must be 2D tensors");
+    if (!rms1_out.shape.is_2d_layout() || !W_qkv.shape.is_2d_layout() || !qkv_out.shape.is_2d_layout()) {
+        throw std::runtime_error("logQKVProjectionEquation: rms1_out, W_qkv, and qkv_out must be 2D tensors");
     }
 
     const int qkv_dim_local = hp.qkv_dim;
@@ -569,24 +569,24 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
         throw std::runtime_error("logQKVProjectionEquation: payload.total_tokens must be > 0");
     }
 
-    const auto ln1_shape = ln1_out.shape.as_2d();
+    const auto rms1_shape = rms1_out.shape.as_2d();
     const auto w_shape = W_qkv.shape.as_2d();
     const auto qkv_shape = qkv_out.shape.as_2d();
-    if (ln1_shape.rows != payload.total_tokens || qkv_shape.rows != payload.total_tokens ||
-        ln1_shape.cols != d_model_local || qkv_shape.cols != qkv_dim_local ||
+    if (rms1_shape.rows != payload.total_tokens || qkv_shape.rows != payload.total_tokens ||
+        rms1_shape.cols != d_model_local || qkv_shape.cols != qkv_dim_local ||
         w_shape.rows != qkv_dim_local || w_shape.cols != d_model_local) {
         throw std::runtime_error("logQKVProjectionEquation: tensor shape mismatch for QKV projection equation");
     }
 
-    std::vector<float> h_ln1_sample(static_cast<size_t>(n_sample) * d_model_local);
+    std::vector<float> h_rms1_sample(static_cast<size_t>(n_sample) * d_model_local);
     const int w_sample_cols = std::min(64, d_model_local);
     std::vector<float> h_wqkv_sample(static_cast<size_t>(qkv_dim_local) * w_sample_cols);
     std::vector<float> h_qkv_sample(static_cast<size_t>(n_sample) * qkv_dim_local);
     std::vector<float> h_bias_sample(qkv_dim_local);
 
-    checkCuda(cudaMemcpyAsync(h_ln1_sample.data(), ln1_out.data,
-                              h_ln1_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream),
-              "logQKVProjectionEquation: copy ln1_out sample");
+    checkCuda(cudaMemcpyAsync(h_rms1_sample.data(), rms1_out.data,
+                              h_rms1_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream),
+              "logQKVProjectionEquation: copy rms1_out sample");
     checkCuda(cudaMemcpy2DAsync(
         h_wqkv_sample.data(),
         static_cast<size_t>(w_sample_cols) * sizeof(float),
@@ -607,22 +607,22 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
     }
     checkCuda(cudaStreamSynchronize(stream), "logQKVProjectionEquation: synchronize samples");
 
-    float ln1_min = FLT_MAX, ln1_max = -FLT_MAX;
-    double ln1_sum_sq = 0.0;
-    double ln1_row_rms_sum = 0.0;
+    float rms1_min = FLT_MAX, rms1_max = -FLT_MAX;
+    double rms1_sum_sq = 0.0;
+    double rms1_row_rms_sum = 0.0;
     for (int t = 0; t < n_sample; ++t) {
         double row_sum_sq = 0.0;
         for (int d = 0; d < d_model_local; ++d) {
-            const float v = h_ln1_sample[t * d_model_local + d];
-            ln1_min = fminf(ln1_min, v);
-            ln1_max = fmaxf(ln1_max, v);
-            ln1_sum_sq += v * v;
+            const float v = h_rms1_sample[t * d_model_local + d];
+            rms1_min = fminf(rms1_min, v);
+            rms1_max = fmaxf(rms1_max, v);
+            rms1_sum_sq += v * v;
             row_sum_sq += v * v;
         }
-        ln1_row_rms_sum += sqrtf(static_cast<float>(row_sum_sq / d_model_local));
+        rms1_row_rms_sum += sqrtf(static_cast<float>(row_sum_sq / d_model_local));
     }
-    const float ln1_rms = sqrtf(static_cast<float>(ln1_sum_sq / (n_sample * d_model_local)));
-    const float ln1_row_rms_mean = static_cast<float>(ln1_row_rms_sum / n_sample);
+    const float rms1_rms = sqrtf(static_cast<float>(rms1_sum_sq / (n_sample * d_model_local)));
+    const float rms1_row_rms_mean = static_cast<float>(rms1_row_rms_sum / n_sample);
 
     float wqkv_min = FLT_MAX, wqkv_max = -FLT_MAX;
     double wqkv_sum_sq = 0.0;
@@ -688,7 +688,7 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
     }
 
     const float expected_q_elem_rms =
-        ln1_row_rms_mean * wq_row_rms_mean * sqrtf(static_cast<float>(d_model_local));
+        rms1_row_rms_mean * wq_row_rms_mean * sqrtf(static_cast<float>(d_model_local));
     const float expected_q_full_row_rms = expected_q_elem_rms;
     const float expected_q_head_row_rms = expected_q_elem_rms;
     const float actual_q_full_row_rms = qkv_row_rms_mean;
@@ -696,10 +696,10 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
     const float target_q_head_row_rms = 1.0f;
     const float target_q_full_row_rms = 1.0f;
 
-    fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = ln1_out @ W_qkv^T + b_qkv\n", layer_idx);
-    fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-            n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
-    fprintf(stderr, "  ln1_out row_rms: mean=%.10f\n", ln1_row_rms_mean);
+    fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = rms1_out @ W_qkv^T + b_qkv\n", layer_idx);
+    fprintf(stderr, "  rms1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
+            n_sample, n_sample, d_model_local, rms1_min, rms1_max, rms1_rms);
+    fprintf(stderr, "  rms1_out row_rms: mean=%.10f\n", rms1_row_rms_mean);
     fprintf(stderr, "  W_qkv (sample %d cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
             w_sample_cols, qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
     fprintf(stderr, "  W_q row_rms (scaled to d_model): mean=%.10f\n", wq_row_rms_mean);
@@ -710,9 +710,9 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
     } else {
         fprintf(stderr, "  b_qkv: [nullptr]\n");
     }
-    fprintf(stderr, "  EXPECTED qkv_elem_rms = ln1_row_rms * wq_row_rms * sqrt(d_model)\n");
+    fprintf(stderr, "  EXPECTED qkv_elem_rms = rms1_row_rms * wq_row_rms * sqrt(d_model)\n");
     fprintf(stderr, "                        = %.8f * %.8f * sqrt(%d) = %.8f\n",
-            ln1_row_rms_mean, wq_row_rms_mean, d_model_local, expected_q_elem_rms);
+            rms1_row_rms_mean, wq_row_rms_mean, d_model_local, expected_q_elem_rms);
     fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
             qkv_min, qkv_max, qkv_rms);
     fprintf(stderr, "  EXPECTED Q row_rms (full/head): %.8f / %.8f\n",
@@ -726,11 +726,11 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
             actual_q_head_row_rms / target_q_head_row_rms);
 
     std::ostringstream eq;
-    eq << "[QKV_PROJECTION_EQUATION] qkv_out = ln1_out @ W_qkv^T + b_qkv\n";
-    eq << "  INPUT (ln1_out): rms=" << ln1_rms << " row_rms=" << ln1_row_rms_mean << "\n";
+    eq << "[QKV_PROJECTION_EQUATION] qkv_out = rms1_out @ W_qkv^T + b_qkv\n";
+    eq << "  INPUT (rms1_out): rms=" << rms1_rms << " row_rms=" << rms1_row_rms_mean << "\n";
     eq << "  WEIGHT (W_qkv): rms=" << wqkv_rms << " q_row_rms=" << wq_row_rms_mean << "\n";
-    eq << "  EXPECTED qkv_elem_rms = ln1_row_rms * wq_row_rms * sqrt(d_model)\n";
-    eq << "                         = " << ln1_row_rms_mean << " * " << wq_row_rms_mean
+    eq << "  EXPECTED qkv_elem_rms = rms1_row_rms * wq_row_rms * sqrt(d_model)\n";
+    eq << "                         = " << rms1_row_rms_mean << " * " << wq_row_rms_mean
        << " * sqrt(" << d_model_local << ")\n";
     eq << "                         = " << expected_q_elem_rms << "\n";
     eq << "  ACTUAL Q row_rms (full/head): " << actual_q_full_row_rms << " / " << actual_q_head_row_rms << "\n";
@@ -742,8 +742,8 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
         eq << "  [ANOMALY] per-head q_row_rms=" << actual_q_head_row_rms
            << " is " << inflation_ratio_eq << "x larger than target=" << target_q_head_row_rms << "\n";
     }
-    if (ln1_row_rms_mean > 50.0f) {
-        eq << "  [ANOMALY] ln1_out row_rms=" << ln1_row_rms_mean << " >> expected ~1.0\n";
+    if (rms1_row_rms_mean > 50.0f) {
+        eq << "  [ANOMALY] rms1_out row_rms=" << rms1_row_rms_mean << " >> expected ~1.0\n";
     }
     if (wq_row_rms_mean > 5.0f) {
         eq << "  [ANOMALY] W_q row_rms=" << wq_row_rms_mean << " >> expected ~0.036\n";

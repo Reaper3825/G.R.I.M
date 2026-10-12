@@ -78,6 +78,7 @@ struct ClipResult {
     size_t measured_group_count = 0;  ///< Number of groups measured by clipGradientNorms()
     float global_rms_pre = 0.0f;
     float global_rms_post = 0.0f;
+    double global_sum_sq_pre = 0.0; ///< Squared gradient energy across all registered groups, after accumulation normalization and before clipping
     float encoder_rms_pre = 0.0f;
     ClipMetrics metrics{};
     std::array<TopGroup, kTopGroupCount> top_groups{};

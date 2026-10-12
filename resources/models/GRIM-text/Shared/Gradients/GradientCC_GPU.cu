@@ -401,6 +401,7 @@ ClipResult clipGradientNorms(
     ClipResult result;
 	result.measured_group_count = num_groups;
     result.global_rms_pre = global_rms;
+    result.global_sum_sq_pre = global_sum_sq;
 	result.encoder_rms_pre = encoderTelemetryRms(measured_metrics);
 	result.metrics = measured_metrics;
 	for (size_t i = 0; i < num_groups; ++i) {

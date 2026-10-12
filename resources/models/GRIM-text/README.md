@@ -487,7 +487,7 @@ input to a prefill payload without constructing a training ConceptBlock.
 **Forward Pass Kernels:**
 - `flashAttentionForwardWithWorkspace` - Memory-efficient Flash Attention 2 (O(N) memory)
 - `launchLayerNorm` - Fused layer normalization (mean + variance + normalize)
-- QKV projection - `autograd::matmul(ln1_out, W_qkv, transpose_b=true)` tape node; Q/K/V split is `autograd::split_and_reshape_qkv`
+- QKV projection - `autograd::matmul(rms1_out, W_qkv, transpose_b=true)` tape node; Q/K/V split is `autograd::split_and_reshape_qkv`
 - `launchAttentionScores` - Scaled dot-product attention (standard path)
 - `launchSoftmax` - Numerically stable softmax
 - `launchAttentionOutput` - Attention @ Value
