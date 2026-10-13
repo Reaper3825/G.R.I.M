@@ -8,6 +8,7 @@
 #include "Phase3_Cleanup.hpp"
 #include "../Diagnostics/Diagnostics.hpp"
 #include "../Diagnostics/MemoryMeasurer.hpp"
+#include "../Diagnostics/GradientTelemetryCapture.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"       // GradClip::clipGradientNorms (registry-level clipping)
@@ -365,6 +366,10 @@ void runOptimizerWindowFromEpoch(
     clip_metrics = clip;
     has_clip_metrics = true;
 
+    GRIM::Diagnostics::captureGradientWindowTelemetry(
+        ctx, clip, *ctx.optimizer.optimizer_state.gradient_clip_scratch,
+        optimizer_step, clip_stream);
+
     if (clipping_hp.enabled) {
         GRIM::Diagnostics::runGradientNormClipDiagnostic(ctx, state, payload, clip, batch_idx, clip_stream);
     }
@@ -395,6 +400,7 @@ void runOptimizerWindowFromEpoch(
                 cudaGetErrorString(post_step_sync));
         }
 
+        GRIM::Diagnostics::collectGradientTelemetry(ctx);
         GRIM::Diagnostics::checkPostOptimizerWeightsFinite(
             parameter_groups.data(),
             parameter_groups.size(),
@@ -713,6 +719,9 @@ BatchResult processBatch(
         batch_idx,
         plan.accumulation_slot,
         "microbatch.graph_cleared"};
+
+    GRIM::Diagnostics::captureGateForwardTelemetry(
+        ctx, forward_outputs, payload, train_bindings, batch_idx, stream);
 
     GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
         &model_config,

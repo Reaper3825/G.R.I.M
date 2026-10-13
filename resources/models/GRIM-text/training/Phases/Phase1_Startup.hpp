@@ -40,6 +40,7 @@
 #include <stdexcept>
 
 #include "../LoRACheckpointLifecycle.hpp"
+#include "../Diagnostics/GradientTelemetryCapture.hpp"
 
 // Core includes
 // NOTE: ai_config_paths.hpp must NOT be included directly. It is pulled in
@@ -185,6 +186,7 @@ struct TelemetryContext {
     GRIM::Telemetry::TelemetryControlConfig control_config;
     std::unique_ptr<GRIM::Telemetry::TelemetryControl> controller;
     std::unique_ptr<GRIM::Telemetry::TelemetryCsvLogger> csv_logger;
+    std::shared_ptr<GRIM::Diagnostics::GradientTelemetryCaptureState> gradient_capture;
     float last_obs[GRIM::HyperParameters::TELEMETRY_MAX_STREAMS] = {};  // Rho/diagnostic slots persist between their compute intervals; INIT_* slots (48-54) are constant for run
     float adam_cumulative_disp = 0.0f;  // Running sum of lr(t) for Adam disruption tracking
     bool enabled = true;

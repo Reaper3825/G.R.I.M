@@ -35,6 +35,7 @@ void TelemetryReady(TrainingContext& ctx) {
     lattice_config.hyperparams.epsilon = lattice_hp.epsilon;
     lattice_config.hyperparams.strict_mode = lattice_hp.strict_mode;
     lattice_config.stream = ctx.requireTrainingState("TelemetryReady").stream_ctrl.getPrimaryStream();
+    GRIM::Diagnostics::registerGradientMetricStreams(ctx, lattice_config);
     ctx.telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(
         lattice_config);
     ctx.logging.logger->log("✓ Telemetry lattice initialized (GPU-resident); exact config values are listed by ConfigDump.");

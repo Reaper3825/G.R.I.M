@@ -113,3 +113,5 @@ Required. See [Encoder.md](Encoder.md).
 Semantic version 12 removes encoder residual centering, LM-head hidden/weight centering, logit centering, and PC1 projection. Their JSON fields are rejected by the host compiler. Deprecated FlatBuffer slots remain reserved solely to preserve wire field IDs; they generate no runtime accessors. Older model artifacts must be recompiled with the current compiler. All checked-in model artifacts have been regenerated.
 
 New parameter checkpoints omit the four retired boolean compatibility facts. The loader validates the original checksum on legacy metadata and accepts those facts only when their values are `false`; checkpoints that used the removed transforms are rejected. Parameter tensors and manifests are unchanged by this removal.
+
+Gradient telemetry registration derives its lattice storage size from the actual encoder layers and parameter registry, using `telemetry_lattice_num_streams` as a minimum capacity. New measurements append after the retired IDs and use the existing MetricStream/lattice/CSV path. See [GradientTelemetryCapture.md](GradientTelemetryCapture.md) for IDs, cadence, and missing-sample handling.

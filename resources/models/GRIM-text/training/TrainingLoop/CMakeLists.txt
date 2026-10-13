@@ -689,6 +689,8 @@ add_executable(train_gpu
     ../Diagnostics/LossStatsDiagnostic.hpp
     ../Diagnostics/GradientNormDiagnostic.cu
     ../Diagnostics/GradientNormDiagnostic.hpp
+    ../Diagnostics/GradientTelemetryCapture.cu
+    ../Diagnostics/GradientTelemetryCapture.hpp
     ../Diagnostics/PostClipParamGradEmbLmEquation.cu
     ../Diagnostics/PostClipParamGradEmbLmEquation.hpp
     ../Diagnostics/OptimizerStepGuards.cu

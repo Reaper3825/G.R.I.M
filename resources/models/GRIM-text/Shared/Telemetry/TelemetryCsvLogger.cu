@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 
 namespace GRIM::Telemetry {
 
@@ -128,6 +129,11 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
 {
     if (!file_.is_open()) return;
 
+    std::vector<LatticeLevelState> snapshot;
+    const TelemetryError snapshot_error = lattice.readSnapshot(snapshot);
+    if (snapshot_error != TelemetryError::OK) throw std::runtime_error(
+        std::string("[TelemetryCsvLogger] snapshot failed: ") + getTelemetryErrorMessage(snapshot_error));
+
     for (int level = 0; level < num_levels_; ++level) {
         const uint32_t stride = 1u << level;
 
@@ -138,12 +144,11 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
 
         for (int s = 0; s < num_streams_; ++s) {
             if (!isActiveMetricStream(s)) continue;
-            TelemetryState state{};
-            TelemetryError err = lattice.readState(level, s, &state);
-            if (err != TelemetryError::OK) continue;
+            if (s >= 94 && (!raw_obs || !std::isfinite(raw_obs[s]))) continue;
+            const TelemetryState& state = snapshot[static_cast<size_t>(level) * num_streams_ + s].state;
             if (state.initialized == 0) continue;
 
-            const char* name = getMetricStreamName(static_cast<MetricStream>(s));
+            const char* name = getMetricStreamName(static_cast<MetricStream>(s), &lattice.config());
             if (std::string(name) == "unknown") {
                 throw std::runtime_error(
                     "[TelemetryCsvLogger] FATAL: stream index " + std::to_string(s) +

@@ -16,6 +16,9 @@
 #include <cmath>
 #include <stdexcept>
 #include <utility>
+#include <array>
+#include <limits>
+#include <algorithm>
 
 namespace GRIM::Telemetry {
 
@@ -25,6 +28,7 @@ namespace GRIM::Telemetry {
 
 constexpr int kMaxLevels = HyperParameters::TELEMETRY_MAX_LEVELS;
 constexpr int kMaxStreams = HyperParameters::TELEMETRY_MAX_STREAMS;
+static_assert(kMaxStreams == static_cast<int>(MetricStream::CAPACITY), "Telemetry capacity mismatch");
 
 //=============================================================================
 // DEVICE HELPERS
@@ -62,6 +66,9 @@ __global__ void updateTelemetryStateKernel(
     }
 
     const float x_t = observations[stream_idx];
+    // New capture streams use NaN for an absent sample. Skip rather than
+    // fabricating zeros or repeatedly updating the lattice with stale data.
+    if (stream_idx >= 94 && isnan(x_t)) return;
     
     if (strict_mode && !isFiniteValue(x_t)) {
         atomicOr(error_flag, (int)TelemetryError::ERR_NAN_IN_INPUT);
@@ -302,7 +309,24 @@ const char* getTelemetryErrorMessage(TelemetryError err) {
     }
 }
 
-const char* getMetricStreamName(MetricStream stream) {
+const char* getMetricStreamName(MetricStream stream, const LatticeConfig* config) {
+    const int id = static_cast<int>(stream);
+    if (id >= static_cast<int>(MetricStream::GRADIENT_CAPTURE_DYNAMIC_BASE)) {
+        if (config && id < static_cast<int>(config->metric_stream_names.size()) &&
+            !config->metric_stream_names[id].empty()) return config->metric_stream_names[id].c_str();
+        return "unknown";
+    }
+    if (id >= static_cast<int>(MetricStream::TOP_GRAD_GROUP_BASE)) {
+        static const auto names = [] {
+            std::array<std::string, 40> result;
+            const char* fields[] = {"group_index", "grad_rms", "energy_pct", "parameter_count"};
+            for (int i = 0; i < 40; ++i) result[i] =
+                std::string(i < 20 ? "top_grad_" : "top_energy_") +
+                std::to_string((i % 20) / 4 + 1) + "_" + fields[i % 4];
+            return result;
+        }();
+        return names[id - static_cast<int>(MetricStream::TOP_GRAD_GROUP_BASE)].c_str();
+    }
     switch (stream) {
         case MetricStream::LOSS: return "loss";
         case MetricStream::GRAD_NORM_MEAN: return "grad_norm_mean";
@@ -343,7 +367,7 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::INIT_TIE_PTRS_SAME: return "init_tie_ptrs_same";
         case MetricStream::INIT_TIE_GRADS_SAME: return "init_tie_grads_same";
         case MetricStream::INIT_LM_OWNS_WEIGHTS: return "init_lm_owns_weights";
-        case MetricStream::INIT_OPT_GROUPS_TOTAL: return "init_opt_groups_total";
+        case MetricStream::INIT_OPT_GROUPS_TOTAL: return "init_opt_groups_total"; 
         case MetricStream::INIT_OPT_GROUPS_EMB: return "init_opt_groups_emb";
         case MetricStream::INIT_OPT_GROUPS_LM: return "init_opt_groups_lm";
         case MetricStream::RHO_RAW_AVG_SIGNED_DOT: return "rho_raw_avg_signed_dot";
@@ -354,6 +378,14 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::OPTIMIZER_ITERATION: return "optimizer_iteration";
         case MetricStream::TEXT_LOSS: return "text_loss";
         case MetricStream::LOCAL_ATOM_RETRIEVAL_LOSS: return "local_atom_retrieval_loss";
+        case MetricStream::GRADIENT_GLOBAL_SUM_SQ_PRE: return "gradient_global_sum_sq_pre";
+        case MetricStream::GRADIENT_GLOBAL_RMS_POST: return "gradient_global_rms_post";
+        case MetricStream::GRADIENT_CLIPPED: return "gradient_clipped";
+        case MetricStream::GRADIENT_CLIP_SCALE: return "gradient_clip_scale";
+        case MetricStream::ATTENTION_RESIDUAL_GATE_ENERGY_PCT: return "attention_residual_gate_energy_pct";
+        case MetricStream::GATE_FORWARD_SAMPLE_GLOBAL_STEP: return "gate_forward_sample_global_step";
+        case MetricStream::GATE_FORWARD_SAMPLE_TOKEN_COUNT: return "gate_forward_sample_token_count";
+        case MetricStream::GRADIENT_CAPTURE_OPTIMIZER_ITERATION: return "gradient_capture_optimizer_iteration";
         default: return "unknown";
     }
 }
@@ -563,8 +595,11 @@ TelemetryError TelemetryLattice::updateFromBatch(
         return TelemetryError::ERR_INVALID_PARAMS;
     }
     const float tokens = static_cast<float>(payload.actual_tokens);
-    float obs[5] = { loss, grad_norm, grad_norm, learning_rate, tokens };
-    return update(obs, global_step);
+    std::vector<float> obs(config_.num_streams, 0.0f);
+    for (int i = 94; i < config_.num_streams; ++i) obs[i] = std::numeric_limits<float>::quiet_NaN();
+    const float core[] = {loss, grad_norm, grad_norm, learning_rate, tokens};
+    for (int i = 0; i < std::min(config_.num_streams, 5); ++i) obs[i] = core[i];
+    return update(obs.data(), global_step);
 }
 
 //=============================================================================
@@ -592,6 +627,19 @@ TelemetryError TelemetryLattice::readVector(
     cudaStreamSynchronize(config_.stream);
     cudaMemcpy(out_vector, d_temp, sizeof(TelemetryVector), cudaMemcpyDeviceToHost);
 
+    return TelemetryError::OK;
+}
+
+TelemetryError TelemetryLattice::readSnapshot(std::vector<LatticeLevelState>& out_states) const {
+    if (!levels_) return TelemetryError::ERR_NULL_POINTER;
+    out_states.resize(static_cast<size_t>(config_.num_levels) * config_.num_streams);
+    cudaError_t error = cudaMemcpyAsync(out_states.data(), levels_,
+        out_states.size() * sizeof(LatticeLevelState), cudaMemcpyDeviceToHost, config_.stream);
+    if (error == cudaSuccess) error = cudaStreamSynchronize(config_.stream);
+    if (error != cudaSuccess) {
+        fprintf(stderr, "[Telemetry] snapshot readback failed: %s\n", cudaGetErrorString(error));
+        return TelemetryError::ERR_KERNEL_LAUNCH;
+    }
     return TelemetryError::OK;
 }
 

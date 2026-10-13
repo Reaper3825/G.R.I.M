@@ -19,6 +19,7 @@
 #include "Phase3_Cleanup.hpp"
 #include "Phase2_TrainingLoop.hpp"
 #include "../OptimizerCheckpoint.hpp"
+#include "../Diagnostics/GradientTelemetryCapture.hpp"
 #include "../LoRACheckpointLifecycle.hpp"
 
 #include "../../Common/CheckpointNaming.hpp"
@@ -564,6 +565,7 @@ void releaseResources(TrainingContext& ctx) {
 #ifdef USE_CUDA
     // Final CUDA synchronization
     cudaDeviceSynchronize();
+    ctx.telemetry.gradient_capture.reset();
     
     // Release module-static autograd resources (cleanup stream + cuBLAS handle)
     shutdownAutogradResources();

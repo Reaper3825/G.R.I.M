@@ -23,6 +23,8 @@
 #include "../Batching/BatchPayload.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 #include <cuda_runtime.h>
+#include <string>
+#include <vector>
 
 namespace GRIM::Telemetry {
 
@@ -35,6 +37,7 @@ struct LatticeConfig {
     int num_streams = 5;                // Number of parallel metric streams
     TelemetryHyperParams hyperparams;   // Global hyperparameters
     cudaStream_t stream = nullptr;      // CUDA stream for kernels
+    std::vector<std::string> metric_stream_names; // Registered per-layer/parameter names, indexed by MetricStream ID
 };
 
 //=============================================================================
@@ -93,6 +96,10 @@ public:
      */
     TelemetryError readState(int level, int stream_idx,
                              TelemetryState* out_state) const;
+
+    /// CSV export snapshot: one readback for all streams/levels, instead of
+    /// a synchronous transfer for every individual TelemetryState.
+    TelemetryError readSnapshot(std::vector<LatticeLevelState>& out_states) const;
 
     /**
      * @brief Reset all anchors to current values (call after soft restart)
@@ -225,14 +232,29 @@ enum class MetricStream : int {
     TEXT_LOSS                = 61,
     LOCAL_ATOM_RETRIEVAL_LOSS = 62,
     // Slots 63-93 retired (selector, latent and execution objectives); do not reuse.
+    GRADIENT_GLOBAL_SUM_SQ_PRE = 94,
+    GRADIENT_GLOBAL_RMS_POST = 95,
+    GRADIENT_CLIPPED = 96,
+    GRADIENT_CLIP_SCALE = 97,
+    ATTENTION_RESIDUAL_GATE_ENERGY_PCT = 98,
+    GATE_FORWARD_SAMPLE_GLOBAL_STEP = 99,
+    GATE_FORWARD_SAMPLE_TOKEN_COUNT = 100,
+    GRADIENT_CAPTURE_OPTIMIZER_ITERATION = 101,
+    // Five ranks, four streams each: group index, gradient RMS, energy %, count.
+    TOP_GRAD_GROUP_BASE = 102,
+    TOP_ENERGY_GROUP_BASE = 122,
+    // Named layer/parameter streams are registered here in model construction order.
+    GRADIENT_CAPTURE_DYNAMIC_BASE = 142,
+    CAPACITY = 4096,
 };
 
 // Shared by the GPU update and CSV export. Stable IDs include retired holes.
 __host__ __device__ constexpr bool isActiveMetricStream(int stream_idx) {
     return (stream_idx >= 0 && stream_idx <= 13) ||
-           (stream_idx >= 27 && stream_idx <= 62);
+           (stream_idx >= 27 && stream_idx <= 62) ||
+           (stream_idx >= 94 && stream_idx < static_cast<int>(MetricStream::CAPACITY));
 }
 
-const char* getMetricStreamName(MetricStream stream);
+const char* getMetricStreamName(MetricStream stream, const LatticeConfig* config = nullptr);
 
 } // namespace GRIM::Telemetry

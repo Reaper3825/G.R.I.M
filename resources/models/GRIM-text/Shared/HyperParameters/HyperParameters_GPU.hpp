@@ -92,7 +92,7 @@ constexpr int CUDA_TILE_DIM_TRANSPOSE = CUDA_WARP_SIZE;  // Tile dim = warp size
 // Hierarchical streaming statistics
 //======================================================//
 constexpr int TELEMETRY_MAX_LEVELS = 8;           // TelemetryLattice temporal levels
-constexpr int TELEMETRY_MAX_STREAMS = 94;         // Stable telemetry slot capacity; active IDs are 0-13 and 27-62
+constexpr int TELEMETRY_MAX_STREAMS = 4096;       // Capacity for registered model-specific telemetry; retired IDs remain reserved
 
 //======================================================//
 // UnigramLM Training Constants
