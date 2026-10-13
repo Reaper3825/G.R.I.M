@@ -149,38 +149,6 @@ float computeEncoderTelemetryRms(const GRIM::GradClip::ClipMetrics& gm, int batc
     return rmsOrThrow(sum_sq, count, "encoder_telemetry", batch_idx);
 }
 
-std::string formatTopGroups(
-    const GRIM::GradClip::ClipResult& clip,
-    const std::vector<GRIM::ParameterGroup>& groups,
-    bool rank_by_energy)
-{
-    std::ostringstream oss;
-    oss << (rank_by_energy ? "[GradTrace] TOP-ENERGY-GROUPS" : "[GradTrace] TOP-GRAD-GROUPS");
-    const auto& top_groups = rank_by_energy ? clip.top_energy_groups : clip.top_groups;
-    for (const auto& top : top_groups) {
-        if (!top.valid) {
-            continue;
-        }
-        const std::string group_name = top.index < groups.size()
-            ? groups[top.index].name
-            : std::string("<out-of-range>");
-        // Both rankings use all registered groups as the energy-share denominator.
-        // An all-zero gradient has no energy, so report a zero share.
-        const double energy_pct = clip.global_sum_sq_pre > 0.0
-            ? 100.0 * static_cast<double>(top.sum_sq) / clip.global_sum_sq_pre
-            : 0.0;
-        oss << " #" << top.index
-            << "(" << group_name
-            << ",type=" << top.type
-            << ",layer=" << top.layer_index
-            << ",rms=" << formatScalar(top.rms, 6)
-            << ",energy_pct=" << energy_pct
-            << ",count=" << top.count
-            << ")";
-    }
-    return oss.str();
-}
-
 } // namespace
 
 void runGradientNormClipDiagnostic(
@@ -212,7 +180,6 @@ void runGradientNormClipDiagnostic(
         emb_rms_pre = computeEmbeddingDiagnosticRmsOrThrow(gm, tied, batch_idx);
     }
     const float enc_rms_pre = computeEncoderTelemetryRms(gm, batch_idx);
-    const auto& groups = ctx.parameter_registry.requireParameterGroups("runGradientNormClipDiagnostic");
 
     ctx.logging.logger->log("[GradTrace] POST-CLIP-MEASURE preclip_registered_global=" +
                             formatScalar(preclip_grad_rms, 6) +
@@ -220,8 +187,6 @@ void runGradientNormClipDiagnostic(
                             " clipped=" + (clip.clipped ? "YES" : "NO") +
                             " emb_rms_pre=" + formatScalar(emb_rms_pre, 6) +
                             " enc_rms_pre=" + formatScalar(enc_rms_pre, 6));
-    ctx.logging.logger->log(formatTopGroups(clip, groups, false));
-    ctx.logging.logger->log(formatTopGroups(clip, groups, true));
 
     if (!lora_model) {
         runPostClipParamGradEmbLmEquation(

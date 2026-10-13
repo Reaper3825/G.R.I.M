@@ -9,6 +9,10 @@ from test_unary_gradfn_host import method
 def main():
     root = Path(__file__).resolve().parent.parent
     capture = (root / 'training/Diagnostics/GradientTelemetryCapture.cu').read_text(encoding='utf-8')
+    clipping = (root / 'Shared/Gradients/GradientCC_GPU.cu').read_text(encoding='utf-8')
+    diagnostic = (root / 'training/Diagnostics/GradientNormDiagnostic.cu').read_text(encoding='utf-8')
+    assert 'stable_sort' not in capture and 'rms_order' not in capture
+    assert 'recordTopGroup' not in clipping and 'formatTopGroups' not in diagnostic
     lattice = (root / 'Shared/Telemetry/TelemetryLattice_GPU.cu').read_text(encoding='utf-8')
     header = (root / 'Shared/Telemetry/TelemetryLattice_GPU.hpp').read_text(encoding='utf-8')
     logger = (root / 'Shared/Telemetry/TelemetryCsvLogger.cu').read_text(encoding='utf-8')
@@ -37,6 +41,7 @@ def main():
     registration = method(capture, 'void registerGradientMetricStreams(')
     publication = method(capture, 'void publishStats(')
     collection = method(capture, 'void collectGradientTelemetry(')
+    window_capture = method(capture, 'void captureGradientWindowTelemetry(')
     source = r"""
 #include <algorithm>
 #include <array>
@@ -60,7 +65,19 @@ int cudaMallocHost(void** p,size_t n) {*p=std::malloc(n);return 0;}
 int cudaFree(void* p) {std::free(p);return 0;}
 int cudaFreeHost(void* p) {std::free(p);return 0;}
 int cudaMemsetAsync(void* p,int v,size_t n,void*) {std::memset(p,v,n);return 0;}
+constexpr int cudaMemcpyDeviceToHost=1;
+int cudaMemcpyAsync(void* dest,const void* src,size_t n,int,void*) {std::memcpy(dest,src,n);return 0;}
 namespace GRIM {
+struct Tensor {float* data=nullptr;Tensor* grad_=nullptr;size_t numel() const {return 1;}};
+namespace GradClip {
+struct ClipResult {
+    size_t measured_group_count=0;
+    double global_sum_sq_pre=0;
+    float global_rms_pre=0,global_rms_post=0;
+    bool clipped=false;
+};
+struct ClipScratch {float* h_partial_sums=nullptr;};
+}
 namespace HyperParameters {
 constexpr int TELEMETRY_MAX_STREAMS = 4096;
 struct HP {int num_layers;bool attention_residual_gate_enabled;};
@@ -74,23 +91,36 @@ namespace Diagnostics {
 """ + constants + stats + merge + state + r"""
 }
 }
-struct Group {std::string name;};
+struct Group {
+    std::string name;size_t count=4;bool has_grad=true;
+    float* grads() const {static float dummy;return has_grad?&dummy:nullptr;}
+    size_t size() const {return count;}
+};
 struct Registry {
     std::vector<Group> groups={{"layer0_wo_weight"},{"layer0_attention_residual_gate_bias"}};
     const std::vector<Group>& requireParameterGroups(const char*) {return groups;}
+    struct Gate {GRIM::Tensor W_gate,b_gate;} gate;
+    const Gate& requireAttentionResidualGateParameters(int,const char*) {return gate;}
+};
+struct Lattice {
+    GRIM::Telemetry::LatticeConfig settings;
+    const GRIM::Telemetry::LatticeConfig& config() const {return settings;}
 };
 namespace GRIMText::Training {
 struct TrainingContext {
     int config=1;
     Registry parameter_registry;
     struct {
+        bool enabled=true;
+        Lattice* lattice=nullptr;
         float last_obs[4096]={};
         std::shared_ptr<GRIM::Diagnostics::GradientTelemetryCaptureState> gradient_capture;
     } telemetry;
 };
 }
 namespace GRIM::Diagnostics {
-""" + registration + publication + collection + r"""
+void reduce(const float*,size_t,Stats*,cudaStream_t) {}
+""" + registration + publication + collection + window_capture + r"""
 Stats point(double x) {
     Stats s{};s.count=1;s.mean=s.min=s.max=x;s.sum_sq=x*x;
     s.slope_sum=x*(1-.5*x);s.below_one=x<1;s.low=x<=.1;s.high=x>=1.9;
@@ -110,7 +140,7 @@ int main() {
     assert(isActiveMetricStream(94) && !isActiveMetricStream(4096));
     GRIMText::Training::TrainingContext ctx;
     LatticeConfig config;registerGradientMetricStreams(ctx,config);
-    assert(config.num_streams==142+2*34+2*5);
+    assert(config.num_streams==142+2*34+2*4);
     for(int i=94;i<config.num_streams;++i) {
         assert(std::isnan(ctx.telemetry.last_obs[i]));
         assert(std::string(getMetricStreamName(static_cast<MetricStream>(i),&config))!="unknown");
@@ -120,6 +150,9 @@ int main() {
     assert(config.metric_stream_names[142]=="layer0_attention_residual_gate_multiplier_mean");
     assert(config.metric_stream_names[142+34+29]=="layer1_attention_residual_gate_bias_grad_postclip_mean");
     assert(config.metric_stream_names[210]=="layer0_wo_weight_grad_rms_pre");
+    assert(config.metric_stream_names[213]=="layer0_wo_weight_grad_parameter_count");
+    assert(config.metric_stream_names[214]=="layer0_attention_residual_gate_bias_grad_rms_pre");
+    for(int i=102;i<142;++i) assert(!isActiveMetricStream(i));
     auto& state=*ctx.telemetry.gradient_capture;
     state.forward_pending=true;state.readback_pending=true;state.forward_tokens=3;state.forward_step=17;
     for(int layer=0;layer<2;++layer) {
@@ -135,7 +168,25 @@ int main() {
     assert(!state.forward_pending && !state.readback_pending);
     GRIMText::Training::TrainingContext disabled;disabled.config=0;
     LatticeConfig disabled_config;registerGradientMetricStreams(disabled,disabled_config);
-    assert(disabled_config.num_streams==152 && disabled.telemetry.gradient_capture->layers==0);
+    assert(disabled_config.num_streams==150 && disabled.telemetry.gradient_capture->layers==0);
+    Lattice host_lattice;host_lattice.settings=disabled_config;disabled.telemetry.lattice=&host_lattice;
+    float sums[]={4.f,16.f};GradClip::ClipScratch scratch;scratch.h_partial_sums=sums;
+    GradClip::ClipResult clip;clip.measured_group_count=2;clip.global_sum_sq_pre=20;
+    clip.global_rms_pre=2;clip.global_rms_post=1;clip.clipped=true;
+    captureGradientWindowTelemetry(disabled,clip,scratch,3,reinterpret_cast<void*>(1));
+    // Lower-RMS group stays first: publication follows registration, without ranking.
+    assert(disabled.telemetry.last_obs[142]==1 && disabled.telemetry.last_obs[146]==2);
+    assert(disabled.telemetry.last_obs[143]==4 && disabled.telemetry.last_obs[147]==16);
+    assert(disabled.telemetry.last_obs[144]==20 && disabled.telemetry.last_obs[148]==80);
+    assert(disabled.telemetry.last_obs[145]==4 && disabled.telemetry.last_obs[149]==4);
+    assert(disabled.telemetry.last_obs[97]==.5f && disabled.telemetry.last_obs[101]==4);
+    for(int i=102;i<142;++i) assert(std::isnan(disabled.telemetry.last_obs[i]));
+    sums[0]=sums[1]=0;clip.global_sum_sq_pre=0;
+    captureGradientWindowTelemetry(disabled,clip,scratch,4,reinterpret_cast<void*>(1));
+    assert(disabled.telemetry.last_obs[144]==0 && disabled.telemetry.last_obs[148]==0);
+    disabled.parameter_registry.groups[1].has_grad=false;
+    captureGradientWindowTelemetry(disabled,clip,scratch,5,reinterpret_cast<void*>(1));
+    for(int i=146;i<150;++i) assert(std::isnan(disabled.telemetry.last_obs[i]));
     GRIMText::Training::TrainingContext too_large;too_large.config=2;
     LatticeConfig large_config;bool rejected=false;
     try {registerGradientMetricStreams(too_large,large_config);} catch(const std::runtime_error&) {rejected=true;}

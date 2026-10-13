@@ -6,6 +6,7 @@ import glob
 import os
 import csv
 import math
+import re
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -75,6 +76,21 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
 }
 
 # Stable historical slots: retired streams must also be hidden in old CSVs.
+CAPTURE_GLOBAL_NAMES = (
+    "gradient_global_sum_sq_pre", "gradient_global_rms_post", "gradient_clipped",
+    "gradient_clip_scale", "attention_residual_gate_energy_pct",
+    "gate_forward_sample_global_step", "gate_forward_sample_token_count",
+    "gradient_capture_optimizer_iteration",
+)
+TELEMETRY_STREAM_NAMES_BY_INDEX.update(enumerate(CAPTURE_GLOBAL_NAMES, start=94))
+for ranking, first_index in (("grad", 102), ("energy", 122)):
+    names = [f"top_{ranking}_{rank}_{field}" for rank in range(1, 6)
+             for field in ("group_index", "grad_rms", "energy_pct", "parameter_count")]
+    TELEMETRY_STREAM_NAMES_BY_INDEX.update(enumerate(names, start=first_index))
+
+GROUP_METRICS = ("rms_pre", "sum_sq_pre", "energy_pct", "parameter_count")
+LEGACY_GROUP_METRICS = ("rms_rank", "energy_rank")
+
 DEAD_TELEMETRY_STREAM_INDICES = set(range(14, 27)) | set(range(63, 94))
 DEAD_TELEMETRY_STREAM_PREFIXES = ("exec_", "eb_", "reserved_", "latent_preset_")
 DEAD_TELEMETRY_STREAM_NAMES = {
@@ -579,6 +595,278 @@ def plot_raw_and_smooth(ax, x, series, window=20, *, color,
         color=color,
         linestyle=smooth_linestyle,
         label=smooth_label)
+
+def is_capture_stream(name):
+    return (name in CAPTURE_GLOBAL_NAMES or re.fullmatch(r"top_(grad|energy)_[1-5]_\w+", name)
+            or re.match(r"layer\d+_attention_residual_gate_", name)
+            or any(name.endswith("_grad_" + metric) for metric in GROUP_METRICS + LEGACY_GROUP_METRICS))
+
+
+def capture_tables(streams):
+    """Align raw observations by publication step, retaining absent observations."""
+    values = {}
+    for name, frame in streams.items():
+        if is_capture_stream(name) and "raw_observation" in frame:
+            series = numeric_series(frame["raw_observation"])
+            values[name] = series.groupby(level=0).last()
+    return pd.DataFrame(values).sort_index()
+
+
+def group_metric_table(table, metric):
+    suffix = "_grad_" + metric
+    return table[[name for name in table if name.endswith(suffix)]].rename(
+        columns=lambda name: name[:-len(suffix)])
+
+
+def offline_group_comparisons(table):
+    """Rank named observations offline; ties retain group registration order."""
+    energy = group_metric_table(table, "energy_pct")
+    rms = group_metric_table(table, "rms_pre")
+    ranks = {"rms_rank": rms.rank(axis=1, ascending=False, method="first"),
+             "energy_rank": energy.rank(axis=1, ascending=False, method="first")}
+    concentration = pd.DataFrame(index=table.index)
+    for ranking, magnitude in (("grad", rms), ("energy", energy)):
+        aligned_energy = energy.reindex(columns=magnitude.columns)
+        shares = []
+        for step, values in magnitude.iterrows():
+            # A partial named observation must not masquerade as a full ranking.
+            if values.empty or values.isna().any() or aligned_energy.loc[step].isna().any():
+                shares.append(np.nan)
+            else:
+                names = values.nlargest(5).index
+                shares.append(aligned_energy.loc[step, names].sum())
+        concentration[ranking] = shares
+    return ranks, concentration
+
+
+def offline_gradient_energy_density(table):
+    """Compute energy/count shares and R from raw, same-window measurements."""
+    squared = group_metric_table(table, "sum_sq_pre")
+    counts = group_metric_table(table, "parameter_count")
+    names = squared.columns.union(counts.columns, sort=False)
+    squared = squared.reindex(columns=names)
+    counts = counts.reindex(columns=names)
+    # Never fill missing counts or gradients with zero or estimate historical counts.
+    complete = (len(names) > 0) & squared.notna().all(axis=1) & counts.notna().all(axis=1)
+    complete &= squared.ge(0).all(axis=1) & counts.gt(0).all(axis=1)
+    total_count = counts.sum(axis=1, min_count=max(1, len(names))).where(complete)
+    total_energy = table.get("gradient_global_sum_sq_pre", pd.Series(np.nan, index=table.index))
+    valid = complete & total_count.gt(0) & total_energy.gt(0) & np.isfinite(total_energy)
+    # Reject partial exports even when the missing groups never appeared as columns.
+    valid &= np.isclose(squared.sum(axis=1), total_energy, rtol=1e-4, atol=0)
+    count_pct = counts.div(total_count, axis=0).mul(100).where(complete, axis=0)
+    energy_pct = squared.div(total_energy.where(valid), axis=0).mul(100)
+    ratio = energy_pct.div(count_pct)
+    tied_name = "embedding_lm_head_tied"
+    tied = pd.DataFrame(index=table.index)
+    if tied_name in names:
+        tied["tied_gradient_sum_sq_pre"] = squared[tied_name]
+        tied["global_gradient_sum_sq_pre"] = total_energy
+        tied["tied_parameter_count"] = counts[tied_name]
+        tied["total_parameter_count"] = total_count
+        tied["tied_gradient_energy_pct"] = energy_pct[tied_name]
+        tied["tied_parameter_count_pct"] = count_pct[tied_name]
+        tied["tied_gradient_energy_ratio"] = ratio[tied_name]
+    return count_pct, energy_pct, ratio, tied
+
+
+def capture_heatmap(fig, ax, frame, title, *, signed=False, percent=False, logarithmic=False):
+    """Equal-width observation columns; explicit step labels handle irregular sampling."""
+    frame = frame.dropna(axis=1, how="all")
+    ax.set_title(title, fontsize=10)
+    if frame.empty:
+        ax.text(0.5, 0.5, "No observations", ha="center", transform=ax.transAxes)
+        ax.axis("off")
+        return
+    data = frame.to_numpy(dtype=float).T
+    if logarithmic:
+        data = np.log10(np.where(data > 0, data, np.nan))
+    finite = data[np.isfinite(data)]
+    limit = np.max(np.abs(finite)) if signed and finite.size else None
+    cmap = plt.get_cmap("RdBu_r" if signed else "viridis").with_extremes(bad="#dddddd")
+    image = ax.imshow(np.ma.masked_invalid(data), aspect="auto", interpolation="nearest",
+                      cmap=cmap, vmin=-limit if signed and limit else (0 if percent else None),
+                      vmax=limit if signed and limit else None)
+    ax.set_yticks(range(len(frame.columns)), frame.columns, fontsize=7)
+    ticks = np.unique(np.linspace(0, len(frame) - 1, min(6, len(frame))).astype(int))
+    ax.set_xticks(ticks, [f"{frame.index[i]:g}" for i in ticks], fontsize=8)
+    ax.set_xlabel("global_step (observation columns; gray = missing/nonpositive on log scale)", fontsize=8)
+    fig.colorbar(image, ax=ax, fraction=0.025, pad=0.02,
+                 label="log10(value)" if logarithmic else ("%" if percent else "value"))
+
+
+def generate_capture_figures(path, streams):
+    """Named group trajectories, rank-slot diagnostics, and all gate summaries."""
+    table = capture_tables(streams)
+    if table.empty:
+        return []
+    output_dir = ensure_output_dir(output_root(path) + "_gradient_gate")
+    outputs = []
+
+    def save(fig, name):
+        target = os.path.join(output_dir, name + ".png")
+        save_figure(fig, target, close=True)
+        outputs.append(target)
+
+    energy = group_metric_table(table, "energy_pct")
+    rms = group_metric_table(table, "rms_pre")
+    ranks, concentration = offline_group_comparisons(table)
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12), constrained_layout=True)
+    fig.suptitle("Gradient comparisons — pre-clip, accumulation-normalized")
+    selected = energy.mean().nlargest(10).index
+    for name in selected:
+        axes[0, 0].plot(energy.index, energy[name], label=name, linewidth=1)
+    axes[0, 0].set(title="Largest groups by average energy (stable identities)", ylabel="Total gradient energy (%)")
+    if len(selected):
+        axes[0, 0].legend(fontsize=6)
+    latest_steps = energy.dropna(how="all").index
+    if len(latest_steps):
+        step = latest_steps[-1]
+        latest = energy.loc[step].dropna()
+        names = latest.nlargest(10).sort_values().index
+        axes[0, 1].barh(names, latest[names])
+        axes[0, 1].tick_params(axis="y", labelsize=7)
+        axes[0, 1].set(title=f"Energy leaders at step {step:g}", xlabel="Total energy (%)")
+        if step in rms.index:
+            comparison = pd.concat([rms.loc[step].rename("rms"), latest.rename("energy")], axis=1).dropna()
+            positive = comparison[(comparison.rms > 0) & (comparison.energy > 0)]
+            gate = positive.index.str.contains("attention_residual_gate")
+            for mask, label, color in ((~gate, "Other groups", "tab:blue"), (gate, "Residual gates", "tab:orange")):
+                axes[1, 0].scatter(positive.loc[mask, "rms"], positive.loc[mask, "energy"], label=label, color=color, alpha=0.7)
+            for name in positive.energy.nlargest(3).index.union(positive.rms.nlargest(3).index):
+                axes[1, 0].annotate(name, (positive.loc[name, "rms"], positive.loc[name, "energy"]), fontsize=6)
+            if not positive.empty:
+                axes[1, 0].set_xscale("log")
+                axes[1, 0].set_yscale("log")
+            axes[1, 0].legend(fontsize=8)
+    axes[1, 0].set(title="Per-parameter magnitude versus total energy (same latest step)", xlabel="Gradient RMS", ylabel="Energy (%)")
+    for ranking in ("grad", "energy"):
+        if not energy.empty and not rms.empty:
+            axes[1, 1].plot(table.index, concentration[ranking], label=f"Top 5 by {ranking} (offline)")
+            continue
+        cols = [f"top_{ranking}_{rank}_energy_pct" for rank in range(1, 6)]
+        # Require every rank: a partial top-five is not a valid concentration estimate.
+        if all(name in table for name in cols):
+            axes[1, 1].plot(table.index, table[cols].sum(axis=1, min_count=5), label=f"Top 5 by {ranking}")
+    if "attention_residual_gate_energy_pct" in table:
+        axes[1, 1].plot(table.index, table.attention_residual_gate_energy_pct, label="All residual gates")
+    axes[1, 1].set(title="Energy concentration", ylabel="Total gradient energy (%)")
+    if axes[1, 1].lines:
+        axes[1, 1].legend(fontsize=8)
+    for ax in axes.flat:
+        ax.grid(alpha=0.2)
+        if ax is not axes[0, 1] and ax is not axes[1, 0]:
+            ax.set_xlabel("global_step")
+    save(fig, "gradient_comparison")
+
+    count_pct, density_energy, density_ratio, tied = offline_gradient_energy_density(table)
+    if count_pct.notna().any().any():
+        # Export every group and window, preserving raw inputs and undefined ratios.
+        records = []
+        squared = group_metric_table(table, "sum_sq_pre")
+        counts = group_metric_table(table, "parameter_count")
+        for name in density_ratio:
+            frame = pd.DataFrame({"group_name": name,
+                "gradient_sum_sq_pre": squared.get(name), "parameter_count": counts.get(name),
+                "parameter_count_pct": count_pct[name], "gradient_energy_pct": density_energy[name],
+                "gradient_energy_ratio": density_ratio[name]}, index=table.index)
+            records.append(frame)
+        pd.concat(records).rename_axis("global_step").to_csv(os.path.join(output_dir, "group_gradient_energy.csv"))
+        for page, names in enumerate(chunked(list(density_ratio.columns), 40), 1):
+            fig, axes = plt.subplots(2, 1, figsize=(18, 14), constrained_layout=True)
+            fig.suptitle("Gradient energy relative to parameter share — computed offline")
+            capture_heatmap(fig, axes[0], count_pct[names], "Parameter count share (%)", percent=True)
+            capture_heatmap(fig, axes[1], density_ratio[names],
+                            "R = gradient energy share / parameter share (log10 R; 0 = model average)", logarithmic=True)
+            save(fig, f"group_energy_density_{page:02d}")
+    if not tied.empty:
+        tied.rename_axis("global_step").to_csv(os.path.join(output_dir, "tied_gradient_ratio.csv"))
+        fig, axes = plt.subplots(2, 1, figsize=(16, 9), constrained_layout=True)
+        fig.suptitle("Tied embedding / LM-head gradient intensity — computed offline")
+        axes[0].plot(tied.index, tied.tied_gradient_energy_ratio, label="R")
+        axes[0].axhline(1, color="gray", linestyle="--", label="Model average (R = 1)")
+        axes[0].set(ylabel="Energy share / parameter share")
+        for name, label in (("tied_gradient_energy_pct", "Gradient energy share"),
+                            ("tied_parameter_count_pct", "Parameter count share")):
+            axes[1].plot(tied.index, tied[name], label=label)
+        axes[1].set(ylabel="Share (%)")
+        for ax in axes:
+            ax.set_xlabel("global_step")
+            ax.grid(alpha=0.2)
+            ax.legend()
+        save(fig, "tied_gradient_ratio")
+
+    # All registered groups, without truncating to the current winners.
+    for page, names in enumerate(chunked(list(energy.columns.union(rms.columns, sort=False)), 40), 1):
+        fig, axes = plt.subplots(6, 1, figsize=(18, 36), constrained_layout=True)
+        for ax, metric, title, log in zip(axes, GROUP_METRICS + LEGACY_GROUP_METRICS,
+                ("Gradient RMS", "Squared gradient energy", "Energy share (%)",
+                 "Parameter count", "RMS rank (offline; 1 = largest)", "Energy rank (offline; 1 = largest)"),
+                (True, True, False, True, False, False)):
+            frame = (ranks[metric] if metric in ranks else group_metric_table(table, metric)).reindex(columns=names)
+            capture_heatmap(fig, ax, frame, title, percent=metric == "energy_pct", logarithmic=log)
+        save(fig, f"parameter_groups_{page:02d}")
+
+    # Rank slots are deliberately labeled as slots, with group indices shown separately.
+    for ranking in ("grad", "energy"):
+        fig, axes = plt.subplots(4, 1, figsize=(16, 13), constrained_layout=True)
+        fig.suptitle(f"Top five by {ranking} — slot identities can change; indices match GradTrace logs")
+        found = False
+        for ax, field in zip(axes, ("group_index", "grad_rms", "energy_pct", "parameter_count")):
+            columns = {f"top_{ranking}_{rank}_{field}": f"Rank {rank}" for rank in range(1, 6)}
+            frame = table.reindex(columns=list(columns)).rename(columns=columns)
+            found |= frame.notna().any().any()
+            capture_heatmap(fig, ax, frame, field, logarithmic=field in ("grad_rms", "parameter_count"))
+        if found:
+            save(fig, f"top_{ranking}_slots")
+        else:
+            plt.close(fig)
+
+    gate_pattern = re.compile(r"layer(\d+)_attention_residual_gate_(.+)")
+    gate_metrics = {}
+    for name in table:
+        match = gate_pattern.fullmatch(name)
+        if match and not any(name.endswith("_grad_" + metric) for metric in GROUP_METRICS + LEGACY_GROUP_METRICS):
+            gate_metrics.setdefault(match[2], {})[int(match[1])] = name
+    for page, metrics in enumerate(chunked(sorted(gate_metrics), 6), 1):
+        fig, axes = plt.subplots(3, 2, figsize=(18, 15), constrained_layout=True)
+        fig.suptitle("Residual gates by layer — raw observations; parameters sampled before optimizer")
+        for ax, metric in zip(axes.flat, metrics):
+            columns = gate_metrics[metric]
+            frame = table[[columns[layer] for layer in sorted(columns)]].rename(
+                columns={name: f"Layer {layer}" for layer, name in columns.items()})
+            forward = metric.startswith(("multiplier_", "logit_"))
+            if forward and "gate_forward_sample_global_step" in table:
+                # Keep publication gaps, but label the actual sampled microbatch step.
+                sample_steps = table.gate_forward_sample_global_step
+                frame = frame.copy()
+                frame.index = sample_steps.where(sample_steps.notna(), pd.Series(table.index, index=table.index)).to_numpy()
+            capture_heatmap(fig, ax, frame, metric + (" (forward sample step)" if forward else ""),
+                            signed=metric.endswith(("mean", "min", "max")) and not metric.startswith("multiplier_"))
+        for ax in axes.flat[len(metrics):]:
+            ax.axis("off")
+        save(fig, f"gate_layers_{page:02d}")
+
+    fig, axes = plt.subplots(6, 1, figsize=(16, 18), constrained_layout=True)
+    for ax, names, title in zip(axes,
+            (("grad_norm_mean", "gradient_global_rms_post"),
+             ("gradient_clip_scale", "gradient_clipped"),
+             ("gradient_global_sum_sq_pre",), ("gate_forward_sample_token_count",),
+             ("gate_forward_sample_global_step",), ("gradient_capture_optimizer_iteration",)),
+            ("Global RMS before / after clipping", "Clipping scale and indicator", "Total pre-clip gradient energy",
+             "Real tokens in forward gate sample", "Forward sample step versus publication step",
+             "Capture optimizer iteration")):
+        for name in names:
+            if name in streams and "raw_observation" in streams[name]:
+                series = numeric_series(streams[name].raw_observation)
+                ax.plot(series.index, series, label=name)
+        ax.set(title=title, xlabel="global_step")
+        ax.grid(alpha=0.2)
+        if ax.lines:
+            ax.legend(fontsize=8)
+    save(fig, "gradient_global")
+    return outputs
+
 
 def main():
     # --- find CSV ---
@@ -1779,8 +2067,13 @@ def main():
     else:
         print("Loss component figure skipped: no raw component streams in CSV")
 
-    atlas_dir = generate_raw_stream_atlas(path, streams)
-    generate_stream_detail_pages(path, streams)
+    generate_capture_figures(path, streams)
+    # Compact comparison pages cover capture streams by default. Opt into the
+    # large, per-stream lattice-state atlas with the second CLI argument.
+    atlas_streams = streams if "--capture-details" in sys.argv else {
+        name: frame for name, frame in streams.items() if not is_capture_stream(name)}
+    atlas_dir = generate_raw_stream_atlas(path, atlas_streams)
+    generate_stream_detail_pages(path, atlas_streams)
     print(f"Saved comprehensive telemetry atlas under: {atlas_dir}")
 
     plt.show()

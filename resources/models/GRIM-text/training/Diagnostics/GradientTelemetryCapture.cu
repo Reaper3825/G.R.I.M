@@ -21,9 +21,9 @@ namespace {
 using Telemetry::MetricStream;
 constexpr int kDynamicBase = static_cast<int>(MetricStream::GRADIENT_CAPTURE_DYNAMIC_BASE);
 constexpr int kLayerMetrics = 34;
-constexpr int kGroupMetrics = 5;
+constexpr int kGroupMetrics = 4;
 const char* const kStatsNames[] = {"mean", "std", "rms", "min", "max"};
-const char* const kGroupNames[] = {"grad_rms_pre", "grad_sum_sq_pre", "grad_energy_pct", "grad_rms_rank", "grad_energy_rank"};
+const char* const kGroupNames[] = {"grad_rms_pre", "grad_sum_sq_pre", "grad_energy_pct", "grad_parameter_count"};
 void check(cudaError_t error) {
     if (error != cudaSuccess) throw std::runtime_error(
         std::string("GradientTelemetryCapture: ") + cudaGetErrorString(error));
@@ -201,42 +201,19 @@ void captureGradientWindowTelemetry(GRIMText::Training::TrainingContext& ctx,
     publish(obs, int(MetricStream::GRADIENT_CLIP_SCALE), clip.global_rms_pre > 0.0f
         ? double(clip.global_rms_post) / clip.global_rms_pre : 1.0);
     publish(obs, int(MetricStream::GRADIENT_CAPTURE_OPTIMIZER_ITERATION), optimizer_step + 1);
-    std::vector<size_t> rms_order, energy_order;
-    for (size_t i = 0; i < groups.size(); ++i) if (groups[i].grads() && groups[i].size()) rms_order.push_back(i);
-    energy_order = rms_order;
-    std::stable_sort(rms_order.begin(), rms_order.end(), [&](size_t a, size_t b) {
-        return double(scratch.h_partial_sums[a]) / groups[a].size() > double(scratch.h_partial_sums[b]) / groups[b].size();
-    });
-    std::stable_sort(energy_order.begin(), energy_order.end(), [&](size_t a, size_t b) {
-        return scratch.h_partial_sums[a] > scratch.h_partial_sums[b];
-    });
-    std::vector<size_t> rms_rank(groups.size()), energy_rank(groups.size());
-    for (size_t rank = 0; rank < rms_order.size(); ++rank) {
-        rms_rank[rms_order[rank]] = rank + 1; energy_rank[energy_order[rank]] = rank + 1;
-    }
     double gate_sum_sq = 0.0;
-    for (size_t i : rms_order) {
+    for (size_t i = 0; i < groups.size(); ++i) {
         const auto& group = groups[i];
+        if (!group.grads() || !group.size()) continue;
         const double energy = scratch.h_partial_sums[i];
         const int id = state.group_base + i * kGroupMetrics;
         publish(obs, id, std::sqrt(energy / group.size())); publish(obs, id + 1, energy);
         publish(obs, id + 2, clip.global_sum_sq_pre > 0.0 ? 100.0 * energy / clip.global_sum_sq_pre : 0.0);
-        publish(obs, id + 3, rms_rank[i]); publish(obs, id + 4, energy_rank[i]);
+        publish(obs, id + 3, group.size());
         if (group.name.find("attention_residual_gate_") != std::string::npos) gate_sum_sq += energy;
     }
     publish(obs, int(MetricStream::ATTENTION_RESIDUAL_GATE_ENERGY_PCT),
         clip.global_sum_sq_pre > 0.0 ? 100.0 * gate_sum_sq / clip.global_sum_sq_pre : 0.0);
-    const auto top = [&](const auto& list, int base) {
-        for (size_t rank = 0; rank < list.size(); ++rank) if (list[rank].valid) {
-            const auto& item = list[rank];
-            const int id = base + 4 * rank;
-            publish(obs, id, item.index); publish(obs, id + 1, item.rms);
-            publish(obs, id + 2, clip.global_sum_sq_pre > 0.0 ? 100.0 * item.sum_sq / clip.global_sum_sq_pre : 0.0);
-            publish(obs, id + 3, item.count);
-        }
-    };
-    top(clip.top_groups, int(MetricStream::TOP_GRAD_GROUP_BASE));
-    top(clip.top_energy_groups, int(MetricStream::TOP_ENERGY_GROUP_BASE));
     for (int layer = 0; layer < state.layers; ++layer) {
         const auto& gate = ctx.parameter_registry.requireAttentionResidualGateParameters(layer, "captureGradientWindowTelemetry");
         const Tensor* tensors[] = {&gate.W_gate, &gate.b_gate, &gate.W_gate, &gate.b_gate};

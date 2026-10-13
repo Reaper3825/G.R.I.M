@@ -270,40 +270,6 @@ float encoderTelemetryRms(const GRIM::GradClip::ClipMetrics& gm) {
 	return rmsOrThrow(sum_sq, count, "encoder gradient");
 }
 
-void recordTopGroup(
-	GRIM::GradClip::ClipResult& result,
-	size_t index,
-	const GRIM::ParameterGroup& group,
-	float sum_sq)
-{
-	const uint64_t count = static_cast<uint64_t>(group.size());
-	if (count == 0 || !std::isfinite(sum_sq)) {
-		return;
-	}
-
-	const float rms = static_cast<float>(std::sqrt(static_cast<double>(sum_sq) / static_cast<double>(count)));
-	GRIM::GradClip::ClipResult::TopGroup candidate{};
-	candidate.index = index;
-	candidate.rms = rms;
-	candidate.sum_sq = sum_sq;
-	candidate.count = count;
-	candidate.type = static_cast<int>(group.type);
-	candidate.layer_index = group.layer_index;
-	candidate.valid = true;
-	auto energy_candidate = candidate;
-
-	for (auto& top : result.top_groups) {
-		if (!top.valid || candidate.rms > top.rms) {
-			std::swap(candidate, top);
-		}
-	}
-	for (auto& top : result.top_energy_groups) {
-		if (!top.valid || energy_candidate.sum_sq > top.sum_sq) {
-			std::swap(energy_candidate, top);
-		}
-	}
-}
-
 void launchScaleGradients(
 	float* gradients,
 	size_t size,
@@ -410,10 +376,6 @@ ClipResult clipGradientNorms(
     result.global_sum_sq_pre = global_sum_sq;
 	result.encoder_rms_pre = encoderTelemetryRms(measured_metrics);
 	result.metrics = measured_metrics;
-	for (size_t i = 0; i < num_groups; ++i) {
-		if (!groups[i].grads() || groups[i].size() == 0) continue;
-		recordTopGroup(result, i, groups[i], scratch->h_partial_sums[i]);
-	}
 
     // Step 4: Clip all registered gradients with one global coefficient.
     // Skipped when clipping is disabled.

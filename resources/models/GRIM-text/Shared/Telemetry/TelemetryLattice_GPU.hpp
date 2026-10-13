@@ -240,7 +240,7 @@ enum class MetricStream : int {
     GATE_FORWARD_SAMPLE_GLOBAL_STEP = 99,
     GATE_FORWARD_SAMPLE_TOKEN_COUNT = 100,
     GRADIENT_CAPTURE_OPTIMIZER_ITERATION = 101,
-    // Five ranks, four streams each: group index, gradient RMS, energy %, count.
+    // Slots 102-141 retired (training-time rankings); do not reuse.
     TOP_GRAD_GROUP_BASE = 102,
     TOP_ENERGY_GROUP_BASE = 122,
     // Named layer/parameter streams are registered here in model construction order.
@@ -252,7 +252,8 @@ enum class MetricStream : int {
 __host__ __device__ constexpr bool isActiveMetricStream(int stream_idx) {
     return (stream_idx >= 0 && stream_idx <= 13) ||
            (stream_idx >= 27 && stream_idx <= 62) ||
-           (stream_idx >= 94 && stream_idx < static_cast<int>(MetricStream::CAPACITY));
+           (stream_idx >= 94 && stream_idx <= 101) ||
+           (stream_idx >= 142 && stream_idx < static_cast<int>(MetricStream::CAPACITY));
 }
 
 const char* getMetricStreamName(MetricStream stream, const LatticeConfig* config = nullptr);

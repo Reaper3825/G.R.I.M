@@ -7,7 +7,6 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -63,26 +62,12 @@ struct ClipScratch {
 
 /// Result of a clipGradientNorms() call — all values valid immediately on return
 struct ClipResult {
-    struct TopGroup {
-        size_t index = 0;
-        float rms = 0.0f;
-        float sum_sq = 0.0f;
-        uint64_t count = 0;
-        int type = -1;
-        int layer_index = -1;
-        bool valid = false;
-    };
-
-    static constexpr size_t kTopGroupCount = 5;
-
     size_t measured_group_count = 0;  ///< Number of groups measured by clipGradientNorms()
     float global_rms_pre = 0.0f;
     float global_rms_post = 0.0f;
     double global_sum_sq_pre = 0.0; ///< Squared gradient energy across all registered groups, after accumulation normalization and before clipping
     float encoder_rms_pre = 0.0f;
     ClipMetrics metrics{};
-    std::array<TopGroup, kTopGroupCount> top_groups{};
-    std::array<TopGroup, kTopGroupCount> top_energy_groups{}; ///< Descending pre-clip sum_sq, independent of RMS rank
 
     bool clipped = false;
     bool any_clipped() const { return clipped; }
