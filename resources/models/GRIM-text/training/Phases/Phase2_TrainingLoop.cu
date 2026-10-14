@@ -863,12 +863,6 @@ BatchResult processBatch(
     // Use computeTelemetryFeedback() to access grad_norm variance for adaptive decisions.
 
     // ========================================================================
-    // BATCH_LOSS equation log + LossStats summary line
-    // (extracted to Diagnostics/LossStatsDiagnostic.cu)
-    // ========================================================================
-    GRIM::Diagnostics::runLossStatsDiagnostic(ctx, payload, result, batch_idx);
-
-    // ========================================================================
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
     // (extracted to Diagnostics/LogitScaleDiagnostic.cu)
     // ========================================================================
@@ -908,13 +902,13 @@ BatchResult processBatch(
     }
 
     // ========================================================================
-    // Adaptive loss baseline tracking + invalid-token validation
-    // (extracted to Diagnostics/LossBaselineDiagnostic.cu)
+    // Loss equation/statistics + observed baseline tracking + token validation
+    // (Diagnostics/LossDiagnostic.cu)
     // Mutates: state.initial_loss, state.min_observed_loss, state.warmup_batches.
     // Throws on data corruption (Rule 20).
     // ========================================================================
-    GRIM::Diagnostics::runLossBaselineAndTokenValidation(
-        ctx, state, payload, result.loss, batch_idx);
+    GRIM::Diagnostics::runLossDiagnostic(
+        ctx, state, payload, result, batch_idx);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // POST-BACKWARD: explicit shared forward + autograd backward has produced/accumulated grads.

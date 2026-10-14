@@ -683,10 +683,8 @@ add_executable(train_gpu
     ../Diagnostics/AtomStatsDiagnostic.hpp
     ../Diagnostics/AtomIdentifierDiagnostic.cu
     ../Diagnostics/AtomIdentifierDiagnostic.hpp
-    ../Diagnostics/LossBaselineDiagnostic.cu
-    ../Diagnostics/LossBaselineDiagnostic.hpp
-    ../Diagnostics/LossStatsDiagnostic.cu
-    ../Diagnostics/LossStatsDiagnostic.hpp
+    ../Diagnostics/LossDiagnostic.cu
+    ../Diagnostics/LossDiagnostic.hpp
     ../Diagnostics/GradientNormDiagnostic.cu
     ../Diagnostics/GradientNormDiagnostic.hpp
     ../Diagnostics/GradientTelemetryCapture.cu
