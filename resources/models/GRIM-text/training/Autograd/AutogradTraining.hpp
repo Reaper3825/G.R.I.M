@@ -100,7 +100,7 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PAYLOAD VIEW
     // Training only: payload points to the caller-owned BatchPayload runtime
-    // datum. Fixed-shape training geometry is config-owned via
+    // datum. Context width and row capacity are config-owned via
     // HyperparameterGroupings/LanguageModelConfig and enforced at upload; the
     // payload carries the realized supervision, token stats, and row layout.
     // Inference MUST NOT enter AutogradContext; use
@@ -126,6 +126,10 @@ struct AutogradContext {
     // Phase1-authored LossConfigHP grouping passed directly to loss assembly.
     // ═══════════════════════════════════════════════════════════════════════════
     const float* d_class_weights = nullptr;
+    // Per-objective weights authored by the optimizer-window plan. Validation
+    // keeps unit scales and reports the unweighted microbatch means.
+    float primary_loss_scale = 1.0f;
+    float retrieval_loss_scale = 1.0f;
     
 
     
@@ -156,7 +160,7 @@ struct AutogradContext {
 
 /**
  * Initialize autograd context for TRAINING. `payload` is the realized runtime
- * batch datum; fixed-shape training geometry is config-owned and validated at
+ * batch datum; context width and row capacity are config-owned and validated at
  * Batching::uploadBatchToDevice(). `bindings` must point at device memory already
  * populated by that upload boundary.
  */

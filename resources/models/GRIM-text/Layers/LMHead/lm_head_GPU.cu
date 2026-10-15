@@ -289,8 +289,8 @@ void forwardLmHead(
         throw std::runtime_error("forwardLmHead: gap geometry does not match payload sequence length");
     if (!hp.atom_insertion_enabled && payload.isTraining() &&
         (hp.training_batch_size <= 0 || hp.training_rows_per_sequence <= 0 ||
-         batch_size != hp.training_batch_size || rows_per_sequence != hp.training_rows_per_sequence))
-        throw std::runtime_error("forwardLmHead: training payload differs from config-authored fixed shape");
+         batch_size > hp.training_batch_size || rows_per_sequence != hp.training_rows_per_sequence))
+        throw std::runtime_error("forwardLmHead: training payload exceeds row capacity or differs from context width");
     if (batch_size <= 0 || rows_per_sequence <= 0 ||
         static_cast<std::int64_t>(total_tokens) !=
             static_cast<std::int64_t>(batch_size) * rows_per_sequence)

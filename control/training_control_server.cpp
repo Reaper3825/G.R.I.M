@@ -39,6 +39,7 @@
 #include <nlohmann/json.hpp>
 #include "training_paths.hpp"
 #include "../resources.hpp"
+#include "../resources/models/GRIM-text/Shared/Batching/TokenBudget.hpp"
 #include "../settings/runtime_ai_config.hpp"
 
 #ifdef _WIN32
@@ -76,7 +77,8 @@ struct InternalTrainingStats {
 
 struct InternalTrainingConfig {
     int epochs = 3;
-    int batchSize = 8;
+    int batchSize = 8; // Legacy row-count view
+    int batchTokenBudget = 0;
     float learningRate = 0.0001f;
     int maxSeqLen = 8192;
     int warmupSteps = 1000;
@@ -376,7 +378,7 @@ public:
                 << " --vocab \"" << vocabPath.string() << "\""
                 << " --output \"" << outputPath.string() << "\""
                 << " --epochs " << config.epochs
-                << " --batch-size " << config.batchSize
+                << " --batch-token-budget " << config.batchTokenBudget
                 << " --lr " << config.learningRate
                 << " --max-seq-len " << config.maxSeqLen
                 << " --warmup-steps " << config.warmupSteps;
@@ -607,7 +609,8 @@ void setupAPI(httplib::Server& server) {
             config.useFlashAttention,
             dataPath,
             vocabPath,
-            outputPath
+            outputPath,
+            config.batchTokenBudget
         );
         
         // Build StatusResponse
@@ -674,6 +677,11 @@ void setupAPI(httplib::Server& server) {
                     config.batchSize = fbConfig->batch_size();
                     config.learningRate = fbConfig->learning_rate();
                     config.maxSeqLen = fbConfig->max_seq_len();
+                    config.batchTokenBudget = fbConfig->max_tokens_per_batch() != 0
+                        ? fbConfig->max_tokens_per_batch()
+                        : GRIM::Batching::tokenBudgetForRows(config.batchSize, config.maxSeqLen);
+                    config.batchSize = GRIM::Batching::rowsForTokenBudget(
+                        config.batchTokenBudget, config.maxSeqLen);
                     config.useGPU = fbConfig->use_gpu();
                     // Also read path config if provided
                     if (fbConfig->data_path() && fbConfig->data_path()->size() > 0) {
@@ -774,6 +782,11 @@ void setupAPI(httplib::Server& server) {
                 config.batchSize = fbConfig->batch_size();
                 config.learningRate = fbConfig->learning_rate();
                 config.maxSeqLen = fbConfig->max_seq_len();
+                config.batchTokenBudget = fbConfig->max_tokens_per_batch() != 0
+                    ? fbConfig->max_tokens_per_batch()
+                    : GRIM::Batching::tokenBudgetForRows(config.batchSize, config.maxSeqLen);
+                config.batchSize = GRIM::Batching::rowsForTokenBudget(
+                    config.batchTokenBudget, config.maxSeqLen);
                 config.warmupSteps = fbConfig->warmup_steps();
                 config.useGPU = fbConfig->use_gpu();
                 config.useFlashAttention = fbConfig->use_flash_attention();
@@ -1178,9 +1191,11 @@ int main(int argc, char** argv) {
         const auto& hyperparams = aiConfig.at("training").at("config");
         InternalTrainingConfig config = g_state.getConfig();
         config.epochs = hyperparams.at("epochs").get<int>();
-        config.batchSize = hyperparams.at("batch_size").get<int>();
+        config.batchTokenBudget = hyperparams.at("max_tokens_per_batch").get<int>();
         config.learningRate = hyperparams.at("learning_rate").get<float>();
         config.maxSeqLen = hyperparams.at("max_seq_len").get<int>();
+        config.batchSize = GRIM::Batching::rowsForTokenBudget(
+            config.batchTokenBudget, config.maxSeqLen);
         config.warmupSteps = 0;
         config.useGPU = hyperparams.at("use_gpu").get<bool>();
         config.useFlashAttention = hyperparams.at("use_flash_attention").get<bool>();

@@ -34,7 +34,7 @@ public:
                 
                 // Load only editable hyperparameters here - snapshot path leaves are staged under training.config
                 config.epochs = tc.value("epochs", 3);
-                config.batchSize = tc.value("batch_size", 8);
+                config.batchTokenBudget = tc.at("max_tokens_per_batch").get<int>();
                 config.learningRate = tc.value("learning_rate", 0.0001f);
                 config.maxSeqLen = tc.value("max_seq_len", 8192);
                 config.warmupSteps = tc.value("warmup_steps", 1000);
@@ -53,7 +53,7 @@ public:
             nlohmann::json pending;
             pending["training"]["config"] = {
                 {"epochs", config.epochs},
-                {"batch_size", config.batchSize},
+                {"max_tokens_per_batch", config.batchTokenBudget},
                 {"learning_rate", config.learningRate},
                 {"max_seq_len", config.maxSeqLen},
                 {"warmup_steps", config.warmupSteps},

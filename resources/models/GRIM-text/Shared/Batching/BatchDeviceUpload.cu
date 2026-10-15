@@ -112,11 +112,11 @@ BatchDeviceBindings uploadBatchToDevice(
     }
 
     if (payload.isTraining()) {
-        if (payload.batch_size != cfg_batch_size) {
+        if (payload.batch_size > cfg_batch_size) {
             throw std::runtime_error(
                 "uploadBatchToDevice: training payload.batch_size=" +
                 std::to_string(payload.batch_size) +
-            " != model batch_size=" + std::to_string(cfg_batch_size));
+            " exceeds model batch row capacity=" + std::to_string(cfg_batch_size));
         }
         if (payload.max_seq_len != cfg_max_cached_seq_len) {
             throw std::runtime_error(
@@ -124,11 +124,11 @@ BatchDeviceBindings uploadBatchToDevice(
                 std::to_string(payload.max_seq_len) +
                 " != model max_cached_seq_len=" + std::to_string(cfg_max_cached_seq_len));
         }
-        if (payload.total_tokens != cfg_max_tokens_per_batch) {
+        if (payload.total_tokens > cfg_max_tokens_per_batch) {
             throw std::runtime_error(
                 "uploadBatchToDevice: training payload.total_tokens=" +
                 std::to_string(payload.total_tokens) +
-                " != model max_tokens_per_batch=" + std::to_string(cfg_max_tokens_per_batch));
+                " exceeds model max_tokens_per_batch=" + std::to_string(cfg_max_tokens_per_batch));
         }
     } else {
         if (payload.batch_size > cfg_batch_size) {

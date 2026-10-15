@@ -370,6 +370,8 @@ struct StabilityOverrideHP {
     float clip_per_token = 0.0f;
 };
 
+// Historical type name: fixed context width, maximum rows, and token capacity.
+// A realized microbatch may contain fewer rows.
 struct TrainingFixedShapeHP {
     int batch_size = 0;
     int max_seq_len = 0;
@@ -919,10 +921,7 @@ inline TrainingFixedShapeHP trainingFixedShapeHP(
     TrainingFixedShapeHP view;
     view.batch_size = snapshotEffectiveBatchSize(snapshot, "trainingFixedShapeHP");
     view.max_seq_len = snapshotEffectiveMaxSeqLen(snapshot, "trainingFixedShapeHP");
-    view.max_tokens_per_batch = computeMaxTokensPerBatch(
-        view.batch_size,
-        view.max_seq_len,
-        "trainingFixedShapeHP");
+    view.max_tokens_per_batch = snapshotTrainingConfigField<int>(snapshot, "max_tokens_per_batch");
     return view;
 }
 
@@ -1343,8 +1342,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     ModelHP view;
     view.training_batch_size = batch_size;
     view.training_max_seq_len = max_seq_len;
-    view.training_max_tokens_per_batch =
-        computeMaxTokensPerBatch(batch_size, max_seq_len, "modelHP(snapshot)");
+    view.training_max_tokens_per_batch = requireInt("max_tokens_per_batch");
 
     view.embedding_vocab_size = vocab_size;
     view.embedding_d_model = d_model;

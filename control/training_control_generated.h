@@ -8,8 +8,10 @@
 
 // Ensure the included flatbuffers.h is the same version as when this file was
 // generated, otherwise it may not be compatible.
-static_assert(FLATBUFFERS_VERSION_MAJOR == 25 && FLATBUFFERS_VERSION_MINOR >= 2,
-             "Non-compatible flatbuffers version included (need 25.2.x)");
+static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
+              FLATBUFFERS_VERSION_MINOR == 2 &&
+              FLATBUFFERS_VERSION_REVISION == 10,
+             "Non-compatible flatbuffers version included");
 
 namespace GRIMText {
 namespace Control {
@@ -361,7 +363,8 @@ struct TrainingConfig FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_USE_FLASH_ATTENTION = 16,
     VT_DATA_PATH = 18,
     VT_VOCAB_PATH = 20,
-    VT_OUTPUT_PATH = 22
+    VT_OUTPUT_PATH = 22,
+    VT_MAX_TOKENS_PER_BATCH = 24
   };
   int32_t epochs() const {
     return GetField<int32_t>(VT_EPOCHS, 3);
@@ -393,6 +396,9 @@ struct TrainingConfig FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *output_path() const {
     return GetPointer<const ::flatbuffers::String *>(VT_OUTPUT_PATH);
   }
+  int32_t max_tokens_per_batch() const {
+    return GetField<int32_t>(VT_MAX_TOKENS_PER_BATCH, 0);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<int32_t>(verifier, VT_EPOCHS, 4) &&
@@ -408,6 +414,7 @@ struct TrainingConfig FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(vocab_path()) &&
            VerifyOffset(verifier, VT_OUTPUT_PATH) &&
            verifier.VerifyString(output_path()) &&
+           VerifyField<int32_t>(verifier, VT_MAX_TOKENS_PER_BATCH, 4) &&
            verifier.EndTable();
   }
 };
@@ -446,6 +453,9 @@ struct TrainingConfigBuilder {
   void add_output_path(::flatbuffers::Offset<::flatbuffers::String> output_path) {
     fbb_.AddOffset(TrainingConfig::VT_OUTPUT_PATH, output_path);
   }
+  void add_max_tokens_per_batch(int32_t max_tokens_per_batch) {
+    fbb_.AddElement<int32_t>(TrainingConfig::VT_MAX_TOKENS_PER_BATCH, max_tokens_per_batch, 0);
+  }
   explicit TrainingConfigBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -468,8 +478,10 @@ inline ::flatbuffers::Offset<TrainingConfig> CreateTrainingConfig(
     bool use_flash_attention = true,
     ::flatbuffers::Offset<::flatbuffers::String> data_path = 0,
     ::flatbuffers::Offset<::flatbuffers::String> vocab_path = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> output_path = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> output_path = 0,
+    int32_t max_tokens_per_batch = 0) {
   TrainingConfigBuilder builder_(_fbb);
+  builder_.add_max_tokens_per_batch(max_tokens_per_batch);
   builder_.add_output_path(output_path);
   builder_.add_vocab_path(vocab_path);
   builder_.add_data_path(data_path);
@@ -494,7 +506,8 @@ inline ::flatbuffers::Offset<TrainingConfig> CreateTrainingConfigDirect(
     bool use_flash_attention = true,
     const char *data_path = nullptr,
     const char *vocab_path = nullptr,
-    const char *output_path = nullptr) {
+    const char *output_path = nullptr,
+    int32_t max_tokens_per_batch = 0) {
   auto data_path__ = data_path ? _fbb.CreateString(data_path) : 0;
   auto vocab_path__ = vocab_path ? _fbb.CreateString(vocab_path) : 0;
   auto output_path__ = output_path ? _fbb.CreateString(output_path) : 0;
@@ -509,7 +522,8 @@ inline ::flatbuffers::Offset<TrainingConfig> CreateTrainingConfigDirect(
       use_flash_attention,
       data_path__,
       vocab_path__,
-      output_path__);
+      output_path__,
+      max_tokens_per_batch);
 }
 
 struct StatusResponse FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

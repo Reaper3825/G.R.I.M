@@ -11,7 +11,7 @@ namespace GRIM::Batching {
 /**
  * @brief Policy-only scheduler inputs (no capacity ownership).
  *
- * Fixed run geometry (sequence cap, batch rows) must be passed separately from
+ * Run capacity (context window, token budget) must be passed separately from
  * the config/hyperparameter-authored capacity path.
  */
 struct PackerPolicy {

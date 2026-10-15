@@ -44,6 +44,8 @@ table TrainingConfig {
     data_path:string;
     vocab_path:string;
     output_path:string;
+    // Padded token slots per microbatch; context width remains model-owned.
+    max_tokens_per_batch:int = 0;
 }
 
 table StatusResponse {

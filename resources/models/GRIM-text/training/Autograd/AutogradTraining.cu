@@ -210,6 +210,22 @@ LossResult computeAutogradLoss(
             << " local_atom_retrieval_queries=" << result.local_atom_retrieval_queries
             << " selector=" << result.selector_loss
             << " valid_rows=" << valid_rows);
+    // Host loss/telemetry above reports the original objective means. Only
+    // the backward root receives optimizer-window supervised-row weighting.
+    if (!std::isfinite(ctx.primary_loss_scale) || ctx.primary_loss_scale < 0.0f ||
+        !std::isfinite(ctx.retrieval_loss_scale) || ctx.retrieval_loss_scale < 0.0f) {
+        throw std::runtime_error("computeAutogradLoss: invalid accumulation weights");
+    }
+    if (retrieval_active) {
+        Tensor primary_root = autograd::mul_scalar(
+            primary_loss_tensor, ctx.primary_loss_scale, ctx.stream);
+        Tensor retrieval_root = autograd::mul_scalar(
+            weighted_retrieval_loss_tensor, ctx.retrieval_loss_scale, ctx.stream);
+        loss_state.loss_tensor = autograd::add(primary_root, retrieval_root, ctx.stream);
+    } else if (ctx.primary_loss_scale != 1.0f) {
+        loss_state.loss_tensor = autograd::mul_scalar(
+            loss_state.loss_tensor, ctx.primary_loss_scale, ctx.stream);
+    }
     result.success = true;
     return result;
 }

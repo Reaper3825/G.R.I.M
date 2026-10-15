@@ -1,5 +1,7 @@
 #include "Batching_GPU.hpp"
 #include "PackerPolicy.hpp"
+#include "TokenBudget.hpp"
+#include <limits>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -62,9 +64,9 @@ std::string BatchSchedule::summary() const {
     ss << std::fixed << std::setprecision(2);
     ss << "BatchSchedule Summary:\n";
     ss << "  Total batches: " << batches.size() << "\n";
-    ss << "  Batch size: " << batch_size << "\n";
+    ss << "  Token budget: " << token_budget << " (max rows: " << batch_size << ")\n";
     ss << "  Discarded tail sequences: " << discarded_tail_sequences << "\n";
-    ss << "  Projected fixed-rectangle tokens: " << actual_tokens << " actual / "
+    ss << "  Projected context-row tokens: " << actual_tokens << " actual / "
        << projected_total_tokens << " projected compute";
     ss << " (projected padding: " << projected_padding_tokens << ", "
        << (100.0f * projected_padding_tokens /
@@ -81,7 +83,7 @@ std::string BatchSchedule::summary() const {
 BatchSchedule buildBatches(
     const std::vector<uint32_t>& sequence_lengths,
     uint32_t fixed_sequence_cap,
-    uint32_t fixed_batch_size,
+    uint32_t token_budget,
     const PackerPolicy& policy)
 {
     BatchSchedule schedule{};
@@ -89,11 +91,14 @@ BatchSchedule buildBatches(
     if (fixed_sequence_cap == 0) {
         throw std::runtime_error("buildBatches: fixed_sequence_cap=0 — caller MUST pass configured max_seq_len");
     }
-    if (fixed_batch_size == 0) {
-        throw std::runtime_error("buildBatches: fixed_batch_size=0 — caller MUST pass configured batch_size");
+    if (token_budget > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        fixed_sequence_cap > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error("buildBatches: token budget/context exceeds int capacity");
     }
-
-    schedule.batch_size = fixed_batch_size;
+    const auto max_batch_rows = static_cast<uint32_t>(rowsForTokenBudget(
+        static_cast<int>(token_budget), static_cast<int>(fixed_sequence_cap)));
+    schedule.batch_size = max_batch_rows;
+    schedule.token_budget = token_budget;
 
     if (sequence_lengths.empty()) {
         return schedule;
@@ -142,11 +147,11 @@ BatchSchedule buildBatches(
     }
     
     // =======================================================================
-    // Fixed-row packing algorithm
+    // Token-budget packing: preserve context rows and their authored order
     // =======================================================================
     
     BatchAssignment current{};
-    current.seq_ids.reserve(fixed_batch_size);
+    current.seq_ids.reserve(max_batch_rows);
 
     for (uint32_t entry_idx : view_indices) {
         const uint32_t seq_len = sequence_lengths[entry_idx];
@@ -162,15 +167,15 @@ BatchSchedule buildBatches(
         }
 
         current.seq_ids.push_back(seq_id);
-        if (current.seq_ids.size() == fixed_batch_size) {
+        if (current.seq_ids.size() == max_batch_rows) {
             schedule.batches.push_back(std::move(current));
             current = BatchAssignment{};
-            current.seq_ids.reserve(fixed_batch_size);
+            current.seq_ids.reserve(max_batch_rows);
         }
     }
 
     if (!current.seq_ids.empty()) {
-        schedule.discarded_tail_sequences = static_cast<uint32_t>(current.seq_ids.size());
+        schedule.batches.push_back(std::move(current));
     }
     
     // =======================================================================
@@ -182,14 +187,11 @@ BatchSchedule buildBatches(
     
     for (const auto& batch : schedule.batches) {
         const uint32_t size = static_cast<uint32_t>(batch.seq_ids.size());
-        if (size != fixed_batch_size) {
-            throw std::runtime_error(
-                "buildBatches: non-fixed batch size emitted (batch_size=" +
-                std::to_string(size) + " expected=" + std::to_string(fixed_batch_size) +
-                ") — fixed batch size is required; upstream data count/order must produce full batches");
+        if (size == 0 || size > max_batch_rows) {
+            throw std::runtime_error("buildBatches: batch exceeds token-budget row capacity");
         }
         const uint64_t batch_actual = sumActualTokens(batch, sequence_lengths);
-        const uint64_t batch_compute = static_cast<uint64_t>(fixed_sequence_cap) * fixed_batch_size;
+        const uint64_t batch_compute = static_cast<uint64_t>(fixed_sequence_cap) * size;
         if (batch_compute < batch_actual) {
             throw std::runtime_error(
                 "buildBatches: fixed compute tokens smaller than actual tokens (batch_compute=" +

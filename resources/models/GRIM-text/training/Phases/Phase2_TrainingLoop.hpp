@@ -50,6 +50,8 @@ struct BatchAutogradPlan {
     bool should_accumulate = false;
     uint64_t batch_idx = 0;
     int accumulation_slot = 0;
+    float primary_loss_scale = 1.0f;
+    float retrieval_loss_scale = 1.0f;
 };
 
 /**

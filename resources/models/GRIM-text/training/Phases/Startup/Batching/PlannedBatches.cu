@@ -334,7 +334,9 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     (void)GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
         ctx.data.vocab_size,
         "PlannedBatchesReady");
-    const int fixed_batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size");
+    const auto batch_capacity = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+    const int fixed_batch_size = batch_capacity.batch_size;
+    const int token_budget = batch_capacity.max_tokens_per_batch;
     const int fixed_max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len");
     const int vocab_size =
         GRIM::HyperParameters::snapshotTrainingConfigField<int>(
@@ -403,13 +405,13 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         if (!row) throw std::runtime_error("PlannedBatches: null training row");
         train_block_ids.push_back(row->concept_block_id);
     }
-    log("[PlannedBatches] Building fixed train schedule: batch_strategy=" + schedule_hp.batch_strategy +
+    log("[PlannedBatches] Building token-budget train schedule: batch_strategy=" + schedule_hp.batch_strategy +
         " randomize_course_order=" + std::to_string(ctx.current_curriculum_metadata->randomize_course_order) +
         " randomize_concept_block_order=" + std::to_string(ctx.current_curriculum_metadata->randomize_concept_block_order));
     ctx.fixed_train_schedule = GRIM::Batching::buildEpochBatches(
         atom_insertion_enabled ? train_atom_lengths : ctx.data.train_seq_lengths,
         static_cast<uint32_t>(fixed_max_seq_len),
-        static_cast<uint32_t>(fixed_batch_size),
+        static_cast<uint32_t>(token_budget),
         /*global_step=*/0,
         /*epoch=*/0,
         /*data_seed=*/ctx.rng.data_seed,
@@ -468,7 +470,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         ctx.fixed_val_schedule = GRIM::Batching::buildBatches(
             atom_insertion_enabled ? val_atom_lengths : ctx.data.val_seq_lengths,
             static_cast<uint32_t>(fixed_max_seq_len),
-            static_cast<uint32_t>(fixed_batch_size),
+            static_cast<uint32_t>(token_budget),
             val_policy);
 
         const int num_val_batches =

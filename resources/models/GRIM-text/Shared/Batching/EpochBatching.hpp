@@ -33,7 +33,7 @@ using EpochBatchingLogFn = std::function<void(const std::string&)>;
 //
 //  sequence_lengths       — sequence lengths; index is the seq_id.
 //  fixed_sequence_cap    — configured max_seq_len / run sequence cap.
-//  fixed_batch_size      — configured batch_size.
+//  token_budget         — maximum padded token slots per batch.
 //  global_step  — current optimizer step; accepted to keep the call boundary explicit.
 //  epoch        — 0-based epoch index used for deterministic per-epoch RNG.
 //  data_seed    — base data RNG seed; per-epoch seed = data_seed + epoch + 1.
@@ -46,7 +46,7 @@ using EpochBatchingLogFn = std::function<void(const std::string&)>;
 BatchSchedule buildEpochBatches(
     const std::vector<uint32_t>& sequence_lengths,
     uint32_t fixed_sequence_cap,
-    uint32_t fixed_batch_size,
+    uint32_t token_budget,
     int global_step,
     int epoch,
     uint64_t data_seed,

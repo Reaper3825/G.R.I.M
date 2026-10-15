@@ -11,6 +11,7 @@
 #include "../Diagnostics/GradientTelemetryCapture.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
+#include "../../Shared/Batching/AccumulationWeights.hpp"
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"       // GradClip::clipGradientNorms (registry-level clipping)
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"          // GRIM::LR::LRSchedule (exposed LR curve)
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -736,6 +737,8 @@ BatchResult processBatch(
         train_bindings,
         plan.batch_idx,
         ctx.global_step);
+    autograd_ctx.primary_loss_scale = plan.primary_loss_scale;
+    autograd_ctx.retrieval_loss_scale = plan.retrieval_loss_scale;
 
     configureAutogradLossInputs(
         autograd_ctx,
@@ -1279,8 +1282,28 @@ EpochResult runEpoch(
         GRIM::Batching::BatchPayload& payload =
             ctx.train_payloads[ctx.epoch_batch_order[epoch_idx][batch_idx]];
 
+        // Preserve step-based accumulation, including a short final window.
+        // On resume the slot cursor locates the same window in the saved plan.
+        const int window_begin = batch_idx - ctx.optimizer.accumulationSlot();
+        if (window_begin < 0) {
+            throw std::runtime_error("FATAL: accumulation window begins before epoch");
+        }
+        const int window_size = std::min(accum_steps, total_batches - window_begin);
+        std::int64_t primary_rows = 0;
+        std::int64_t retrieval_rows = 0;
+        for (int i = window_begin; i < window_begin + window_size; ++i) {
+            const auto& member = ctx.train_payloads[batch_order[i]];
+            primary_rows += member.EnableAtomIdentification
+                ? member.atom_insertion_valid_gap_count : member.lm_valid_tokens;
+            if (member.local_atom_retrieval_enabled && !member.EnableAtomIdentification) {
+                retrieval_rows += member.localAtomQueryCount();
+            }
+        }
+        if (primary_rows <= 0) {
+            throw std::runtime_error("FATAL: accumulation window has no supervised rows");
+        }
         validateAccumulationPositionBeforeBackward(
-            ctx.optimizer, accum_steps, batch_idx, ctx.global_step);
+            ctx.optimizer, window_size, batch_idx, ctx.global_step);
 
         // runEpoch owns optimizer timing. processBatch receives an immutable
         // autograd plan and must not read or mutate OptimizerContext.
@@ -1288,6 +1311,14 @@ EpochResult runEpoch(
         autograd_plan.should_accumulate = shouldAccumulateGradients(ctx.optimizer);
         autograd_plan.batch_idx = static_cast<uint64_t>(batch_idx);
         autograd_plan.accumulation_slot = ctx.optimizer.accumulationSlot();
+        autograd_plan.primary_loss_scale = GRIM::Batching::objectiveAccumulationScale(
+            payload.EnableAtomIdentification ? payload.atom_insertion_valid_gap_count
+                                             : payload.lm_valid_tokens,
+            primary_rows, accum_steps);
+        autograd_plan.retrieval_loss_scale = GRIM::Batching::objectiveAccumulationScale(
+            payload.local_atom_retrieval_enabled && !payload.EnableAtomIdentification
+                ? payload.localAtomQueryCount() : 0,
+            retrieval_rows, accum_steps);
 
         const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
 
@@ -1307,7 +1338,7 @@ EpochResult runEpoch(
         batch_result.learning_rate = scheduledLearningRateForOptimizerStep(
             ctx, optimizer_step);
 
-        const bool should_step = advanceAccumulationOrThrow(ctx.optimizer, accum_steps);
+        const bool should_step = advanceAccumulationOrThrow(ctx.optimizer, window_size);
         if (should_step) {
             runOptimizerWindowFromEpoch(
                 ctx,
@@ -1318,7 +1349,7 @@ EpochResult runEpoch(
                 training_state,
                 parameter_groups,
                 batch_idx,
-                accum_steps,
+                window_size,
                 optimizer_step);
         }
 

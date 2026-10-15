@@ -82,12 +82,12 @@ struct BatchPayload {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // GEOMETRY (computed/materialized ONCE during buildBatchPayload)
-    // For fixed-shape training/eval, batch_size/max_seq_len are config-owned
-    // runtime facts authored through HyperParameters/HyperparameterGroupings
-    // and realized here for row layout / payload validation. Inference
+    // For training/eval, context width and row capacity are config-owned
+    // runtime facts authored through HyperParameters/HyperparameterGroupings;
+    // batch_size is the selected row count within that capacity. Inference
     // prefill/decode payloads carry their explicit runtime geometry.
     // ═══════════════════════════════════════════════════════════════════════════
-    int batch_size = 0;                      // training: fixed batch rows; inference: prompt/decode rows
+    int batch_size = 0;                      // training: selected rows; inference: prompt/decode rows
     int max_seq_len = 0;                     // training: fixed sequence cap; inference: prompt/decode length
     int total_tokens = 0;                    // batch_size * max_seq_len (includes padding)
     int actual_tokens = 0;                   // sum of real sequence lengths (no padding); telemetry/diagnostics token count owner
@@ -1090,7 +1090,7 @@ struct BatchPayload {
  * @param assignment     Batch assignment from scheduler (seq_ids, etc.)
  * @param views          Sequence data views indexed by seq_id
  * @param vocab_size     Model token-space width for target validation
- * @param batch_size         Fixed training batch size / row capacity
+ * @param batch_size         Maximum training row capacity (derived from token budget)
  * @param max_cached_seq_len GPU cache sequence length capacity
  * @param local_atom_retrieval_enabled Compiled feature gate controlling
  *                           sequence-local retrieval metadata materialization.

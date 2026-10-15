@@ -171,11 +171,11 @@ BatchPayload buildBatchPayload(
         throw std::runtime_error(
             "buildBatchPayload: batch has 0 sequences — scheduler produced empty batch");
     }
-    if (static_cast<size_t>(payload.batch_size) != batch_size) {
+    if (static_cast<size_t>(payload.batch_size) > batch_size) {
         throw std::runtime_error(
             "buildBatchPayload: assignment batch_size=" + std::to_string(payload.batch_size) +
-            " != fixed batch_size=" + std::to_string(batch_size) +
-            " — training uses fixed batch rows; scheduler must emit full batches");
+            " exceeds batch row capacity=" + std::to_string(batch_size) +
+            " — scheduler exceeded the token-budget row capacity");
     }
 
     // ═════════════════════════════════════════════════════════════════════════

@@ -18,11 +18,11 @@ void logBatchSchedule(
 {
     if (!log_fn) return;
 
-    log_fn("Created " + std::to_string(schedule.batches.size()) + " fixed batches");
+    log_fn("Created " + std::to_string(schedule.batches.size()) + " token-budget batches");
     log_fn("[Batching] Sequence cap: " + std::to_string(fixed_sequence_cap));
-    log_fn("[Batching] Batch size: " + std::to_string(schedule.batch_size));
-    log_fn("[Batching] Projected fixed token rectangle: " +
-           std::to_string(static_cast<uint64_t>(fixed_sequence_cap) * schedule.batch_size));
+    log_fn("[Batching] Maximum batch rows: " + std::to_string(schedule.batch_size));
+    log_fn("[Batching] Token budget: " +
+           std::to_string(schedule.token_budget));
     log_fn("[Batching] Projected packing efficiency: " +
            std::to_string(static_cast<int>(schedule.projected_packing_efficiency * 100)) + "%");
     if (schedule.discarded_tail_sequences > 0) {
@@ -35,7 +35,7 @@ void logBatchSchedule(
 BatchSchedule buildEpochBatches(
     const std::vector<uint32_t>& sequence_lengths,
     uint32_t fixed_sequence_cap,
-    uint32_t fixed_batch_size,
+    uint32_t token_budget,
     int global_step,
     int epoch,
     uint64_t data_seed,
@@ -54,7 +54,7 @@ BatchSchedule buildEpochBatches(
     // The explicit block plan is authoritative; no later row/batch shuffle.
     policy.batch_ordering = BatchOrdering::PRESERVE;
 
-    auto schedule = buildBatches(sequence_lengths, fixed_sequence_cap, fixed_batch_size, policy);
+    auto schedule = buildBatches(sequence_lengths, fixed_sequence_cap, token_budget, policy);
 
     logBatchSchedule(schedule, fixed_sequence_cap, log_fn);
 

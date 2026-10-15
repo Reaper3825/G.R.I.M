@@ -51,7 +51,8 @@ struct TrainingStats {
 struct TrainingConfig {
     // Training hyperparameters (stored in training.config section)
     int epochs = 3;
-    int batchSize = 8;
+    int batchSize = 8; // Legacy row-count view
+    int batchTokenBudget = 0;
     float learningRate = 0.0001f;
     int maxSeqLen = 8192;
     int warmupSteps = 1000;
@@ -141,6 +142,7 @@ public:
                 auto fbConfig = statusResponse->config();
                 config.epochs = fbConfig->epochs();
                 config.batchSize = fbConfig->batch_size();
+                config.batchTokenBudget = fbConfig->max_tokens_per_batch();
                 config.learningRate = fbConfig->learning_rate();
                 config.maxSeqLen = fbConfig->max_seq_len();
                 config.warmupSteps = fbConfig->warmup_steps();
@@ -181,7 +183,8 @@ public:
                     customConfig->useFlashAttention,
                     dataPath,
                     vocabPath,
-                    outputPath
+                    outputPath,
+                    customConfig->batchTokenBudget
                 );
             }
             
@@ -293,7 +296,8 @@ public:
                 config.useFlashAttention,
                 dataPath,
                 vocabPath,
-                outputPath
+                outputPath,
+                config.batchTokenBudget
             );
             
             auto request = Control::CreateUpdateConfigRequest(builder, fbConfig);

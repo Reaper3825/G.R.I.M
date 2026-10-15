@@ -29,6 +29,7 @@
 
 #include "../UnigramByte/Unigram.hpp"
 #include "HyperparameterEnums.hpp"
+#include "../Batching/TokenBudget.hpp"
 
 //======================================================//
 // HyperParameters_GPU.hpp - typed config owner / computation boundary
@@ -309,7 +310,7 @@ struct LanguageModelConfig {
 
     // Cache limits
     int max_cached_seq_len = 0;
-    int max_tokens_per_batch = 0;  // Optional token budget for training logits/loss
+    int max_tokens_per_batch = 0;  // Authored padded-token overflow limit; context width is unchanged
 
     // Fixed config values (not architecture-dependent)
     float rms_epsilon = 1e-5f;  // RMSNorm epsilon - shared across all RMSNorm layers
@@ -947,7 +948,6 @@ namespace GRIM {
 namespace HyperParameters {
 
 inline void deriveTrainingRuntimeConfig(LanguageModelConfig& params);
-inline int computeMaxTokensPerBatch(int batch_size, int max_seq_len, const char* caller);
 inline void refreshMutableTrainingDerivedValues(LanguageModelConfig& params,
                                                 int effective_max_seq_len,
                                                 const char* caller);
@@ -979,25 +979,6 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
     char** argv,
     ModelExecutionMode execution_mode);
 
-inline int computeMaxTokensPerBatch(int batch_size, int max_seq_len, const char* caller) {
-    if (batch_size <= 0) {
-        throw std::runtime_error(std::string(caller) + ": batch_size must be > 0, got " +
-                                 std::to_string(batch_size));
-    }
-    if (max_seq_len <= 0) {
-        throw std::runtime_error(std::string(caller) + ": max_seq_len must be > 0, got " +
-                                 std::to_string(max_seq_len));
-    }
-    const std::int64_t token_budget =
-        static_cast<std::int64_t>(batch_size) * static_cast<std::int64_t>(max_seq_len);
-    if (token_budget > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
-        throw std::runtime_error(std::string(caller) + ": max_tokens_per_batch overflow: batch_size=" +
-                                 std::to_string(batch_size) + " max_seq_len=" +
-                                 std::to_string(max_seq_len) + " product=" +
-                                 std::to_string(token_budget) + " exceeds int max");
-    }
-    return static_cast<int>(token_budget);
-}
 
 inline std::vector<float> computeExpectedPBMAlibiSlopes(
     const LanguageModelConfig& params,
@@ -1158,8 +1139,10 @@ inline void validateCompiledPBMTables(
 inline void refreshMutableTrainingDerivedValues(LanguageModelConfig& params,
                                                 int effective_max_seq_len,
                                                 const char* caller) {
-    params.max_tokens_per_batch = computeMaxTokensPerBatch(
-        params.batch_size, effective_max_seq_len, caller);
+    // The token budget owns batching capacity. batch_size is a derived row
+    // capacity retained for existing runtime consumers, not a second limit.
+    params.batch_size = Batching::rowsForTokenBudget(
+        params.max_tokens_per_batch, effective_max_seq_len);
 
     if (params.cosine_decay_enabled) {
         if (params.learning_rate <= 0.0f) {
@@ -1679,21 +1662,10 @@ inline void validateRootConfigDocument(
     if (params.log_dir.empty()) {
         throw std::runtime_error(std::string(caller) + ": log_dir is empty");
     }
-    const std::int64_t expected_tokens =
-        static_cast<std::int64_t>(params.batch_size) *
-        static_cast<std::int64_t>(params.max_cached_seq_len);
-    if (expected_tokens > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+    if (params.batch_size != Batching::rowsForTokenBudget(
+            params.max_tokens_per_batch, params.max_cached_seq_len)) {
         throw std::runtime_error(std::string(caller) +
-                                 ": batch_size * max_cached_seq_len overflowed int capacity (batch=" +
-                                 std::to_string(params.batch_size) + " seq_len=" +
-                                 std::to_string(params.max_cached_seq_len) + " product=" +
-                                 std::to_string(expected_tokens) + ")");
-    }
-    if (params.max_tokens_per_batch != static_cast<int>(expected_tokens)) {
-        throw std::runtime_error(std::string(caller) + ": max_tokens_per_batch=" +
-                                 std::to_string(params.max_tokens_per_batch) +
-                                 " does not match batch_size * max_cached_seq_len=" +
-                                 std::to_string(expected_tokens));
+            ": batch row capacity does not match token budget / context window");
     }
     if (params.execution_mode != ModelExecutionMode::TRAINING &&
         params.execution_mode != ModelExecutionMode::INFERENCE) {
@@ -1874,7 +1846,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(clear_merged_cache_on_merge);
     GRIM_LOAD_CONFIG_FIELD(epochs);
     GRIM_LOAD_CONFIG_FIELD(seed);
-    GRIM_LOAD_CONFIG_FIELD(batch_size);
+    GRIM_LOAD_CONFIG_FIELD(max_tokens_per_batch);
     GRIM_LOAD_CONFIG_FIELD(gradient_accumulation_steps);
     GRIM_LOAD_CONFIG_FIELD(batch_strategy);
     GRIM_LOAD_CONFIG_FIELD(learning_rate);
@@ -2334,20 +2306,8 @@ inline int snapshotEffectiveBatchSize(
     const GRIM::Config::AiConfigSnapshot& snapshot,
     const char* caller)
 {
-    const int batch_size = snapshotTrainingConfigField<int>(snapshot, "batch_size");
-    if (!snapshotTrainingConfigField<bool>(snapshot, "stability_overrides_enabled")) {
-        return batch_size;
-    }
-
-    const int override_batch_size =
-        snapshotTrainingConfigField<int>(snapshot, "stability_override_batch_size");
-    if (override_batch_size <= 0) {
-        throw std::runtime_error(
-            std::string(caller) +
-            ": stability_overrides_enabled=true but stability_override_batch_size=" +
-            std::to_string(override_batch_size));
-    }
-    return override_batch_size;
+    (void)caller;
+    return snapshotTrainingConfigField<int>(snapshot, "batch_size");
 }
 
 inline int snapshotEffectiveMaxSeqLen(
@@ -2847,7 +2807,8 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
                 std::to_string(config.stability_override_batch_size) +
                 " (must be > 0)");
         }
-        config.batch_size = config.stability_override_batch_size;
+        config.max_tokens_per_batch = Batching::tokenBudgetForRows(
+            config.stability_override_batch_size, config.max_seq_len);
         if (config.stability_override_clip_per_token > 0.0f) {
             config.grad_clip_norm = config.stability_override_clip_per_token;
         }
@@ -2864,7 +2825,10 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
         } else if (arg == "--epochs" && i + 1 < argc) {
             config.epochs = std::atoi(argv[++i]);
         } else if (arg == "--batch-size" && i + 1 < argc) {
-            config.batch_size = std::atoi(argv[++i]);
+            config.max_tokens_per_batch = Batching::tokenBudgetForRows(
+                std::atoi(argv[++i]), config.max_seq_len);
+        } else if (arg == "--batch-token-budget" && i + 1 < argc) {
+            config.max_tokens_per_batch = std::atoi(argv[++i]);
         } else if (arg == "--lr" && i + 1 < argc) {
             config.learning_rate =
                 static_cast<float>(std::atof(argv[++i]));
@@ -2881,7 +2845,8 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
                 << "  --vocab <path>     Vocabulary path\n"
                 << "  --output <path>    Output model path\n"
                 << "  --epochs <n>       Number of epochs\n"
-                << "  --batch-size <n>   Batch size\n"
+                << "  --batch-size <n>   Legacy override: n complete context rows\n"
+                << "  --batch-token-budget <n> Maximum padded token slots per batch\n"
                 << "  --lr <rate>        Learning rate\n"
                 << "  --save-test        Test serialization save and exit\n";
             std::exit(0);

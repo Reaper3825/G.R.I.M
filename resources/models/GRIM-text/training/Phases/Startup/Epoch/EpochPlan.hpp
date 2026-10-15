@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../../../Shared/Dynamic_LR/LRSchedule.hpp"
+#include "../../../../Shared/Batching/AccumulationWeights.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include <cstdint>
@@ -52,8 +53,9 @@ inline EpochPlan finalizeEpochPlanOrThrow(
         plan.total_batches = authored_train_batches;
     }
 
+    plan.steps_per_epoch = GRIM::Batching::optimizerWindowsPerEpoch(plan.total_batches, accum);
     const int64_t total_accumulation_slots =
-        static_cast<int64_t>(num_epochs) * static_cast<int64_t>(plan.total_batches);
+        static_cast<int64_t>(num_epochs) * plan.steps_per_epoch;
     if (total_accumulation_slots > static_cast<int64_t>(std::numeric_limits<int>::max())) {
         throw std::runtime_error("FATAL: estimated_total_steps input overflow during startup (epochs=" +
                                  std::to_string(num_epochs) + " batches=" +
@@ -61,7 +63,7 @@ inline EpochPlan finalizeEpochPlanOrThrow(
                                  std::to_string(total_accumulation_slots) + ")");
     }
 
-    plan.estimated_total_steps = static_cast<int>(total_accumulation_slots / accum);
+    plan.estimated_total_steps = static_cast<int>(total_accumulation_slots);
     if (plan.estimated_total_steps <= 0) {
         throw std::runtime_error("FATAL: estimated_total_steps computed as <= 0 during startup (epochs=" +
                                  std::to_string(num_epochs) + " batches=" +
@@ -84,7 +86,7 @@ inline EpochPlan finalizeEpochPlanOrThrow(
     cfg.at("warmup_steps") = warmup_steps;
     cfg.at("telemetry_warmup_steps") = warmup_steps;
 
-    plan.steps_per_epoch = plan.total_batches / accum;
+    // A short final optimizer window is flushed at the epoch boundary.
     if (plan.steps_per_epoch <= 0) {
         throw std::runtime_error("FATAL: steps_per_epoch computed as <= 0 during startup (batches=" +
                                  std::to_string(plan.total_batches) + " accum=" +

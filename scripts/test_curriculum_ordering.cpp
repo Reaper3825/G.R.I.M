@@ -60,7 +60,7 @@ int main() {
     const std::vector<std::string> ids{"b1", "a1", "b1", "a2"};
     const std::vector<uint32_t> expected{1, 3, 0, 2};
     assert(orderedCourseSequences(lengths, ids, c, CurriculumOrdering::PRESERVE, 1) == expected);
-    auto schedule = buildEpochBatches(lengths, 4, 2, 0, 0, 42, c, ids, CurriculumOrdering::PRESERVE, {});
+    auto schedule = buildEpochBatches(lengths, 4, 8, 0, 0, 42, c, ids, CurriculumOrdering::PRESERVE, {});
     assert(schedule.batches.size() == 2);
     assert((schedule.batches[0].seq_ids == std::vector<uint32_t>{1, 3}));
     assert((schedule.batches[1].seq_ids == std::vector<uint32_t>{0, 2}));
@@ -69,11 +69,11 @@ int main() {
     policy.sequence_order = expected;
     policy.batch_ordering = BatchOrdering::RANDOM;
     policy.rng_seed = 42;
-    assert(buildBatches(lengths, 4, 2, policy).batches[0].seq_ids == schedule.batches[0].seq_ids);
+    assert(buildBatches(lengths, 4, 8, policy).batches[0].seq_ids == schedule.batches[0].seq_ids);
     policy.sequence_order = std::vector<uint32_t>{0, 0, 2, 3};
-    rejects([&] { buildBatches(lengths, 4, 2, policy); });
+    rejects([&] { buildBatches(lengths, 4, 8, policy); });
     policy.sequence_order = std::vector<uint32_t>{0};
-    rejects([&] { buildBatches(lengths, 4, 2, policy); });
+    rejects([&] { buildBatches(lengths, 4, 8, policy); });
     rejects([&] { orderedCourseSequences(lengths, {"", "a1", "b1", "a2"}, c, CurriculumOrdering::RANDOM, 1); });
     rejects([&] { orderedCourseSequences(lengths, {"missing", "a1", "b1", "a2"}, c, CurriculumOrdering::PRESERVE, 1); });
     rejects([&] { orderedCourseSequences(lengths, {}, c, CurriculumOrdering::CURRICULUM, 1); });
@@ -83,5 +83,5 @@ int main() {
     const auto rows = orderedCourseSequences(lengths, ids, c, CurriculumOrdering::RANDOM, 7);
     auto first = std::find(rows.begin(), rows.end(), uint32_t{0});
     assert(first != rows.end() && first + 1 != rows.end() && *(first + 1) == 2);
-    std::cout << "Course ordering and fixed batch packing tests passed\n";
+    std::cout << "Course ordering and token-budget batch packing tests passed\n";
 }
