@@ -640,26 +640,6 @@ void registerAtomInsertionBoundaryParameters(
     ParameterRegistry::registerAtomInsertionBoundaryParameters(owner, registrar);
 }
 
-void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
-                                 Registrar& registrar,
-                                 const GRIM::Config::AiConfigSnapshot& config) {
-    auto* selector_parameters = parameter_registry.getSelectorParameters();
-    const bool selector_enabled =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "selector_enabled");
-    if (!selector_enabled) {
-        if (selector_parameters) {
-            throw std::runtime_error("[buildParameterGroups] Selector parameter owner exists while config.selector_enabled=false");
-        }
-        return;
-    }
-
-    auto& selector_tensor_owner = requireLayer(
-        selector_parameters,
-        "SelectorParameterTensors",
-        "registerSelectorParameters");
-    ParameterRegistry::registerSelectorParameters(selector_tensor_owner, registrar);
-}
-
 void registerLocalAtomRetrievalParameters(
     ParameterRegistry::StartupParameterRegistry& parameter_registry,
     Registrar& registrar,
@@ -730,9 +710,6 @@ void validateBaseParametersFrozen(
         for (const auto& spec : ParameterRegistry::kFeedForwardTensorParameters) {
             require_frozen(tensors.*(spec.tensor_member), prefix + spec.name);
         }
-    }
-    if (const auto* selector = parameter_registry.getSelectorParameters()) {
-        require_frozen(selector->W_q, "selector_W_q");
     }
     if (const auto* retrieval = parameter_registry.getLocalAtomRetrievalParameters()) {
         require_frozen(retrieval->type_no_reference_key,
@@ -1503,50 +1480,6 @@ void initializeAtomInsertionBoundaryParameterTensors(
     emitInfo(
         "[initializeAtomInsertionBoundaryParameterTensors] Initialized registry-owned "
         "atom boundary tensors (d_model=" + std::to_string(atom_hp.d_model) + ")");
-}
-
-void initializeSelectorParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    bool selector_enabled,
-    int d_model,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream,
-    bool requires_grad) {
-    if (!selector_enabled) {
-        if (parameter_registry.getSelectorParameters()) {
-            throw std::runtime_error("initializeSelectorParameterTensors: selector disabled but registry owner already exists");
-        }
-        return;
-    }
-    if (!init_stream) {
-        throw std::runtime_error("initializeSelectorParameterTensors: init_stream is NULL");
-    }
-    if (parameter_registry.getSelectorParameters()) {
-        throw std::runtime_error("initializeSelectorParameterTensors: registry selector tensor owner is already initialized");
-    }
-    if (d_model <= 0) {
-        throw std::runtime_error("initializeSelectorParameterTensors: d_model must be > 0, got " +
-                                 std::to_string(d_model));
-    }
-
-    auto params = std::make_unique<GRIM::SelectorParameterTensors>();
-    GRIM::Tensor w_q = GRIM::Tensor::zeros({d_model, d_model}, init_stream, "selector.W_q");
-    if (requires_grad) {
-        w_q.requires_grad_();
-        w_q.alloc_grad();
-    }
-    GRIM::Tensor::xavier_uniform_(w_q, weight_init_seed, init_stream);
-    params->W_q = std::move(w_q);
-
-    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(std::string("initializeSelectorParameterTensors: cudaStreamSynchronize failed: ") +
-                                 cudaGetErrorString(sync_err));
-    }
-
-    parameter_registry.selector_parameters = std::move(params);
-    emitInfo("[initializeSelectorParameterTensors] Initialized registry-owned selector W_q (d_model=" +
-             std::to_string(d_model) + ")");
 }
 
 void initializeLocalAtomRetrievalParameterTensors(

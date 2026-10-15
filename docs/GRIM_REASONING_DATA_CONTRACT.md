@@ -622,6 +622,45 @@ Rules:
 - Do not silently perform a different transition than the one selected.
 - Tool syntax, when present, must match the grammar for that curriculum.
 
+#### Tool-expression closure for self-correction RL
+
+The selected authoring contract for the self-correction tool path is:
+
+```text
+<TOOL>tool_expression -> ${destination}</TOOL>
+```
+
+`</TOOL>` closes the complete expression, including its output destination.
+The destination must already be declared in `define`; it names where the runtime
+will assign the actual result, not a value the model supplies. No trailing
+semicolon or post-close destination is required or accepted as part of this
+expression. Semicolons remain the terminators for declarations and input
+bindings in `define`.
+
+At the complete sampled `</TOOL>`, the planned runtime validates the enclosed
+tool expression, arguments, and destination before dispatch. A partial or
+invalid expression does not execute. This closes a tool expression, not the
+execute phase or the attempt; `</answer>` remains the independent attempt/grading
+boundary. Result assignment and configured automatic injection or explicit READ
+access follow execution.
+
+For this planned feedback path, `auto_inject_tool_results` controls successful
+result values only. Its default is `false`: successful values stay assigned to
+their variables until READ; `true` additionally injects them automatically.
+Execution, call-validation, and READ-resolution errors are automatically injected
+under either setting, with no READ required. Error feedback provides the failure
+reason without leaking withheld result values or treating an error as a successful
+assignment. It resumes the same attempt and does not replace `</answer>` as the
+grading boundary.
+
+This is the selected contract for the pending RL implementation. Existing
+arithmetic authoring currently emits `<TOOL>expression</TOOL> -> ${destination}`;
+its generator, validators, and affected data must migrate before being used with
+the new parser. The current TOOL atom recognition alone does not implement this
+dispatch behavior. See the
+[grammar and insertion map](GRIM_SELF_CORRECTION_RL_GRAMMAR_AND_INSERTION_MAP.md)
+for implementation ownership.
+
 ### 4.12 Update — commit the transition result to state
 
 Canonical position: after `execute` and before `answer`.

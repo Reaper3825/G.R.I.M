@@ -93,14 +93,6 @@ void initializeAtomInsertionBoundaryParameterTensors(
     cudaStream_t init_stream,
     bool requires_grad);
 
-void initializeSelectorParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    bool selector_enabled,
-    int d_model,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream,
-    bool requires_grad);
-
 void initializeLocalAtomRetrievalParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int d_model,

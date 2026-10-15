@@ -67,13 +67,6 @@ struct AtomInsertionBoundaryParameterTensors {
     Tensor projection_bias;          // [1, d_model]
 };
 
-// Arg/option selector head parameters (execution-INDEPENDENT). A single query
-// projection W_q maps encoder hidden states into an externally owned
-// candidate-key space.
-struct SelectorParameterTensors {
-    Tensor W_q;   // [d_model, d_model] query projection
-};
-
 // Sequence-local atom retrieval parameters. The retrieval compute path borrows
 // this tensor through StartupParameterRegistry and never owns model weights.
 struct LocalAtomRetrievalParameterTensors {
@@ -146,7 +139,6 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::AtomInsertionBoundaryParameterTensors>
         atom_insertion_boundary_parameters;
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
-    std::unique_ptr<GRIM::SelectorParameterTensors> selector_parameters;
     std::unique_ptr<GRIM::LocalAtomRetrievalParameterTensors>
         local_atom_retrieval_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
@@ -314,23 +306,6 @@ struct StartupParameterRegistry {
                 " (config.attention_head_gate_enabled=false or startup initialization incomplete)");
         }
         return gate_parameters;
-    }
-
-    GRIM::SelectorParameterTensors* getSelectorParameters() { return selector_parameters.get(); }
-    const GRIM::SelectorParameterTensors* getSelectorParameters() const { return selector_parameters.get(); }
-
-    GRIM::SelectorParameterTensors& requireSelectorParameters(const char* caller) {
-        if (!selector_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.selector_parameters is NULL");
-        }
-        return *selector_parameters;
-    }
-
-    const GRIM::SelectorParameterTensors& requireSelectorParameters(const char* caller) const {
-        if (!selector_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.selector_parameters is NULL");
-        }
-        return *selector_parameters;
     }
 
     GRIM::LocalAtomRetrievalParameterTensors*
@@ -507,9 +482,6 @@ struct TensorParameterSpec {
     int layer = -1;
 };
 
-using SelectorTensorParameterSpec =
-    TensorParameterSpec<GRIM::SelectorParameterTensors>;
-
 using EncodingLayerTensorParameterSpec =
     TensorParameterSpec<GRIM::EncodingLayerParameterTensors>;
 
@@ -548,12 +520,6 @@ inline constexpr std::array<AtomInsertionBoundaryTensorParameterSpec, 3>
         {"atom_insertion_projection_bias",
          &GRIM::AtomInsertionBoundaryParameterTensors::projection_bias,
          GRIM::ParamGroupType::LM_HEAD, GRIM::ParamStatsBucket::LM_HEAD},
-    }};
-
-inline constexpr std::array<SelectorTensorParameterSpec, 1>
-    kSelectorTensorParameters = {{
-        {"selector_W_q", &GRIM::SelectorParameterTensors::W_q,
-         GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
     }};
 
 inline constexpr std::array<LocalAtomRetrievalTensorParameterSpec, 1>
@@ -631,19 +597,6 @@ inline void registerAtomInsertionBoundaryParameters(
     for (const auto& spec : kAtomInsertionBoundaryTensorParameters) {
         registrar.addTensor(spec.name,
                             parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerSelectorParameters(
-    GRIM::SelectorParameterTensors& selector_parameters,
-    RegistrarT& registrar) {
-    for (const auto& spec : kSelectorTensorParameters) {
-        registrar.addTensor(spec.name,
-                            selector_parameters.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);
