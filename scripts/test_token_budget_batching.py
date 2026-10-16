@@ -44,7 +44,8 @@ def main():
         ("token_budget", [repo / "scripts/test_token_budget_batching.cpp", shared / "Batching/Batching_GPU.cu"]),
         ("curriculum_ordering", [repo / "scripts/test_curriculum_ordering.cpp", shared / "Batching/Batching_GPU.cu", shared / "Batching/EpochBatching.cu"]),
         ("payload_validation", [repo / "resources/models/GRIM-text/Tests/batch_payload_lm_validation_host_test.cpp"]),
-        ("token_budget_config", [repo / "scripts/test_token_budget_config.cpp"]),
+        ("token_budget_config", [repo / "scripts/test_token_budget_config.cpp",
+                                 shared / "ModelConfig/CompiledModelConfig.cpp"]),
         ("token_budget_payload", [repo / "scripts/test_token_budget_payload.cpp",
                                   shared / "Batching/BatchPayload.cu",
                                   shared / "Batching/LocalAtomSelectionData.cu",
@@ -52,6 +53,16 @@ def main():
     ]
     with tempfile.TemporaryDirectory(prefix="grim-token-budget-") as temporary:
         work = Path(temporary)
+        generated = work / "generated"
+        generated.mkdir()
+        flatc = (repo / "vcpkg_installed/x64-windows/tools/flatbuffers/flatc.exe"
+                 if os.name == "nt" else shutil.which("flatc"))
+        if not flatc or not Path(flatc).is_file():
+            raise RuntimeError("An installed FlatBuffers compiler is required")
+        subprocess.run([str(flatc), "-c", "--gen-mutable", "-o", str(generated),
+                        str(repo / "resources/models/GRIM-text/training/schemas/grim_compiled_hyperparameters.fbs")],
+                       cwd=work, env=env, check=True)
+        includes.append(generated)
         for name, sources in tests:
             executable = work / (name + (".exe" if os.name == "nt" else ""))
             if os.name == "nt":

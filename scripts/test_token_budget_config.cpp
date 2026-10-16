@@ -8,6 +8,18 @@
 using namespace GRIM::HyperParameters;
 
 int main() try {
+    // Exercise the same raw-load -> finalize boundary as train_gpu.cu, without
+    // loading weights, initializing CUDA, or starting the trainer.
+    auto startup_raw = GRIM::Config::loadAiConfigSnapshot();
+    startup_raw.document["training"]["config"].erase("batch_size");
+    assert(startup_raw.model_config);
+    const auto startup = finalizeAiConfigSnapshot(
+        startup_raw, 0, nullptr, ModelExecutionMode::TRAINING);
+    const auto& startup_fields = snapshotTrainingConfig(startup);
+    assert(startup_fields.at("batch_size").get<int>() ==
+           startup_fields.at("max_tokens_per_batch").get<int>() /
+           startup_fields.at("max_seq_len").get<int>());
+
     std::ifstream source("ai_config.json");
     assert(source.is_open());
     auto document = nlohmann::json::parse(source);
