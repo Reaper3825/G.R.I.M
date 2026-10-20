@@ -570,6 +570,8 @@ struct LanguageModelConfig {
     bool loss_class_balanced_enabled = false;
     float loss_class_balanced_beta = 0.0f;
     float loss_local_atom_retrieval_weight = 0.0f;
+    // Authored runtime training policy; not part of model.grimcfg geometry.
+    float rl_kl_coefficient = 0.0f;
 
     bool embedding_freeze_enabled = false;
     int embedding_freeze_after_step = 0;
@@ -1475,6 +1477,13 @@ inline void validateRootConfigDocument(
         throw std::runtime_error(std::string(caller) +
                                  ": lora_model must match whether any LoRA matrix class is enabled");
     }
+    if (params.execution_mode == ModelExecutionMode::TRAINING &&
+        params.training_stage == TrainingStage::RL && params.lora_model) {
+        throw std::runtime_error(
+            std::string(caller) + ": training_stage=rl requires lora_model=false: "
+            "LoRA-only training freezes base policy parameters; "
+            "RL requires all policy parameters to remain trainable");
+    }
     const auto validate_lora_class = [&](bool enabled,
                                          int rank,
                                          float alpha,
@@ -1508,6 +1517,7 @@ inline void validateRootConfigDocument(
         validationField("loss_focal_gamma", &LanguageModelConfig::loss_focal_gamma),
         validationField("loss_entropy_reg_lambda", &LanguageModelConfig::loss_entropy_reg_lambda),
         validationField("loss_local_atom_retrieval_weight", &LanguageModelConfig::loss_local_atom_retrieval_weight),
+        validationField("rl_kl_coefficient", &LanguageModelConfig::rl_kl_coefficient),
         validationField("weight_decay", &LanguageModelConfig::weight_decay)
     }, caller);
     if (params.loss_focal_enabled) {
@@ -1979,6 +1989,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_enabled);
     GRIM_LOAD_CONFIG_FIELD(loss_class_balanced_beta);
     GRIM_LOAD_CONFIG_FIELD(loss_local_atom_retrieval_weight);
+    GRIM_LOAD_CONFIG_FIELD(rl_kl_coefficient);
     GRIM_LOAD_CONFIG_FIELD(freeze_learned_rms_gammas);
     if (config.at("hardcoded_hidden_states_enabled").get<bool>()) {
         params.hardcoded_hidden_pattern = config.at("hardcoded_hidden_states_pattern").get<HardcodedPattern>();
@@ -2632,6 +2643,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_beta);
     GRIM_WRITE_FINAL_CONFIG_FIELD(loss_local_atom_retrieval_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(rl_kl_coefficient);
     GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_after_step);
     GRIM_WRITE_FINAL_CONFIG_FIELD(optimizer_kind);

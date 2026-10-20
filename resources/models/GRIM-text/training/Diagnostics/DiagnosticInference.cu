@@ -19,6 +19,7 @@
 #include "DiagnosticLens.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../Phases/Phase2_InferenceLoop.hpp"
+#include "../../Shared/InferenceState/InferencePrefill.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
 
@@ -205,7 +206,7 @@ void logDiagnosticSample(TrainingContext& ctx,
         const auto encode_start = std::chrono::steady_clock::now();
         std::optional<GRIM::Batching::BatchPayload> prefill;
         if (!atom_insertion)
-            prefill = buildPhase2InferencePrefill(ctx, *tokenizer, prompt, input_state);
+            prefill = GRIM::Inference::buildInferencePrefill(ctx.config, *tokenizer, prompt, &input_state);
         const auto prefill_encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - encode_start).count();
         const auto concept_spans =

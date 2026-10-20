@@ -1060,6 +1060,7 @@ void UIDataHubPanel::syncCurriculumTrainingStageDropdown() {
         else if (curr.training_stage == "sft") selectedIdx = 2;
         else if (curr.training_stage == "dpo") selectedIdx = 3;
         else if (curr.training_stage == "rlhf") selectedIdx = 4;
+        else if (curr.training_stage == "rl") selectedIdx = 5;
     }
     cbTrainingStageDropdown_->setSelectedIndex(selectedIdx);
 }

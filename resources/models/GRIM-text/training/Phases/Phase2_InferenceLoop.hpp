@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -26,6 +27,10 @@ struct Phase2TextInferenceResult {
     std::string continuation_text; // Token-LM output only; never includes prefill state.
     // Exact realized IDs, including the prompt, for diagnostic comparisons.
     std::vector<int> token_ids;
+    // Retain the complete token-LM trajectory, including scores, positions,
+    // provenance, and atom metadata. Absent for paths that do not produce a
+    // GeneratedSequence (atom insertion and direct prefill-only inspection).
+    std::optional<GRIM::GeneratedSequence> generated_sequence;
     std::size_t prompt_token_count = 0;
     std::size_t sequence_token_count = 0;
     std::int64_t encode_ms = 0;
@@ -61,14 +66,12 @@ Phase2TextInferenceResult executePhase2TextInference(
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr);
 
-// Build the wire-input adapter into a realized prefill payload. Existing
-// reasoning_state JSON is accepted for transport compatibility only.
-GRIM::Batching::BatchPayload buildPhase2InferencePrefill(
-    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
-    const std::string& prompt, const nlohmann::json& input_state);
-
 // Primary token-LM boundary: caller-authored tokens, GoalTokenSpan tree and atom
 // side channels. The generation loop authors ModelForwardRequest per invocation.
+// Requires Phase1-ready context/tokenizer and a payload validated by batch
+// preparation (including any caller-authored metadata). This entry point checks
+// only inference-specific mode and compact single-row requirements; device
+// upload retains its payload validation and forward geometry checks.
 Phase2TextInferenceResult executePhase2PayloadInference(
     TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::Batching::BatchPayload& prefill,

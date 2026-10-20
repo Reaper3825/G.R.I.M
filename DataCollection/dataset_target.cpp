@@ -31,7 +31,7 @@ namespace {
 
 bool isValidCurriculumTrainingStage(const std::string& stage) {
     return stage == "pt" || stage == "sft" ||
-           stage == "dpo" || stage == "rlhf";
+           stage == "dpo" || stage == "rlhf" || stage == "rl";
 }
 
 bool replaceFileAtomically(const fs::path& temporary,
@@ -883,7 +883,7 @@ bool DatasetTarget::loadCurriculumRegistry() {
                 if (!isValidCurriculumTrainingStage(curr.training_stage)) {
                     throw std::runtime_error(
                         "curriculum '" + curr.name + "' has invalid training_stage '" +
-                        curr.training_stage + "' (valid: pt, sft, dpo, rlhf)");
+                        curr.training_stage + "' (valid: pt, sft, dpo, rlhf, rl)");
                 }
                 if (cj.contains("concept_block_ids") && cj["concept_block_ids"].is_array()) {
                     for (const auto& bid : cj["concept_block_ids"]) {

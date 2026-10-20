@@ -554,10 +554,10 @@ UIDataHubPanel::UIDataHubPanel()
     }, UITheme::Colors::Danger);
 
     cbTrainingStageDropdown_ = std::make_shared<UIDropdown>(
-        "Stage", std::vector<std::string>{"(select curriculum)", "PT", "SFT", "DPO", "RLHF"}, 0,
+        "Stage", std::vector<std::string>{"(select curriculum)", "PT", "SFT", "DPO", "RLHF", "RL"}, 0,
         [this](int idx, const std::string&) {
-            static constexpr const char* kStageValues[] = {"pt", "sft", "dpo", "rlhf"};
-            if (idx <= 0 || idx > 4 || activeCurriculumId_.empty() || !datasetTarget_) {
+            static constexpr const char* kStageValues[] = {"pt", "sft", "dpo", "rlhf", "rl"};
+            if (idx <= 0 || idx > 5 || activeCurriculumId_.empty() || !datasetTarget_) {
                 syncCurriculumTrainingStageDropdown();
                 return;
             }

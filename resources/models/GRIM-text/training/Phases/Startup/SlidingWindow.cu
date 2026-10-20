@@ -540,6 +540,22 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                          bool add_bos_token,
                          bool add_eos_token,
                          TrainingLogger& logger) {
+    // Select preparation before mutating corpus rows. RL targets and windows
+    // must come from recorded episodes, never from PT or SFT corpus projection.
+    switch (training_stage) {
+        case GRIM::HyperParameters::TrainingStage::PT:
+        case GRIM::HyperParameters::TrainingStage::SFT:
+            break;
+        case GRIM::HyperParameters::TrainingStage::RL:
+            throw std::runtime_error(
+                "RL batch preparation requires recorded episode batches; "
+                "the episode-to-payload preparation path is not implemented");
+        default:
+            throw std::runtime_error(
+                "Sliding window (" + split_name + "): training_stage=" +
+                std::string(GRIM::HyperParameters::trainingStageToJsonString(training_stage)) +
+                " has no authored window-construction policy");
+    }
     // BOS must exist before projection so any first span can be supervised.
     size_t added_bos = 0, ignored_eos = 0;
     injectBoundaryTokens(sequences, training_stage, add_bos_token, false, added_bos, ignored_eos);

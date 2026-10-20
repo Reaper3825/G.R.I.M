@@ -61,6 +61,9 @@ checkpointStageFromFilename(const std::string& filename)
     if (stage_token == "RLHF") {
         return HyperParameters::TrainingStage::RLHF;
     }
+    if (stage_token == "RL") {
+        return HyperParameters::TrainingStage::RL;
+    }
     return std::nullopt;
 }
 

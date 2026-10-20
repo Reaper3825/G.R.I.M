@@ -28,7 +28,8 @@ enum class TrainingStage : uint8_t {
     PT,    // Pre-training; may start from a fresh random initialization.
     SFT,   // Supervised fine-tuning; requires an existing model checkpoint.
     DPO,   // Direct preference optimization; requires an existing checkpoint.
-    RLHF   // Reinforcement learning from human feedback; requires a checkpoint.
+    RLHF,  // Reinforcement learning from human feedback; requires a checkpoint.
+    RL     // Episode-based reinforcement learning; requires an existing checkpoint.
 };
 
 inline const char* trainingStageToString(TrainingStage stage) {
@@ -38,6 +39,7 @@ inline const char* trainingStageToString(TrainingStage stage) {
         case TrainingStage::SFT: return "SFT";
         case TrainingStage::DPO: return "DPO";
         case TrainingStage::RLHF: return "RLHF";
+        case TrainingStage::RL: return "RL";
     }
     throw std::runtime_error("trainingStageToString: unknown TrainingStage enum value");
 }
@@ -49,6 +51,7 @@ inline const char* trainingStageToJsonString(TrainingStage stage) {
         case TrainingStage::SFT: return "sft";
         case TrainingStage::DPO: return "dpo";
         case TrainingStage::RLHF: return "rlhf";
+        case TrainingStage::RL: return "rl";
     }
     throw std::runtime_error("trainingStageToJsonString: unknown TrainingStage enum value");
 }
@@ -67,9 +70,12 @@ inline TrainingStage parseTrainingStage(const std::string& value) {
     if (normalized == "rlhf" || normalized == "reinforcement_learning_from_human_feedback") {
         return TrainingStage::RLHF;
     }
+    if (normalized == "rl" || normalized == "reinforcement_learning") {
+        return TrainingStage::RL;
+    }
     throw std::runtime_error(
         "ai_config.json: training.config.training_stage has unknown value '" + value +
-        "' (valid: pt, sft, dpo, rlhf)");
+        "' (valid: pt, sft, dpo, rlhf, rl)");
 }
 
 //======================================================//

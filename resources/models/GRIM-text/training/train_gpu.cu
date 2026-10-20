@@ -31,6 +31,7 @@
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
 #include "Phases/Phase2_InferenceLoop.hpp"
+#include "../Shared/InferenceState/InferencePrefill.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
@@ -212,8 +213,8 @@ GRIMText::Training::Phase2TextInferenceResult executeWorkerInference(
     if (!request.contains("reasoning_state"))
         return GRIMText::Training::executePhase2TextInference(ctx, tokenizer, prompt, generation_hp);
     const auto start = std::chrono::steady_clock::now();
-    auto prefill = GRIMText::Training::buildPhase2InferencePrefill(
-        ctx, tokenizer, prompt, request.at("reasoning_state"));
+    auto prefill = GRIM::Inference::buildInferencePrefill(
+        ctx.config, tokenizer, prompt, &request.at("reasoning_state"));
     const auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count();
     auto result = GRIMText::Training::executePhase2PayloadInference(ctx, tokenizer, prefill, generation_hp);

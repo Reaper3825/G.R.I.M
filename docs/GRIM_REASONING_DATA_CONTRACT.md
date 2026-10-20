@@ -21,8 +21,10 @@ The normative implementation is split across:
 - [`reasoning_state.hpp`](../DataCollection/reasoning_state.hpp) and
   [`reasoning_state_json.hpp`](../DataCollection/reasoning_state_json.hpp):
   inference-time state accepted from upstream producers.
+- [`InferencePrefill.hpp`](../resources/models/GRIM-text/Shared/InferenceState/InferencePrefill.hpp):
+  standalone prompt/state adapter that builds the realized inference-prefill payload.
 - [`Phase2_InferenceLoop.hpp`](../resources/models/GRIM-text/training/Phases/Phase2_InferenceLoop.hpp):
-  realized inference-prefill payload and generation entrypoints.
+  generation and inspection entrypoints.
 - [`ConceptSupervision.cu`](../resources/models/GRIM-text/training/Phases/Startup/ConceptSupervision.cu):
   runtime projection of configured ConceptBlock fields onto causal targets and
   masked context before window construction.
@@ -80,7 +82,7 @@ forward; each tree entry uses a half-open `GoalTokenSpan`. `ModelForwardRequest`
 borrows that payload, and lens capture reads its supplied span metadata.
 Inference does not accept a training `ConceptBlock`.
 
-`buildPhase2InferencePrefill()` adapts the prompt and compatibility wire state
+`GRIM::Inference::buildInferencePrefill()` adapts the prompt and compatibility wire state
 into that payload. It rejects model-generated fields, renders only supplied
 input via the shared configured renderer (including `ignore` filtering), and
 preserves supplied typed atom boundaries and their metadata. `ReasoningState`

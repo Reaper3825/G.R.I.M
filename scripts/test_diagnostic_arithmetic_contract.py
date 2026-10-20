@@ -29,7 +29,7 @@ class DiagnosticArithmeticContractTests(unittest.TestCase):
         self.assertNotIn('"unknowns"', initializer)
         self.assertNotIn("ConceptBlock", source)
         self.assertNotIn("withPrompt", source)
-        self.assertIn("buildPhase2InferencePrefill(ctx, *tokenizer, prompt, input_state)", source)
+        self.assertIn("GRIM::Inference::buildInferencePrefill(ctx.config, *tokenizer, prompt, &input_state)", source)
         self.assertIn("executePhase2PayloadInference", source)
         self.assertIn("sample.continuation_text", source)
 

@@ -130,7 +130,7 @@ struct Curriculum {
     std::vector<std::string> concept_block_ids;
     std::vector<std::string> plaintext_block_ids;
     // Training procedure metadata owned by the curriculum registry.
-    // Valid persisted values are: pt, sft, dpo, rlhf.
+    // Valid persisted values are: pt, sft, dpo, rlhf, rl.
     std::string              training_stage = "sft";
     int64_t                  timestamp = 0;
     bool                     randomize_course_order = false;

@@ -72,7 +72,8 @@ void readCurriculumMetadata(const json& registry, const json& source,
 			"[DataLoader] FATAL: curriculum registry entry has invalid identity metadata");
 	}
 	if (metadata.training_stage != "pt" && metadata.training_stage != "sft" &&
-		metadata.training_stage != "dpo" && metadata.training_stage != "rlhf") {
+        metadata.training_stage != "dpo" && metadata.training_stage != "rlhf" &&
+        metadata.training_stage != "rl") {
 		throw std::runtime_error(
 			"[DataLoader] FATAL: curriculum '" + metadata.name +
 			"' has invalid training_stage '" + metadata.training_stage + "'");

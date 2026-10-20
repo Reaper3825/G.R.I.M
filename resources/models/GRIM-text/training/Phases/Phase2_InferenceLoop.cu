@@ -4,7 +4,7 @@
 //======================================================//
 
 #include "Phase2_InferenceLoop.hpp"
-#include "../../Shared/Forward/InferenceInput.hpp"
+#include "../../Shared/InferenceState/InferencePrefill.hpp"
 #include "../../Shared/Forward/InferenceResultDecode.hpp"
 
 #include "../../Shared/AtomInsertion/AtomInsertionData.hpp"
@@ -63,28 +63,9 @@ std::shared_ptr<GRIM::Batching::BatchDeviceStorage> ensureInferenceDeviceStorage
     return payload.device_storage;
 }
 
-void validateInferenceContext(const TrainingContext& ctx,
-                              bool require_generation_state = true) {
-    if (!ctx.training_state) {
-        throw std::runtime_error("Phase2 payload inference: Phase1 context training_state is NULL");
-    }
-    if (require_generation_state && !ctx.generation_state) {
-        throw std::runtime_error("Phase2 payload inference: Phase1 context generation_state is NULL");
-    }
-    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
-    const auto layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
-        static_cast<std::uint32_t>(vocab_size),
-        "validateInferenceContext");
-    if (layout.total_vocab() != vocab_size) {
-        throw std::runtime_error(
-            "Phase2 payload inference: actual_vocab_size-derived token layout=" +
-            std::to_string(layout.total_vocab()) +
-            " != config.vocab_size=" + std::to_string(vocab_size));
-    }
-}
-
 void validateInferenceForwardPayload(
-    const GRIM::Config::AiConfigSnapshot& config,
+    const GRIM::HyperParameters::ModelHP& model_hp,
+    bool use_gpu,
     const GRIM::Batching::BatchPayload& active_payload,
     const char* caller);
 
@@ -92,7 +73,9 @@ std::vector<float> runAtomInsertionForward(
     TrainingContext& ctx,
     GRIM::Batching::BatchPayload& payload) {
     constexpr const char* caller = "runAtomInsertionForward";
-    validateInferenceForwardPayload(ctx.config, payload, caller);
+    const auto model_hp = GRIM::HyperParameters::modelHP(ctx.config);
+    const auto gpu_hp = GRIM::HyperParameters::gpuModelInitializationHP(ctx.config);
+    validateInferenceForwardPayload(model_hp, gpu_hp.use_gpu, payload, caller);
     if (!payload.EnableAtomIdentification) {
         throw std::runtime_error(
             "runAtomInsertionForward: atom identification is disabled on payload");
@@ -225,25 +208,14 @@ Phase2TextInferenceResult executeAtomInsertionTextInference(
     return result;
 }
 
-void validatePromptPayload(const GRIM::Batching::BatchPayload& prompt_payload) {
-    prompt_payload.validate("Phase2 payload inference");
-    if (!prompt_payload.isInferencePrefill()) {
-        throw std::runtime_error("Phase2 payload inference: prompt_payload must be InferencePrefill");
-    }
-    if (prompt_payload.batch_size != 1) {
-        throw std::runtime_error("Phase2 payload inference: prompt_payload.batch_size must be 1");
-    }
-    if (prompt_payload.seq_atom_tables.empty()) {
-        throw std::runtime_error("Phase2 payload inference: prompt_payload.seq_atom_tables is empty");
-    }
-}
-
 void validateInferenceForwardPayload(
-    const GRIM::Config::AiConfigSnapshot& config,
+    const GRIM::HyperParameters::ModelHP& model_hp,
+    bool use_gpu,
     const GRIM::Batching::BatchPayload& active_payload,
     const char* caller)
 {
-    active_payload.validate(caller);
+    // uploadBatchToDevice validates the complete payload before transfer.
+    // Keep only the inference/config geometry checks at this forward boundary.
     if (!active_payload.isInference()) {
         throw std::runtime_error(std::string(caller) + ": payload must be an inference payload");
     }
@@ -251,9 +223,8 @@ void validateInferenceForwardPayload(
         throw std::runtime_error(std::string(caller) + ": batch_size must be 1");
     }
 
-    const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
-    const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
-    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
+    const int max_seq_len = model_hp.training_max_seq_len;
+    const int vocab_size = model_hp.embedding_vocab_size;
     if (!use_gpu) {
         throw std::runtime_error(std::string(caller) + ": config.use_gpu must be true");
     }
@@ -286,13 +257,13 @@ GRIM::GeneratedSequence generateOneSequence(
     const GRIM::Lenses::LensCaptureRequest* lens_capture,
     bool inspect_only = false)
 {
-    validatePromptPayload(prompt_payload);
     const auto model_hp = GRIM::HyperParameters::modelHP(config);
     const bool local_atom_retrieval_enabled =
         model_hp.local_atom_retrieval_enabled;
 
-    const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
-    const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
+    const auto gpu_hp = GRIM::HyperParameters::gpuModelInitializationHP(config);
+    const bool use_gpu = gpu_hp.use_gpu;
+    const int max_seq_len = model_hp.training_max_seq_len;
     const int vocab_size = prompt_payload.vocab_size;
     const auto& prompt_tokens = prompt_payload.input_ids;
     const auto& prompt_numeric_values = prompt_payload.numeric_values;
@@ -319,18 +290,12 @@ GRIM::GeneratedSequence generateOneSequence(
 
     GRIM::GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
+    sequence.token_origins.assign(prompt_tokens.size(), GRIM::TokenOrigin::SuppliedContext);
     sequence.token_numeric_values = prompt_numeric_values;
     sequence.token_atom_mask = prompt_atom_mask;
     sequence.context_atom_table = prompt_atom_table;
     sequence.context_local_atom_table = generation_local_atom_table;
-    if (prompt_atom_entry_ids.size() != prompt_tokens.size()) {
-        throw std::runtime_error("Phase2 payload inference: atom_entry_ids length mismatch");
-    }
     sequence.atom_entry_ids = prompt_atom_entry_ids;
-    if (prompt_local_atom_indices.size() != prompt_tokens.size()) {
-        throw std::runtime_error(
-            "Phase2 payload inference: token_local_atom_indices length mismatch");
-    }
     sequence.token_local_atom_indices = prompt_local_atom_indices;
 
     if (!use_gpu) {
@@ -343,11 +308,6 @@ GRIM::GeneratedSequence generateOneSequence(
                                  std::to_string(prompt_tokens.size()) + " exceeds max_seq_len " +
                                  std::to_string(max_seq_len));
     }
-    if (prompt_numeric_values.size() != prompt_tokens.size() ||
-        prompt_atom_mask.size() != prompt_tokens.size() ||
-        prompt_atom_flags.size() != prompt_tokens.size()) {
-        throw std::runtime_error("Phase2 payload inference: side-channel length mismatch");
-    }
     std::vector<uint32_t> sequence_atom_flags = prompt_atom_flags;
 
     if (cfg.max_new_tokens <= 0) {
@@ -358,9 +318,6 @@ GRIM::GeneratedSequence generateOneSequence(
     }
     if (cfg.min_new_tokens > cfg.max_new_tokens) {
         throw std::runtime_error("Phase2 payload inference: min_new_tokens exceeds max_new_tokens");
-    }
-    if (vocab_size <= 0) {
-        throw std::runtime_error("Phase2 payload inference: invalid vocab_size");
     }
     if (cfg.strategy == GRIM::HyperParameters::SamplingStrategy::BEAM_SEARCH) {
         throw std::runtime_error("Phase2 payload inference: BEAM_SEARCH is not supported");
@@ -401,16 +358,13 @@ GRIM::GeneratedSequence generateOneSequence(
     if (!gpu_encoder) {
         throw std::runtime_error("Phase2::generateOneSequence: gpu_model_state.gpu_encoder is NULL");
     }
-    const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
-    const int num_heads = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_heads");
-    const int num_kv_heads = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_kv_heads");
-    const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "d_model");
-    const int rotary_dim = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "rotary_dim");
-    const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_cached_seq_len");
-    if (num_heads <= 0 || d_model % num_heads != 0) {
-        throw std::runtime_error("generateOneSequence: invalid num_heads/d_model for head_dim derivation");
-    }
-    const int head_dim = d_model / num_heads;
+    const int num_layers = model_hp.encoder_num_layers;
+    const int num_heads = model_hp.encoder_num_heads;
+    const int num_kv_heads = model_hp.encoder_num_kv_heads;
+    const int d_model = model_hp.encoder_d_model;
+    const int rotary_dim = model_hp.encoder_rotary_dim;
+    const int max_cached_seq_len = model_hp.max_cached_seq_len;
+    const int head_dim = model_hp.encoder_head_dim;
 
     GRIM::KvCacheState& kv_cache = generation_state.kv_cache;
     kv_cache.ensureAllocated(num_layers, num_heads, num_kv_heads, head_dim, rotary_dim,
@@ -441,7 +395,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // by q_len. Returns the last n_tail rows of the primary logits.
     auto runCachedForward = [&](GRIM::Batching::BatchPayload& active_payload,
                                 int n_tail) -> TailLogits {
-        validateInferenceForwardPayload(config, active_payload, "generateOneSequence");
+        validateInferenceForwardPayload(model_hp, use_gpu, active_payload, "generateOneSequence");
         const int q_len = active_payload.total_tokens;
         if (n_tail <= 0 || n_tail > q_len) {
             throw std::runtime_error("generateOneSequence: invalid n_tail=" + std::to_string(n_tail) +
@@ -598,8 +552,11 @@ GRIM::GeneratedSequence generateOneSequence(
         return static_cast<int>(sequence.token_ids.size()) - prompt_len;
     };
 
-    auto commitToken = [&](const GRIM::Sampling::SampleResult& s) {
+    auto commitToken = [&](const GRIM::Sampling::SampleResult& s,
+                           GRIM::TokenOrigin origin = GRIM::TokenOrigin::SampledAction) {
+        sequence.score_token_positions.push_back(sequence.token_ids.size());
         sequence.token_ids.push_back(s.token_id);
+        sequence.token_origins.push_back(origin);
         sequence.token_scores.push_back(s.log_probability);
         sequence.token_numeric_values.push_back(0.0f);
         sequence.token_atom_mask.push_back(0);
@@ -618,7 +575,7 @@ GRIM::GeneratedSequence generateOneSequence(
         forced.token_id = token_id;
         forced.probability = 1.0f;
         forced.log_probability = 0.0f;
-        commitToken(forced);
+        commitToken(forced, GRIM::TokenOrigin::ForcedToken);
     };
 
     // Select the next token from a primary-logit row using the SAME pipeline +
@@ -869,8 +826,8 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
     const GRIM::Lenses::LensCaptureRequest* lens_capture,
     bool inspect_only = false)
 {
-    validateInferenceContext(ctx);
-    validatePromptPayload(prompt_payload);
+    // Phase1 owns context readiness; batch preparation owns payload validity.
+    // executePayload checks the prefill requirements for this private helper.
     if (generation_hp.num_return_sequences <= 0) {
         throw std::runtime_error("Phase2 payload inference: num_return_sequences must be > 0");
     }
@@ -895,75 +852,17 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
 
 } // namespace
 
-namespace {
-GRIM::Batching::BatchPayload buildTokenPrefill(
-    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
-    GRIM::SpanText::EncodedText encoded) {
-    if (GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled)
-        throw std::invalid_argument("Token prefill cannot be used with the atom-insertion model");
-    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
-    if (tokenizer.vocabSize() != vocab_size)
-        throw std::runtime_error("Inference tokenizer vocabulary does not match compiled model");
-    auto& t = encoded.tokens;
-    // Supplied input is context. Only a tokenizer-added terminal EOS is removed.
-    if (!t.token_ids.empty() && t.token_ids.back() == GRIM::Tokenizer::EOS_TOKEN_ID) {
-        t.token_ids.pop_back();
-        t.token_numeric_values.pop_back();
-        t.token_atom_mask.pop_back();
-        t.token_atom_flags.pop_back();
-        t.atom_entry_ids.pop_back();
-        t.token_local_atom_indices.pop_back();
-    }
-    auto payload = GRIM::Batching::buildInferenceBatchPayload(
-        t.token_ids, t.token_numeric_values, t.token_atom_mask, t.token_atom_flags,
-        t.atom_table, t.atom_entry_ids, t.local_atom_table, t.token_local_atom_indices,
-        vocab_size,
-        static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size")),
-        static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_cached_seq_len")),
-        GRIM::HyperParameters::modelHP(ctx.config).local_atom_retrieval_enabled);
-    if (encoded.spans && !encoded.spans->empty()) {
-        GRIM::validateNamedConceptSpans(*encoded.spans, t.token_ids.size());
-        payload.named_concept_spans = {std::move(encoded.spans)};
-    }
-    payload.validate("buildTokenPrefill");
-    return payload;
-}
-} // namespace
-
-GRIM::Batching::BatchPayload buildPhase2InferencePrefill(
-    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
-    const std::string& prompt, const nlohmann::json& input_state) {
-    if (GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled)
-        throw std::invalid_argument("Structured token prefill requires a token model; use raw text for atom insertion");
-    const auto source = GRIM::Forward::inferenceInputSource(prompt, input_state);
-    auto definitions = GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
-        ctx.config, "concept_spans");
-    GRIM::resolveConceptSpanDelimiters(definitions, [&](const std::string& text) {
-        const auto id = tokenizer.unigramLM().getPieceId(text);
-        const auto* piece = tokenizer.unigramLM().getPiece(id);
-        return piece && piece->text == text ? id : -1;
-    });
-    const auto rendered = GRIM::SpanText::renderInputWithSpans(
-        source, definitions);
-    auto encoded = GRIM::SpanText::encodeSpanText(rendered,
-        [&](const auto& content, const auto& boundaries, auto* counts) {
-            return tokenizer.tokenizeWithMetadata(content, boundaries, counts);
-        });
-    return buildTokenPrefill(ctx, tokenizer, std::move(encoded));
-}
-
 static Phase2TextInferenceResult executePayload(
     TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::Batching::BatchPayload& prefill,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     const GRIM::Lenses::LensCaptureRequest* lens_capture, bool inspect_only) {
-    validateInferenceContext(ctx);
-    validatePromptPayload(prefill);
+    // Consume Phase1-owned state and a structurally validated batch payload.
+    // Only enforce requirements specific to this inference entry point.
+    if (!prefill.isInferencePrefill())
+        throw std::invalid_argument("Inference generation requires an InferencePrefill payload");
     if (prefill.EnableAtomIdentification)
         throw std::invalid_argument("Token generation cannot consume atom-insertion gaps");
-    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
-    if (tokenizer.vocabSize() != vocab_size || prefill.vocab_size != vocab_size)
-        throw std::runtime_error("Inference prefill/tokenizer vocabulary does not match compiled model");
     if (prefill.batch_size != 1 || prefill.total_tokens != prefill.seq_lengths.at(0))
         throw std::invalid_argument("Inference generation requires one compact prefill row");
     Phase2TextInferenceResult result;
@@ -977,7 +876,6 @@ static Phase2TextInferenceResult executePayload(
     auto generated = generatePayloadSequences(ctx, generation_prefill, tokenizer, generation_hp, nullptr, lens_capture, inspect_only);
     result.generation_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start_generation).count();
-    if (generated.empty()) throw std::runtime_error("Inference generation returned no sequences");
     const auto start_decode = std::chrono::high_resolution_clock::now();
     const auto& sequence = generated.front();
     result.continuation_text = tokenizer.decode(
@@ -991,6 +889,7 @@ static Phase2TextInferenceResult executePayload(
     result.sequence_token_count = sequence.token_ids.size();
     result.decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start_decode).count();
+    result.generated_sequence = std::move(generated.front());
     return result;
 }
 
@@ -1009,24 +908,20 @@ Phase2TextInferenceResult executePhase2Inspection(
     if (prompt.empty()) throw std::invalid_argument("Inspection input is empty");
     // Use the same tokenizer/span adapter, device upload, cached prefill and
     // forward lifecycle as inference. Return before sampling or decode forwards.
-    auto prefill = input_state
-        ? buildPhase2InferencePrefill(ctx, tokenizer, prompt, *input_state)
-        : buildTokenPrefill(ctx, tokenizer, {tokenizer.tokenizeWithMetadata(prompt), nullptr});
+    auto prefill = GRIM::Inference::buildInferencePrefill(ctx.config, tokenizer, prompt, input_state);
     if(capture.capture_jacobian) {
-        validateInferenceContext(ctx);validatePromptPayload(prefill);
         if(prefill.EnableAtomIdentification || prefill.batch_size!=1 || prefill.total_tokens!=prefill.seq_lengths.at(0) ||
            capture.batch_row!=0 || !capture.all_layers || !capture.all_positions)
             throw std::invalid_argument("Jacobian row inspection requires one compact token prefill and all layers/positions");
-        if(tokenizer.vocabSize()!=prefill.vocab_size)
-            throw std::invalid_argument("Jacobian tokenizer/payload vocabulary mismatch");
-        const int width=GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config,"d_model");
-        const int layers=GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config,"num_layers");
+        const auto model_hp = GRIM::HyperParameters::modelHP(ctx.config);
+        const int width = model_hp.encoder_d_model;
+        const int layers = model_hp.encoder_num_layers;
         const auto matrixBytes=GRIM::Lenses::hiddenJacobianBytes(width,prefill.total_tokens,layers)/width;
         const auto rowBytes=3ULL*prefill.total_tokens*width*sizeof(float);
         if(matrixBytes>192ULL*1024*1024 || matrixBytes>capture.temporary_memory_budget_bytes ||
            rowBytes>capture.temporary_memory_budget_bytes-matrixBytes)
             throw std::invalid_argument("Jacobian row exceeds capture scratch or response budget; shorten input or increase scratch MiB (response limit: 192 MiB FP32)");
-        auto& training=*ctx.training_state;
+        auto& training=ctx.requireTrainingState("Jacobian inspection");
         const auto stream=training.stream_ctrl.getPrimaryStream();
         ensureInferenceDeviceStorage(prefill,ctx.config,stream,{},"Jacobian inspection");
         const auto bindings=GRIM::Batching::uploadBatchToDevice(ctx.config,prefill,stream);
@@ -1066,16 +961,15 @@ Phase2TextInferenceResult executePhase2TextInference(
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     const GRIM::Lenses::LensCaptureRequest* lens_capture) {
     if (prompt.empty()) throw std::invalid_argument("Inference prompt is empty");
-    if (GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled) {
-        validateInferenceContext(ctx, false);
+    const auto model_hp = GRIM::HyperParameters::modelHP(ctx.config);
+    if (model_hp.atom_insertion_enabled) {
         if (lens_capture) throw std::invalid_argument("Lens capture requires token rows, not atom-insertion gaps");
         return executeAtomInsertionTextInference(ctx, prompt,
-            GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size"),
-            std::min(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len"),
-                     GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_cached_seq_len")));
+            model_hp.embedding_vocab_size,
+            std::min(model_hp.training_max_seq_len, model_hp.max_cached_seq_len));
     }
     const auto start = std::chrono::high_resolution_clock::now();
-    auto prefill = buildTokenPrefill(ctx, tokenizer, {tokenizer.tokenizeWithMetadata(prompt), nullptr});
+    auto prefill = GRIM::Inference::buildInferencePrefill(ctx.config, tokenizer, prompt);
     const auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     auto result = executePhase2PayloadInference(ctx, tokenizer, prefill, generation_hp, lens_capture);

@@ -275,6 +275,10 @@ struct LossConfigHP {
     float local_atom_retrieval_weight = 0.0f;
 };
 
+struct RLTrainingHP {
+    float kl_coefficient = 0.0f;
+};
+
 struct AutoStopHP {
     bool enabled = false;
     int plateau_patience = 0;
@@ -505,6 +509,7 @@ struct ModelHP {
     int training_batch_size = 0;
     int training_max_seq_len = 0;
     int training_max_tokens_per_batch = 0;
+    int max_cached_seq_len = 0;
 
     int embedding_vocab_size = 0;
     int embedding_d_model = 0;
@@ -721,6 +726,14 @@ inline LossConfigHP lossConfigHP(
     view.class_balanced_beta = hp.loss_class_balanced_beta;
     view.local_atom_retrieval_weight =
         hp.loss_local_atom_retrieval_weight;
+    return view;
+}
+
+inline RLTrainingHP rlTrainingHP(
+    const LanguageModelConfig& hp)
+{
+    RLTrainingHP view;
+    view.kl_coefficient = hp.rl_kl_coefficient;
     return view;
 }
 
@@ -1163,6 +1176,14 @@ inline LossConfigHP lossConfigHP(
     return view;
 }
 
+inline RLTrainingHP rlTrainingHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    RLTrainingHP view;
+    view.kl_coefficient = snapshotTrainingConfigField<float>(snapshot, "rl_kl_coefficient");
+    return view;
+}
+
 inline AutoStopHP autoStopHP(
     const GRIM::Config::AiConfigSnapshot& snapshot)
 {
@@ -1343,6 +1364,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.training_batch_size = batch_size;
     view.training_max_seq_len = max_seq_len;
     view.training_max_tokens_per_batch = requireInt("max_tokens_per_batch");
+    view.max_cached_seq_len = requireInt("max_cached_seq_len");
 
     view.embedding_vocab_size = vocab_size;
     view.embedding_d_model = d_model;

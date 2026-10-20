@@ -73,6 +73,13 @@ result. `tool_payload` is parsed by the selected tool adapter into an available
 tool ID and validated arguments. Its exact argument syntax must be specified
 per adapter; this grammar does not make arbitrary text shell-executable.
 
+Callers never supply a variable store, predeclared locals, or prebound local
+variables. The model produces all local declarations and input bindings in
+`define`; supplied input means task context that the model can bind, not an
+externally populated store. The runtime starts with no local bindings and tracks
+validated model declarations and actual tool assignments. A retry retains the
+valid bindings produced within that episode.
+
 `</TOOL>` is the expression terminator; no trailing semicolon is used. Dispatch
 is eligible at that boundary only after the enclosed payload and destination
 validate. Migrate the current curriculum's post-close destination into the TOOL
@@ -118,8 +125,8 @@ values remain in the transcript with their original versions.
 
 | Control | Value | What it controls |
 | --- | --- | --- |
-| `self_correction_rl.enabled` | `false` (default) | Existing training path; no RL rollout, reference allocation, RL loss, or retry-EMA update |
-| `self_correction_rl.enabled` | `true` | Complete RL collection/scoring/update branch; all policy parameters participate |
+| `training.config.training_stage` | PT/SFT and other existing stages | Existing configured path; no self-correction rollout, reference allocation, RL loss, or retry-EMA update |
+| `training.config.training_stage` | `"rl"` / `TrainingStage::RL` | Select episode-based RL preparation and separate RL forward/backward/update loop; stage parsing and preparation guard exist, executable RL flow remains pending |
 | `auto_inject_tool_results` | `false` (default) | On success, assign privately; append value-free status; disclose the value only after a valid READ |
 | `auto_inject_tool_results` | `true` | On success, assign and append the actual value automatically, then resume generation |
 | Execution/validation/READ error | Either boolean value | Automatically inject error feedback; never require READ to discover the failure |
@@ -128,10 +135,11 @@ values remain in the transcript with their original versions.
 | Generated-token budget | 256 per attempt | Counts all sampled segments, including calls/reads/markers, across pauses |
 | Attempt budget | Initial plus one retry | Bounds correction; tool calls and reads do not consume this budget |
 
-Both booleans are planned configuration, not installed keys. The RL gate belongs
-to training configuration; result disclosure is shared by inference and rollout.
-Its final configuration nesting still needs wiring. Snapshot both resolved
-settings with each rollout group. Changing disclosure changes the policy's
+The existing training-stage selector now accepts `rl`; it replaces the proposed
+`self_correction_rl.enabled` boolean. Result disclosure remains a planned boolean
+shared by inference and rollout, with final configuration nesting still to wire.
+Snapshot the resolved stage and disclosure setting with each rollout group.
+Changing disclosure changes the policy's
 observations, so never replay an old episode under a newly selected mode.
 
 Explicit mode must not leak unread values through command messages, knowns,
@@ -218,6 +226,42 @@ Fixture rollback is explicit: record it, invalidate affected bindings, and expos
 the changed state before continuing. Closing or failing an answer does not undo
 tool side effects by itself. No training replay may execute those effects again.
 
+### 2.1 Episode definition header
+
+[`Shared/SelfCorrection/Episode.hpp`](../resources/models/GRIM-text/Shared/SelfCorrection/Episode.hpp)
+now defines only self-correction episode metadata under
+`GRIM::SelfCorrection`: identity snapshots, sampling segments, committed attempt boundaries, verifier outcomes,
+and detached score slots. Attempt definitions live in
+[`Shared/SelfCorrection/Attempt.hpp`](../resources/models/GRIM-text/Shared/SelfCorrection/Attempt.hpp),
+which `Episode.hpp` includes. `EpisodeRecord` reuses `GeneratedSequence` for token
+IDs, scores, token provenance, score positions, atom channels, and tables, plus the existing `NamedConceptSpans`
+and runtime `Goal` (from `Shared/Goal/Goal.hpp`) types. Token offsets are absolute within the episode
+sequence; ranges are half-open. Score positions are explicit because existing
+generation excludes prefix scores and records forced-token scores as zero.
+Committed attempts use const ownership, with later scores stored separately.
+`EpisodeRecord` directly owns its task/model identity, prepared goal, sandbox
+instance association, and generated sequence; there is no separate
+`EpisodeSnapshot` wrapper or verifier ID/version. Each committed attempt names
+the sandbox snapshot containing execution results and environment state frozen
+at its endpoint. Grading uses these associations in the one episode record,
+rather than accepting duplicate task, trajectory, and execution-evidence inputs.
+Initial/retry identity comes from the attempt's slot in that record.
+`model_name` and `reference_model_name` identify the policy and reference models
+for lookup through the existing configured model-store path. Each model's store
+directory contains its weights/checkpoints and `model.grimcfg`; the snapshot
+does not duplicate those paths. Training and general settings remain owned by
+the AI configuration. Do not add an RL checkpoint-path control: startup resolves
+the policy and frozen reference through that store, pins the selected reference
+checkpoint identity, and validates it on resume. The episode header does not
+resolve or load artifacts; separate frozen-reference loading remains pending.
+
+This is a definition layer only. The header does not define a parallel token
+payload, tool registry, value codec, variable store, or runtime event system.
+Those runtime integrations remain pending at the insertion points below, as do
+collection, parsing, verification, disclosure, and lifecycle validation. No
+configuration keys, delimiters, serialization, or training dispatch are wired.
+Goal origin remains undecided by default.
+
 ## 3. Before Phase 1: configuration and grammar artifacts
 
 Paths in the insertion tables are relative to `resources/models/GRIM-text/`
@@ -227,8 +271,8 @@ unless they explicitly start with `DataCollection/`, `MMO/`, or `commands/`.
 
 | Existing insertion point | Mechanism to add | Boundary invariant |
 | --- | --- | --- |
-| `training/ConfigCompiler/compile_model_config.cpp`, `training/schemas/grim_compiled_hyperparameters.fbs` | Compile the RL gate and result-disclosure control through the existing config flow | Do not read ad hoc JSON inside the token loop |
-| `Shared/ModelConfig/CompiledModelConfig.hpp` and `.cpp`, `Shared/HyperParameters/HyperParameters_GPU.hpp` | Carry validated settings into existing runtime snapshots/accessors | Defaults and enabled-only validation agree between compilation and runtime |
+| `training/ConfigCompiler/compile_model_config.cpp`, `training/schemas/grim_compiled_hyperparameters.fbs` | Wire RL-only settings and result-disclosure control through the existing config flow; reuse the existing training-stage selector | Do not add a second mode switch or read ad hoc JSON inside the token loop |
+| `Shared/ModelConfig/CompiledModelConfig.hpp` and `.cpp`, `Shared/HyperParameters/HyperParameters_GPU.hpp` | Carry validated settings into existing runtime snapshots/accessors | Defaults and RL-stage-only validation agree between compilation and runtime |
 | `Shared/UnigramByte/Detectors/AtomDelimiterDetector.cu`, `Shared/UnigramByte/TokenLayout.hpp` | Decide and implement distinct READ recognition/representation | Existing TOOL is an atom type, not a full call grammar; READ must not alias it |
 | `Shared/ConceptBlock/SpanTextRenderer.hpp`, `SpanTextEncoder.hpp` | Define observation/feedback span rendering and token projection | Typed atom channels and exact delimiter boundaries survive insertion |
 
@@ -241,9 +285,26 @@ it. Retired execution metadata is not an implementation shortcut.
 
 ## 4. Phase 1: startup and ownership
 
+Runtime config now authors `training.config.rl_kl_coefficient: 0.02` with typed
+loading, finite/nonnegative validation, finalized-config export, and
+`rlTrainingHP()` accessors. This training-policy field is outside the compiled
+model-geometry schema. The executable RL objective remains pending; both source
+and document pseudocode read the resolved coefficient rather than hardcoding it.
+
+Implemented: `TrainingStage::RL` parses/serializes as `rl`; curriculum persistence,
+registry validation, and the Data Hub selector accept it. RL checkpoint names
+round-trip and predecessor-stage selection points to SFT. The preparation switch
+in `Startup/SlidingWindow.cu::applySlidingWindows()` runs before corpus mutation:
+PT/SFT retain their paths, while RL explicitly rejects offline preparation until
+the recorded-episode adapter exists. Focused host checks pass in
+`Tests/test_rl_batch_preparation_host.py`; this does not enable an RL run.
+
+Pending: mode-aware planning/validation must remove the SFT payload/epoch-plan
+prerequisite for RL and carry the resolved stage through the Phase 2 handoff.
+
 | Existing insertion point | Mechanism to add | Produced handoff |
 | --- | --- | --- |
-| `training/Phases/Phase1_Startup.cu` / `.hpp` | Branch-aware initialization and ownership on `TrainingContext` | RL state only when enabled; normal startup when disabled |
+| `training/Phases/Phase1_Startup.cu` / `.hpp` | Stage-aware initialization and ownership on `TrainingContext` | Self-correction state only for RL; existing startup for other stages |
 | `training/Phases/Startup/Validation/StartupValidation.cu` and `Phase2Handoff.cu` | Validate grammar/tokenizer support, tool fixtures, bounds, reference identity, and freeze conflicts | Fail before collection if the requested mode cannot run |
 | `training/Phases/Startup/CheckpointLoad.cu` | Restore policy and RL resume metadata; initialize separate frozen reference | Policy version, reference identity, retry baseline |
 | `training/Phases/Startup/Model/ParameterGroupRegistration.cu`, `ParameterRegistry.hpp` | Include all policy parameters in existing registration | No RL subset; no reference parameters in optimizer groups |
@@ -258,8 +319,8 @@ results are runtime data, not trainable parameters.
 
 ### 5.1 Prefill and determine/define
 
-`buildPhase2InferencePrefill()` in
-`training/Phases/Phase2_InferenceLoop.cu` currently renders supplied input,
+`GRIM::Inference::buildInferencePrefill()` in
+`Shared/InferenceState/InferencePrefill.cu` currently renders supplied input,
 resolves configured delimiters, encodes metadata, and builds a compact payload.
 Keep that boundary. Supply available action/tool context without private fixture
 answers; the replacement action approach and its input handoff remain open. Include
@@ -318,22 +379,35 @@ DDEA attempt with the original goal/history available. Retain valid variable
 bindings; do not reconstruct private values as model-visible knowns. An attempt
 boundary is explicit metadata, not inferred from counting repeated text tags.
 
-`executePayload()` currently converts `GeneratedSequence` to
-`Phase2TextInferenceResult` and drops token scores and much atom metadata.
-Extend this handoff so the episode collector retains the complete record before
-any display-only conversion. Do not recreate training trajectories from decoded
-text. `GeneratedSequence::finished` alone cannot distinguish answer completion,
+`executePayload()` now retains the complete `GeneratedSequence` in
+`Phase2TextInferenceResult::generated_sequence` after decoding. The optional is
+absent for atom-insertion and direct prefill-only inspection paths that do not
+produce a generated sequence. `GeneratedSequence` owns `token_origins`, aligned
+with token IDs, and `score_token_positions`, aligned with continuation scores.
+The generation loop labels supplied, sampled, and forced tokens at commit time;
+runtime-context insertion remains future work. Forced scores remain zero
+placeholders and must be excluded using provenance, not their numeric value.
+Connect the episode collector to this retained record rather than recreating
+trajectories from decoded text. `GeneratedSequence::finished` alone cannot distinguish answer completion,
 budget failure, or an intermediate runtime pause; add explicit event/end reasons.
 
 ## 6. Phase 2 training: committed episodes to gradients
 
 ### 6.1 Collection and payload construction
 
-At `executePhase2()` / `runEpoch()` in
-`training/Phases/Phase2_TrainingLoop.cu`, select the RL collection path using the
-single branch gate. The existing SFT batch source must not remain an accidental
-prerequisite for collecting online episodes. Reuse the update machinery after
-forming the complete group, rather than replacing the training pipeline.
+Episode scheduling is a separate sequence from forward/backward training. It
+selects tasks, collects initial attempts and eligible retries, replaces invalid
+episodes, and prepares rewards/advantages for a complete group under one policy
+version. It then supplies recorded rows to the episode-to-payload adapter.
+The existing SFT batch source must not remain a prerequisite for this sequence.
+
+The proposed `training/Phases/Phase2_RLTrainingLoop.cu/.hpp` consumes the prepared,
+scored group. It owns policy/reference forwards, RL loss, backward accumulation,
+and one optimizer commit. Dispatch to it using the resolved training stage in
+the Phase 2 handoff. Keep the existing SFT `runEpoch()` separate; reuse shared
+payload upload, execution, and update plumbing rather than copying epoch ordering
+or supervised-row weighting into the RL loop. These loop/handoff changes are
+planned, not implemented by the stage-selection work.
 
 Episode records need goal origin, task/group/attempt IDs, policy/config versions, exact token
 IDs and scores, provenance, atom channels, call/assignment/read events, disclosure
@@ -354,7 +428,7 @@ dispatcher, or variable-store mutations.
 | Existing insertion point | Mechanism to add | Required invariant |
 | --- | --- | --- |
 | `Shared/Forward/ModelForward_GPU.hpp` | Parameter-connected recomputation for policy; frozen-reference scoring on identical recorded prefixes | Cached collection stays non-differentiable; dropout disabled for both scoring paths |
-| `training/Autograd/AutogradTraining.cu` | Explicit RL loss selection and assembly | Existing SFT objective remains available under the disabled gate |
+| `training/Autograd/AutogradTraining.cu` | Explicit RL loss selection and assembly | Existing SFT objective remains available for the SFT stage |
 | `Shared/Loss/ComputeLoss/AutogradLoss.cu` | Signed-advantage action loss and exact categorical forward KL | Same legal support; FP32 KL; reference has no gradients |
 | Phase 2 accumulation helpers and `runOptimizerWindowFromEpoch()` | Group-aware accumulation, existing clipping/optimizer dispatch | One update for the complete group; denominator stays `256 * 64` |
 | Existing Phase 2 logging/checkpoint handoff | Report RL outcomes and publish consumed-group/policy version | No CE/perplexity interpretation of policy loss |
@@ -399,7 +473,8 @@ and transport mapping, READ's
 tokenizer representation, call/read/time/context limits, fixture rollback rules,
 and auxiliary/local-retrieval objectives. These are bounded design choices at
 the insertion points above. They do not reopen the selected episode definition,
-answer grading boundary, all-parameter policy training, or the two boolean controls.
+answer grading boundary, all-parameter policy training, training-stage selection,
+or the result-disclosure boolean.
 
 Required migration: move existing post-`</TOOL>` output bindings inside the
 expression in authoring generators, validators, and affected datasets. The

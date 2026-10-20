@@ -442,6 +442,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/LocalAtomRetrieval/LocalAtomRetrievalLoss.cu
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
+    ../../Shared/InferenceState/InferencePrefill.cu
     ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../../Shared/InferenceState/LocalAtomRetrievalInferenceState.cu
     ../Autograd/AutogradContext.cu

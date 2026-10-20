@@ -100,6 +100,7 @@ std::optional<GRIM::HyperParameters::TrainingStage> predecessorTrainingStage(
         case TrainingStage::SFT:
             return TrainingStage::PT;
         case TrainingStage::DPO:
+        case TrainingStage::RL:
             return TrainingStage::SFT;
         case TrainingStage::RLHF:
             return TrainingStage::DPO;
