@@ -28,6 +28,10 @@ Existing integration points:
 | --- | --- |
 | Supplied goal and persisted state | `DataCollection/reasoning_state.hpp` and `reasoning_state_json.hpp` |
 | Configured text and span rendering | `resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp` and `SpanTextEncoder.hpp` |
+| Runtime delimiter lookup and span events | `resources/models/GRIM-text/Shared/ConceptBlock/ConceptSpanDelimiterMap.hpp` |
+| Generation session and token accounting | `resources/models/GRIM-text/Shared/InferenceState/InferenceGenerationSession.hpp` and `.cu` (data-only state and free functions) |
+| Return/termination decisions | `resources/models/GRIM-text/Shared/InferenceState/InferenceReturnPolicy.hpp` (free functions) |
+| Live session, KV cache, and retrieval ownership | `resources/models/GRIM-text/Shared/InferenceState/GenerationState_GPU.hpp` |
 | Tool identities, descriptions, parameters, and availability | `MMO/Core/ToolRegistry.hpp` (`ToolDescriptor`, `ToolRegistry`) |
 | Command execution and result envelope | `commands/commands_core.hpp` and `.cpp` (`dispatchCommand`, `CommandResult`) |
 | Generated sequence data | `resources/models/GRIM-text/Shared/Forward/GeneratedSequence.hpp` |
@@ -40,6 +44,16 @@ Existing integration points:
 | Training/update orchestration | `resources/models/GRIM-text/training/Phases/Phase2_TrainingLoop.cu` |
 
 These are integration boundaries, not an already-connected RL tool loop.
+Structured prefill now retains an in-memory `ConceptSpanDelimiterMap` shared
+with generation. Sessions identify configured marker IDs and retain generated
+span events/ranges without text decoding. The loop now returns at a valid
+closing marker with `SpanBoundary`, distinct from terminal EOS/limits, and the
+returned sequence remains unfinished. The map is rebuilt per structured
+prefill, never persisted. `GenerationState` now retains the live session and
+cache across span returns; `resumePhase2PayloadInference()` continues without
+re-prefill. Sampled-action counts carry across segments; runtime/forced tokens
+consume context capacity only. Tool/READ representation, runtime-context
+append/atom remapping, and dispatch remain pending.
 `GRIM::Inference::buildInferencePrefill()` renders supplied prompt/state into a payload;
 `executePhase2PayloadInference()` generates a continuation. The current public
 `Phase2TextInferenceResult` retains the complete `GeneratedSequence` in its
@@ -267,6 +281,26 @@ decision and must not become a parameter-freezing mechanism.
 
 ## 1. Add self-correction episode orchestration
 
+### Implemented generation foundation
+
+- [x] Resolve the complete configured span delimiter vocabulary against the loaded tokenizer during structured prefill, including continuation spans absent from the supplied input. Retain an immutable reverse lookup shared by payload/session/result; never persist resolved IDs in configuration, GRMT, or checkpoints.
+- [x] Track generated opening/closing markers by definition and enclosing scope, including repeated spans. Retain absolute token ranges and invalid-marker events; reject ambiguous delimiter mappings. Opening markers, unmatched/mismatched closes, and stale close events do not stop generation.
+- [x] Keep `InferenceGenerationSession` as data-only state operated on by free functions. Read vocabulary size and prefill geometry from the inference payload and sequence/cache limits from model configuration; do not cache those scalar values on the session.
+- [x] Centralize return decisions in the classless `InferenceReturnPolicy.hpp`. Return at a valid configured close with `SpanBoundary` and `finished == false`; keep sampled EOS, token/context limits, and explicit finish distinct and terminal. Retain the return reason on `GeneratedSequence` and decode after the loop returns.
+- [x] Preserve the live session, sampler/RNG, prefill, atom registries, retrieval state, and reusable device storage in `GenerationState` across span returns. Expose `resumePhase2PayloadInference()` to continue the same trajectory without re-prefill; acknowledge the delivered span event so it does not immediately yield again.
+- [x] Read the existing `kv_cache.host_seqlen` directly in the inference loop as the processed-token cursor. On resume, process the pending closing marker and any queued tokens exactly once, in order, before sampling again. Keep this scheduling in `Phase2_InferenceLoop.cu`; no separate advance helper or duplicate processed-token counter.
+- [x] Count only `TokenOrigin::SampledAction` toward the generation budget and minimum-length EOS suppression, carrying the count across segments. Runtime/supplied context and forced retrieval tokens consume context capacity only; retrieval replay selection uses remaining context capacity. Bound context by both the model sequence limit and KV-cache capacity.
+- [x] Release the active session on terminal return, inspection completion, or advance failure; reject resume without a matching tokenizer and span-paused session. Beginning a new inference explicitly resets the previous live trajectory. Return cumulative trajectory snapshots rather than moving the live session out at a span boundary.
+- [x] Pass focused host tests for delimiter scope/ambiguity, valid and malformed span boundaries, EOS versus span/limit reasons, two successive pause/resume segments, pending-marker processing, queued runtime tokens before the next sample, sampled/context accounting, and terminal cleanup. The trajectory test compiles the production scheduling loop with GPU forwarding substituted; the cached-forward host test also passes. No GPU/model/training binary was built or run for this work.
+
+These are generation primitives, not a connected RL episode or tool loop.
+The returned continuation is still cumulative from the original prefill boundary.
+Runtime-context appending/atom remapping and the episode-specific answer-close,
+execution, grading, and retry handlers remain below.
+
+### Pending episode integration
+
+- [ ] Add a validated `appendRuntimeContext()` free function beside the session operations: check channel lengths, vocabulary IDs, context capacity, and observation boundaries before mutation; merge/remap atom registries and aligned metadata; append with `RuntimeContext` provenance and no policy-score entries. Observation markers must not become generated grammar/dispatch events. Connect the adapter to the retained session and existing resume path.
 - [ ] Wrap the existing generation entrypoint with the initial-attempt / outcome / optional-retry flow.
 - [ ] Add the task/verifier adapter described above: return overall success, per-criterion outcomes, constraint violations, execution status, and model-visible feedback separately from private grading data.
 - [ ] Bind available tool descriptions/parameters to the task prefix using the existing rendering path; record registry/tool versions and reject calls outside that task's available set.
@@ -274,13 +308,13 @@ decision and must not become a parameter-freezing mechanism.
 - [ ] Add `auto_inject_tool_results` through the existing config schema/compiler/loading path and use the same resolved mode in rollout and inference; snapshot it for each episode group.
 - [ ] Route execution/validation/READ errors to automatic feedback before applying the successful-result injection boolean. Test error injection under both values and on both attempts; no READ is required for errors.
 - [ ] Implement declaration validation, tool-output assignment, and the episode-local variable store for both result-access modes.
-- [ ] Add distinct `<READ>` / `</READ>` recognition, variable resolution, and generation pause/resume behavior; validate complete boundaries before servicing requests.
-- [ ] Add a call/result handoff with conditional disclosure and an explicit read/result handoff. Tool and read pauses are not correction attempts; count sampled tokens across all generation segments within that attempt toward the same 256-token budget.
+- [ ] Add distinct `<READ>` / `</READ>` recognition and variable resolution, wiring request handling to the existing span pause/resume primitives; validate complete boundaries before servicing requests.
+- [ ] Add a call/result handoff with conditional disclosure and an explicit read/result handoff. Tool and read pauses are not correction attempts; wire the existing sampled-token accounting to one shared 256-token budget per attempt.
 - [ ] On initial failure, append permitted execution observations and unmet-criterion feedback with the original goal available. Retain prior generated history, variable bindings, and call/result associations without disclosing unread values.
 - [ ] Define isolated fixture state and reset it between independent episodes. Within an episode, retry from the recorded post-attempt state unless the fixture explicitly rolls back and exposes that rollback; never silently replay side effects.
 - [ ] Bound calls, observation/context size, and execution time per attempt. Treat tool/validation errors as observations the model can respond to; distinguish infrastructure failures from scored policy failures and replace invalid episodes before the update.
 - [ ] Define the appended feedback/goal delimiters and the beginning of the next DDEA attempt using the existing rendering path.
-- [ ] If continuing the existing KV cache, feed appended context through it before sampling the retry.
+- [ ] Connect retry feedback insertion to the runtime-context append adapter and existing cache-preserving resume path; feed all appended context before sampling the retry and initialize the retry's separate sampled-token budget explicitly.
 - [ ] Close each attempt independently when the full `</answer>` marker is emitted, then grade its recorded trajectory. End the episode after a passing first attempt or after grading the retry; never stop generation because a runtime check reports success. Set the existing per-attempt generation limit to 256 tokens for this pilot.
 - [ ] Configure the existing sampling pipeline for categorical sampling with the settings above; disable no-repeat n-gram blocking and minimum-length EOS suppression as additional distribution transforms.
 - [ ] End normal generation after the full generated `</answer>` marker, configured EOS if present, or the token limit; also handle configured call/time-budget exhaustion explicitly. Handle the closing marker across token boundaries and retain all sampled marker tokens in the recorded action sequence and length count.

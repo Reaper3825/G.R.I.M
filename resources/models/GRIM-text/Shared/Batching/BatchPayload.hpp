@@ -32,6 +32,7 @@
 
 // Forward declaration for GRMT-authored training rows.
 namespace GRIM {
+class ConceptSpanDelimiterMap;
 namespace TokenizerArtifacts { struct GrmtSequence; }
 }
 
@@ -106,6 +107,9 @@ struct BatchPayload {
     std::vector<int32_t> prompt_end_positions; // [batch_size], inclusive; -1 when length is 0
     // Immutable generic span trees aligned with the realized batch rows.
     std::vector<std::shared_ptr<const GRIM::NamedConceptSpans>> named_concept_spans;
+    // Inference-only, full configured marker vocabulary (including future output
+    // spans). Shared host state; not uploaded, checkpointed, or written to GRMT.
+    std::shared_ptr<const GRIM::ConceptSpanDelimiterMap> concept_span_delimiters;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)

@@ -906,6 +906,61 @@ with neutral atom side channels, and records ranges into the owning token row.
 Delimiter strings are supplied by configuration, not duplicated in source data.
 The cached IDs are derived state, never authored JSON.
 
+Structured inference now retains these resolved definitions in an immutable,
+host-only `ConceptSpanDelimiterMap` attached to the prefill payload. The map is
+built once per structured prefill from the complete configured definitions,
+including continuation sections absent from the supplied input, and shared by
+generation sessions and returned trajectories. It is not persisted in JSON,
+GRMT, or checkpoints. A new prefill resolves against its current tokenizer and
+configuration; there is no global cache that can retain stale vocabulary IDs.
+Plain-text inference does not attach this map or interpret structural markers.
+
+The reverse lookup maps a token ID to opening/closing marker candidates identified
+by definition index and enclosing tagged definition, rather than name alone.
+Delimiter-free groups introduce no runtime marker scope. Shared IDs under
+different tagged parents are resolved by the active span stack; ambiguous IDs
+within one scope and IDs used for both opening and closing are rejected.
+
+`InferenceGenerationSession` tracks committed continuation tokens incrementally
+and retains opening, closing, and invalid-marker events on `GeneratedSequence`.
+Positions are absolute token offsets in the owning sequence. A valid close
+records `[opening_position, closing_position + 1)`, including both markers but
+excluding the following separator. This event range is distinct from canonical
+rendered spans, which include trailing separators. Unexpected markers do not
+close active spans. Each session starts with an empty stack at the completed
+prefill boundary; incomplete spans at EOS or a token limit have no close event.
+The inference return policy now yields on a valid close event at the newest
+committed token. Opening markers, invalid closes, and older close events do not
+trigger a yield. `InferenceReturnReason::SpanBoundary` is distinct from EOS;
+the returned trajectory retains that reason and `finished == false`. Explicit
+finish, token/context limits, and EOS remain terminal and take precedence over
+a span event at the same position. Minimum-length EOS suppression does not
+suppress span returns. The existing result decoder decodes the generated
+continuation through the closing marker after the loop returns.
+
+The begin entrypoint returns at the first completed configured span and retains
+the live session in `GenerationState`, alongside its prefill, reusable device
+storage, KV cache, and local-atom retrieval state. The newest committed marker
+is still pending at this boundary. `resumePhase2PayloadInference()` acknowledges
+the delivered boundary and continues the same sampler/trajectory without another
+prefill. The KV cache's `host_seqlen` is the authoritative processed-token cursor:
+every queued token is consumed once, in order, before another action is sampled.
+An acknowledged close cannot immediately yield again. Returned results are
+snapshots; IDs and decoded continuation remain cumulative from the original
+prefill boundary. Resume requires a matching tokenizer and a span-paused session.
+Terminal EOS/limits, inspection completion, and advance failures release the
+live session; explicitly beginning another inference resets the previous one.
+
+Generation length and minimum-length EOS suppression now count only
+`TokenOrigin::SampledAction` tokens, including sampled structural markers.
+Supplied/runtime context and forced retrieval tokens consume context capacity
+but not the sampled-token budget. The context limit is the smaller of the model's
+sequence limit and KV-cache capacity. Retrieval replay selection uses remaining
+context capacity, rather than charging replay tokens to the sampled budget.
+The runtime-context append/atom-remapping API and tool/READ dispatch remain
+pending; the scheduling supports queued tokens but does not itself authorize or
+construct runtime observations.
+
 GRMT v34 replaces fixed Goal, phase, collection, and Answer records with generic
 named nodes. The wire representation stores each node's name, range, and parent;
 child lists are reconstructed on read and validated. Token slices are not

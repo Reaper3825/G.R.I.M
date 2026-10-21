@@ -74,4 +74,10 @@ Phase2TextInferenceResult executePhase2PayloadInference(
     const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr,
     bool inspect_only = false);
 
+// Continue the live span-paused trajectory owned by this context. Reuses its
+// tokenizer, sampling policy, prefill and KV cache; does not prefill again.
+// Returned IDs/continuation retain the accumulated trajectory, as on begin.
+Phase2TextInferenceResult resumePhase2PayloadInference(
+    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer);
+
 } // namespace GRIMText::Training

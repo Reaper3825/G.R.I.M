@@ -5,6 +5,9 @@
 
 #pragma once
 
+#include "../ConceptBlock/ConceptSpanDelimiterMap.hpp"
+#include "../InferenceState/InferenceReturnPolicy.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -27,6 +30,8 @@ enum class TokenOrigin : std::uint8_t {
 };
 
 struct GeneratedSequence {
+    std::shared_ptr<const ConceptSpanDelimiterMap> concept_span_delimiters;
+    std::vector<GeneratedSpanEvent> span_events;
     std::shared_ptr<const Lenses::LensSnapshot> prefill_lens_snapshot;
     std::shared_ptr<const Lenses::LensCaptureResult> prefill_lens_capture_result;
     std::vector<int> token_ids;
@@ -45,6 +50,8 @@ struct GeneratedSequence {
         context_local_atom_table;
     std::vector<uint32_t> token_local_atom_indices;
     float score = 0.0f;
+    Inference::InferenceReturnReason return_reason = Inference::InferenceReturnReason::Continue;
+    // A span return leaves the full sequence unfinished. EOS and limits are terminal.
     bool finished = false;
 };
 

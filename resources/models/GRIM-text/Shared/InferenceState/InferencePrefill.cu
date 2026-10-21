@@ -1,4 +1,5 @@
 #include "InferencePrefill.hpp"
+#include "../ConceptBlock/ConceptSpanDelimiterMap.hpp"
 
 #include "../Forward/InferenceInput.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
@@ -21,6 +22,7 @@ GRIM::Batching::BatchPayload buildInferencePrefill(
     if (tokenizer.vocabSize() != vocab_size)
         throw std::runtime_error("Inference tokenizer vocabulary does not match compiled model");
     GRIM::SpanText::EncodedText encoded;
+    std::shared_ptr<const GRIM::ConceptSpanDelimiterMap> delimiter_map;
     if (input_state) {
         const auto source = GRIM::Forward::inferenceInputSource(prompt, *input_state);
         auto definitions = GRIM::HyperParameters::dataLoadingHP(config).concept_spans;
@@ -29,7 +31,8 @@ GRIM::Batching::BatchPayload buildInferencePrefill(
             const auto* piece = tokenizer.unigramLM().getPiece(id);
             return piece && piece->text == text ? id : -1;
         });
-        const auto rendered = GRIM::SpanText::renderInputWithSpans(source, definitions);
+        delimiter_map = std::make_shared<const GRIM::ConceptSpanDelimiterMap>(definitions);
+        const auto rendered = GRIM::SpanText::renderInputWithSpans(source, delimiter_map->definitions());
         encoded = GRIM::SpanText::encodeSpanText(rendered,
             [&](const auto& content, const auto& boundaries, auto* counts) {
                 return tokenizer.tokenizeWithMetadata(content, boundaries, counts);
@@ -58,6 +61,7 @@ GRIM::Batching::BatchPayload buildInferencePrefill(
         GRIM::validateNamedConceptSpans(*encoded.spans, t.token_ids.size());
         payload.named_concept_spans = {std::move(encoded.spans)};
     }
+    payload.concept_span_delimiters = std::move(delimiter_map);
     payload.validate("buildInferencePrefill");
     return payload;
 }
