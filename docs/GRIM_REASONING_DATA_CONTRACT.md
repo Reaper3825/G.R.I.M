@@ -23,8 +23,12 @@ The normative implementation is split across:
   inference-time state accepted from upstream producers.
 - [`InferencePrefill.hpp`](../resources/models/GRIM-text/Shared/InferenceState/InferencePrefill.hpp):
   standalone prompt/state adapter that builds the realized inference-prefill payload.
+- [`InferenceGenerationSession.hpp`](../resources/models/GRIM-text/Shared/InferenceState/InferenceGenerationSession.hpp):
+  generated trajectory initialization, sampling policy, token bookkeeping, and completion.
 - [`Phase2_InferenceLoop.hpp`](../resources/models/GRIM-text/training/Phases/Phase2_InferenceLoop.hpp):
-  generation and inspection entrypoints.
+  generation entrypoints.
+- [`Phase2_InspectionLoop.hpp`](../resources/models/GRIM-text/training/Phases/Phase2_InspectionLoop.hpp):
+  prefill lens capture and Jacobian inspection entrypoint.
 - [`ConceptSupervision.cu`](../resources/models/GRIM-text/training/Phases/Startup/ConceptSupervision.cu):
   runtime projection of configured ConceptBlock fields onto causal targets and
   masked context before window construction.
@@ -95,13 +99,15 @@ continues to accept raw text through `executePhase2TextInference()` and returns
 its annotated input. Token-LM inference consumes the supplied atom annotations
 or an already-realized payload; it does not implicitly launch another model.
 
-Token-LM results expose `continuation_text` separately from the full decoded
-sequence. The continuation is decoded from the realized prefill token boundary,
-with aligned atom side channels, after verifying that generated IDs preserve
+Token-LM results expose only `continuation_text` as decoded text; full-sequence
+token IDs and metadata remain available. The continuation is decoded from the
+realized prefill token boundary, with aligned atom side channels, after verifying that generated IDs preserve
 that prefix. Diagnostics and worker responses use the continuation, so text
 normalization cannot cause prefill state to be logged or returned. Atom-insertion
-results retain their distinct annotated-input response contract. This refactor
-preserves training encoding and does not require corpus regeneration.
+results return their annotated input in the same `continuation_text` field,
+retaining their distinct annotated-input response contract. Prefill-only
+inspection has no text output. This refactor preserves training encoding and does
+not require corpus regeneration.
 
 ## 2. Exact canonical model-visible order
 

@@ -31,6 +31,7 @@
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
 #include "Phases/Phase2_InferenceLoop.hpp"
+#include "Phases/Phase2_InspectionLoop.hpp"
 #include "../Shared/InferenceState/InferencePrefill.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
@@ -351,8 +352,7 @@ int runInferenceWorker(
             json response = {
                 {"model", "grim-text"},
                 {"created_at", "2025-11-05T00:00:00Z"},
-                {"response", GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled
-                    ? generated.text : generated.continuation_text},
+                {"response", generated.continuation_text},
                 {"done", true},
                 {"stats", inferenceStatsJson(generated)}
             };
@@ -376,8 +376,7 @@ int runInferenceWorker(
             json response = {
                 {"model", "grim-text"},
                 {"created_at", "2025-11-05T00:00:00Z"},
-                {"message", {{"role", "assistant"}, {"content", GRIM::HyperParameters::atomInsertionBoundaryProjectionHP(ctx.config).enabled
-                    ? generated.text : generated.continuation_text}}},
+                {"message", {{"role", "assistant"}, {"content", generated.continuation_text}}},
                 {"done", true},
                 {"stats", inferenceStatsJson(generated)}
             };

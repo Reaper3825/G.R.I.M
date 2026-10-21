@@ -430,6 +430,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Phases/Startup/Model/ParameterGroupRegistration.cu
     ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
+    ../../Shared/Forward/CachedInferenceForward.cu
     ../../Shared/Forward/ModelForward_GPU.cu
     ../../Shared/Lenses/LensMetadata.cpp
     ../../Shared/Lenses/LensCapture_GPU.cu
@@ -442,6 +443,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/LocalAtomRetrieval/LocalAtomRetrievalLoss.cu
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
+    ../../Shared/InferenceState/InferenceGenerationSession.cu
     ../../Shared/InferenceState/InferencePrefill.cu
     ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../../Shared/InferenceState/LocalAtomRetrievalInferenceState.cu
@@ -665,6 +667,8 @@ add_executable(train_gpu
     ../Phases/Phase2_TrainingLoop.hpp
     ../Phases/Phase2_InferenceLoop.cu
     ../Phases/Phase2_InferenceLoop.hpp
+    ../Phases/Phase2_InspectionLoop.cu
+    ../Phases/Phase2_InspectionLoop.hpp
     ../Diagnostics/DiagnosticInference.cu
     ../Diagnostics/DiagnosticLens.cpp
     ../Diagnostics/DiagnosticInference.hpp

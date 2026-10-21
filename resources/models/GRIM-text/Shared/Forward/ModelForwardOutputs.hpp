@@ -416,7 +416,7 @@ public:
     Tensor lm_head_mlp_up_out;        // [total_tokens, mlp_d_ff] z @ W_up
     Tensor lm_head_mlp_swiglu_out;    // [total_tokens, mlp_d_ff] silu ⊙ up
     Tensor lm_head_mlp_residual_out;  // [total_tokens, d_model] u = z + alpha * (swiglu @ W_down)
-    Tensor logits_tensor;
+    Tensor logits_tensor; 
 
     // Atom-identification boundary projection. These are retained in graph
     // order because the projection is composed from ordinary autograd

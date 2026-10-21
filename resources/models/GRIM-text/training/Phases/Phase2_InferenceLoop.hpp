@@ -23,8 +23,9 @@ namespace GRIMText::Training {
 struct Phase2TextInferenceResult {
     std::shared_ptr<const GRIM::Lenses::LensSnapshot> prefill_lens_snapshot;
     std::shared_ptr<const GRIM::Lenses::LensCaptureResult> prefill_lens_capture_result;
-    std::string text; // Full decoded sequence; atom-insertion models return annotated input.
-    std::string continuation_text; // Token-LM output only; never includes prefill state.
+    // Token-LM continuation excludes prefill state. Atom-insertion models return
+    // their annotated input here. Prefill-only inspection has no text output.
+    std::string continuation_text;
     // Exact realized IDs, including the prompt, for diagnostic comparisons.
     std::vector<int> token_ids;
     // Retain the complete token-LM trajectory, including scores, positions,
@@ -37,13 +38,6 @@ struct Phase2TextInferenceResult {
     std::int64_t generation_ms = 0;
     std::int64_t decode_ms = 0;
 };
-
-// Forward-only inspection of the existing inference prefill. No token sampling,
-// optimizer updates, or parameter graph. The result owns the complete capture.
-Phase2TextInferenceResult executePhase2Inspection(
-    TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
-    const std::string& prompt, const nlohmann::json* input_state,
-    const GRIM::Lenses::LensCaptureRequest& capture);
 
 /**
  * @brief Execute Phase 2 inference from a text prompt over Phase1-owned state.
@@ -72,10 +66,12 @@ Phase2TextInferenceResult executePhase2TextInference(
 // preparation (including any caller-authored metadata). This entry point checks
 // only inference-specific mode and compact single-row requirements; device
 // upload retains its payload validation and forward geometry checks.
+// inspect_only returns after prefill capture, before token sampling.
 Phase2TextInferenceResult executePhase2PayloadInference(
     TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer,
     const GRIM::Batching::BatchPayload& prefill,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
-    const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr);
+    const GRIM::Lenses::LensCaptureRequest* lens_capture = nullptr,
+    bool inspect_only = false);
 
 } // namespace GRIMText::Training

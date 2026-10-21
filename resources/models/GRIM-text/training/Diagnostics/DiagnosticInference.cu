@@ -266,7 +266,7 @@ void logDiagnosticSample(TrainingContext& ctx,
             // are device-wide observations, not a leak verdict or peak scratch size.
             std::vector<std::size_t> used_bytes{memory_used()};
             bool token_match = baseline->token_ids == sample.token_ids;
-            bool text_match = baseline->text == sample.text;
+            bool text_match = baseline->continuation_text == sample.continuation_text;
             bool identity_pass = sample.prefill_lens_snapshot->identity_max_abs_logit_error.value_or(
                 std::numeric_limits<double>::infinity()) <= lens_options.absolute_tolerance;
             for (int round = 1; round < lens_options.validation_rounds; ++round) {
@@ -274,7 +274,7 @@ void logDiagnosticSample(TrainingContext& ctx,
                     auto repeated = run_sample(&lens);
                     report_lens(repeated);
                     token_match = token_match && baseline->token_ids == repeated.token_ids;
-                    text_match = text_match && baseline->text == repeated.text;
+                    text_match = text_match && baseline->continuation_text == repeated.continuation_text;
                     identity_pass = identity_pass && repeated.prefill_lens_snapshot->identity_max_abs_logit_error.value_or(
                         std::numeric_limits<double>::infinity()) <= lens_options.absolute_tolerance;
                 }
@@ -289,7 +289,7 @@ void logDiagnosticSample(TrainingContext& ctx,
             std::chrono::steady_clock::now() - start).count();
 
         const std::string decoded = trimSampleText(
-            atom_insertion ? sample.text : sample.continuation_text,
+            sample.continuation_text,
             static_cast<std::size_t>(max_chars));
         ctx.logging.logger->log("[Sample] step=" + std::to_string(optimizer_step) +
                                 " ms=" + std::to_string(elapsed_ms) +
