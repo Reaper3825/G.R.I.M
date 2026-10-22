@@ -87,7 +87,20 @@ void getVirtualScreenRect(int& x, int& y, int& width, int& height);
 // Process one frame of events.
 // mouseWheelDeltaOut: accumulated scroll delta for this frame.
 // quitRequested: set to true if OS quit signal received.
-bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested);
+struct ScrollDelta {
+    // Logical steps: vertical positive up, horizontal positive right.
+    // Native precise scrolling uses 40 logical points per step.
+    float x = 0, y = 0;
+    void addWheel(float horizontal, float vertical) { x += horizontal / 120.0f; y += vertical / 120.0f; }
+    void addPrecise(float horizontal, float vertical) { x += horizontal / 40.0f; y += vertical / 40.0f; }
+};
+bool pumpEvents(ScrollDelta& scroll, bool& quitRequested);
+// UI activation is separate from global input used for wake/hotkey bindings.
+bool isInputWindowActive(void* window);
+void setInputPointerCapture(void* window, bool capture);
+#if defined(__APPLE__)
+bool getOverlayCursorPosition(void* window, int& x, int& y);
+#endif
 
 // Create an overlay window spanning the given rect.
 // Returns native handle (HWND on Windows, NSWindow* on macOS).

@@ -267,10 +267,21 @@ static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     
     case WM_CHAR:
     {
-        if (wParam >= 32 && wParam < 127)
-        {
-            char ch = static_cast<char>(wParam);
-            UIRoot::get().injectTextInput(std::string(1, ch));
+        static wchar_t highSurrogate = 0;
+        const wchar_t unit = static_cast<wchar_t>(wParam);
+        if (unit >= 0xD800 && unit <= 0xDBFF) { highSurrogate = unit; return 0; }
+        wchar_t units[2] = {unit, 0};
+        int count = 1;
+        if (unit >= 0xDC00 && unit <= 0xDFFF) {
+            if (!highSurrogate) return 0;
+            units[0] = highSurrogate; units[1] = unit; count = 2;
+        }
+        highSurrogate = 0;
+        if (unit >= 32 && unit != 127) {
+            char utf8[8];
+            const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                units, count, utf8, sizeof(utf8), nullptr, nullptr);
+            if (length > 0) UIRoot::get().injectTextInput(std::string(utf8, length));
         }
         return 0;
     }

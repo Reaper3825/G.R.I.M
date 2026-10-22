@@ -1,3 +1,4 @@
+#include "routed_input_scope.hpp"
 // mouse.cpp
 #include "mouse.hpp"
 #include "logger.hpp"
@@ -86,21 +87,25 @@ void Mouse::setUp(MouseButton btn) {
 }
 
 bool Mouse::isDown(MouseButton btn) {
+    if (routedUIInput) { const int i = btn == MouseButton::Left ? 0 : btn == MouseButton::Right ? 1 : 2; return routedUIInput->mouseDown[i]; }
     std::lock_guard<std::mutex> lock(stateMutex);
     return buttonStates[btn].down;
 }
 
 bool Mouse::wasPressed(MouseButton btn) {
+    if (routedUIInput) { const int i = btn == MouseButton::Left ? 0 : btn == MouseButton::Right ? 1 : 2; return routedUIInput->mousePressed[i]; }
     std::lock_guard<std::mutex> lock(stateMutex);
     return buttonStates[btn].pressed;
 }
 
 bool Mouse::wasReleased(MouseButton btn) {
+    if (routedUIInput) { const int i = btn == MouseButton::Left ? 0 : btn == MouseButton::Right ? 1 : 2; return routedUIInput->mouseReleased[i]; }
     std::lock_guard<std::mutex> lock(stateMutex);
     return buttonStates[btn].released;
 }
 
 POINT Mouse::getPosition() {
+    if (routedUIInput) return {static_cast<LONG>(routedUIInput->mousePos.x), static_cast<LONG>(routedUIInput->mousePos.y)};
     POINT pt;
 #ifdef _WIN32
     GetCursorPos(&pt);

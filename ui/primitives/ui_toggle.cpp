@@ -21,7 +21,8 @@ void UIToggle::setState(bool state) {
     enabled = state;
 }
 
-void UIToggle::update(const InputState& input, float dt) {
+void UIToggle::update(const InputState& source, float dt) {
+    const auto input = routeInput(source);
     Vec2 m = input.mousePos;
     
     togglePos = {position.x + size.x - 60, position.y + 8};
@@ -29,7 +30,8 @@ void UIToggle::update(const InputState& input, float dt) {
     bool overToggle = (m.x >= togglePos.x && m.x <= togglePos.x + toggleSize.x &&
                       m.y >= togglePos.y && m.y <= togglePos.y + toggleSize.y);
     
-    if (overToggle && Mouse::wasPressed(MouseButton::Left)) {
+    if (overToggle && input.mousePressed[0] && capturePointer()) {
+        releasePointer();
         enabled = !enabled;
         if (callback) callback(enabled);
     }

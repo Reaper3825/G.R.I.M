@@ -334,12 +334,24 @@ void getVirtualScreenRect(int& x, int& y, int& width, int& height) {
     height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 }
 
-bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
-    mouseWheelDeltaOut = 0.0f;
+bool isInputWindowActive(void* window) {
+    const HWND foreground = GetForegroundWindow();
+    return window && (foreground == static_cast<HWND>(window) || IsChild(static_cast<HWND>(window), foreground));
+}
+void setInputPointerCapture(void* window, bool capture) {
+    const auto hwnd = static_cast<HWND>(window);
+    if (capture && hwnd && GetCapture() != hwnd) SetCapture(hwnd);
+    else if (!capture && GetCapture() == hwnd) ReleaseCapture();
+}
+
+bool pumpEvents(ScrollDelta& scroll, bool& quitRequested) {
+    scroll = {};
     MSG msg{};
     while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_MOUSEWHEEL) {
-            mouseWheelDeltaOut = static_cast<float>(GET_WHEEL_DELTA_WPARAM(msg.wParam));
+            scroll.addWheel(0, static_cast<float>(GET_WHEEL_DELTA_WPARAM(msg.wParam)));
+        } else if (msg.message == WM_MOUSEHWHEEL) {
+            scroll.addWheel(static_cast<float>(GET_WHEEL_DELTA_WPARAM(msg.wParam)), 0);
         }
         if (msg.message == WM_QUIT) {
             quitRequested = true;

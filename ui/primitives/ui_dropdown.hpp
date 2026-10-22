@@ -40,6 +40,7 @@ public:
     void collapse() { expanded = false; scrollOffset = 0; hoveredItem = -1; }
 
 private:
+    float scrollRemainder_ = 0.0f;
     std::string label;
     std::vector<std::string> options;
     int selectedIndex;

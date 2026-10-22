@@ -1,3 +1,4 @@
+#include "platform_window.hpp"
 #include "platform_input.hpp"
 #include "grim_platform.h"
 
@@ -528,9 +529,7 @@ namespace PlatformInput {
     }
     
     void getCursorPosRelative(void* windowHandle, int& x, int& y) {
-        // Window-relative positioning requires NSWindow access
-        // For now, just return screen coordinates
-        getCursorPos(x, y);
+        if (!PlatformWindow::getOverlayCursorPosition(windowHandle, x, y)) x = y = 0;
     }
 
     bool moveCursorRelative(int deltaX, int deltaY) {

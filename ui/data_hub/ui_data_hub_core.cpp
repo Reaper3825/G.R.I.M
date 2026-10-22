@@ -1452,9 +1452,7 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             if (mouse.x >= lexiconX && mouse.x <= lexiconX + middleW &&
                 mouse.y >= lexiconY && mouse.y <= lexiconY + lexiconH &&
                 input.mouseWheelDelta != 0.0f) {
-                const float wheelSteps = std::fabs(input.mouseWheelDelta) >= 120.0f
-                    ? input.mouseWheelDelta / 120.0f
-                    : input.mouseWheelDelta;
+                const float wheelSteps = input.scrollSteps().y;
                 generatorLexiconScroll_ -= wheelSteps * 42.0f;
                 const float maxScroll = std::max(
                     0.0f, generatorLexiconContentH_ - lexiconH + 12.0f);

@@ -1,3 +1,4 @@
+#include "routed_input_scope.hpp"
 #include "key.hpp"
 #include "input_parser.hpp"
 #include "logger.hpp"
@@ -237,9 +238,9 @@ void Key::updateFromInput(const InputState& input)
     }
 }
 
-bool Key::isDown(KeyCode code)      { return keyStates[code].down; }
-bool Key::wasPressed(KeyCode code)  { return keyStates[code].pressed; }
-bool Key::wasReleased(KeyCode code) { return keyStates[code].released; }
+bool Key::isDown(KeyCode code)      { const int k = toPlatformCode(code); return routedUIInput ? (k >= 0 && k < 256 && routedUIInput->keysDown[k]) : keyStates[code].down; }
+bool Key::wasPressed(KeyCode code)  { const int k = toPlatformCode(code); return routedUIInput ? (k >= 0 && k < 256 && routedUIInput->keyPressed[k]) : keyStates[code].pressed; }
+bool Key::wasReleased(KeyCode code) { const int k = toPlatformCode(code); return routedUIInput ? (k >= 0 && k < 256 && routedUIInput->keyReleased[k]) : keyStates[code].released; }
 
 void Key::endFrame()
 {

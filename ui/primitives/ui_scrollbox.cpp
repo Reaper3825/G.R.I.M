@@ -97,79 +97,43 @@ bool UIScrollBox::isMouseOverScrollbar(const Vec2& mousePos) const {
             mousePos.y >= sbPos.y && mousePos.y <= sbPos.y + sbSize.y);
 }
 
-void UIScrollBox::update(const InputState& input, float dt) {
-    // The owning panel may resize this widget between frames.
+void UIScrollBox::update(const InputState& source, float dt) {
     scrollTo(scrollOffset);
-    Vec2 m = input.mousePos;
-    
-    // Check if mouse is over the scrollbox
-    bool inside = (m.x >= position.x && m.x <= position.x + size.x &&
-                   m.y >= position.y && m.y <= position.y + size.y);
-    
-    if (!inside && !isDraggingScrollbar) {
-        return; // Don't process if mouse is outside and not dragging
-    }
-    
-    // Handle scrollbar dragging
-    if (needsScrollbar()) {
-        isHoveringScrollbar = isMouseOverScrollbar(m);
-        
-        if (isHoveringScrollbar && Mouse::wasPressed(MouseButton::Left)) {
-            isDraggingScrollbar = true;
-            scrollbarDragStartY = m.y;
-            scrollbarDragStartOffset = scrollOffset;
-        }
-        
-        if (isDraggingScrollbar) {
-            if (Mouse::isDown(MouseButton::Left)) {
-                // Calculate new scroll position based on mouse drag
-                float deltaY = m.y - scrollbarDragStartY;
-                float maxScrollbarY = size.y - getScrollbarHeight();
-                float maxScroll = contentHeight - size.y;
-                
-                if (maxScrollbarY > 0.0f) {
-                    float scrollDelta = (deltaY / maxScrollbarY) * maxScroll;
-                    scrollTo(scrollbarDragStartOffset + scrollDelta);
-                }
-            } else {
-                isDraggingScrollbar = false;
-            }
-        }
-    }
-    
-    // Handle mouse wheel scrolling
-    if (inside && needsScrollbar() && input.mouseWheelDelta != 0.0f) {
-        const float wheel_steps = std::fabs(input.mouseWheelDelta) >= 120.0f
-            ? input.mouseWheelDelta / 120.0f
-            : input.mouseWheelDelta;
-        scrollBy(-wheel_steps * 42.0f);
-    }
-    
-    // Update children with positions adjusted for scrolling
+    if (!hasPointerCapture()) isDraggingScrollbar = false;
+    // Descendants get first refusal on wheel input. The parent scrolls only
+    // when no child consumed it (including when a child reached its boundary).
+    const auto childInput = source.clipped(position, {size.x - (needsScrollbar() ? scrollbarWidth + 4 : 0), size.y});
     for (auto& child : children) {
-        if (child->isVisible()) {
-            Vec2 childPos = child->getPosition();  // Relative to content area
-            Vec2 childSize = child->getSize();
-            
-            // Calculate absolute screen position for update
-            Vec2 absolutePos = {position.x + childPos.x, position.y + childPos.y - scrollOffset};
-
-            // Clipping the draw is not enough: off-screen rows must not retain
-            // hit targets over controls elsewhere in the panel.
-            const bool intersectsViewport =
-                absolutePos.x + childSize.x >= position.x &&
-                absolutePos.x <= position.x + size.x &&
-                absolutePos.y + childSize.y >= position.y &&
-                absolutePos.y <= position.y + size.y;
-            if (!intersectsViewport) continue;
-            
-            // Temporarily update child position for input handling
-            child->setPosition(absolutePos.x, absolutePos.y);
-            child->update(input, dt);
-            
-            // Restore relative position
-            child->setPosition(childPos.x, childPos.y);
+        if (!child->isVisible()) continue;
+        const Vec2 local = child->getPosition();
+        child->setPosition(position.x + local.x, position.y + local.y - scrollOffset);
+        child->update(childInput, dt);
+        child->setPosition(local);
+    }
+    const auto input = routeInput(source);
+    const Vec2 m = input.mousePos;
+    const bool inside = m.x >= position.x && m.x < position.x + size.x &&
+                        m.y >= position.y && m.y < position.y + size.y;
+    isHoveringScrollbar = inside && isMouseOverScrollbar(m);
+    if (needsScrollbar() && isHoveringScrollbar && input.mousePressed[0] && capturePointer()) {
+        isDraggingScrollbar = true;
+        scrollbarDragStartY = m.y;
+        scrollbarDragStartOffset = scrollOffset;
+    }
+    if (isDraggingScrollbar) {
+        if (input.mouseDown[0]) {
+            const float travel = size.y - getScrollbarHeight();
+            if (travel > 0) scrollTo(scrollbarDragStartOffset +
+                (m.y - scrollbarDragStartY) / travel * (contentHeight - size.y));
+        } else {
+            isDraggingScrollbar = false;
+            releasePointer();
         }
+    }
+    if (inside && needsScrollbar() && input.mouseWheelDelta != 0) {
+        const float previous = scrollOffset;
+        scrollBy(-input.scrollSteps().y * 42.0f);
+        if (previous != scrollOffset) consumeScroll();
     }
 }
 

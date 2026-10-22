@@ -54,7 +54,9 @@ float UIActionMenu::popupWidth() const {
 //  Update — hit test the pill button + popup items
 // ─────────────────────────────────────────────────────────
 
-void UIActionMenu::update(const InputState& input, float /*dt*/) {
+void UIActionMenu::update(const InputState& source, float /*dt*/) {
+    const auto input = routeInput(source);
+    if (!hasInputPopup()) expanded_ = false;
     Vec2 m = input.mousePos;
 
     // Pill button hit test
@@ -62,7 +64,7 @@ void UIActionMenu::update(const InputState& input, float /*dt*/) {
                        m.y >= position.y && m.y <= position.y + size.y);
     hovered_ = overButton;
 
-    bool leftPressed = Mouse::wasPressed(MouseButton::Left);
+    bool leftPressed = input.mousePressed[0];
 
     // Popup geometry (anchored below the pill button)
     float pw = popupWidth();
@@ -89,15 +91,18 @@ void UIActionMenu::update(const InputState& input, float /*dt*/) {
     if (leftPressed) {
         if (overButton) {
             expanded_ = !expanded_;
+            if (expanded_) openInputPopup(); else closeInputPopup();
         } else if (expanded_) {
             if (hoveredItem_ >= 0 && hoveredItem_ < static_cast<int>(items_.size())) {
                 auto& item = items_[hoveredItem_];
                 if (item.callback) item.callback();
             }
             expanded_ = false;
+            closeInputPopup();
             hoveredItem_ = -1;
         }
     }
+    if (input.keyPressed[VK_ESCAPE]) { expanded_ = false; closeInputPopup(); }
 }
 
 // ─────────────────────────────────────────────────────────

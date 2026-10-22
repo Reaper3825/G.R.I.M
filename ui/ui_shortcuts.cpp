@@ -1,3 +1,4 @@
+#include "ui/input/ui_input_router.hpp"
 #include "ui_shortcuts.hpp"
 
 #include "../core/input/InputBindings.hpp"
@@ -27,6 +28,8 @@ void togglePanel(const char* actionId, const char* panelName)
 
 void processPanelShortcuts()
 {
+    const auto& input = GRIM::UI::InputRouter::get();
+    if (input.focus || input.popup || input.capture) return;
     togglePanel("toggle_console", "Console");
     togglePanel("toggle_settings", "Settings");
     togglePanel("toggle_training", "GRIM-text Training Control");

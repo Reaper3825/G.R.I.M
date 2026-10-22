@@ -14,6 +14,7 @@ public:
               GRIM::InputBindings::Binding binding,
               ChangeCallback onChange);
     ~UIKeybind() override;
+    void cancelInput() override { stopListening(); Widget::cancelInput(); }
 
     void update(const InputState& input, float dt) override;
     void drawOverlay(class OverlayRenderer& renderer, const Vec2& panelPos) override;

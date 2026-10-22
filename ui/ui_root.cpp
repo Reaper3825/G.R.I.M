@@ -1,3 +1,5 @@
+#include "ui/input/ui_input_router.hpp"
+#include "helpers/routed_input_scope.hpp"
 #include "ui_root.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
@@ -75,55 +77,53 @@ void UIRoot::update(const InputState& input, float dt)
     InputState modifiedInput = input;
     modifiedInput.textInput = consumeTextInput();
     
-    // Check if cursor is over any visible UI
-    bool cursorOverUI = shouldReceiveInputAt(input.mousePos.x, input.mousePos.y);
-    
-    // Update all visible panels with the modified input
-    // Iterate in REVERSE order so top panels get input first
     auto panels = snapshotPanels();
-    std::shared_ptr<UIPanel> clickedPanel = nullptr;
-    bool anyPanelDragging = false;
-    
-    // First pass: check if any panel is currently dragging or resizing
-    for (auto& panel : panels)
-    {
-        if (panel && panel->isVisible() && (panel->isDragging() || panel->isResizing()))
-        {
-            anyPanelDragging = true;
-            break;
-        }
+    auto& router = GRIM::UI::InputRouter::get();
+    for (const auto owner : {router.capture, router.popup, router.focus}) {
+        if (!owner) continue;
+        const auto found = std::find_if(panels.begin(), panels.end(), [&](const auto& panel) {
+            return panel && panel->getPanelID() == owner.panel && panel->isVisible();
+        });
+        if (found == panels.end()) router.forgetPanel(owner.panel);
     }
-    
-    for (int i = static_cast<int>(panels.size()) - 1; i >= 0; --i)
-    {
-        auto& panel = panels[i];
-        if (!panel || !panel->isVisible()) continue;
-        
-        Vec2 pos = panel->getPosition();
-        Vec2 size = panel->getSize();
-        bool isOver = (input.mousePos.x >= pos.x && input.mousePos.x <= pos.x + size.x &&
-                  input.mousePos.y >= pos.y && input.mousePos.y <= pos.y + size.y &&
-                  !panel->shouldPassThroughAt(input.mousePos.x, input.mousePos.y));
-        
-        // If a panel is dragging, only update that panel (the topmost one)
-        // Otherwise, only update topmost panel under cursor
-        if (!clickedPanel && (!anyPanelDragging || i == static_cast<int>(panels.size()) - 1))
-        {
-            panel->update(modifiedInput, dt);
-            
-            if (isOver)
-            {
-                m_inputConsumed = true;
-                
-                // On click, mark for bringing to front
-                if (input.mousePressed[0])
-                {
-                    clickedPanel = panel;
-                }
+    const bool cancelGesture = input.keyPressed[VK_ESCAPE] && bool(router.capture);
+    router.beginFrame(input.interactionCancelled || cancelGesture);
+    const uint64_t pointerPanel = router.pointerTarget(panels, [&](const auto& panel) -> uint64_t {
+            if (!panel || !panel->isVisible()) return 0;
+            const auto p = panel->getPosition(), extent = panel->getSize();
+            if (input.mousePos.x >= p.x && input.mousePos.x < p.x + extent.x &&
+                input.mousePos.y >= p.y && input.mousePos.y < p.y + extent.y &&
+                !panel->shouldPassThroughAt(input.mousePos.x, input.mousePos.y)) {
+                return panel->getPanelID();
             }
+            return 0;
+    });
+    // A click away relinquishes keyboard ownership before routing this frame.
+    if ((input.mousePressed[0] || input.mousePressed[1]) && !router.popup &&
+        router.focus.panel != pointerPanel) router.focus = {};
+    const uint64_t keyboardPanel = router.popup ? router.popup.panel :
+        router.focus ? router.focus.panel : pointerPanel;
+    std::shared_ptr<UIPanel> clickedPanel;
+    for (auto it = panels.rbegin(); it != panels.rend(); ++it) {
+        const auto& panel = *it;
+        if (!panel || !panel->isVisible()) continue;
+        InputState routed = modifiedInput;
+        if (router.cancelled || panel->getPanelID() != pointerPanel) routed.suppressPointer();
+        if (router.cancelled || panel->getPanelID() != keyboardPanel) routed.suppressKeyboard();
+        routed.interactionCancelled = router.cancelled;
+        router.currentPanel = panel->getPanelID();
+        RoutedInputScope legacyScope(routed);
+        // Always tick visible panels. Polling/animations must not depend on hover.
+        panel->update(routed, dt);
+        if (panel->getPanelID() == pointerPanel) {
+            m_inputConsumed = true;
+            if (input.mousePressed[0] && !router.cancelled) clickedPanel = panel;
         }
     }
-    
+    router.endFrame();
+    PlatformWindow::setInputPointerCapture(m_hwnd, bool(router.capture));
+    updateHitTestCache();
+
     // Bring clicked panel to front after iteration
     if (clickedPanel)
     {
@@ -266,6 +266,7 @@ void UIRoot::removePanel(const std::string& name)
         if (mapIt == m_panelMap.end()) return;
 
         auto panel = mapIt->second;
+        GRIM::UI::InputRouter::get().forgetPanel(panel->getPanelID());
         m_panelMap.erase(mapIt);
 
         for (auto it = m_panels.begin(); it != m_panels.end(); ++it) {
@@ -410,6 +411,7 @@ bool UIRoot::hasVisiblePanels() const
 
 bool UIRoot::isAnyPanelDragging() const
 {
+    if (GRIM::UI::InputRouter::get().capture) return true;
     auto panels = snapshotPanels();
     for (const auto& panel : panels)
     {
@@ -428,7 +430,7 @@ void UIRoot::updateHitTestCache()
     auto panels = snapshotPanels();
     int count = 0;
     int passThroughCount = 0;
-    bool dragging = false;
+    bool dragging = bool(GRIM::UI::InputRouter::get().capture);
 
     for (const auto& panel : panels)
     {

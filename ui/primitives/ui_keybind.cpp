@@ -23,10 +23,13 @@ void UIKeybind::stopListening()
     if (!listening_) return;
     listening_ = false;
     GRIM::InputBindings::endCapture();
+    setFocused(false);
 }
 
-void UIKeybind::update(const InputState& input, float)
+void UIKeybind::update(const InputState& source, float)
 {
+    const auto input = routeInput(source);
+    if (listening_ && !focused) stopListening();
     const float buttonWidth = 190.0f;
     const Vec2 buttonPos{position.x + size.x - buttonWidth - 10.0f, position.y + 7.0f};
     const Vec2 buttonSize{buttonWidth, size.y - 14.0f};
@@ -34,9 +37,11 @@ void UIKeybind::update(const InputState& input, float)
                input.mousePos.y >= buttonPos.y && input.mousePos.y <= buttonPos.y + buttonSize.y;
 
     if (!listening_ && hovered_ &&
-        (input.mousePressed[0] || Mouse::wasPressed(MouseButton::Left)))
+        (input.mousePressed[0]) && capturePointer())
     {
+        releasePointer();
         listening_ = true;
+        setFocused(true);
         GRIM::InputBindings::beginCapture();
         return;
     }

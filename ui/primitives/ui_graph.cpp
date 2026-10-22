@@ -174,7 +174,8 @@ void UIGraph::setOnPointClick(std::function<void(int, const DataPoint&)> callbac
 // Update
 // ============================================================
 
-void UIGraph::update(const InputState& input, float dt) {
+void UIGraph::update(const InputState& source, float dt) {
+    const auto input = routeInput(source);
     if (!visible) return;
     
     Vec2 m = input.mousePos;
@@ -197,7 +198,8 @@ void UIGraph::update(const InputState& input, float dt) {
                 if (m_onPointHover) m_onPointHover(hit->pointIndex, point);
                 if (m_onSeriesPointHover) m_onSeriesPointHover(*hit, point);
             }
-            if (Mouse::wasPressed(MouseButton::Left)) {
+            if (input.mousePressed[0] && capturePointer()) {
+                releasePointer();
                 if (m_onPointClick) m_onPointClick(hit->pointIndex, point);
                 if (m_onSeriesPointClick) m_onSeriesPointClick(*hit, point);
             }

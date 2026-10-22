@@ -32,6 +32,8 @@ struct PanelRect {
 class GRIM_HOST_API UIPanel : public Widget {
 public:
     UIPanel(const std::string& title = "", bool draggable = true);
+    ~UIPanel() override;
+    void setVisible(bool value) override;
     
     static void setCanvasSize(const Vec2& canvasSize);
     
@@ -96,7 +98,6 @@ protected:
     float resizeHandleSize = 20.0f;  // Increased from 10 to 20 pixels
     std::function<void()> onClose = nullptr;
     
-    uint64_t panelID = 0;  // Unique panel identifier for focus tracking
     int zOrder = 0;  // Z-order for rendering (higher = on top)
 
     PanelChromeOptions chromeOptions{};

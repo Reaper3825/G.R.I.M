@@ -56,7 +56,9 @@ std::string UIDropdown::getSelectedItem() const {
     return "";
 }
 
-void UIDropdown::update(const InputState& input, float dt) {
+void UIDropdown::update(const InputState& source, float dt) {
+    const auto input = routeInput(source);
+    if (!hasInputPopup()) expanded = false;
     Vec2 m = input.mousePos;
 
     const auto geom = computeDropdownGeometry(label, position, size);
@@ -70,7 +72,7 @@ void UIDropdown::update(const InputState& input, float dt) {
     // Some panel paths feed clicks through InputState before the static Mouse
     // helper observes the edge. Treat either source as authoritative so a
     // dropdown cannot appear visually alive but ignore the click edge.
-    bool leftPressed = input.mousePressed[0] || Mouse::wasPressed(MouseButton::Left);
+    bool leftPressed = input.mousePressed[0];
     
     // Calculate expanded list bounds for scrolling
     int visibleItems = std::min(maxVisibleItems, static_cast<int>(options.size()));
@@ -97,14 +99,18 @@ void UIDropdown::update(const InputState& input, float dt) {
     // Handle mouse wheel scrolling when over expanded list
     if (expanded && overExpandedList && input.mouseWheelDelta != 0.0f) {
         // Scroll by 1 item per 120 wheel delta (standard Windows scroll)
-        int scrollAmount = -static_cast<int>(input.mouseWheelDelta / 120.0f);
+        scrollRemainder_ -= input.scrollSteps().y;
+        const int scrollAmount = static_cast<int>(scrollRemainder_);
+        scrollRemainder_ -= scrollAmount;
         scrollOffset = std::clamp(scrollOffset + scrollAmount, 0, maxScrollOffset);
+        consumeScroll();
     }
     
     if (leftPressed) {
         if (overDropdown) {
             // Toggle dropdown
             expanded = !expanded;
+            if (expanded) openInputPopup(); else closeInputPopup();
             if (expanded) {
                 // Reset scroll to show selected item
                 scrollOffset = std::max(0, selectedIndex - maxVisibleItems / 2);
@@ -120,15 +126,18 @@ void UIDropdown::update(const InputState& input, float dt) {
                     selectedIndex = clickedItem;
                     if (callback) callback(selectedIndex, options[selectedIndex]);
                     expanded = false;
+                    closeInputPopup();
                     scrollOffset = 0;
                 }
             } else {
                 // Clicked outside - close dropdown
                 expanded = false;
+                closeInputPopup();
                 scrollOffset = 0;
             }
         }
     }
+    if (input.keyPressed[VK_ESCAPE]) { expanded = false; closeInputPopup(); }
 }
 
 void UIDropdown::draw(UIRenderer& renderer) {

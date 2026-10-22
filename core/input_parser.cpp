@@ -83,7 +83,7 @@ void InputState::captureFromHWND(HWND hwnd)
     static Vec2 prevMousePos{0.0f, 0.0f};
     
     mouseInputEnabled = true;
-    mouseWheelDelta = 0.0f;
+    mouseWheelDelta = mouseWheelDeltaX = 0.0f;
     
     // Reset per-frame data
     textInput.clear();
@@ -167,6 +167,8 @@ void InputState::captureFromHWND(HWND hwnd)
 
 void InputState::resetFrameState()
 {
+    mouseWheelDelta = mouseWheelDeltaX = 0.0f;
+    interactionCancelled = false;
     textInput.clear();
     pastedText.clear();
     copyRequested = false;

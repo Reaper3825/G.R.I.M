@@ -17,7 +17,7 @@ void UILayoutBox::clearWidgets() {
 
 void UILayoutBox::update(const InputState& input, float dt) {
     for (auto& widget : widgets) {
-        widget->update(input, dt);
+        if (widget->isVisible()) widget->update(input, dt);
     }
 }
 

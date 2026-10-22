@@ -1,3 +1,4 @@
+#include "ui/input/ui_input_router.hpp"
 #include "ui_panel.hpp"
 #include "../ui_theme.hpp"
 #include "../overlay_renderer.hpp"
@@ -16,6 +17,15 @@ UIPanel::UIPanel(const std::string& t, bool drag)
 {
     // Generate unique panel ID
     panelID = UIFocusManager::getInstance().generateUniqueID();
+}
+
+UIPanel::~UIPanel() { GRIM::UI::InputRouter::get().forgetPanel(panelID); }
+void UIPanel::setVisible(bool value) {
+    Widget::setVisible(value);
+    if (!value) {
+        GRIM::UI::InputRouter::get().forgetPanel(panelID);
+        dragging = resizing = false;
+    }
 }
 
 void UIPanel::setCanvasSize(const Vec2& canvasSize)
@@ -89,6 +99,8 @@ void UIPanel::toggleMinimize() {
     if (!minimized) {
         storedHeight = size.y;
         minimized = true;
+        GRIM::UI::InputRouter::get().forgetPanel(panelID);
+        dragging = resizing = false;
         size.y = titleBarHeight + 6.0f;
     } else {
         minimized = false;
@@ -133,7 +145,9 @@ Vec2 UIPanel::chromeButtonOrigin(int slot) const {
     return {x, y};
 }
 
-void UIPanel::update(const InputState& input, float dt) {
+void UIPanel::update(const InputState& source, float dt) {
+    const auto input = routeInput(source);
+    if (!hasPointerCapture()) dragging = resizing = false;
     Vec2 m = input.mousePos;
     bool inside = (m.x >= position.x && m.x <= position.x + size.x &&
                    m.y >= position.y && m.y <= position.y + size.y);
@@ -144,14 +158,14 @@ void UIPanel::update(const InputState& input, float dt) {
     
     bool chromeConsumed = handleChromeButtons(input);
     
-    bool leftDown = Mouse::isDown(MouseButton::Left);
+    bool leftDown = input.mouseDown[0];
     
     // Handle resizing FIRST (higher priority)
     if (resizable && !chromeConsumed) {
         bool overHandle = isOverResizeHandle(m);
         
         // Start resizing if clicking on handle
-        if (overHandle && leftDown && !resizing && !dragging) {
+        if (overHandle && input.mousePressed[0] && !resizing && !dragging && capturePointer()) {
             resizing = true;
             resizeStartPos = m;
             resizeStartSize = size;
@@ -167,6 +181,7 @@ void UIPanel::update(const InputState& input, float dt) {
             } else {
                 // Stop resizing when mouse is released
                 resizing = false;
+                releasePointer();
             }
             return; // Don't process dragging while resizing
         }
@@ -175,7 +190,7 @@ void UIPanel::update(const InputState& input, float dt) {
     // Handle dragging (lower priority than resize)
     if (draggable && !chromeConsumed) {
         // Start dragging if clicking on title bar
-        if (inTitleBar && leftDown && !dragging && !resizing) {
+        if (inTitleBar && input.mousePressed[0] && !dragging && !resizing && capturePointer()) {
             dragging = true;
             dragOffset = {m.x - position.x, m.y - position.y};
         }
@@ -189,6 +204,7 @@ void UIPanel::update(const InputState& input, float dt) {
             } else {
                 // Stop dragging when mouse is released
                 dragging = false;
+                releasePointer();
             }
         }
     }
@@ -203,7 +219,8 @@ void UIPanel::update(const InputState& input, float dt) {
     // Update children
     for (auto& c : children) {
         if (c->isVisible()) {
-            c->update(input, dt);
+            const auto content = getContentRect();
+            c->update(source.clipped(content.origin, content.size), dt);
         }
     }
 }

@@ -387,8 +387,29 @@ void getVirtualScreenRect(int& x, int& y, int& width, int& height) {
     }
 }
 
-bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
-    mouseWheelDeltaOut = 0.0f;
+bool isInputWindowActive(void* handle) {
+    NSWindow* window = (__bridge NSWindow*)handle;
+    return window && [NSApp isActive] && ([window isKeyWindow] || [[NSApp keyWindow] parentWindow] == window);
+}
+void setInputPointerCapture(void*, bool) {
+    // Overlay motion/button state is polled globally on macOS. InputRouter
+    // retains ownership across bounds; activation loss cancels that ownership.
+}
+
+bool getOverlayCursorPosition(void* handle, int& x, int& y) {
+    NSWindow* window = (__bridge NSWindow*)handle;
+    if (!window || !window.contentView) return false;
+    NSView* view = window.contentView;
+    const NSPoint point = [view convertPoint:[window convertPointFromScreen:[NSEvent mouseLocation]] fromView:nil];
+    // Overlay raster dimensions are Cocoa points (see getScreenSize), not
+    // backing pixels. Convert once and preserve the overlay's top-left origin.
+    x = static_cast<int>(point.x - view.bounds.origin.x);
+    y = static_cast<int>(view.isFlipped ? point.y - view.bounds.origin.y : NSMaxY(view.bounds) - point.y);
+    return true;
+}
+
+bool pumpEvents(ScrollDelta& scroll, bool& quitRequested) {
+    scroll = {};
     quitRequested = false;
 
     @autoreleasepool {
@@ -403,7 +424,10 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
             NSEventType etype = [event type];
 
             if (etype == NSEventTypeScrollWheel) {
-                mouseWheelDeltaOut += static_cast<float>([event scrollingDeltaY]) * 120.0f;
+                const float x = -static_cast<float>([event scrollingDeltaX]);
+                const float y = static_cast<float>([event scrollingDeltaY]);
+                if ([event hasPreciseScrollingDeltas]) scroll.addPrecise(x, y);
+                else { scroll.x += x; scroll.y += y; }
             }
 
             if (etype == NSEventTypeApplicationDefined &&
@@ -433,13 +457,17 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
                 if (!cmdHeld) {
                     NSString* chars = [event characters];
                     if (chars && [chars length] > 0) {
-                        std::string charsStr = [chars UTF8String];
                         bool injectedAny = false;
-                        for (unsigned char c : charsStr) {
-                            if (c >= 32 && c < 127) {
-                                s_textInputCallback(std::string(1, static_cast<char>(c)));
+                        // Keep UTF-8 sequences intact. Filter control/function
+                        // keys before encoding, rather than discarding high bytes.
+                        for (NSUInteger i = 0; i < chars.length;) {
+                            const NSRange range = [chars rangeOfComposedCharacterSequenceAtIndex:i];
+                            const unichar first = [chars characterAtIndex:i];
+                            if (first >= 32 && first != 127 && !(first >= 0xF700 && first <= 0xF8FF)) {
+                                s_textInputCallback([[chars substringWithRange:range] UTF8String]);
                                 injectedAny = true;
                             }
+                            i = NSMaxRange(range);
                         }
                         if (injectedAny) {
                             continue;

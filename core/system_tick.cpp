@@ -35,7 +35,7 @@ void tickApplicationFrame(
     constexpr auto kFrameDuration = std::chrono::milliseconds(16);
     const auto frameStart = std::chrono::steady_clock::now();
 
-    float wheelDelta = 0.0f;
+    PlatformWindow::ScrollDelta wheelDelta;
     bool quitRequested = false;
     PlatformWindow::pumpEvents(wheelDelta, quitRequested);
     if (quitRequested) {
@@ -44,7 +44,8 @@ void tickApplicationFrame(
 
     InputState input;
     input.captureFromHWND(overlayWindow.hwnd);
-    input.mouseWheelDelta = wheelDelta;
+    input.mouseWheelDelta = wheelDelta.y * 120.0f;
+    input.mouseWheelDeltaX = wheelDelta.x * 120.0f;
 
     Mouse::updateFromInput(input);
     Key::updateFromInput(input);
@@ -71,6 +72,9 @@ void tickApplicationFrame(
     Perception::Digital::TickDigitalContextProjector();
     geoSpatialRuntime.tick(kDeltaSeconds);
 
+    // Global bindings above retain raw hardware input. UI gestures stop when
+    // another application owns activation; they cannot restart from a held key.
+    input.interactionCancelled = !PlatformWindow::isInputWindowActive(overlayWindow.hwnd);
     UIRoot::get().update(input, kDeltaSeconds);
     UIRoot::get().updateOverlayInteraction(input);
     UIRoot::get().draw();

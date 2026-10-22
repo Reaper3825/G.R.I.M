@@ -9,7 +9,9 @@
 UIButton::UIButton(const std::string& lbl, std::function<void()> cb)
     : label(lbl), callback(std::move(cb)) {}
 
-void UIButton::update(const InputState& input, float) {
+void UIButton::update(const InputState& source, float) {
+    const auto input = routeInput(source);
+    if (!hasPointerCapture()) pressed = pressedInside = false;
     Vec2 m = input.mousePos;
     
     // Expand hitbox slightly for easier clicking (5px padding)
@@ -23,12 +25,12 @@ void UIButton::update(const InputState& input, float) {
     
     // Use BOTH InputState and Mouse class for maximum reliability
     // This ensures we catch the click even if one source misses it
-    bool mouseDown = input.mouseDown[0] || Mouse::isDown(MouseButton::Left);
-    bool mousePressed = input.mousePressed[0] || Mouse::wasPressed(MouseButton::Left);
-    bool mouseReleased = input.mouseReleased[0] || Mouse::wasReleased(MouseButton::Left);
+    bool mouseDown = input.mouseDown[0];
+    bool mousePressed = input.mousePressed[0];
+    bool mouseReleased = input.mouseReleased[0];
     
     // Simplified state machine - more forgiving
-    if (inside && mousePressed && !pressed) {
+    if (inside && mousePressed && !pressed && capturePointer()) {
         // Mouse pressed inside expanded hitbox - start press
         pressed = true;
         pressedInside = true;
@@ -40,7 +42,8 @@ void UIButton::update(const InputState& input, float) {
             // Mouse released OR lost mouse down state
             // Trigger callback if we're still near the button (expanded hitbox)
             // This is very forgiving - allows slight mouse movement
-            if (inside && callback) {
+            releasePointer();
+            if (inside && mouseReleased && callback) {
                 LOG_DEBUG("UIButton", "Clicked: " + label);
                 callback();
             }

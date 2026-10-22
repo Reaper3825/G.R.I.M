@@ -1,3 +1,4 @@
+#include "helpers/utf8_edit.hpp"
 #include "ui_textarea.hpp"
 #include "../ui_theme.hpp"
 #include "../overlay_renderer.hpp"
@@ -56,7 +57,8 @@ void UITextArea::rebuildWrappedLines() {
         } else {
             size_t pos = 0;
             while (pos < line.size()) {
-                size_t end = pos + maxChars;
+                size_t end = UTF8Edit::boundary(line, static_cast<int>(pos + maxChars));
+                if (end <= pos) end = UTF8Edit::next(line, static_cast<int>(pos));
                 if (end >= line.size()) {
                     wrappedLines.push_back({li, static_cast<int>(pos), line.substr(pos)});
                     break;
@@ -66,7 +68,7 @@ void UITextArea::rebuildWrappedLines() {
                     wrappedLines.push_back({li, static_cast<int>(pos), line.substr(pos, breakAt - pos)});
                     pos = breakAt + 1;
                 } else {
-                    wrappedLines.push_back({li, static_cast<int>(pos), line.substr(pos, maxChars)});
+                    wrappedLines.push_back({li, static_cast<int>(pos), line.substr(pos, end - pos)});
                     pos = end;
                 }
             }
@@ -96,7 +98,7 @@ int UITextArea::lineColToCursor(int line, int col) const {
     for (int i = 0; i < line && i < static_cast<int>(lines.size()); ++i)
         pos += static_cast<int>(lines[i].size()) + 1;
     pos += std::min(col, static_cast<int>(lines[std::min(line, static_cast<int>(lines.size()) - 1)].size()));
-    return std::min(pos, static_cast<int>(text.size()));
+    return UTF8Edit::boundary(text, std::min(pos, static_cast<int>(text.size())));
 }
 
 int UITextArea::lineStartOffset(int lineIdx) const {
@@ -188,11 +190,11 @@ int UITextArea::cursorFromMousePos(const Vec2& mousePos, const OverlayRenderer& 
     if (clickedWrapIdx >= 0 && clickedWrapIdx < static_cast<int>(wrappedLines.size())) {
         const auto& wl = wrappedLines[clickedWrapIdx];
         float prevW = 0.0f;
-        for (int ci = 0; ci < static_cast<int>(wl.text.size()); ++ci) {
-            float nextW = overlayRenderer.measureTextWidth(wl.text.substr(0, ci + 1));
+        for (int ci = 0; ci < static_cast<int>(wl.text.size()); ci = UTF8Edit::next(wl.text, ci)) {
+            float nextW = overlayRenderer.measureTextWidth(wl.text.substr(0, UTF8Edit::next(wl.text, ci)));
             float midpoint = prevW + (nextW - prevW) * 0.5f;
             if (relX < midpoint) break;
-            clickedCol = ci + 1;
+            clickedCol = UTF8Edit::next(wl.text, ci);
             prevW = nextW;
         }
     }
@@ -211,13 +213,13 @@ void UITextArea::handleInput(const InputState& input, float dt) {
 #endif
 
     auto processActionKey = [&](KeyCode kc, int vk) -> bool {
-        if (Key::wasPressed(kc)) {
+        if (input.keyPressed[Key::toPlatformCode(kc)]) {
             heldKeyVK = vk;
             heldKeyTimer = 0.0f;
             repeatFiring = false;
             return true;
         }
-        if (heldKeyVK == vk && Key::isDown(kc)) {
+        if (heldKeyVK == vk && input.keysDown[Key::toPlatformCode(kc)]) {
             heldKeyTimer += dt;
             if (!repeatFiring && heldKeyTimer >= kRepeatDelay) {
                 repeatFiring = true;
@@ -243,7 +245,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             case VK_DOWN:   heldKC = KeyCode::Down; break;
             default: break;
         }
-        if (heldKC != KeyCode::Unknown && !Key::isDown(heldKC)) {
+        if (heldKC != KeyCode::Unknown && !input.keysDown[Key::toPlatformCode(heldKC)]) {
             heldKeyVK = -1;
             heldKeyTimer = 0.0f;
             repeatFiring = false;
@@ -257,8 +259,9 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             deleteSelection();
             changed = true;
         } else if (cursorPos > 0) {
-            text.erase(cursorPos - 1, 1);
-            cursorPos--;
+            const int previous = UTF8Edit::previous(text, cursorPos);
+            text.erase(previous, cursorPos - previous);
+            cursorPos = previous;
             changed = true;
         }
         caretVisible = true; lastBlink = now;
@@ -269,7 +272,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             deleteSelection();
             changed = true;
         } else if (cursorPos < static_cast<int>(text.length())) {
-            text.erase(cursorPos, 1);
+            text.erase(cursorPos, UTF8Edit::next(text, cursorPos) - cursorPos);
             changed = true;
         }
         caretVisible = true; lastBlink = now;
@@ -277,13 +280,13 @@ void UITextArea::handleInput(const InputState& input, float dt) {
 
     if (processActionKey(KeyCode::Left, VK_LEFT)) {
         if (input.shift) {
-            if (cursorPos > 0) cursorPos--;
+            if (cursorPos > 0) cursorPos = UTF8Edit::previous(text, cursorPos);
             selEnd = cursorPos;
         } else if (hasSelection()) {
             cursorPos = std::min(selStart, selEnd);
             clearSelection();
         } else if (cursorPos > 0) {
-            cursorPos--;
+            cursorPos = UTF8Edit::previous(text, cursorPos);
             clearSelection();
         }
         caretVisible = true; lastBlink = now;
@@ -291,13 +294,13 @@ void UITextArea::handleInput(const InputState& input, float dt) {
 
     if (processActionKey(KeyCode::Right, VK_RIGHT)) {
         if (input.shift) {
-            if (cursorPos < static_cast<int>(text.length())) cursorPos++;
+            if (cursorPos < static_cast<int>(text.length())) cursorPos = UTF8Edit::next(text, cursorPos);
             selEnd = cursorPos;
         } else if (hasSelection()) {
             cursorPos = std::max(selStart, selEnd);
             clearSelection();
         } else if (cursorPos < static_cast<int>(text.length())) {
-            cursorPos++;
+            cursorPos = UTF8Edit::next(text, cursorPos);
             clearSelection();
         }
         caretVisible = true; lastBlink = now;
@@ -330,14 +333,14 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         caretVisible = true; lastBlink = now;
     }
 
-    if (Key::wasPressed(KeyCode::Home)) {
+    if (input.keyPressed[Key::toPlatformCode(KeyCode::Home)]) {
         int wIdx = wrapIndexForCursor();
         if (wIdx >= 0)
             cursorPos = cursorFromWrappedClick(wIdx, 0);
         if (input.shift) selEnd = cursorPos;
         else clearSelection();
     }
-    if (Key::wasPressed(KeyCode::End)) {
+    if (input.keyPressed[Key::toPlatformCode(KeyCode::End)]) {
         int wIdx = wrapIndexForCursor();
         if (wIdx >= 0)
             cursorPos = cursorFromWrappedClick(wIdx, static_cast<int>(wrappedLines[wIdx].text.size()));
@@ -345,7 +348,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         else clearSelection();
     }
 
-    if (input.ctrl && Key::wasPressed(KeyCode::A)) {
+    if (input.ctrl && input.keyPressed[Key::toPlatformCode(KeyCode::A)]) {
         selStart = 0;
         selEnd = static_cast<int>(text.length());
         cursorPos = selEnd;
@@ -370,17 +373,14 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             deleteSelection();
             changed = true;
         }
-        std::string filtered;
-        for (char c : input.pastedText) {
-            if ((c >= 32 && c <= 126) || c == '\n' || c == '\t') filtered += c;
-        }
+        const auto filtered = UTF8Edit::printable(input.pastedText, true);
         text.insert(cursorPos, filtered);
         cursorPos += static_cast<int>(filtered.length());
         clearSelection();
         changed = true;
     }
 
-    if (Key::wasPressed(KeyCode::Enter)) {
+    if (input.keyPressed[Key::toPlatformCode(KeyCode::Enter)]) {
         if (hasSelection()) { deleteSelection(); changed = true; }
         text.insert(text.begin() + cursorPos, '\n');
         cursorPos++;
@@ -389,15 +389,14 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         caretVisible = true; lastBlink = now;
     }
 
-    for (char c : input.textInput) {
-        if (c >= 32 && c <= 126) {
-            if (hasSelection()) { deleteSelection(); changed = true; }
-            text.insert(text.begin() + cursorPos, c);
-            cursorPos++;
-            clearSelection();
-            changed = true;
-            caretVisible = true; lastBlink = now;
-        }
+    const auto inserted = UTF8Edit::printable(input.textInput);
+    if (!inserted.empty()) {
+        if (hasSelection()) deleteSelection();
+        text.insert(cursorPos, inserted);
+        cursorPos += static_cast<int>(inserted.size());
+        clearSelection();
+        changed = true;
+        caretVisible = true; lastBlink = now;
     }
 
     if (changed) {
@@ -409,7 +408,9 @@ void UITextArea::handleInput(const InputState& input, float dt) {
 
 // ─── Update ─────────────────────────────────────────────
 
-void UITextArea::update(const InputState& input, float dt) {
+void UITextArea::update(const InputState& source, float dt) {
+    const auto input = routeInput(source);
+    if (!hasPointerCapture()) dragging = false;
     Vec2 m = input.mousePos;
     hovered = (m.x >= position.x && m.x <= position.x + size.x &&
                m.y >= position.y && m.y <= position.y + size.y);
@@ -422,7 +423,7 @@ void UITextArea::update(const InputState& input, float dt) {
     // Uses InputState directly (no Mouse:: static class mixing)
     if (input.mousePressed[0]) {
         if (hovered) {
-            focused = true;
+            setFocused(true);
 
             const OverlayRenderer& overlayRenderer = UIRoot::get().getRenderer();
             cursorPos = cursorFromMousePos(m, overlayRenderer);
@@ -433,7 +434,7 @@ void UITextArea::update(const InputState& input, float dt) {
                 selStart = cursorPos;
                 selEnd = cursorPos;
             }
-            dragging = true;
+            dragging = capturePointer();
 
 #ifdef _WIN32
             lastBlink = GetTickCount64();
@@ -443,8 +444,9 @@ void UITextArea::update(const InputState& input, float dt) {
 #endif
             caretVisible = true;
         } else {
-            focused = false;
+            setFocused(false);
             dragging = false;
+            releasePointer();
         }
     } else if (dragging) {
         if (input.mouseDown[0]) {
@@ -464,15 +466,18 @@ void UITextArea::update(const InputState& input, float dt) {
             }
         } else {
             dragging = false;
+            releasePointer();
         }
     }
 
     // Mouse wheel scroll (against wrapped line count)
     if (hovered && input.mouseWheelDelta != 0.0f) {
-        scrollOffset -= input.mouseWheelDelta;
+        const float previousScroll = scrollOffset;
+        scrollOffset -= input.scrollSteps().y * 3.0f;
         float maxScroll = std::max(0.0f, static_cast<float>(wrappedLines.size()) -
                           (size.y - kTextPad * 2.0f) / kLineHeight);
         scrollOffset = std::clamp(scrollOffset, 0.0f, maxScroll);
+        if (scrollOffset != previousScroll) consumeScroll();
     }
 
     // Caret blink

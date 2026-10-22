@@ -1,3 +1,4 @@
+#include "helpers/utf8_edit.hpp"
 #include "ui_inputbox.hpp"
 #include "../ui_theme.hpp"
 #include "../ui_renderer.hpp"
@@ -13,7 +14,7 @@
 #include "core/platform_clipboard.hpp"
 #include <algorithm>
 
-static UIInputBox* g_activeInputBox = nullptr;
+
 
 namespace {
 constexpr float kTextPaddingX = 6.0f;
@@ -51,8 +52,10 @@ InputBoxDisplayLayout buildDisplayLayout(const std::string& buffer,
     float visibleWidth = layout.prefix.empty() ? 0.0f : ellipsisWidth;
     int suffixStart = static_cast<int>(buffer.length());
 
-    for (int i = static_cast<int>(buffer.length()) - 1; i >= 0; --i) {
-        const float charWidth = renderer.measureTextWidth(std::string(1, buffer[static_cast<size_t>(i)]));
+    for (int end = static_cast<int>(buffer.length()); end > 0;) {
+        const int i = UTF8Edit::previous(buffer, end);
+        const float charWidth = renderer.measureTextWidth(buffer.substr(i, end - i));
+        end = i;
         if (visibleWidth + charWidth > availableWidth) {
             break;
         }
@@ -105,9 +108,9 @@ int UIInputBox::charIndexAtX(float clickX) const {
     const std::string visibleBuffer = buffer.substr(static_cast<size_t>(layout.displayOffset));
     float prevCaretX = layout.prefix.empty() ? 0.0f : renderer.measureTextWidth(layout.prefix);
 
-    for (int i = 0; i < static_cast<int>(visibleBuffer.length()); ++i) {
+    for (int i = 0; i < static_cast<int>(visibleBuffer.length()); i = UTF8Edit::next(visibleBuffer, i)) {
         const float nextCaretX = renderer.measureTextWidth(
-            layout.prefix + visibleBuffer.substr(0, static_cast<size_t>(i + 1)));
+            layout.prefix + visibleBuffer.substr(0, static_cast<size_t>(UTF8Edit::next(visibleBuffer, i))));
         const float midpoint = prevCaretX + ((nextCaretX - prevCaretX) * 0.5f);
 
         if (relX < midpoint) {
@@ -140,7 +143,9 @@ std::string UIInputBox::selectedText() const {
 // Update
 // ---------------------------------------------------------------
 
-void UIInputBox::update(const InputState& input, float dt) {
+void UIInputBox::update(const InputState& source, float dt) {
+    const auto input = routeInput(source);
+    if (!hasPointerCapture()) dragging = false;
     if (!isVisible()) return;
 
     // Caret blink
@@ -166,13 +171,8 @@ void UIInputBox::update(const InputState& input, float dt) {
     if (input.mousePressed[0]) {
         if (overBox) {
             if (!focused) {
-                if (g_activeInputBox != nullptr && g_activeInputBox != this) {
-                    if (g_activeInputBox->externalBind)
-                        *(g_activeInputBox->externalBind) = g_activeInputBox->buffer;
-                    g_activeInputBox->setFocused(false);
-                }
                 setFocused(true);
-                g_activeInputBox = this;
+
             }
             cursorPos = charIndexAtX(m.x);
             if (input.shift) {
@@ -181,16 +181,17 @@ void UIInputBox::update(const InputState& input, float dt) {
                 selStart = cursorPos;
                 selEnd = cursorPos;
             }
-            dragging = true;
+            dragging = capturePointer();
             caretVisible = true;
             lastBlink = now;
         } else {
-            if (focused && g_activeInputBox == this) {
+            if (focused) {
                 setFocused(false);
-                g_activeInputBox = nullptr;
+
                 if (externalBind) *externalBind = buffer;
             }
             dragging = false;
+            releasePointer();
         }
     } else if (dragging) {
         if (input.mouseDown[0]) {
@@ -203,10 +204,11 @@ void UIInputBox::update(const InputState& input, float dt) {
             }
         } else {
             dragging = false;
+            releasePointer();
         }
     }
 
-    if (!focused || g_activeInputBox != this) return;
+    if (!focused) return;
 
     // While mouse is actively dragging, skip keyboard input so
     // arrow keys / text input don't clobber the drag selection.
@@ -218,10 +220,10 @@ void UIInputBox::update(const InputState& input, float dt) {
     // We track a "held" action key (Backspace, Delete, Left, Right)
     // and fire repeats after an initial delay.
 
-    auto isActionKeyDown = [&](KeyCode kc) -> bool { return Key::isDown(kc); };
+    auto isActionKeyDown = [&](KeyCode kc) -> bool { return input.keysDown[Key::toPlatformCode(kc)]; };
 
     auto processActionKey = [&](KeyCode kc, int vk) {
-        if (Key::wasPressed(kc)) {
+        if (input.keyPressed[Key::toPlatformCode(kc)]) {
             heldKeyVK = vk;
             heldKeyTimer = 0.0f;
             repeatFiring = false;
@@ -266,8 +268,9 @@ void UIInputBox::update(const InputState& input, float dt) {
         if (hasSelection()) {
             deleteSelection();
         } else if (cursorPos > 0) {
-            buffer.erase(cursorPos - 1, 1);
-            cursorPos--;
+            const int previous = UTF8Edit::previous(buffer, cursorPos);
+            buffer.erase(previous, cursorPos - previous);
+            cursorPos = previous;
             clearSelection();
         }
         caretVisible = true;
@@ -281,7 +284,7 @@ void UIInputBox::update(const InputState& input, float dt) {
         if (hasSelection()) {
             deleteSelection();
         } else if (cursorPos < static_cast<int>(buffer.length())) {
-            buffer.erase(cursorPos, 1);
+            buffer.erase(cursorPos, UTF8Edit::next(buffer, cursorPos) - cursorPos);
             clearSelection();
         }
         caretVisible = true;
@@ -293,13 +296,13 @@ void UIInputBox::update(const InputState& input, float dt) {
     // -------------------------------------------------------
     if (processActionKey(KeyCode::Left, VK_LEFT)) {
         if (input.shift) {
-            if (cursorPos > 0) cursorPos--;
+            if (cursorPos > 0) cursorPos = UTF8Edit::previous(buffer, cursorPos);
             selEnd = cursorPos;
         } else if (hasSelection()) {
             cursorPos = std::min(selStart, selEnd);
             clearSelection();
         } else if (cursorPos > 0) {
-            cursorPos--;
+            cursorPos = UTF8Edit::previous(buffer, cursorPos);
             clearSelection();
         }
         caretVisible = true;
@@ -308,13 +311,13 @@ void UIInputBox::update(const InputState& input, float dt) {
 
     if (processActionKey(KeyCode::Right, VK_RIGHT)) {
         if (input.shift) {
-            if (cursorPos < static_cast<int>(buffer.length())) cursorPos++;
+            if (cursorPos < static_cast<int>(buffer.length())) cursorPos = UTF8Edit::next(buffer, cursorPos);
             selEnd = cursorPos;
         } else if (hasSelection()) {
             cursorPos = std::max(selStart, selEnd);
             clearSelection();
         } else if (cursorPos < static_cast<int>(buffer.length())) {
-            cursorPos++;
+            cursorPos = UTF8Edit::next(buffer, cursorPos);
             clearSelection();
         }
         caretVisible = true;
@@ -322,12 +325,12 @@ void UIInputBox::update(const InputState& input, float dt) {
     }
 
     // Home / End
-    if (Key::wasPressed(KeyCode::Home)) {
+    if (input.keyPressed[Key::toPlatformCode(KeyCode::Home)]) {
         cursorPos = 0;
         if (input.shift) selEnd = cursorPos;
         else clearSelection();
     }
-    if (Key::wasPressed(KeyCode::End)) {
+    if (input.keyPressed[Key::toPlatformCode(KeyCode::End)]) {
         cursorPos = static_cast<int>(buffer.length());
         if (input.shift) selEnd = cursorPos;
         else clearSelection();
@@ -336,7 +339,7 @@ void UIInputBox::update(const InputState& input, float dt) {
     // -------------------------------------------------------
     // Select All (Ctrl+A / Cmd+A)
     // -------------------------------------------------------
-    if (input.ctrl && Key::wasPressed(KeyCode::A)) {
+    if (input.ctrl && input.keyPressed[Key::toPlatformCode(KeyCode::A)]) {
         selStart = 0;
         selEnd = static_cast<int>(buffer.length());
         cursorPos = selEnd;
@@ -360,11 +363,7 @@ void UIInputBox::update(const InputState& input, float dt) {
 
     if (input.pasteRequested && !input.pastedText.empty()) {
         if (hasSelection()) deleteSelection();
-        // Filter to printable ASCII
-        std::string filtered;
-        for (char c : input.pastedText) {
-            if (c >= 32 && c <= 126) filtered += c;
-        }
+        const auto filtered = UTF8Edit::printable(input.pastedText, false);
         buffer.insert(cursorPos, filtered);
         cursorPos += static_cast<int>(filtered.length());
         clearSelection();
@@ -373,12 +372,12 @@ void UIInputBox::update(const InputState& input, float dt) {
     // -------------------------------------------------------
     // Enter - commit and unfocus
     // -------------------------------------------------------
-    if (Key::wasPressed(KeyCode::Enter)) {
+    if (input.keyPressed[Key::toPlatformCode(KeyCode::Enter)]) {
         std::string submittedText = buffer;
         if (externalBind) *externalBind = submittedText;
 
         setFocused(false);
-        g_activeInputBox = nullptr;
+
         submitTextInput(submittedText);
         if (clearOnSubmit) {
             buffer.clear();
@@ -392,9 +391,9 @@ void UIInputBox::update(const InputState& input, float dt) {
     // -------------------------------------------------------
     // Escape - cancel edit
     // -------------------------------------------------------
-    if (Key::wasPressed(KeyCode::Escape)) {
+    if (input.keyPressed[Key::toPlatformCode(KeyCode::Escape)]) {
         setFocused(false);
-        g_activeInputBox = nullptr;
+
         if (externalBind) buffer = *externalBind;
         cursorPos = static_cast<int>(buffer.length());
         clearSelection();
@@ -404,15 +403,14 @@ void UIInputBox::update(const InputState& input, float dt) {
     // -------------------------------------------------------
     // Text input from platform (WM_CHAR / macOS text callback)
     // -------------------------------------------------------
-    for (char c : input.textInput) {
-        if (c >= 32 && c <= 126) {
-            if (hasSelection()) deleteSelection();
-            buffer.insert(buffer.begin() + cursorPos, c);
-            cursorPos++;
-            clearSelection();
-            caretVisible = true;
-            lastBlink = now;
-        }
+    const auto inserted = UTF8Edit::printable(input.textInput);
+    if (!inserted.empty()) {
+        if (hasSelection()) deleteSelection();
+        buffer.insert(cursorPos, inserted);
+        cursorPos += static_cast<int>(inserted.size());
+        clearSelection();
+        caretVisible = true;
+        lastBlink = now;
     }
 
     // Sync to external bind

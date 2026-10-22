@@ -3,6 +3,7 @@
 #include <string>
 #include <random>
 #include <unordered_map>
+#include "input/ui_input_router.hpp"
 
 class Widget;
 class UIPanel;
@@ -30,8 +31,8 @@ public:
     bool isPanelFocused(uint64_t panelID) const;
     bool hasAnyFocus() const;
     
-    uint64_t getFocusedWidget() const { return focusedWidgetID; }
-    uint64_t getFocusedPanel() const { return focusedPanelID; }
+    uint64_t getFocusedWidget() const { return GRIM::UI::InputRouter::get().focus.widget; }
+    uint64_t getFocusedPanel() const { return GRIM::UI::InputRouter::get().focus.panel; }
     
     // Debug
     std::string getFocusInfo() const;
@@ -44,8 +45,6 @@ private:
     UIFocusManager(const UIFocusManager&) = delete;
     UIFocusManager& operator=(const UIFocusManager&) = delete;
 
-    uint64_t focusedWidgetID = 0;
-    uint64_t focusedPanelID = 0;
     
     // Random number generator for unique IDs
     std::mt19937_64 rng;

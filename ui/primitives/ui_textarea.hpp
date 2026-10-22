@@ -27,7 +27,6 @@ private:
     std::string placeholder;
     std::function<void(const std::string&)> callback;
     
-    bool focused = false;
     bool hovered = false;
     int cursorPos = 0;
     float scrollOffset = 0.0f;

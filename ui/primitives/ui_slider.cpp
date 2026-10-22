@@ -61,6 +61,7 @@ void UISlider::setRange(float minVal, float maxVal) {
     value = constrainedValue(value);
     valueBeforeEdit = value;
     dragging = false;
+    releasePointer();
     editingText = false;
     textBuffer.clear();
     if (focusID != 0 && UIFocusManager::getInstance().isWidgetFocused(focusID))
@@ -76,8 +77,11 @@ float UISlider::getHandleX() const {
     return sliderStart.x + getNormalizedValue() * sliderSize.x;
 }
 
-void UISlider::update(const InputState& input, float dt) {
+void UISlider::update(const InputState& source, float dt) {
+    const auto input = routeInput(source);
     if (!visible || minValue == maxValue || size.x <= 160.0f) return;
+    if (!hasPointerCapture()) dragging = false;
+    if (editingText && !focused) { editingText = false; textBuffer.clear(); value = valueBeforeEdit; }
     Vec2 m = input.mousePos;
     
     // Slider bar = the track itself (no separate box); bar height fits text
@@ -89,17 +93,17 @@ void UISlider::update(const InputState& input, float dt) {
     bool overTrack = (m.x >= sliderStart.x && m.x <= sliderStart.x + sliderSize.x &&
                       m.y >= sliderStart.y && m.y <= sliderStart.y + sliderSize.y);
     
-    bool leftDown = Mouse::isDown(MouseButton::Left);
+    bool leftDown = input.mouseDown[0];
     
     // Handle text editing
     if (editingText) {
         // Backspace / Delete with key repeat
         bool bsFire = false;
-        if (Key::wasPressed(KeyCode::Backspace) || Key::wasPressed(KeyCode::Delete)) {
+        if (input.keyPressed[Key::toPlatformCode(KeyCode::Backspace)] || input.keyPressed[Key::toPlatformCode(KeyCode::Delete)]) {
             bsHeldTimer = 0.0f;
             bsRepeatFiring = false;
             bsFire = true;
-        } else if (Key::isDown(KeyCode::Backspace) || Key::isDown(KeyCode::Delete)) {
+        } else if (input.keysDown[Key::toPlatformCode(KeyCode::Backspace)] || input.keysDown[Key::toPlatformCode(KeyCode::Delete)]) {
             bsHeldTimer += dt;
             if (!bsRepeatFiring && bsHeldTimer >= kRepeatDelay) {
                 bsRepeatFiring = true;
@@ -118,7 +122,7 @@ void UISlider::update(const InputState& input, float dt) {
         }
         
         // Handle Escape key - cancel edit
-        if (Key::wasPressed(KeyCode::Escape)) {
+        if (input.keyPressed[Key::toPlatformCode(KeyCode::Escape)]) {
             value = valueBeforeEdit;
             editingText = false;
             textBuffer.clear();
@@ -127,7 +131,7 @@ void UISlider::update(const InputState& input, float dt) {
         }
         
         // Handle Enter key - commit edit
-        if (Key::wasPressed(KeyCode::Enter)) {
+        if (input.keyPressed[Key::toPlatformCode(KeyCode::Enter)]) {
             try {
                 float newValue = std::stof(textBuffer);
                 newValue = constrainedValue(newValue);
@@ -188,7 +192,8 @@ void UISlider::update(const InputState& input, float dt) {
                        m.y >= handlePos.y && m.y <= handlePos.y + handleSize.y);
 
     // Start text editing on click (anywhere on track except handle)
-    if (overTrack && !overHandle && leftDown) {
+    if (overTrack && !overHandle && input.mousePressed[0] && capturePointer()) {
+        releasePointer();
         editingText = true;
         valueBeforeEdit = value;
         
@@ -212,7 +217,7 @@ void UISlider::update(const InputState& input, float dt) {
         return;
     }
     
-    if (overHandle && leftDown && !dragging) {
+    if (overHandle && input.mousePressed[0] && !dragging && capturePointer()) {
         dragging = true;
     }
     
@@ -231,6 +236,7 @@ void UISlider::update(const InputState& input, float dt) {
             }
         } else {
             dragging = false;
+            releasePointer();
         }
     }
 }

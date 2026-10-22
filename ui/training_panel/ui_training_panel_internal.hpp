@@ -58,10 +58,7 @@ struct ParamScrollbarMetrics {
 };
 
 inline float normalizeMouseWheelDelta(float rawDelta) {
-    if (std::fabs(rawDelta) >= 120.0f) {
-        return rawDelta / 120.0f;
-    }
-    return rawDelta;
+    return rawDelta / 120.0f;
 }
 
 inline bool pointInRect(const Vec2& point, float x, float y, float w, float h) {
