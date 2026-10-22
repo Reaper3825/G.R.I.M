@@ -28,7 +28,7 @@ enum class EpisodeState : std::uint8_t {
     Collecting, Complete, InfrastructureInvalid,
 };
 
-struct EpisodeRecord {
+struct TaskEpisode {
     // Callers never supply a variable store. Local declarations and input
     // bindings originate in model output; runtime tracks them and tool results.
     std::string rollout_group_id;

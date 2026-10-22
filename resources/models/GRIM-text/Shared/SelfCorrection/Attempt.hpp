@@ -18,7 +18,7 @@ enum class SegmentEndReason : std::uint8_t {
 };
 
 struct SamplingSegment {
-    // Half-open absolute offsets in EpisodeRecord::sequence.token_ids.
+    // Half-open absolute offsets in TaskEpisode::sequence.token_ids.
     // Contains uninterrupted sampled actions, with no runtime insertions.
     std::size_t token_begin = 0;
     std::size_t token_end = 0;

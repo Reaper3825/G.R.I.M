@@ -578,6 +578,7 @@ G.R.I.M/
 | **Porcupine** | Offline wake word detection |
 | **flash-attention** | Reference kernels for Flash Attention v2 |
 | **vcpkg** | C++ package manager |
+| **TextWorld** | Optional text-game environment; pinned source submodule, isolated Docker runtime ([setup](docs/TEXTWORLD_SETUP.md)) |
 
 ### Python Bridges (in `resources/python/`)
 

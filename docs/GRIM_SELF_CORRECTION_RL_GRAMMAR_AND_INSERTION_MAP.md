@@ -228,18 +228,18 @@ tool side effects by itself. No training replay may execute those effects again.
 
 ### 2.1 Episode definition header
 
-[`Shared/SelfCorrection/Episode.hpp`](../resources/models/GRIM-text/Shared/SelfCorrection/Episode.hpp)
+[`Shared/SelfCorrection/TaskEpisode.hpp`](../resources/models/GRIM-text/Shared/SelfCorrection/TaskEpisode.hpp)
 now defines only self-correction episode metadata under
 `GRIM::SelfCorrection`: identity snapshots, sampling segments, committed attempt boundaries, verifier outcomes,
 and detached score slots. Attempt definitions live in
 [`Shared/SelfCorrection/Attempt.hpp`](../resources/models/GRIM-text/Shared/SelfCorrection/Attempt.hpp),
-which `Episode.hpp` includes. `EpisodeRecord` reuses `GeneratedSequence` for token
+which `TaskEpisode.hpp` includes. `TaskEpisode` reuses `GeneratedSequence` for token
 IDs, scores, token provenance, score positions, atom channels, and tables, plus the existing `NamedConceptSpans`
 and runtime `Goal` (from `Shared/Goal/Goal.hpp`) types. Token offsets are absolute within the episode
 sequence; ranges are half-open. Score positions are explicit because existing
 generation excludes prefix scores and records forced-token scores as zero.
 Committed attempts use const ownership, with later scores stored separately.
-`EpisodeRecord` directly owns its task/model identity, prepared goal, sandbox
+`TaskEpisode` directly owns its task/model identity, prepared goal, sandbox
 instance association, and generated sequence; there is no separate
 `EpisodeSnapshot` wrapper or verifier ID/version. Each committed attempt names
 the sandbox snapshot containing execution results and environment state frozen

@@ -30,7 +30,7 @@ def main():
     handoff = source[source.index('    result.token_ids = sequence.token_ids;'):]
     handoff = handoff[:handoff.index('    return result;') + len('    return result;')]
     sequence_header = (root / 'Shared/Forward/GeneratedSequence.hpp').as_posix()
-    episode_header = (root / 'Shared/SelfCorrection/Episode.hpp').as_posix()
+    episode_header = (root / 'Shared/SelfCorrection/TaskEpisode.hpp').as_posix()
     layout_header = (root / 'Shared/UnigramByte/TokenLayout.hpp').as_posix()
     test = r'''
 #include "SEQUENCE_HEADER"
