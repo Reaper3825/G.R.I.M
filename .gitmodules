@@ -22,3 +22,6 @@
 [submodule "vcpkg"]
 	path = vcpkg
 	url = https://github.com/microsoft/vcpkg.git
+[submodule "external/textworld"]
+	path = external/textworld
+	url = https://github.com/microsoft/TextWorld.git
