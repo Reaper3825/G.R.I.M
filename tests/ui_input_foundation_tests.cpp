@@ -57,7 +57,19 @@ static void begin(bool cancel = false) { router.beginFrame(cancel); router.curre
 static void end() { router.endFrame(); }
 
 void runCanvasTests();
+#ifdef GRIM_WORLD_LAB_TESTS
+void runWorldLabTests();
+#endif
+#ifdef GRIM_TEXTWORLD_INTEGRATION
+void runTextWorldClientTests();
+#endif
 int main() {
+#ifdef GRIM_TEXTWORLD_INTEGRATION
+    runTextWorldClientTests();
+#endif
+#ifdef GRIM_WORLD_LAB_TESTS
+    runWorldLabTests();
+#endif
     runCanvasTests();
     // Console-style title controls update after panel chrome. They must win
     // capture over dragging, including when released outside the panel.
@@ -168,12 +180,15 @@ int main() {
     begin(); name.update(source,0); end();
     source.mousePressed[0]=source.mouseDown[0]=false; source.mouseReleased[0]=true;
     begin(); name.update(source,0); end();
-    source={}; source.textInput=u8"caf\u00e9\U0001f600";
+    // InputState carries UTF-8 bytes in std::string, including under C++20.
+    const std::string cafe = "caf\xC3\xA9";
+    const std::string cafeEmoji = cafe + "\xF0\x9F\x98\x80";
+    source={}; source.textInput=cafeEmoji;
     begin(); name.update(source,0); end();
-    check(name.getText()==u8"caf\u00e9\U0001f600", "Unicode text was discarded");
+    check(name.getText()==cafeEmoji, "Unicode text was discarded");
     source.textInput.clear(); source.keyPressed[VK_BACK]=true;
     begin(); name.update(source,0); end();
-    check(name.getText()==u8"caf\u00e9", "Backspace split a UTF-8 character");
+    check(name.getText()==cafe, "Backspace split a UTF-8 character");
     source.keyPressed[VK_BACK]=false; source.keyPressed[VK_LEFT]=true;
     begin(); name.update(source,0); end();
     source.keyPressed[VK_LEFT]=false; source.keyPressed[VK_DELETE]=true;

@@ -1,7 +1,8 @@
 # TextWorld dependency setup
 
-TextWorld is an optional standalone environment dependency. Inference feedback,
-tool dispatch, services, and training integration are deferred.
+TextWorld is an optional environment dependency. World Lab now uses the existing
+image for manual compilation and playtesting; see [WORLD_LAB.md](WORLD_LAB.md).
+Inference feedback, tool dispatch, and training integration remain deferred.
 
 ## Dependency ownership
 
@@ -64,15 +65,16 @@ docker run --rm -it --network none grim-textworld:1.7.0 bash
 docker run --rm --network none grim-textworld:1.7.0 cat /opt/grim-textworld/installed-packages.txt
 ```
 
-No ports are exposed and no background service is started. Persistent games,
-worker transport, and GRIM session integration can be added separately.
+The setup command exposes no ports and starts no background service. World Lab
+starts its own temporary worker on Validate/Compile & Play, mounting the current
+worker source read-only, so its installation does not require rebuilding this image.
 
 ## Validation status
 
-Source checkout and setup files were prepared on Windows without Docker installed.
-The Docker image build and executable smoke check remain pending until Docker is
-available. The PowerShell script reports that prerequisite explicitly rather than
-reporting an installed runtime.
+On 2026-10-23 the existing Docker Desktop Linux engine and
+`grim-textworld:1.7.0` image were verified through World Lab's real compilation,
+locked-door gameplay, win/failure, reset, solution replay, and native worker-client
+tests. No image rebuild or dependency installation was needed for Stage 2.
 
 Upstream: https://github.com/microsoft/TextWorld/tree/1.7.0
 

@@ -1,0 +1,36 @@
+{
+  "format": "grim-world",
+  "version": 2,
+  "title": "The Garden Delivery",
+  "spawn": "r1",
+  "next_id": 1,
+  "objective": "Find the seed packet in the shed and carry it into the garden. The brass key in the cottage opens the garden gate.",
+  "entities": [
+    {"id":"r1","name":"Cottage","kind":"room","parent":"","description":"Morning light fills a small cottage. A brass key rests on the kitchen table. The shed is east.","state":"open"},
+    {"id":"r2","name":"Shed","kind":"room","parent":"","description":"A tidy shed smells of fresh wood. A seed box sits on the floor. The cottage is west and the garden is north beyond a locked gate.","state":"open"},
+    {"id":"r3","name":"Garden","kind":"room","parent":"","description":"Sunlight warms the empty flower beds. This is the perfect place for the seeds. The shed is south.","state":"open"},
+    {"id":"s1","name":"kitchen table","kind":"supporter","parent":"r1","description":"A sturdy wooden table with a brass key on top.","state":"open"},
+    {"id":"k1","name":"brass key","kind":"key","parent":"s1","description":"A small brass key for the garden gate.","state":"open"},
+    {"id":"c1","name":"seed box","kind":"container","parent":"r2","description":"A small wooden box. Open it to find the seeds.","state":"closed"},
+    {"id":"o1","name":"seed packet","kind":"object","parent":"c1","description":"A paper packet of sunflower seeds, ready for the garden.","state":"open"}
+  ],
+  "passages": [
+    {"id":"p1","from":"r1","to":"r2","direction":"east","door_name":"","door_state":"open","key":""},
+    {"id":"p2","from":"r2","to":"r3","direction":"north","door_name":"garden gate","door_state":"locked","key":"k1"}
+  ],
+  "editor": {"rooms":[{"id":"r1","x":80,"y":300},{"id":"r2","x":440,"y":300},{"id":"r3","x":440,"y":60}]},
+  "win_conditions": [
+    {"predicate":"player_at","subject":"r3","target":""},
+    {"predicate":"carrying","subject":"o1","target":""}
+  ],
+  "fail_conditions": [],
+  "solution": [
+    "take brass key from kitchen table",
+    "go east",
+    "open seed box",
+    "take seed packet from seed box",
+    "unlock garden gate with brass key",
+    "open garden gate",
+    "go north"
+  ]
+}

@@ -13,6 +13,10 @@ same core-plus-tab layout as DataHub.
   it into an immutable `.grimcfg` artifact.
 - **Tokenizer** — inspect the loaded model's tokenizer through `grim_text_server`.
 - **Observatory** — inspect the loaded model through the same public bridge.
+- **World Lab** — author rooms, nested objects, passages, and player starts;
+  add doors and challenges, compile/play through the TextWorld worker, and record
+  verified solutions. Save/load includes undo/redo and recovery.
+  See [World Lab](../docs/WORLD_LAB.md).
 
 ## Tokenizer diagnostics
 
