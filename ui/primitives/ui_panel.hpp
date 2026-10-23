@@ -80,6 +80,8 @@ public:
     bool isResizing() const { return resizing; }
 
 protected:
+    // Derived panels can reserve title-bar regions for interactive controls.
+    virtual bool isTitleBarControlAt(const Vec2& point) const { return false; }
     std::string title;
     std::vector<std::shared_ptr<Widget>> children;
     bool draggable = true;

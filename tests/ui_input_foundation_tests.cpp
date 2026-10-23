@@ -11,6 +11,7 @@
 #include "ui/primitives/ui_scrollbox.hpp"
 #include "ui/primitives/ui_dropdown.hpp"
 #include "ui/ui_focus_manager.hpp"
+#include "ui/ui_root.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "ui/ui_renderer.hpp"
 #include "helpers/key.hpp"
@@ -19,6 +20,9 @@
 #include <cmath>
 
 bool PlatformClipboard::copyText(const std::string&) { return true; }
+float PlatformWindow::getMenuBarHeight() { return 0; }
+UIRoot::MonitorRect UIRoot::getMonitorRectAt(const Vec2&) const { return {{0,0},{1920,1080}}; }
+void OverlayRenderer::drawGlassPanel(const Vec2&, const Vec2&, float, uint32_t, uint32_t, uint32_t, int, float, uintptr_t, bool) {}
 void logDebug(const std::string&, const std::string&) {}
 void logError(const std::string&, const std::string&) {}
 void OverlayRenderer::drawRect(const Vec2&, const Vec2&, uint32_t) {}
@@ -52,7 +56,42 @@ static auto& router = GRIM::UI::InputRouter::get();
 static void begin(bool cancel = false) { router.beginFrame(cancel); router.currentPanel = 1; }
 static void end() { router.endFrame(); }
 
+void runCanvasTests();
 int main() {
+    runCanvasTests();
+    // Console-style title controls update after panel chrome. They must win
+    // capture over dragging, including when released outside the panel.
+    struct ToolbarPanel : UIPanel {
+        bool isTitleBarControlAt(const Vec2& p) const override {
+            return p.x >= 200 && p.x <= 300 && p.y >= 0 && p.y <= 30;
+        }
+    } panel;
+    panel.setPosition(0,0); panel.setSize(400,200);
+    int toolbarClicks = 0;
+    UIButton toolbar("tab", [&]{ ++toolbarClicks; });
+    toolbar.setPosition(200,0); toolbar.setSize(100,30);
+    InputState gesture; gesture.mousePos = {250,15};
+    gesture.mousePressed[0] = gesture.mouseDown[0] = true;
+    begin(); panel.update(gesture,0); toolbar.update(gesture,0); end();
+    check(toolbar.hasPointerCapture() && !panel.isDragging(), "Title toolbar lost click to panel drag");
+    gesture.mousePressed[0] = gesture.mouseDown[0] = false;
+    gesture.mouseReleased[0] = true;
+    begin(); panel.update(gesture,0); toolbar.update(gesture,0); end();
+    check(toolbarClicks == 1 && !router.capture, "Title toolbar release failed");
+    gesture.mouseReleased[0] = false;
+    gesture.mousePressed[0] = gesture.mouseDown[0] = true;
+    begin(); panel.update(gesture,0); toolbar.update(gesture,0); end();
+    gesture.mousePos = {500,300};
+    gesture.mousePressed[0] = gesture.mouseDown[0] = false;
+    gesture.mouseReleased[0] = true;
+    begin(); panel.update(gesture,0); toolbar.update(gesture,0); end();
+    check(toolbarClicks == 1 && !router.capture, "Outside toolbar release activated or stuck");
+    gesture.mousePos = {150,15}; gesture.mouseReleased[0] = false;
+    gesture.mousePressed[0] = gesture.mouseDown[0] = true;
+    begin(); panel.update(gesture,0); toolbar.update(gesture,0); end();
+    check(panel.isDragging(), "Unoccupied title bar stopped dragging");
+    begin(true); panel.update(gesture,0); toolbar.update(gesture,0); end();
+
     PlatformWindow::ScrollDelta wheel;
     wheel.addWheel(60, 120); wheel.addWheel(60, 60);
     check(wheel.x == 1 && wheel.y == 1.5f, "Wheel events were lost or rounded");

@@ -190,7 +190,7 @@ void UIPanel::update(const InputState& source, float dt) {
     // Handle dragging (lower priority than resize)
     if (draggable && !chromeConsumed) {
         // Start dragging if clicking on title bar
-        if (inTitleBar && input.mousePressed[0] && !dragging && !resizing && capturePointer()) {
+        if (inTitleBar && !isTitleBarControlAt(m) && input.mousePressed[0] && !dragging && !resizing && capturePointer()) {
             dragging = true;
             dragOffset = {m.x - position.x, m.y - position.y};
         }

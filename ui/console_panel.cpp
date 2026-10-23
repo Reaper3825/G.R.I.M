@@ -142,6 +142,16 @@ ConsolePanel::ConsolePanel()
     addTemporarySession();
 }
 
+bool ConsolePanel::isTitleBarControlAt(const Vec2& point) const
+{
+    if (!toolbarBox || !toolbarBox->isVisible()) return false;
+    const float toolbarW = toolbarBox->getSize().x;
+    const float toolbarX = position.x + size.x - toolbarW - 12.0f;
+    const float toolbarY = position.y + (titleBarHeight - 25.0f) * 0.5f;
+    return point.x >= toolbarX && point.x <= toolbarX + toolbarW &&
+           point.y >= toolbarY && point.y <= toolbarY + 25.0f;
+}
+
 void ConsolePanel::update(const InputState& input, float dt)
 {
     // Call base panel update to handle drag/resize

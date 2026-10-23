@@ -9,6 +9,8 @@ if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
 $sources = @('tests/ui_input_foundation_tests.cpp','ui/primitives/ui_inputbox.cpp','ui/primitives/ui_textarea.cpp','ui/primitives/ui_button.cpp','ui/primitives/ui_slider.cpp','ui/primitives/ui_scrollbox.cpp','ui/primitives/ui_dropdown.cpp','helpers/widget.cpp','helpers/vector2.cpp','ui/ui_focus_manager.cpp')
 $arguments = @('/nologo','/std:c++17','/EHsc','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
+$sources += 'ui/primitives/ui_panel.cpp'
+$sources += 'ui/primitives/ui_canvas.cpp', 'tests/ui_canvas_tests.cpp'
 $arguments += ('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"')
 $arguments += $sources | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $arguments += '/Fe:ui_input_foundation_tests.exe'

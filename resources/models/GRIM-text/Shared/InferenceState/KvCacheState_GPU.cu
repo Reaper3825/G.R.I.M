@@ -138,7 +138,7 @@ void KvCacheState::beginSession(cudaStream_t stream) {
 }
 
 void KvCacheState::advance(int n, cudaStream_t stream) {
-    if (n < 0) {
+    if (n < 0) { 
         throw std::runtime_error("KvCacheState::advance: negative n");
     }
     setSeqlen(host_seqlen + n, stream);

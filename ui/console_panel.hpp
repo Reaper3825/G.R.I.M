@@ -30,6 +30,7 @@ public:
     ConsoleHistory& getHistory();
 
 private:
+    bool isTitleBarControlAt(const Vec2& point) const override;
     struct SessionEntry {
         std::string id;
         std::string name;
