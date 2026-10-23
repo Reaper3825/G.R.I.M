@@ -1,0 +1,16 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Brass Lantern",
+  "root": "o1",
+  "entities": [
+    {
+      "id": "o1",
+      "name": "brass lantern",
+      "kind": "object",
+      "parent": "",
+      "description": "A small brass lantern with a curved handle and cloudy glass.",
+      "state": "open"
+    }
+  ]
+}

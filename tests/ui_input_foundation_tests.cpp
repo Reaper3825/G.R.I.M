@@ -59,6 +59,7 @@ static void end() { router.endFrame(); }
 void runCanvasTests();
 #ifdef GRIM_WORLD_LAB_TESTS
 void runWorldLabTests();
+void runWorldAssetTests();
 #endif
 #ifdef GRIM_TEXTWORLD_INTEGRATION
 void runTextWorldClientTests();
@@ -69,6 +70,7 @@ int main() {
 #endif
 #ifdef GRIM_WORLD_LAB_TESTS
     runWorldLabTests();
+    runWorldAssetTests();
 #endif
     runCanvasTests();
     // Console-style title controls update after panel chrome. They must win

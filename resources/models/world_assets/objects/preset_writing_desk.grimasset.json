@@ -1,0 +1,32 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Writing Desk",
+  "root": "s1",
+  "entities": [
+    {
+      "id": "s1",
+      "name": "writing desk",
+      "kind": "supporter",
+      "parent": "",
+      "description": "A compact desk with space for notes and small objects.",
+      "state": "open"
+    },
+    {
+      "id": "o1",
+      "name": "notebook",
+      "kind": "object",
+      "parent": "s1",
+      "description": "A notebook filled with blank pages.",
+      "state": "open"
+    },
+    {
+      "id": "o2",
+      "name": "pencil",
+      "kind": "object",
+      "parent": "s1",
+      "description": "A short pencil with a sharpened point.",
+      "state": "open"
+    }
+  ]
+}

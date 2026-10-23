@@ -1,0 +1,16 @@
+{
+  "entities": [
+    {
+      "description": "The room in a house where a bed kept.",
+      "id": "e1",
+      "kind": "room",
+      "name": "Bedroom",
+      "parent": "",
+      "state": "open"
+    }
+  ],
+  "format": "grim-world-asset",
+  "name": "New room",
+  "root": "e1",
+  "version": 1
+}

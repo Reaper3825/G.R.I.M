@@ -17,6 +17,8 @@ same core-plus-tab layout as DataHub.
   add doors and challenges, compile/play through the TextWorld worker, and record
   verified solutions. Save/load includes undo/redo and recovery.
   See [World Lab](../docs/WORLD_LAB.md).
+- **Assets** — create, edit, save, and insert independent room/object templates.
+  See the [feature reference and terminology index](../docs/WORLD_LAB_REFERENCE.md).
 
 ## Tokenizer diagnostics
 

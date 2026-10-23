@@ -1,0 +1,40 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Walled Garden",
+  "root": "r1",
+  "entities": [
+    {
+      "id": "r1",
+      "name": "Walled Garden",
+      "kind": "room",
+      "parent": "",
+      "description": "Low stone walls shelter flower beds and a patch of soft soil. A bench offers a quiet place to rest.",
+      "state": "open"
+    },
+    {
+      "id": "s1",
+      "name": "garden bench",
+      "kind": "supporter",
+      "parent": "r1",
+      "description": "A weathered bench beside the flower beds.",
+      "state": "open"
+    },
+    {
+      "id": "o1",
+      "name": "watering can",
+      "kind": "object",
+      "parent": "s1",
+      "description": "A green metal watering can.",
+      "state": "open"
+    },
+    {
+      "id": "o2",
+      "name": "sunflower seeds",
+      "kind": "object",
+      "parent": "r1",
+      "description": "A paper packet filled with sunflower seeds.",
+      "state": "open"
+    }
+  ]
+}

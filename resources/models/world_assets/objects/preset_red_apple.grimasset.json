@@ -1,0 +1,16 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Red Apple",
+  "root": "f1",
+  "entities": [
+    {
+      "id": "f1",
+      "name": "red apple",
+      "kind": "food",
+      "parent": "",
+      "description": "A ripe red apple that can be carried or eaten.",
+      "state": "open"
+    }
+  ]
+}

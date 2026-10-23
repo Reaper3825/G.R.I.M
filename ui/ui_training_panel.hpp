@@ -38,6 +38,7 @@
 class OverlayRenderer;
 class UIObservatoryView;
 class UIWorldLabView;
+class UIWorldAssetsView;
 struct InputState;
 
 // ─────────────────────────────────────────────────────────
@@ -61,7 +62,8 @@ enum class TrainingPanelTab : uint8_t {
     ModelConfig   = 3,
     Tokenizer     = 4,
     Observatory   = 5,
-    WorldLab      = 6
+    WorldLab      = 6,
+    Assets        = 7
 };
 
 // ─────────────────────────────────────────────────────────
@@ -113,6 +115,8 @@ private:
     std::unique_ptr<UIObservatoryView> observatory_;
     std::shared_ptr<UIButton> tabWorldLabBtn_;
     std::unique_ptr<UIWorldLabView> worldLab_;
+    std::shared_ptr<UIButton> tabAssetsBtn_;
+    std::unique_ptr<UIWorldAssetsView> worldAssets_;
 
     // ═════════════════════════════════════════════════════
     //  Home tab — Model Browser

@@ -6,6 +6,7 @@
 #include "ui/primitives/ui_dropdown.hpp"
 #include "ui/primitives/ui_scrollbox.hpp"
 #include "ui_world_session.hpp"
+#include "world_asset.hpp"
 #include <memory>
 
 class UIWorldLabView {
@@ -16,6 +17,8 @@ public:
     void update(const InputState&, float dt, const PanelRect&, uint64_t panel);
     void draw(OverlayRenderer&, const PanelRect&);
     void hide();
+    void insertAsset(const GRIM::WorldLab::Asset&);
+    std::function<void(const GRIM::WorldLab::Document&,const std::string&)> onSaveAsset;
 private:
     void layout(const PanelRect&);
     void refresh();
@@ -37,7 +40,7 @@ private:
     std::vector<std::string> doorKeys_;
     std::unique_ptr<UIWorldSession> session_;
     bool sessionVisible_ = false;
-    std::unique_ptr<UIButton> apply_, add_, spawn_, erase_;
+    std::unique_ptr<UIButton> apply_, add_, spawn_, erase_, saveAsset_;
     std::vector<std::string> locations_;
     PanelRect area_{}, inspector_{};
     std::string status_ = "Drag a compass handle to connect rooms or create a new room.";

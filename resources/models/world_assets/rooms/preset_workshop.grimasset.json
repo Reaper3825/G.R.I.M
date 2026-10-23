@@ -1,0 +1,48 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Small Workshop",
+  "root": "r1",
+  "entities": [
+    {
+      "id": "r1",
+      "name": "Small Workshop",
+      "kind": "room",
+      "parent": "",
+      "description": "Wood shavings cover the floor of a compact workshop. Tools rest on a workbench.",
+      "state": "open"
+    },
+    {
+      "id": "s1",
+      "name": "workbench",
+      "kind": "supporter",
+      "parent": "r1",
+      "description": "A heavy bench marked by years of careful work.",
+      "state": "open"
+    },
+    {
+      "id": "o1",
+      "name": "wooden mallet",
+      "kind": "object",
+      "parent": "s1",
+      "description": "A well-balanced mallet with a wooden head.",
+      "state": "open"
+    },
+    {
+      "id": "c1",
+      "name": "tool chest",
+      "kind": "container",
+      "parent": "r1",
+      "description": "A closed chest containing a useful key.",
+      "state": "closed"
+    },
+    {
+      "id": "k1",
+      "name": "iron key",
+      "kind": "key",
+      "parent": "c1",
+      "description": "An iron key ready to be matched to a door in your game.",
+      "state": "open"
+    }
+  ]
+}

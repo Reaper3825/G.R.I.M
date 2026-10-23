@@ -1,0 +1,48 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Cozy Cottage",
+  "root": "r1",
+  "entities": [
+    {
+      "id": "r1",
+      "name": "Cozy Cottage",
+      "kind": "room",
+      "parent": "",
+      "description": "A peaceful cottage with a stone hearth and a sturdy kitchen table.",
+      "state": "open"
+    },
+    {
+      "id": "s1",
+      "name": "kitchen table",
+      "kind": "supporter",
+      "parent": "r1",
+      "description": "A broad wooden table worn smooth by years of use.",
+      "state": "open"
+    },
+    {
+      "id": "f1",
+      "name": "bread loaf",
+      "kind": "food",
+      "parent": "s1",
+      "description": "A small loaf with a crisp golden crust.",
+      "state": "open"
+    },
+    {
+      "id": "c1",
+      "name": "pantry cupboard",
+      "kind": "container",
+      "parent": "r1",
+      "description": "A wooden cupboard for kitchen supplies.",
+      "state": "closed"
+    },
+    {
+      "id": "o1",
+      "name": "clay cup",
+      "kind": "object",
+      "parent": "c1",
+      "description": "A simple clay drinking cup.",
+      "state": "open"
+    }
+  ]
+}

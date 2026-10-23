@@ -2,6 +2,7 @@
 #include "training_panel/ui_training_panel_internal.hpp"
 #include "observatory/ui_observatory_view.hpp"
 #include "world_lab/ui_world_lab_view.hpp"
+#include "world_lab/ui_world_assets_view.hpp"
 #include "resources.hpp"
 #include "ai/grim_text_server_manager.hpp"
 
@@ -61,6 +62,13 @@ UITrainingPanel::UITrainingPanel()
     });
     tabWorldLabBtn_->setSize(100.0f, 28.0f);
     worldLab_ = std::make_unique<UIWorldLabView>(std::filesystem::path{}, std::filesystem::path(getResourcePath()) / "models" / "games");
+    tabAssetsBtn_ = std::make_shared<UIButton>("Assets", [this]() {setView(TrainingPanelTab::Assets);});
+    tabAssetsBtn_->setSize(80.0f,28.0f);
+    worldAssets_ = std::make_unique<UIWorldAssetsView>(std::filesystem::path(getResourcePath()) / "models" / "world_assets");
+    worldLab_->onSaveAsset=[this](const GRIM::WorldLab::Document& document,const std::string& root){
+        worldAssets_->capture(document,root);setView(TrainingPanelTab::Assets);
+    };
+    worldAssets_->onInsert=[this](const GRIM::WorldLab::Asset& asset){worldLab_->insertAsset(asset);setView(TrainingPanelTab::WorldLab);};
 
     // ══════════════════════════════════════════════════════
     //  Home tab — Model Browser widgets
@@ -242,6 +250,7 @@ UITrainingPanel::~UITrainingPanel() = default;
 // ============================================================
 
 void UITrainingPanel::setView(TrainingPanelTab tab) {
+    if(worldAssets_ && activeTab_==TrainingPanelTab::Assets && tab!=activeTab_)worldAssets_->hide();
     if (worldLab_ && activeTab_ == TrainingPanelTab::WorldLab && tab != activeTab_) worldLab_->hide();
     if (observatory_ && tab != TrainingPanelTab::Observatory) observatory_->hide();
     activeTab_ = tab;
@@ -257,6 +266,7 @@ void UITrainingPanel::setView(TrainingPanelTab tab) {
 }
 
 void UITrainingPanel::setVisible(bool value) {
+    if(!value && worldAssets_)worldAssets_->hide();
     if (!value && worldLab_ && activeTab_ == TrainingPanelTab::WorldLab) worldLab_->hide();
     UIPanel::setVisible(value);
     if (!value && observatory_) observatory_->hide();
@@ -281,6 +291,7 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     if (!isVisible()) { if (observatory_) observatory_->hide(); return; }
     const bool wasMinimized = isMinimized();
     UIPanel::update(input, dt);
+    if (!wasMinimized && isMinimized() && worldAssets_)worldAssets_->hide();
     if (!wasMinimized && isMinimized() && activeTab_ == TrainingPanelTab::WorldLab && worldLab_) worldLab_->hide();
     if (!isVisible() || isMinimized()) { if (observatory_) observatory_->hide(); return; }
 
@@ -292,11 +303,17 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     tabTokenizerBtn_->update(input, dt);
     tabObservatoryBtn_->update(input, dt);
     tabWorldLabBtn_->update(input, dt);
+    tabAssetsBtn_->update(input, dt);
 
     // Bottom bar buttons — always active
 
     // Tab-specific updates
     switch (activeTab_) {
+        case TrainingPanelTab::Assets: {
+            PanelRect content=getContentRect();
+            content.origin.y+=(kContentTopY-kTabBarY);content.size.y-=(kContentTopY-kTabBarY);
+            worldAssets_->update(input,dt,content,getPanelID());break;
+        }
         case TrainingPanelTab::WorldLab: {
             PanelRect content = getContentRect();
             content.origin.y += (kContentTopY - kTabBarY);
@@ -410,6 +427,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     tabTokenizerBtn_->setPosition(tabX + 435.0f, position.y + kTabBarY);
     tabObservatoryBtn_->setPosition(tabX + 530.0f, position.y + kTabBarY);
     tabWorldLabBtn_->setPosition(tabX + 650.0f, position.y + kTabBarY);
+    tabAssetsBtn_->setPosition(tabX + 755.0f, position.y + kTabBarY);
 
     tabHomeBtn_->drawOverlay(renderer, position);
     tabKnowledgeGapsBtn_->drawOverlay(renderer, position);
@@ -418,6 +436,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     tabTokenizerBtn_->drawOverlay(renderer, position);
     tabObservatoryBtn_->drawOverlay(renderer, position);
     tabWorldLabBtn_->drawOverlay(renderer, position);
+    tabAssetsBtn_->drawOverlay(renderer, position);
 
     // Active tab indicator (2px underline)
     float indicatorX = tabX;
@@ -429,6 +448,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         case TrainingPanelTab::ModelConfig:   indicatorX = tabX + 315.0f; indicatorW = 115.0f; break;
         case TrainingPanelTab::Tokenizer:     indicatorX = tabX + 435.0f; indicatorW = 90.0f;  break;
         case TrainingPanelTab::Observatory:   indicatorX = tabX + 530.0f; indicatorW = 115.0f; break;
+        case TrainingPanelTab::Assets:        indicatorX = tabX + 755.0f; indicatorW = 80.0f; break;
         case TrainingPanelTab::WorldLab:      indicatorX = tabX + 650.0f; indicatorW = 100.0f; break;
     }
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {indicatorW, 2.0f},
@@ -461,6 +481,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         case TrainingPanelTab::ModelConfig:   drawModelConfigTab(renderer, content);   break;
         case TrainingPanelTab::Tokenizer:     drawTokenizerTab(renderer, content);     break;
         case TrainingPanelTab::Observatory:   observatory_->draw(renderer, content);    break;
+        case TrainingPanelTab::Assets:        worldAssets_->draw(renderer, content); break;
         case TrainingPanelTab::WorldLab:      worldLab_->draw(renderer, content);       break;
     }
 

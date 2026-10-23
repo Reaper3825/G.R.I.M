@@ -82,6 +82,13 @@ void UIWorldCanvas::fitWorld() {
 }
 bool UIWorldCanvas::updateCanvasContent(const InputState& source,float) {
     const auto input=routeInput(source);
+    if(selectionOnly) {
+        if(input.mousePressed[0] && input.mouseInputEnabled) {
+            const auto id=hitEntity(screenToWorld(input.mousePos));
+            if(!id.empty()){select(id);return true;}
+        }
+        return false;
+    }
     if(input.keyPressed[VK_ESCAPE]) {cancelInput();return true;}
     if(!drag_.empty() && !hasPointerCapture()) {cancelInput();return false;}
     if(!drag_.empty()) {
@@ -177,7 +184,7 @@ void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
             drawWorldText(r,{at.x+12+indent,y},child->name,changed?Warning:TextSecondary,13);
         }
         r.popClipRect();
-        for(const auto& dir:directions) {
+        if(!selectionOnly)for(const auto& dir:directions) {
             const auto pt=port(p.id,dir);
             drawWorldRect(r,{{pt.x-5,pt.y-5},{10,10}},Primary);
             drawWorldText(r,{pt.x+8,pt.y-7},dir.substr(0,1),TextMuted,11);

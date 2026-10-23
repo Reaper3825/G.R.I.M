@@ -1,0 +1,32 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Supply Chest",
+  "root": "c1",
+  "entities": [
+    {
+      "id": "c1",
+      "name": "supply chest",
+      "kind": "container",
+      "parent": "",
+      "description": "A small chest holding supplies for an adventure.",
+      "state": "closed"
+    },
+    {
+      "id": "k1",
+      "name": "brass key",
+      "kind": "key",
+      "parent": "c1",
+      "description": "A brass key ready to be matched to a door in your game.",
+      "state": "open"
+    },
+    {
+      "id": "o1",
+      "name": "folded map",
+      "kind": "object",
+      "parent": "c1",
+      "description": "A folded map with faded ink. Its destination is yours to define.",
+      "state": "open"
+    }
+  ]
+}

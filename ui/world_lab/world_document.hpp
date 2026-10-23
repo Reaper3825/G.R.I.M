@@ -42,12 +42,15 @@ struct Document {
     static Document parse(const nlohmann::json& value);
     static Document initial();
 };
+void saveJsonFile(const std::filesystem::path&, const nlohmann::json&);
+nlohmann::json loadJsonFile(const std::filesystem::path&);
 std::string opposite(const std::string& direction);
 
 // Snapshot transactions keep multi-entity edits atomic. UI gestures commit once.
 class Editor {
 public:
     Editor();
+    void reset(const Document& document);
     const Document& document() const { return current_; }
     bool change(const std::function<void(Document&)>& operation);
     bool undo();

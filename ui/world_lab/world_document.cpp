@@ -173,6 +173,7 @@ Document Document::parse(const nlohmann::json& j) {
 }
 Document Document::initial() { Document d; auto id=d.addRoom(80,80); d.find(id)->name="Starting room"; return d; }
 Editor::Editor():current_(Document::initial()) {}
+void Editor::reset(const Document& document) {document.validate();current_=document;undo_.clear();redo_.clear();saved_=current_.json();}
 bool Editor::change(const std::function<void(Document&)>& operation) {
     auto candidate=current_; operation(candidate); candidate.validate();
     if(candidate.json()==current_.json()) return false;
@@ -184,6 +185,9 @@ bool Editor::redo() { if(redo_.empty()) return false; undo_.push_back(current_);
 bool Editor::dirty() const { return current_.json()!=saved_; }
 void Editor::save(const std::filesystem::path& path) {
     current_.validate(); const auto serialized=current_.json();
+    saveJsonFile(path,serialized);saved_=serialized;
+}
+void saveJsonFile(const std::filesystem::path& path,const nlohmann::json& serialized) {
     require(!path.empty(),"Enter a world file path");
     // Write alongside the destination, then replace atomically. Never truncate the old save.
     // An exclusively created staging directory avoids clobbering an unrelated
@@ -211,14 +215,16 @@ void Editor::save(const std::filesystem::path& path) {
 #else
     std::filesystem::rename(temp,path);
 #endif
-    saved_=serialized;
 }
-void Editor::load(const std::filesystem::path& path) {
+nlohmann::json loadJsonFile(const std::filesystem::path& path) {
     require(std::filesystem::file_size(path)<=16*1024*1024,"World file exceeds 16 MB");
     std::ifstream in(path,std::ios::binary); require(bool(in),"Cannot open world file");
     nlohmann::json j; in >> j; in >> std::ws;
     require(in.eof(),"Unexpected trailing data in world file");
-    auto candidate=Document::parse(j);
+    return j;
+}
+void Editor::load(const std::filesystem::path& path) {
+    auto candidate=Document::parse(loadJsonFile(path));
     change([&](Document& d){d=candidate;}); saved_=candidate.json();
 }
 void Editor::newWorld() { change([](Document& d){d=Document::initial();}); saved_=nullptr; }

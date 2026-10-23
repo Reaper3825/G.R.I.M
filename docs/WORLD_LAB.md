@@ -1,5 +1,8 @@
 # World Lab — Stages 1 and 2
 
+For the full control reference, customization guide, terminology index, and agent
+maintenance notes, see [World Lab and Assets reference](WORLD_LAB_REFERENCE.md).
+
 World Lab is an authoring tab in the Training Control panel. It stores an editable
 world locally. Validate and Compile & Play start an isolated TextWorld Docker
 worker on demand. No model, inference service, or training process is started.
@@ -167,3 +170,43 @@ These verify locked-door gameplay, win/failure, reset, independent solution repl
 failed-compilation preservation, single-flight transport, cancellation/restart,
 version migration, and challenge reference cleanup. No `grim.exe` build/run is
 part of either test command.
+
+## Reusable assets
+
+Training Control now includes an **Assets** tab. The library lives under
+`resources/models/world_assets/rooms` and `resources/models/world_assets/objects`.
+Each version-1 `.grimasset.json` contains a library name, root entity ID, and a
+self-contained entity tree. It does not contain passages, player start, goals,
+solutions, or references to other games. A room includes all contained objects;
+a container or supporter includes all its descendants.
+
+- In World Lab, select a room or object and use **Save as asset** in Inspect
+  (scroll down if necessary). Assets opens a separate editable copy; press Save.
+- To start from scratch, choose a type in the inspector and click **New asset**.
+- Edit the library name at the top. Select an item in the canvas to edit its
+  in-game name, description, or container state. Choose an object type and
+  **Add inside** to add contents to the selected room/container/supporter.
+- **Save** updates the current asset; **Save copy** writes a separate file.
+  Changing the library name updates its browser label without moving its file.
+- **Saved assets** lists both categories and refreshes while its menu is closed.
+  Malformed files are labelled invalid; attempting to open one preserves the editor.
+- **Add to world** inserts into the currently open World Lab game and switches
+  back to World Lab. Rooms appear in the canvas center. For objects, first select
+  a room, container, or supporter in World Lab. Each insertion is one undoable
+  operation, remaps every entity ID and parent, and adds numeric suffixes to
+  duplicate names. Save the game to persist the inserted copy.
+- **Undo/Redo** cover asset edits. **Discard edits** restores the last loaded or
+  saved snapshot. Unsaved edits block New, opening another asset, capture from
+  World Lab, and deletion until saved or explicitly discarded. Switching tabs
+  preserves the draft in memory; asset drafts are not autosaved across app exits.
+- **Delete asset** moves a saved asset into `world_assets/.trash`. Restore its
+  file to `rooms` or `objects` to recover it. Existing games retain their copies.
+
+The preview canvas supports selection, pan and zoom. Room topology and the
+synthetic preview room for standalone objects cannot be edited in this tab.
+Asset copies are independent; linked updates and multi-room templates are not
+implemented. TextWorld still validates playable names and nesting at compilation.
+
+The host-only UI test command above also covers asset round trips, invalid
+references, repeated insertion, unique names/IDs, failed placement rollback,
+atomic undo, saving, library selection, dirty-edit protection and recoverable deletion.
