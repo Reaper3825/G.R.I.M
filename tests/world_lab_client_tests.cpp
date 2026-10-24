@@ -40,6 +40,7 @@ void runTextWorldClientTests(){
     const Document d=example.document();
     TextWorldClient client;
     auto start=request(client,{{"op","compile"},{"document",d.gameJson()}});
+    check(start.at("action_catalog")==actionCatalog(),"Runtime catalog differs from native action definitions");
     check(start.at("state").at("room_id")==d.spawn,"Client did not receive initial room");
     const std::vector<std::string> solution{"open toolbox","take brass key from toolbox","unlock oak door with brass key","open oak door","go east"};
     nlohmann::json last;
@@ -59,6 +60,17 @@ void runTextWorldClientTests(){
     auto click=[&](float x,float y){InputState input;input.mousePos={x,y};input.mousePressed[0]=input.mouseDown[0]=true;frame(input);input.mousePressed[0]=input.mouseDown[0]=false;input.mouseReleased[0]=true;frame(input);};
     auto ready=[&]{const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(135);while(panel.busy() && std::chrono::steady_clock::now()<deadline){frame({});std::this_thread::sleep_for(std::chrono::milliseconds(20));}check(!panel.busy(),"Play panel request timed out");};
     frame({});click(50,48);ready();check(panel.status()=="Ready for a command.","Play panel did not compile the example");
+    // Preparing a typed action does not execute it. Dropdown selection cannot
+    // click through to the Prepare button underneath its popup.
+    click(280,202); // Actions composer.
+    click(40,292);click(40,343); // Container parameter -> toolbox.
+    check(panel.preparedCommand().empty(),"Parameter popup clicked through to Prepare");
+    click(40,354);
+    check(panel.preparedCommand()=="close toolbox","Play composer failed typed binding");
+    panel.prepareCommand("");click(280,202); // Close composer.
+    click(40,202);click(40,254); // Latest live available command.
+    check(!panel.preparedCommand().empty(),"Live available-command picker failed");
+    panel.prepareCommand("");
     click(40,86);ready();check(panel.status()=="Recording from the starting state.","Record did not reset the game");
     for(const auto& command:solution){
         click(20,166);InputState input;input.textInput=command;frame(input);input.textInput.clear();input.keyPressed[VK_RETURN]=true;frame(input);ready();

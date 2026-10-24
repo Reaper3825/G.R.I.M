@@ -48,6 +48,10 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
     session_=std::make_unique<UIWorldSession>(editor_);
     session_->onErrorEntity=[this](const std::string& id){canvas_.selected=id;status_="TextWorld validation points to "+id;refresh();};
     session_->onState=[this](const nlohmann::json& state){canvas_.setPlayState(state);};
+    actions_.beforePrepare=[this]{return apply();};
+    actions_.onPrepare=[this](const std::string& command){
+        sessionVisible_=true;session_->setChallenge(false);session_->prepareCommand(command);
+    };
     button("Challenge",[this]{if(!apply())return;sessionVisible_=true;session_->setChallenge(true);});
     button("Play",[this]{if(!apply())return;sessionVisible_=true;session_->setChallenge(false);});
     button("Inspect",[this]{if(!apply())return;sessionVisible_=false;refresh();});
@@ -63,6 +67,7 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
     doorState_=std::make_unique<UIDropdown>("",std::vector<std::string>{"open","closed","locked"},0,[](int,const std::string&){});
     doorKey_=std::make_unique<UIDropdown>("",std::vector<std::string>{"No key"},0,[](int,const std::string&){});
     apply_=std::make_unique<UIButton>("Apply changes",[this]{apply();});
+    actionsShortcut_=std::make_unique<UIButton>("Actions",[this]{if(apply())inspectorScroll_.scrollTo(500);});
     add_=std::make_unique<UIButton>("+ Add here",[this]{act([this]{addObject();});});
     spawn_=std::make_unique<UIButton>("Set player start",[this]{act([this]{if(!apply())return;editor_.change([&](Document& d){d.spawn=canvas_.selected;});refresh();});});
     erase_=std::make_unique<UIButton>("Delete selection",[this]{act([this]{if(!apply())return;editor_.change([&](Document& d){d.erase(canvas_.selected);});refresh();status_="Deleted selection and its contents. Undo restores them.";});});
@@ -89,7 +94,7 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
 }
 std::vector<Widget*> UIWorldLabView::controls() {
     std::vector<Widget*> result{&path_,&title_,games_.get()};
-    if(!sessionVisible_)for(auto* w:std::vector<Widget*>{&name_,&description_,kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get(),apply_.get(),add_.get(),spawn_.get(),erase_.get(),saveAsset_.get()})result.push_back(w);
+    if(!sessionVisible_)for(auto* w:std::vector<Widget*>{&name_,&description_,kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get(),apply_.get(),add_.get(),spawn_.get(),erase_.get(),saveAsset_.get(),actionsShortcut_.get()})result.push_back(w);
     for(auto& b:toolbar_)result.push_back(b.get());
     return result;
 }
@@ -144,6 +149,7 @@ void UIWorldLabView::refresh() {
     location_->setItems(labels);location_->setSelectedIndex(selected);
     if(e)state_->setSelectedIndex(e->state=="closed"?1:0);
     if(session_)session_->refresh();
+    actions_.select(canvas_.selected);
 }
 void UIWorldLabView::addObject() {
     if(!apply())return;
@@ -164,10 +170,11 @@ void UIWorldLabView::layout(const PanelRect& content) {
     const float canvasWidth=std::max(80.f,w-paneWidth-12);
     canvas_.setPosition(x,y+112);canvas_.setSize(canvasWidth,std::max(40.f,content.size.y-174));
     inspector_={{x+canvasWidth+12,y+112},{paneWidth,std::max(40.f,content.size.y-174)}};
-    inspectorScroll_.setPosition(inspector_.origin);inspectorScroll_.setSize(inspector_.size);inspectorScroll_.setContentHeight(490);
+    inspectorScroll_.setPosition(inspector_.origin);inspectorScroll_.setSize(inspector_.size);inspectorScroll_.setContentHeight(1040);
     x=inspector_.origin.x+10;y=inspector_.origin.y-inspectorScroll_.getScrollOffset();
     place(name_,x,y+48,232);place(description_,x,y+102,232);
     place(*apply_,x,y+140,150);
+    place(*actionsShortcut_,x+156,y+140,76);
     place(*location_,x,y+204,168);place(*state_,x,y+260,168);
     place(*kind_,x,y+322,130);place(*add_,x+138,y+322,94);
     place(*spawn_,x,y+366,150);place(*erase_,x,y+408,150);
@@ -232,18 +239,23 @@ void UIWorldLabView::update(const InputState& input,float dt,const PanelRect& co
         w->setPanelID(panel);if(!w->isVisible())continue;
         auto* dropdown=dynamic_cast<UIDropdown*>(w);
         if(dropdown)continue;
-        const bool isInspector=w==&name_ || w==&description_ || w==apply_.get() || w==add_.get() || w==spawn_.get() || w==erase_.get() || w==saveAsset_.get();
+        const bool isInspector=w==&name_ || w==&description_ || w==apply_.get() || w==add_.get() || w==spawn_.get() || w==erase_.get() || w==saveAsset_.get() || w==actionsShortcut_.get();
         w->update(isInspector?clipped.clipped(inspector_.origin,inspector_.size):clipped,dt);
     }
     // A popup may have closed above; don't process the same press twice.
     for(auto* dropdown:dropdowns)if(dropdown!=expanded && dropdown->isVisible())dropdown->update(dropdownInput(dropdown),dt);
     if(sessionVisible_)session_->update(clipped,dt,inspector_);
-    else{inspectorScroll_.setPanelID(panel);inspectorScroll_.update(clipped,dt);}
+    else{
+        actions_.update(clipped.clipped(inspector_.origin,inspector_.size),dt,
+            {{inspector_.origin.x+10,inspector_.origin.y+500-inspectorScroll_.getScrollOffset()},{232,530}},panel);
+        inspectorScroll_.setPanelID(panel);inspectorScroll_.update(clipped,dt);
+    }
     canvas_.update(clipped,dt);
     recoveryTimer_+=std::max(0.f,dt);
     if(recoveryTimer_>=10){recoveryTimer_=0;act([this]{if(apply())autosave();});}
 }
 void UIWorldLabView::hide() {
+    actions_.hide();
     act([this]{if(apply())autosave();});
     canvas_.cancelInput();inspectorScroll_.cancelInput();for(auto* w:controls())w->cancelInput();
     games_->collapse();gamesTimer_=2;
@@ -287,7 +299,8 @@ void UIWorldLabView::draw(OverlayRenderer& r,const PanelRect& content) {
             r.drawText({x,y+240},"Matching key",TextMuted,12);
         }
     } else r.drawText({x,y+48},"Select a room or object.",TextMuted,13);
-    for(auto* w:std::vector<Widget*>{apply_.get(),kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get(),add_.get(),spawn_.get(),erase_.get(),saveAsset_.get()})if(w->isVisible())w->drawOverlay(r,{});
+    for(auto* w:std::vector<Widget*>{apply_.get(),kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get(),add_.get(),spawn_.get(),erase_.get(),saveAsset_.get(),actionsShortcut_.get()})if(w->isVisible())w->drawOverlay(r,{});
+    actions_.draw(r,{{x,y+500},{232,530}});
     for(auto* dropdown:{kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get()})if(dropdown->isVisible() && dropdown->isExpanded())dropdown->drawExpandedList(r,{});
     r.popClipRect();
     }

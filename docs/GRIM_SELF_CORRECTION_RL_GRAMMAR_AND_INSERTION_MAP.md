@@ -11,13 +11,31 @@ Existing symbols below were inspected in the repository. Grammar labeled
 **proposed** makes the pending work concrete; it does not silently change the
 current tokenizer, corpus, configuration, or reasoning-state wire contract.
 
+**Scope after the recurrent DDEA transition:** the
+[reasoning data contract](GRIM_REASONING_DATA_CONTRACT.md#11-recurrent-boundary-and-recipient-contract)
+now defines optional Define/Execute phases and a per-cycle Answer payload.
+For TextWorld, DDE is observed and only a validated completed Answer is submitted
+to the environment; feedback then precedes the next cycle. Ordinary user
+responses require no environment/tool call. Span pauses do not independently
+authorize dispatch, and answer completion does not imply challenge completion.
+
+The TOOL/READ grammar and two-attempt grading boundaries below remain a separate,
+pending tool-curriculum design. In particular, dispatch at `</TOOL>` and treating
+each `</answer>` as the grading endpoint must not be copied into the recurrent
+TextWorld controller. Reconcile those policies explicitly if that curriculum
+adopts the new controller; this documentation update does not implement or
+silently change its parser, training schedule, or reward policy.
+
 ## 1. Grammar: what each construct means
 
 ### 1.1 Supplied context and generated phases
 
-The current canonical order is prompt, target state, criteria/evidence,
+The current single-block canonical order is prompt, target state, criteria/evidence,
 constraints, persisted knowns/unknowns, then determine, define, execute, update,
-and answer. Empty fields can be omitted according to the current contract.
+and answer. Define and Execute are optional and need not occur together; no
+phase should be invented merely to force tool use. Empty fields can be omitted
+according to the current contract. Recurrent tasks can span multiple cycles;
+the current source ConceptBlock still has one field per phase.
 The supplied prefix is context; the continuation is generated behavior.
 
 Goal ownership for the planned RL path is undecided. The goal rows below describe
@@ -37,8 +55,8 @@ anchored to the task verifier in either case.
 | `<define>` | Model declares local variables and binds supplied inputs | Proposed declaration parser prepares the episode variable store |
 | `<execute>` | Model emits actions and explicit reads | Proposed tool/read parser produces runtime events |
 | `<update>` | Model describes what the observed results established | Does not itself mutate the authoritative variable store |
-| `<answer>` | Model starts its terminal response | Collect the response for grading |
-| `</answer>` | Model closes the answer | Immediately freezes the attempt record, independently of success |
+| `<answer>` | Model starts its external response for this cycle | This tool-curriculum proposal collects it for grading; TextWorld instead receives its validated command |
+| `</answer>` | Model closes the current response | This proposal freezes its attempt record; recurrent TextWorld submits once and waits for feedback, without assuming task completion |
 
 The current SFT configuration treats update as context. RL action provenance is
 a separate concern: if the policy samples update tokens, those tokens are
@@ -94,9 +112,11 @@ The complete `</READ>` commits the read request; returned data is runtime
 context, never a model-authored result. A valid read remains available in either
 injection mode.
 
-Proposed parser scope: declarations/input bindings are actionable only within
+Proposed TOOL/READ parser scope (not the TextWorld answer adapter): declarations/input bindings are actionable only within
 define; tool calls and reads are actionable only within execute. Text quoted in
-the prompt, tool output, feedback, or answer must never dispatch an action.
+the prompt, tool output, feedback, or answer must never dispatch a TOOL/READ action.
+TextWorld's separate answer adapter handles the completed answer as a game
+command; it does not run the TOOL/READ parser over it.
 Only sampled action tokens enter the executable parser. Returned text that
 contains `</answer>` must not close an attempt. A generated answer close is the
 independent boundary even if other grammar is malformed; record that malformed

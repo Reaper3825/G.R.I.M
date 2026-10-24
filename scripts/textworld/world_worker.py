@@ -9,6 +9,7 @@ import re
 import time
 import traceback
 from pathlib import Path
+from action_catalog import action_catalog
 
 TYPES = {"room": "r", "object": "o", "key": "k", "container": "c",
          "supporter": "s", "food": "f"}
@@ -210,7 +211,8 @@ class Session:
             self.mapping.update({entity.name: ident for ident, entity in mapping.items()})
             self.commands = []
             self.done = False
-            return {"state": self.observation(state), "warnings": warnings}
+            return {"state": self.observation(state), "warnings": warnings,
+                    "action_catalog": action_catalog()}
         need(self.env is not None, "Compile and play a world first")
         if op == "reset":
             state = self.env.reset()

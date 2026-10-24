@@ -7,6 +7,15 @@ Companion: [grammar, commit boundaries, and phase-by-phase mechanism insertion m
 It expands the integration points below and marks proposed grammar separately
 from current executable behavior.
 
+Scope note: the [reasoning data contract](GRIM_REASONING_DATA_CONTRACT.md)
+now specifies recurrent DDEA with optional Define/Execute and Answer as the
+per-cycle external payload. TextWorld receives only that answer command, then
+returns feedback for the next cycle; ordinary user responses need no tool call.
+This TODO's two-attempt tool-training schedule and Execute-based TOOL/READ design
+remain a separately scoped proposal, not the TextWorld interaction contract.
+Do not equate each environment-command answer with a terminal challenge answer
+or apply the two-attempt budget to environment steps without an explicit design.
+
 The objective is goal-directed tool use: choose an appropriate available tool,
 bind valid arguments, interpret its actual result, and satisfy the supplied
 goal and constraints. Self-correction means using execution and goal-check

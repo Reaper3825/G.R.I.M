@@ -2,10 +2,15 @@
 
 Verified against the repository implementation on 2026-10-23.
 
-This guide covers the game-authoring system in **Training Control → World Lab**
+This guide covers the environment-authoring system in **Training Control → World Lab**
 and **Training Control → Assets**. Challenge, Play, and Inspect are modes within
 World Lab, not separate top-level tabs. The other Training Control tabs are
 covered by [the panel README](../ui/UI_TRAINING_PANEL_README.md).
+
+Physical navigation is the current pilot. The broader direction includes other
+navigation/action tasks, such as simulated UI workflows and problem solving.
+Those mechanics are not implemented yet; the current schema and worker still
+use TextWorld's physical-world subset.
 
 ## Contents
 
@@ -154,6 +159,34 @@ No win conditions means no authored victory goal. A world with neither wins nor
 fails is an exploration sandbox; a world with only fail conditions can still lose.
 
 ## Playtesting and solutions
+
+**Inspecting and preparing actions**
+
+Select an entity or passage, then choose **Actions** beside Apply changes to
+scroll to its supported TextWorld rules. The same inspector is available in
+Assets through **Actions** beside Apply. The catalog shows command templates,
+typed parameter choices, required facts, removed facts, and added facts. These
+are definitions from TextWorld 1.7, not an evaluation of the current play state.
+Different rule IDs may share a command, such as the examination rules for items
+in different locations. Container lock/unlock rules are visible with a notice
+that matching-container-key authoring is not yet supported.
+
+In World Lab, bind any remaining parameters and choose **Prepare command** to
+open Play with the command in its editable field. Preparation does not execute
+the action or change the authored starting state. Review it, then Send. Asset
+inspection does not run commands; insert the asset into a world to playtest it.
+
+In Play, **Actions** toggles a compact composer for all supported built-in rules.
+Choose an action, bind its parameters, then Prepare command and Send. Entity
+bindings use IDs; names are resolved when preparing the command. Free-text input
+remains available. The **Live available commands** dropdown fills the command
+field from the latest interpreter state, even while inspecting an older history
+entry. It is hidden while busy, after completion, or when compilation is stale.
+
+The built-in catalog is read-only. It is an offline snapshot generated from the
+installed knowledge base; compilation checks it against the runtime catalog. A
+mismatch blocks preparation in the Play composer and reports the discrepancy.
+Custom action authoring and non-compass transitions remain future work.
 
 | Control | Behavior |
 |---|---|
@@ -353,6 +386,9 @@ directory and atomic destination replacement; failed writes preserve the old fil
 | `ui/world_lab/world_asset.hpp`, `.cpp` | Asset schema, extraction, validation, synthetic previews, insertion/remapping, naming, file discovery. |
 | `ui/world_lab/ui_world_assets_view.hpp`, `.cpp` | Independent asset editor, library controls, draft protection, save/copy/archive. |
 | `ui/world_lab/ui_world_session.hpp`, `.cpp` | Challenge UI, play controls, async responses, command history and solution recording. |
+| `ui/world_lab/world_actions.*`, `ui_world_actions.*` | Shared catalog access, typed ID binding, action inspection and command composition. |
+| `ui/world_lab/textworld_action_catalog.generated.hpp` | Generated offline TextWorld rules; do not edit by hand. |
+| `scripts/textworld/action_catalog.py` | Exports native TextWorld rules for offline inspection and runtime compatibility checks. |
 | `ui/world_lab/textworld_client.hpp`, `.cpp` | Hidden Docker process, asynchronous request lifecycle, timeouts, cancellation, mailbox transport and cleanup. |
 | `scripts/textworld/world_worker.py` | Native-to-TextWorld translation, compiler/interpreter operations, facts, win/loss conditions and solution replay. |
 | `ui/primitives/ui_canvas.*`, `ui/input/ui_input_router.hpp` | Shared canvas transforms, gestures, focus, capture and popup routing. |
@@ -426,6 +462,35 @@ Future model-driven gameplay, training episode export, curriculum generation,
 linked asset updates, multi-room templates, asset tags/search, and arbitrary
 TextWorld game import are not implemented. Treat them as new scoped work, not as
 existing features to build assumptions around.
+
+### Recurrent model interaction contract (selected; integration pending)
+
+The [GRIM reasoning contract](GRIM_REASONING_DATA_CONTRACT.md) governs the model
+side of future challenge assignment. The Goal describes the desired outcome,
+success criteria, and constraints. The TextWorld quest supplies executable
+environment checks. Align them explicitly; criterion prose does not become a
+predicate automatically, and not every GRIM constraint is an environment fact.
+
+Each model cycle follows Determine, optional Define, optional Execute, and
+Answer, with optional Update where appropriate. Define and Execute need not
+occur together. They are working context observed at span boundaries, not
+TextWorld commands. Only the contents of the newly completed Answer span are
+validated as one command and submitted to the environment. Submission must be
+tracked once per answer instance; cumulative decoded trajectories must not be
+resent as commands.
+
+The returned observation and verified status become permitted context before the
+next cycle. A requested transition is not an observed result. Retain the active
+Goal while the challenge continues; emitting Answer does not prove victory or
+end the challenge. Observations must not leak hidden world facts, saved solutions,
+or future results. Ordinary user-facing responses use the same optional-phase
+contract without necessarily submitting anything to an environment or tool.
+
+Span-boundary pause/resume exists in GRIM inference. Answer dispatch, runtime
+feedback insertion, challenge sequencing, and recurrent episode export remain
+pending. The current source ConceptBlock stores one instance of each phase;
+neither a whole challenge nor every environment step is assumed to map 1:1 to
+an SFT block. This describes the intended integration, not new Play-tab behavior.
 
 ## Validation workflow
 

@@ -13,6 +13,7 @@ $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/wd4251','/DGRIM_BUILD_HOST
 $sources += 'ui/primitives/ui_panel.cpp'
 $sources += 'ui/primitives/ui_canvas.cpp', 'tests/ui_canvas_tests.cpp'
 if ($WorldLab -or $TextWorld) {
+    $sources += 'ui/world_lab/world_actions.cpp', 'ui/world_lab/ui_world_actions.cpp'
     $sources += 'ui/world_lab/world_asset.cpp', 'ui/world_lab/ui_world_assets_view.cpp', 'ui/world_lab/world_document.cpp', 'ui/world_lab/ui_world_canvas.cpp', 'ui/world_lab/ui_world_lab_view.cpp', 'ui/world_lab/ui_world_session.cpp', 'ui/world_lab/textworld_client.cpp', 'tests/world_lab_tests.cpp', 'tests/world_asset_tests.cpp'
     $arguments += '/DGRIM_WORLD_LAB_TESTS'
 }

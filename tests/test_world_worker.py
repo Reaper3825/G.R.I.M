@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "textwo
 if Path("/worker").exists():
     sys.path.insert(0, "/worker")
 from world_worker import Session, WorldError, build_world
+from action_catalog import action_catalog
 
 
 def puzzle():
@@ -29,6 +30,20 @@ SOLUTION = ["open toolbox", "take brass key from toolbox", "unlock oak door with
 
 
 class WorkerTests(unittest.TestCase):
+    def test_action_catalog_matches_native_snapshot(self):
+        root = Path(__file__).resolve().parents[1]
+        header = root / "ui/world_lab/textworld_action_catalog.generated.hpp"
+        if Path("/catalog/textworld_action_catalog.generated.hpp").exists():
+            header = Path("/catalog/textworld_action_catalog.generated.hpp")
+        import json
+        snapshot = json.loads(header.read_text().split('R"catalog(', 1)[1].split(')catalog"', 1)[0])
+        self.assertEqual(action_catalog(), snapshot)
+        catalog = {a["id"]: a for a in snapshot["actions"]}
+        self.assertEqual(catalog["unlock/d"]["command"], "unlock {d} with {k}")
+        self.assertEqual(catalog["unlock/d"]["adds"], ["closed(d)"])
+        self.assertEqual(catalog["unlock/d"]["removes"], ["locked(d)"])
+        self.assertIn("match(k, d)", catalog["unlock/d"]["requires"])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.session = Session(self.temp.name)
@@ -38,7 +53,9 @@ class WorkerTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_locked_puzzle_reset_recording_and_failure(self):
-        initial = self.session.handle({"op": "compile", "document": puzzle()})["state"]
+        compiled = self.session.handle({"op": "compile", "document": puzzle()})
+        self.assertEqual(compiled["action_catalog"], action_catalog())
+        initial = compiled["state"]
         self.assertEqual(initial["room_id"], "r1")
         self.assertFalse(initial["done"])
         invalid = self.session.handle({"op": "step", "command": "go east"})["state"]

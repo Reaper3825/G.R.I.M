@@ -27,6 +27,8 @@ public:
 
     // Set maximum visible items before scrolling (default: 8)
     void setMaxVisibleItems(int max) { maxVisibleItems = std::max(1, max); }
+    // Explicit unlabeled layout for wide inspector/composer controls.
+    void setFullWidth(bool value) { fullWidth = value; }
     
     // For overlay rendering
     void drawOverlay(class OverlayRenderer& renderer, const Vec2& panelPos);
@@ -40,6 +42,7 @@ public:
     void collapse() { expanded = false; scrollOffset = 0; hoveredItem = -1; }
 
 private:
+    bool fullWidth = false;
     float scrollRemainder_ = 0.0f;
     std::string label;
     std::vector<std::string> options;

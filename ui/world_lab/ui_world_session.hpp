@@ -1,6 +1,7 @@
 #pragma once
 #include "world_document.hpp"
 #include "textworld_client.hpp"
+#include "ui_world_actions.hpp"
 #include "ui/primitives/ui_panel.hpp"
 #include "ui/primitives/ui_button.hpp"
 #include "ui/primitives/ui_inputbox.hpp"
@@ -16,6 +17,8 @@ public:
     void draw(OverlayRenderer&,const PanelRect&);
     void hide();
     void refresh();
+    void prepareCommand(const std::string& command) { command_.setText(command); }
+    const std::string& preparedCommand() const { return command_.getText(); }
     bool apply();
     bool hasPendingEdits() const { return objective_.getText()!=editor_.document().objective; }
     bool busy() const { return client_.busy(); }
@@ -32,6 +35,7 @@ private:
     void report(const std::function<void()>&);
     std::vector<Widget*> controls();
     GRIM::WorldLab::Editor& editor_;
+    UIWorldActions actions_;
     GRIM::WorldLab::TextWorldClient client_;
     bool challenge_=true,recording_=false,live_=false,done_=false;
     std::string operation_,sentCommand_,details_,message_="Define a challenge, then Compile & Play.";
@@ -40,6 +44,10 @@ private:
     UIScrollBox scroll_;
     PanelRect area_{},transcript_{};
     std::unique_ptr<UIDropdown> predicate_,subject_,target_,conditions_,history_;
+    std::unique_ptr<UIDropdown> available_;
+    std::vector<std::string> availableCommands_;
+    bool catalogCompatible_=true;
+    bool composerVisible_=false;
     std::vector<std::string> subjects_,targets_,recorded_;
     std::vector<std::unique_ptr<UIButton>> challengeButtons_,playButtons_;
     struct Entry { std::string command,feedback; nlohmann::json state; };

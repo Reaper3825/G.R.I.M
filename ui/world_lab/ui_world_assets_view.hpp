@@ -1,5 +1,6 @@
 #pragma once
 #include "world_asset.hpp"
+#include "ui_world_actions.hpp"
 #include "ui_world_canvas.hpp"
 #include "ui/primitives/ui_button.hpp"
 #include "ui/primitives/ui_dropdown.hpp"
@@ -31,6 +32,7 @@ private:
     std::vector<Widget*> controls();
     GRIM::WorldLab::Editor editor_;
     UIWorldCanvas canvas_{editor_};
+    UIWorldActions actions_{editor_};
     std::filesystem::path directory_,path_;
     std::string root_,status_="Create an asset or select a saved one. Add to world inserts an independent copy.";
     nlohmann::json baseline_;

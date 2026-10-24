@@ -43,6 +43,7 @@ UIWorldAssetsView::UIWorldAssetsView(std::filesystem::path directory):directory_
     });
     button("Undo",[this]{if(!apply())return;editor_.undo();refresh();});
     button("Redo",[this]{if(!apply())return;editor_.redo();refresh();});
+    button("Actions",[this]{if(apply())scroll_.scrollTo(390);});
     canvas_.selectionOnly=true;
     canvas_.onSelect=[this](const std::string& id){if(!apply() || (id!=root_ && id==editor_.document().spawn))return false;canvas_.selected=id;refresh();return true;};
     canvas_.onError=[this](const std::string& message){status_=message;};
@@ -87,6 +88,7 @@ void UIWorldAssetsView::refresh() {
     assetName_.setText(d.title);const auto* e=d.find(canvas_.selected);
     name_.setText(e?e->name:"");description_.setText(e?e->description:"");
     state_->setVisible(e && e->kind=="container");state_->setSelectedIndex(e && e->state=="closed"?1:0);
+    actions_.select(canvas_.selected);
 }
 void UIWorldAssetsView::refreshLibrary() {
     auto entries=listAssets(directory_);std::vector<std::string> labels{"Choose asset"};
@@ -105,12 +107,13 @@ void UIWorldAssetsView::layout(const PanelRect& area) {
     const float canvasWidth=std::max(80.f,w-280);
     canvas_.setPosition(x,y+126);canvas_.setSize(canvasWidth,std::max(40.f,area.size.y-184));
     inspector_={{x+canvasWidth+12,y+126},{268,std::max(40.f,area.size.y-184)}};
-    scroll_.setPosition(inspector_.origin);scroll_.setSize(inspector_.size);scroll_.setContentHeight(430);
+    scroll_.setPosition(inspector_.origin);scroll_.setSize(inspector_.size);scroll_.setContentHeight(930);
     const auto ix=inspector_.origin.x+8,iy=inspector_.origin.y-scroll_.getScrollOffset();
     place(name_,ix,iy+44,248);place(description_,ix,iy+100,248);place(*state_,ix,iy+150,168);
     place(*buttons_[6],ix,iy+190,80);place(*kind_,ix,iy+248,168);
     place(*buttons_[7],ix,iy+286,110);place(*buttons_[8],ix+118,iy+286,120);
     place(*buttons_[9],ix,iy+330,80);place(*buttons_[10],ix+88,iy+330,80);
+    place(*buttons_[11],ix+88,iy+190,100);
 }
 void UIWorldAssetsView::update(const InputState& input,float dt,const PanelRect& area,uint64_t panel) {
     layout(area);const auto clipped=input.clipped(area.origin,area.size);
@@ -119,11 +122,13 @@ void UIWorldAssetsView::update(const InputState& input,float dt,const PanelRect&
     UIDropdown* expanded=nullptr;
     for(auto* dropdown:{library_.get(),kind_.get(),state_.get()})if(dropdown->isVisible() && dropdown->isExpanded()){expanded=dropdown;dropdown->update(source(dropdown),dt);break;}
     for(auto* w:controls())if(w->isVisible() && w!=expanded)w->update(source(w),dt);
+    actions_.update(clipped.clipped(inspector_.origin,inspector_.size),dt,
+        {{inspector_.origin.x+8,inspector_.origin.y+390-scroll_.getScrollOffset()},{248,530}},panel);
     canvas_.setPanelID(panel);canvas_.update(clipped,dt);scroll_.setPanelID(panel);scroll_.update(clipped,dt);
     libraryTimer_+=std::max(0.f,dt);
     if(libraryTimer_>=2 && !library_->isExpanded()){libraryTimer_=0;act([this]{refreshLibrary();});}
 }
-void UIWorldAssetsView::hide(){for(auto* w:controls())w->cancelInput();for(auto* d:{library_.get(),kind_.get(),state_.get()})d->collapse();canvas_.cancelInput();scroll_.cancelInput();libraryTimer_=2;}
+void UIWorldAssetsView::hide(){actions_.hide();for(auto* w:controls())w->cancelInput();for(auto* d:{library_.get(),kind_.get(),state_.get()})d->collapse();canvas_.cancelInput();scroll_.cancelInput();libraryTimer_=2;}
 void UIWorldAssetsView::draw(OverlayRenderer& r,const PanelRect& area) {
     using namespace UITheme::Colors;layout(area);r.pushClipRect(area.origin,area.size);
     library_->drawOverlay(r,{});assetName_.drawOverlay(r,{});
@@ -139,6 +144,7 @@ void UIWorldAssetsView::draw(OverlayRenderer& r,const PanelRect& area) {
     if(state_->isVisible())state_->drawOverlay(r,{});
     r.drawText({x,y+228},"Type for New asset / Add inside",TextMuted,12);kind_->drawOverlay(r,{});
     for(size_t i=6;i<buttons_.size();++i)buttons_[i]->drawOverlay(r,{});
+    actions_.draw(r,{{x,y+390},{248,530}});
     for(auto* d:{kind_.get(),state_.get()})if(d->isVisible() && d->isExpanded())d->drawExpandedList(r,{});
     r.popClipRect();
     r.drawText({area.origin.x+8,area.origin.y+area.size.y-34},status_,TextSecondary,12);

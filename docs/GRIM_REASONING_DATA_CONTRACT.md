@@ -35,12 +35,18 @@ The normative implementation is split across:
 - [`concept_block.fbs`](../DataCollection/concept_block.fbs): persisted training
   example fields. This is supporting storage, not the organizing model contract.
 
-If this document and executable code disagree, treat the code as current and
-update this document in the same change.
+For descriptions of implemented behavior, executable code is authoritative.
+The recurrent contract below is the selected direction; explicitly marked
+pending integration and storage changes must not be mistaken for implemented
+behavior. Update this document alongside those implementations.
 
 ## 1. The inference contract in one view
 
-GRIM structured inference is a prefix-to-continuation problem:
+GRIM structured inference is a recurrent, feedback-conditioned process. DDEA
+means Determine, Define, Execute, Answer; Define and Execute are optional and
+need not occur together. Not every user input requires a tool call. A direct
+response must not acquire artificial definitions, execution, or tool use merely
+to fill the phase structure.
 
 ```text
 UPSTREAM-SUPPLIED PREFIX                         MODEL CONTINUATION / OUTPUT
@@ -52,16 +58,59 @@ prompt
   -> persisted knowns/unknowns (later passes only)
   || inference boundary ||
   -> determine
-  -> define
-  -> execute
-  -> update
-  -> answer
+  -> [define]
+  -> [execute]
+  -> [update]
+  -> answer -> completed answer-span boundary
+                  |
+                  +-> deliver response to the configured recipient
+                  +-> receive permitted feedback when the task continues
+                  +-> next reasoning cycle under the same active goal
 ```
 
 The left side describes the task, objective, verification envelope, and any
 state persisted from earlier generation passes. The right side describes the
-model-supervised reasoning transition and terminal response represented in a
-complete training example.
+model's working trajectory and externally submitted response for one cycle.
+Square brackets mark optional phases. Pre-answer DDE spans are observed as
+working context; they are separate from the answer payload delivered outside
+that cycle. Answer completion does not by itself establish goal completion.
+
+### 1.1 Recurrent boundary and recipient contract
+
+- Each valid completed span can pause generation for controller observation.
+  A DDE span close is not a TextWorld command-dispatch boundary.
+- At a valid generated `</answer>`, the controller selects the contents of that
+  answer instance only. It must not submit preceding DDE, optional update text,
+  tags, earlier answers, or the cumulative decoded continuation.
+- The recipient is task-specific. Ordinary conversation delivers a response to
+  the user without an environment call. A TextWorld challenge validates the
+  answer as one game command and submits that command to the environment.
+- A command submission is an attempt, not proof that its requested transition
+  occurred. Only the returned observation can establish the result.
+- For a continuing environment task, append permitted feedback before generating
+  the next cycle. Retain the active Goal until it is completed, failed, cancelled,
+  or explicitly replaced. An intermediate answer does not end the challenge.
+- Track the delivered span instance and command request so a resume or repeated
+  cumulative result cannot submit the same action twice. Invalid or incomplete
+  answers do not dispatch. Runtime feedback cannot impersonate generated markers.
+
+The selected semantic loop is:
+
+```text
+Goal + permitted observation
+  -> Determine -> [Define] -> [Execute] -> [Update] -> Answer
+  -> submit Answer to the task recipient
+  -> actual feedback / verified task status
+  -> next cycle if needed
+```
+
+Span-boundary pause/resume is implemented (section 7). Automatic answer routing,
+TextWorld model-command submission, and runtime observation insertion are pending.
+The existing manual Play command field is not this model-driven controller.
+Recurrent interaction does not imply recurrent-network architecture or a change
+to the SFT loss policy.
+
+### 1.2 Existing inference transport
 
 The compatibility `reasoning_state` wire object (also serialized by
 `ReasoningState` clients) accepts only:
@@ -109,9 +158,12 @@ retaining their distinct annotated-input response contract. Prefill-only
 inspection has no text output. This refactor preserves training encoding and does
 not require corpus regeneration.
 
-## 2. Exact canonical model-visible order
+## 2. Existing single-block canonical model-visible order
 
-Only non-empty fields render. Authored array order is preserved.
+Only non-empty fields render. Authored array order is preserved. This is the
+current persisted ConceptBlock rendering for one cycle/example, not a limit of
+one reasoning cycle per task. Recurrent trajectory serialization is not yet
+represented by repeated phase fields in the source schema.
 
 ```text
 <prompt>
@@ -193,9 +245,10 @@ Important rendering facts:
 - Each evidence span belongs to the immediately preceding criterion.
 - Legacy `explanation`/`intermediates` text is unlabeled and appears immediately
   before `determine`.
-- `determine`, `define`, `execute`, and `update` occur at most once each in the current
-  canonical structure. A value may describe multiple internal substeps, but the
-  schema does not represent repeated phase cycles as separate sections.
+- Each phase and answer has at most one field in the current persisted
+  ConceptBlock. The recurrent contract permits successive cycles, with optional
+  Define/Execute in each. Do not pack an entire interactive trajectory into one
+  scalar or imply that the existing schema already serializes repeated cycles.
 - A non-empty `raw` value bypasses this entire structure and is therefore not a
   valid structured reasoning-state input.
 
@@ -220,7 +273,7 @@ on; it must not contain hidden future state.
 
 ### 3.2 Complete training sequence
 
-A complete example may append:
+A current single-cycle example may append:
 
 ```text
 [legacy reasoning]
@@ -232,7 +285,11 @@ A complete example may append:
 ```
 
 These fields represent the continuation after the normal structured-state
-prefix. For train/inference alignment, every token placed before the first
+prefix. Define and Execute are used only when needed; neither implies a mandatory
+tool call. Recurrent episodes additionally have ordered feedback boundaries
+between cycles, with feedback available only after the corresponding submission.
+Their storage/projection must preserve these boundaries rather than treating
+future observations as initial context. For train/inference alignment, every token placed before the first
 supervised output must be constructible at inference time. The desired
 prefix-equivalence invariant is:
 
@@ -574,6 +631,9 @@ Definition: create the local definitions, bindings, and relationships needed to
 perform the action stated by `determine`. This is model-supervised working
 context for the current generation pass.
 
+This phase is optional. Omit it when no explicit local definitions are needed;
+its presence does not require an Execute span or an external tool call.
+
 Network role: converts the natural-language action objective into explicit local
 reasoning terms that `execute` can use.
 
@@ -616,10 +676,15 @@ VALUE
 </execute>
 ```
 
-Definition: apply the selected operation, transformation, tool call, or action
-to its bound inputs and expose the resulting observation/value.
+Definition: carry out the computation, transformation, or working procedure
+needed for the current response, using available inputs. This phase is optional
+and does not necessarily involve an external tool. Omit it when the response
+does not require such work.
 
-Network role: converts a proposed transition into a concrete result.
+Network role: develops the result or proposed action used to construct Answer.
+For TextWorld, this span is observed, not submitted. An intended or predicted
+environment transition remains unverified until the answer command has been
+submitted and actual feedback received in a later boundary.
 
 Rules:
 
@@ -632,7 +697,14 @@ Rules:
 
 #### Tool-expression closure for self-correction RL
 
-The selected authoring contract for the self-correction tool path is:
+The following is a separately scoped, pending self-correction tool-path design.
+It is not the recurrent TextWorld dispatch contract, does not make tool calls
+mandatory, and must not cause DDE text to be sent to TextWorld. Its proposed
+TOOL/READ dispatch needs explicit adapter-specific reconciliation before use
+with the answer-routed interaction controller. Ordinary response cycles need
+none of this grammar.
+
+The proposed authoring contract for that tool path is:
 
 ```text
 <TOOL>tool_expression -> ${destination}</TOOL>
@@ -661,7 +733,7 @@ reason without leaking withheld result values or treating an error as a successf
 assignment. It resumes the same attempt and does not replace `</answer>` as the
 grading boundary.
 
-This is the selected contract for the pending RL implementation. Existing
+This remains a pending, tool-path-specific design. Existing
 arithmetic authoring currently emits `<TOOL>expression</TOOL> -> ${destination}`;
 its generator, validators, and affected data must migrate before being used with
 the new parser. The current TOOL atom recognition alone does not implement this
@@ -684,6 +756,11 @@ VALUE
 Definition: integrate the execution result into the working state, identifying
 what became known and what remains unresolved.
 
+Update remains optional and is not an additional mandatory DDEA phase. When
+present, it may summarize already observed results, including feedback from a
+previous cycle. It cannot commit the outcome of the current answer's environment
+action before that answer has been submitted and feedback has arrived.
+
 Network role: state transition/commit boundary.
 
 Rules:
@@ -702,9 +779,10 @@ Example:
 consumed volume = 36 liters; no unknowns remain.
 ```
 
-### 4.13 Answer — external terminal response
+### 4.13 Answer — externally submitted response for the current cycle
 
-Canonical position: final.
+Canonical position: final generated response span of the current cycle, not
+necessarily the end of the task or recurrent trajectory.
 
 Visible form:
 
@@ -714,16 +792,23 @@ VALUE
 </answer>
 ```
 
-Definition: the terminal user-facing response produced from the updated state.
+Definition: the response delivered to the configured recipient. For ordinary
+conversation this is user-facing text; for a TextWorld challenge it is the game
+command submitted to the environment. DDE and optional update remain separate
+working context and are not part of the submitted payload.
 
-Network role: exposes the resolved result outside the internal reasoning
-contract.
+Network role: commits the current cycle's external response/action. A valid
+generated close provides the controller boundary for validation and delivery.
 
 Rules:
 
-- Must satisfy the target state, criteria, and constraints.
-- Must agree with the final known state and execution result.
-- Directly answer the prompt at the requested level of detail.
+- Must respect the recipient's response format and the active goal/constraints.
+  An intermediate action may advance the goal without satisfying it yet.
+- Must agree with observed state and any actual computation; it must not present
+  predicted environment outcomes as established facts.
+- A final user response must satisfy the target and criteria at the requested
+  level of detail. An intermediate TextWorld response contains one command,
+  without surrounding explanations or a claim that the command succeeded.
 - Preserve units, qualifiers, uncertainty, and safety boundaries when relevant.
 - Do not introduce new unsupported reasoning or contradict the update.
 
@@ -737,7 +822,8 @@ sentences into labeled sections.
 Information may flow forward:
 
 ```text
-prompt/goal/state -> determine -> define -> execute -> update -> answer
+prompt/goal/state -> determine -> [define] -> [execute] -> [update] -> answer
+    -> recipient feedback -> next cycle
 ```
 
 It must not flow backward. In particular:
@@ -751,20 +837,23 @@ It must not flow backward. In particular:
 
 ### 5.2 Determine/define/execute alignment
 
-The intended work, local definitions, and performed transition must match.
+When present, the intended work, local definitions, and performed work must match.
 `determine` states the contextualized action, `define` creates the local terms
 and relationships needed for it, and `execute` applies those definitions.
 
 ### 5.3 Execute/update alignment
 
-Update may commit only what execute established. It may normalize wording or
-record remaining work, but it must not manufacture an additional result.
+Update may commit only what actual computation or already received feedback
+established. It may normalize wording or record remaining work, but it must not
+manufacture a result or anticipate feedback from the current answer submission.
 
 ### 5.4 Update/answer alignment
 
-Answer is a presentation of terminal state, not a second calculation channel.
-Any material result stated in the answer should already be supported by the
-updated state or directly by the supplied context for a direct-answer example.
+Answer is the externally submitted response for this cycle. Any result it
+asserts must be supported by available context or completed work, even when
+Define, Execute, or Update is omitted. A proposed environment command is not an
+assertion of its success. Task completion is established separately by the
+task's verifier, not by the existence of an answer close.
 
 ### 5.5 Goal consistency
 
@@ -772,7 +861,12 @@ Every reasoning phase must move toward the target state while respecting
 criteria and constraints. Irrelevant but correct computations are still bad
 training examples because they teach poor transition selection.
 
-## 6. Canonical inference example
+## 6. Single-cycle canonical inference example
+
+This arithmetic example uses Define and Execute because they serve the task.
+It does not require an external tool call and is not a template requiring all
+phases for every user input. A recurrent environment episode can contain many
+cycles before its goal is reached; the following example happens to finish in one.
 
 ### 6.1 Upstream structured input
 
@@ -961,6 +1055,16 @@ The runtime-context append/atom-remapping API and tool/READ dispatch remain
 pending; the scheduling supports queued tokens but does not itself authorize or
 construct runtime observations.
 
+For recurrent TextWorld interaction, the controller must additionally distinguish
+observed DDE boundaries from the Answer submission boundary, extract only the
+newly closed answer instance, and insert the actual permitted environment result
+before resuming. A span yield is a scheduling event; only the configured recipient
+policy makes an answer actionable. No other span close automatically dispatches
+a TextWorld command. The current cumulative continuation result is not itself a
+command payload. A completed answer may finish one cycle while the generation
+session and challenge remain active; terminal budgets/EOS still take precedence
+under the existing return policy.
+
 GRMT v34 replaces fixed Goal, phase, collection, and Answer records with generic
 named nodes. The wire representation stores each node's name, range, and parent;
 child lists are reconstructed on read and validated. Token slices are not
@@ -983,6 +1087,11 @@ special prompt-span storage.
 The source ConceptBlock FlatBuffer and its JSON adapter remain authoring
 storage. Adding a genuinely new source property may still require changing that
 source model/adapter, but not the GRMT span format.
+
+No source-schema, renderer configuration, supervision, or corpus migration is
+performed by this documentation transition. Recurrent episode storage and
+feedback projection must be implemented explicitly; a challenge, an interaction
+cycle, and a persisted SFT ConceptBlock are not assumed to have a 1:1 mapping.
 
 ## 8. Supporting storage and non-visible data
 
@@ -1022,11 +1131,15 @@ For every example, verify:
 - Determine directly states the contextualized work without narrating its own
   phase or mechanically copying state entries, identifiers, values, operand
   bindings, or results.
-- Define creates the local terms and relationships needed by execute without
-  performing the calculation.
-- Execute performs exactly the intended action on valid inputs.
-- Update commits only the execution result and accurately tracks remaining work.
-- Answer reflects the terminal state without adding unsupported conclusions.
+- Define, when needed, creates local terms without claiming an execution result.
+- Execute, when needed, performs the intended work on available inputs; its
+  presence or absence must not imply a mandatory external tool call.
+- Optional Update commits only verified work/observations and tracks remaining work.
+- Answer contains only the recipient-facing response for its cycle. For TextWorld,
+  only its validated command is submitted; DDE is observed separately.
+- Each feedback item follows the submission that produced it; no cycle sees
+  hidden world facts, future results, or saved solutions as supplied evidence.
+- Goal completion is checked independently from answer-span completion.
 - The active supervision/window policy actually targets the phases the example
   is intended to teach.
 - `raw` is empty for structured reasoning data.

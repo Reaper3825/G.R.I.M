@@ -7,6 +7,14 @@ World Lab is an authoring tab in the Training Control panel. It stores an editab
 world locally. Validate and Compile & Play start an isolated TextWorld Docker
 worker on demand. No model, inference service, or training process is started.
 
+Future model-driven play follows the
+[recurrent reasoning contract](GRIM_REASONING_DATA_CONTRACT.md): observe DDE,
+submit only the completed Answer command, then supply actual environment feedback
+before the next cycle. Define and Execute are optional; ordinary responses do
+not require tool calls. An answer boundary ends a response cycle, not necessarily
+the challenge. Model dispatch and feedback insertion remain pending; see the
+[integration reference](WORLD_LAB_REFERENCE.md#recurrent-model-interaction-contract-selected-integration-pending).
+
 ## Challenge and manual playtest
 
 1. Open `examples/world_lab/locked_door.grimworld.json` using the file field for
@@ -163,13 +171,33 @@ the existing image:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -WorldLab -TextWorld
-& 'C:/Program Files/Docker/Docker/resources/bin/docker.exe' run --rm --network none --mount 'type=bind,source=D:/G.R.I.M/scripts/textworld,target=/worker,readonly' --mount 'type=bind,source=D:/G.R.I.M/tests,target=/tests,readonly' grim-textworld:1.7.0 python /tests/test_world_worker.py
+& 'C:/Program Files/Docker/Docker/resources/bin/docker.exe' run --rm --pull never --network none --mount 'type=bind,source=D:/G.R.I.M/scripts/textworld,target=/worker,readonly' --mount 'type=bind,source=D:/G.R.I.M/tests,target=/tests,readonly' --mount 'type=bind,source=D:/G.R.I.M/ui/world_lab,target=/catalog,readonly' grim-textworld:1.7.0 python /tests/test_world_worker.py
 ```
 
 These verify locked-door gameplay, win/failure, reset, independent solution replay,
 failed-compilation preservation, single-flight transport, cancellation/restart,
 version migration, and challenge reference cleanup. No `grim.exe` build/run is
 part of either test command.
+
+## Built-in action inspection
+
+World and Asset inspectors provide an Actions shortcut. Rules and command
+templates come from the generated TextWorld 1.7 catalog, while native code only
+binds typed parameters to document entity IDs. World inspection can prepare a
+command in Play. Play also offers an Actions composer and a live available-command
+picker; neither submits until Send/Enter. The worker returns its catalog during
+compilation to detect a stale offline snapshot. Definitions remain read-only.
+
+Regenerate the snapshot only when intentionally updating the installed knowledge
+base, then run the host and worker tests:
+
+```powershell
+& 'C:/Program Files/Docker/Docker/resources/bin/docker.exe' run --rm --pull never --network none --mount 'type=bind,source=D:/G.R.I.M/scripts/textworld,target=/worker,readonly' --mount 'type=bind,source=D:/G.R.I.M/ui/world_lab,target=/output' grim-textworld:1.7.0 python /worker/action_catalog.py --header /output/textworld_action_catalog.generated.hpp
+```
+
+The snapshot contains command parameters and logical preconditions/additions/
+removals, not a duplicate execution implementation. Custom actions, container
+key configuration, and non-compass traversal are not part of this first slice.
 
 ## Reusable assets
 

@@ -7,6 +7,7 @@
 #include "ui/primitives/ui_scrollbox.hpp"
 #include "ui_world_session.hpp"
 #include "world_asset.hpp"
+#include "ui_world_actions.hpp"
 #include <memory>
 
 class UIWorldLabView {
@@ -32,6 +33,7 @@ private:
     std::vector<Widget*> controls();
     GRIM::WorldLab::Editor editor_;
     UIWorldCanvas canvas_{editor_};
+    UIWorldActions actions_{editor_};
     std::vector<std::unique_ptr<UIButton>> toolbar_;
     UIInputBox path_, title_, name_, description_;
     UIScrollBox inspectorScroll_;
@@ -40,7 +42,7 @@ private:
     std::vector<std::string> doorKeys_;
     std::unique_ptr<UIWorldSession> session_;
     bool sessionVisible_ = false;
-    std::unique_ptr<UIButton> apply_, add_, spawn_, erase_, saveAsset_;
+    std::unique_ptr<UIButton> apply_, add_, spawn_, erase_, saveAsset_, actionsShortcut_;
     std::vector<std::string> locations_;
     PanelRect area_{}, inspector_{};
     std::string status_ = "Drag a compass handle to connect rooms or create a new room.";

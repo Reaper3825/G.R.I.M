@@ -148,5 +148,42 @@ void runWorldLabTests(){
     conditionEditor.undo();challengeFrame({});
     check(conditionEditor.document().objective.empty(),"Challenge field overwrote external undo");
     challengePanel.hide();
+    // Catalog binding is typed and ID-based, independent of starting/live state.
+    auto rule=[](const std::string& id)->nlohmann::json {
+        for(const auto& a:actionCatalog()["actions"])if(a["id"]==id)return a;
+        throw std::runtime_error("Missing built-in action");
+    };
+    Editor actionEditor;std::string actionKey,actionBox,actionDoor;
+    actionEditor.change([&](Document& d){
+        actionKey=d.addObject(d.spawn,"key");d.find(actionKey)->name="brass key";
+        actionBox=d.addObject(d.spawn,"container");d.find(actionBox)->name="toolbox";
+        const auto next=d.addRoom(400,80);actionDoor=d.connect(d.spawn,next,"east");
+        d.passages.back().doorName="garden gate";d.passages.back().key=actionKey;
+    });
+    check(composeAction(actionEditor.document(),rule("unlock/d"),{actionDoor,actionKey})=="unlock garden gate with brass key","Typed door binding failed");
+    check(composeAction(actionEditor.document(),rule("go/north"),{})=="go north","Zero parameter action failed");
+    rejects([&]{composeAction(actionEditor.document(),rule("eat"),{actionKey});},"Wrong action parameter kind accepted");
+    rejects([&]{composeAction(actionEditor.document(),rule("unlock/d"),{actionDoor});},"Missing action parameter accepted");
+    check(actionRelevant(actionEditor.document(),rule("take/c"),actionBox),"Holder action missing from inspector");
+    check(!actionRelevant(actionEditor.document(),rule("eat"),actionBox),"Unrelated action in inspector");
+    check(actionRelevant(actionEditor.document(),rule("go/west"),actionDoor),"Reverse passage traversal missing");
+    UIWorldActions actionView(actionEditor);actionView.select(actionBox);
+    std::string prepared;actionView.onPrepare=[&](const auto& value){prepared=value;};
+    auto actionFrame=[&](const InputState& in){router.beginFrame();router.currentPanel=90;actionView.update(in,0,{{0,0},{260,530}},90);actionView.draw(renderer,{{0,0},{260,530}});router.endFrame();};
+    auto actionClick=[&](Vec2 p){InputState in;in.mousePos=p;in.mousePressed[0]=in.mouseDown[0]=true;actionFrame(in);in.mousePressed[0]=in.mouseDown[0]=false;in.mouseReleased[0]=true;actionFrame(in);};
+    actionFrame({}); // Sorted catalog starts with close/c for a container.
+    check(actionView.command()=="close toolbox","Selection did not bind container parameter");
+    const auto actionBefore=actionEditor.document().json();actionClick({40,128});
+    check(prepared=="close toolbox" && actionEditor.document().json()==actionBefore,"Prepare changed world or failed");
+    actionClick({40,36});actionClick({40,62}); // Full-width dropdown first row.
+    check(actionView.command()=="close toolbox","Action dropdown lost selection binding");
+    actionEditor.change([&](Document& d){d.find(actionBox)->name="supply box";});actionFrame({});
+    check(actionView.command()=="close supply box","Renamed entity left stale command");
+    actionEditor.change([&](Document& d){d.erase(actionBox);});actionFrame({});
+    rejects([&]{actionView.command();},"Deleted selection left a usable stale action");
+    actionView.hide();
+    challengePanel.setChallenge(false);challengePanel.prepareCommand("look");challengeFrame({});
+    check(challengePanel.preparedCommand()=="look","Play did not retain prepared command");
+    challengePanel.hide();
     std::cout<<"World Lab document, persistence, gesture, and lifecycle tests passed\n";
 }

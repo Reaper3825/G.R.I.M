@@ -15,10 +15,10 @@ struct DropdownGeometry {
 
 DropdownGeometry computeDropdownGeometry(const std::string& label,
                                          const Vec2& position,
-                                         const Vec2& size) {
+                                         const Vec2& size, bool fullWidth) {
     DropdownGeometry geom;
 
-    const bool compact = label.empty() && size.x <= 170.0f;
+    const bool compact = fullWidth || (label.empty() && size.x <= 170.0f);
     if (compact) {
         geom.boxPos = position;
         geom.boxSize = size;
@@ -61,7 +61,7 @@ void UIDropdown::update(const InputState& source, float dt) {
     if (!hasInputPopup()) expanded = false;
     Vec2 m = input.mousePos;
 
-    const auto geom = computeDropdownGeometry(label, position, size);
+    const auto geom = computeDropdownGeometry(label, position, size, fullWidth);
     dropdownPos = geom.boxPos;
     dropdownSize = geom.boxSize;
     
@@ -147,7 +147,7 @@ void UIDropdown::draw(UIRenderer& renderer) {
 void UIDropdown::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     using namespace UITheme;
 
-    const auto geom = computeDropdownGeometry(label, position, size);
+    const auto geom = computeDropdownGeometry(label, position, size, fullWidth);
     Vec2 currentDropdownPos = geom.boxPos;
     Vec2 currentDropdownSize = geom.boxSize;
 
@@ -180,7 +180,7 @@ void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPo
     using namespace UITheme;
     if (!expanded) return;
 
-    const auto geom = computeDropdownGeometry(label, position, size);
+    const auto geom = computeDropdownGeometry(label, position, size, fullWidth);
     Vec2 currentDropdownPos = geom.boxPos;
     Vec2 currentDropdownSize = geom.boxSize;
     
