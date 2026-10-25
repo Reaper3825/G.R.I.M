@@ -61,7 +61,7 @@ UITrainingPanel::UITrainingPanel()
         setView(TrainingPanelTab::WorldLab);
     });
     tabWorldLabBtn_->setSize(100.0f, 28.0f);
-    worldLab_ = std::make_unique<UIWorldLabView>(std::filesystem::path{}, std::filesystem::path(getResourcePath()) / "models" / "games");
+    worldLab_ = std::make_unique<UIWorldLabView>(std::filesystem::path{}, std::filesystem::path(getResourcePath()) / "models" / "games", std::filesystem::path(getResourcePath()) / "models" / "world_assets");
     tabAssetsBtn_ = std::make_shared<UIButton>("Assets", [this]() {setView(TrainingPanelTab::Assets);});
     tabAssetsBtn_->setSize(80.0f,28.0f);
     worldAssets_ = std::make_unique<UIWorldAssetsView>(std::filesystem::path(getResourcePath()) / "models" / "world_assets");

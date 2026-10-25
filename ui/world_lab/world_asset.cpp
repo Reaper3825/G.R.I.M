@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <sstream>
 
 namespace GRIM::WorldLab {
 namespace {
@@ -99,11 +100,38 @@ std::vector<AssetEntry> listAssets(const std::filesystem::path& directory) {
         if(!std::filesystem::exists(path))continue;
         for(const auto& entry:std::filesystem::directory_iterator(path)) {
             if(!entry.is_regular_file() || !lower(entry.path().filename().string()).ends_with(".grimasset.json"))continue;
-            try {auto a=Asset::parse(loadJsonFile(entry.path()));result.push_back({entry.path(),std::string(folder)+" / "+a.name});}
+            try {
+                auto a=Asset::parse(loadJsonFile(entry.path()));
+                AssetEntry item{entry.path(),std::string(folder)+" / "+a.name};
+                item.valid=true;item.entityCount=a.entities.size();
+                for(const auto& entity:a.entities) {
+                    if(entity.id==a.root)item.kind=entity.kind;
+                    item.searchText+=" "+entity.name+" "+entity.description+" "+entity.kind;
+                }
+                result.push_back(std::move(item));
+            }
             catch(const std::exception&) {result.push_back({entry.path(),std::string(folder)+" / [invalid] "+entry.path().filename().string()});}
         }
     }
     std::sort(result.begin(),result.end(),[](const auto& a,const auto& b){return a.name<b.name;});return result;
+}
+std::vector<size_t> searchAssets(const std::vector<AssetEntry>& entries,const std::string& query,const std::string& kind) {
+    std::vector<std::pair<size_t,int>> ranked;
+    std::istringstream words(lower(query));std::vector<std::string> tokens;
+    for(std::string word;words>>word;)tokens.push_back(word);
+    for(size_t i=0;i<entries.size();++i) {
+        const auto& e=entries[i];if(!kind.empty() && e.kind!=kind)continue;
+        const auto name=lower(e.name),body=lower(e.searchText);int score=0;
+        for(const auto& token:tokens) {
+            if(name.find(token)!=std::string::npos)score+=10;
+            else if(body.find(token)!=std::string::npos)score+=2;
+        }
+        if(!tokens.empty() && !score)continue;
+        if(!tokens.empty() && name.find(lower(query))!=std::string::npos)score+=20;
+        ranked.push_back({i,score});
+    }
+    std::stable_sort(ranked.begin(),ranked.end(),[](const auto& a,const auto& b){return a.second>b.second;});
+    std::vector<size_t> result;for(const auto& item:ranked)result.push_back(item.first);return result;
 }
 std::filesystem::path newAssetPath(const std::filesystem::path& directory,const Asset& a) {
     auto d=a.preview();

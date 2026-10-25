@@ -11,6 +11,11 @@ const std::vector<std::string> types{"room","object","key","container","supporte
 void place(Widget& w,float x,float y,float width,float height=28){w.setPosition(x,y);w.setSize(width,height);}
 }
 UIWorldAssetsView::UIWorldAssetsView(std::filesystem::path directory):directory_(std::move(directory)) {
+    browser_=std::make_unique<UIWorldAssetBrowser>(directory_);
+    browser_->onOpen=[this](const Asset& asset,const std::filesystem::path& file){
+        requireClean();setAsset(asset,file);status_="Loaded asset for editing.";
+    };
+    browser_->onError=[this](const std::string& message){status_=message;};
     library_=std::make_unique<UIDropdown>("Saved assets",std::vector<std::string>{"Choose asset"},0,[this](int index,const std::string&){
         act([&]{if(index<=0 || index>static_cast<int>(entries_.size()))return;requireClean();
             const auto file=entries_[index-1].path;const auto candidate=Asset::parse(loadJsonFile(file));setAsset(candidate,file);status_="Loaded asset.";});
@@ -62,7 +67,7 @@ void UIWorldAssetsView::requireClean() const {if(dirty())throw std::runtime_erro
 void UIWorldAssetsView::setAsset(const Asset& a,const std::filesystem::path& path) {
     const auto candidate=a.preview();editor_.reset(candidate);
     const auto serialized=candidate.json();
-    root_=a.root;path_=path;baseline_=serialized;baselineRoot_=root_;
+    root_=a.root;path_=path;browser_->selectPath(path_);baseline_=serialized;baselineRoot_=root_;
     canvas_.cancelInput();canvas_.selected=root_;refresh();canvas_.fitWorld();
 }
 void UIWorldAssetsView::capture(const Document& d,const std::string& root) {
@@ -91,6 +96,7 @@ void UIWorldAssetsView::refresh() {
     actions_.select(canvas_.selected);
 }
 void UIWorldAssetsView::refreshLibrary() {
+    browser_->refreshLibrary();browser_->selectPath(path_);
     auto entries=listAssets(directory_);std::vector<std::string> labels{"Choose asset"};
     for(const auto& entry:entries)labels.push_back(entry.name);
     entries_=std::move(entries);library_->setItems(labels);library_->setSelectedIndex(0);
@@ -104,12 +110,19 @@ void UIWorldAssetsView::layout(const PanelRect& area) {
     place(*library_,x,y,w);place(assetName_,x,y+44,std::max(80.f,w-140));
     float bx=x;const float widths[]={92,60,90,110,100,110};
     for(int i=0;i<6;++i){place(*buttons_[i],bx,y+82,widths[i]);bx+=widths[i]+6;}
-    const float canvasWidth=std::max(80.f,w-280);
-    canvas_.setPosition(x,y+126);canvas_.setSize(canvasWidth,std::max(40.f,area.size.y-184));
-    inspector_={{x+canvasWidth+12,y+126},{268,std::max(40.f,area.size.y-184)}};
+    librarySplit_.setPosition(x,y+126);librarySplit_.setSize(w,std::max(0.f,area.size.y-184));
+    librarySplit_.setMinimumSizes(100,130);
+    librarySplit_.setDefaultSecondSize(std::min(210.f,std::max(130.f,area.size.y*0.28f)));
+    const auto upper=librarySplit_.firstRect(),library=librarySplit_.secondRect();
+    browser_->setPosition(library.origin);browser_->setSize(library.size);
+    inspectorSplit_.setPosition(upper.origin);inspectorSplit_.setSize(upper.size);
+    inspectorSplit_.setMinimumSizes(160,268);inspectorSplit_.setDefaultSecondSize(268);
+    const auto canvas=inspectorSplit_.firstRect();inspector_=inspectorSplit_.secondRect();
+    canvas_.setPosition(canvas.origin);canvas_.setSize(canvas.size);
     scroll_.setPosition(inspector_.origin);scroll_.setSize(inspector_.size);scroll_.setContentHeight(930);
     const auto ix=inspector_.origin.x+8,iy=inspector_.origin.y-scroll_.getScrollOffset();
-    place(name_,ix,iy+44,248);place(description_,ix,iy+100,248);place(*state_,ix,iy+150,168);
+    const float fields=std::max(0.f,inspector_.size.x-20);
+    place(name_,ix,iy+44,fields);place(description_,ix,iy+100,fields);place(*state_,ix,iy+150,168);
     place(*buttons_[6],ix,iy+190,80);place(*kind_,ix,iy+248,168);
     place(*buttons_[7],ix,iy+286,110);place(*buttons_[8],ix+118,iy+286,120);
     place(*buttons_[9],ix,iy+330,80);place(*buttons_[10],ix+88,iy+330,80);
@@ -117,18 +130,22 @@ void UIWorldAssetsView::layout(const PanelRect& area) {
 }
 void UIWorldAssetsView::update(const InputState& input,float dt,const PanelRect& area,uint64_t panel) {
     layout(area);const auto clipped=input.clipped(area.origin,area.size);
+    librarySplit_.setPanelID(panel);inspectorSplit_.setPanelID(panel);
+    librarySplit_.update(clipped,dt);layout(area);
+    inspectorSplit_.update(clipped,dt);layout(area);
+    browser_->setPanelID(panel);browser_->update(clipped,dt);
     for(auto* w:controls())w->setPanelID(panel);
     auto source=[&](Widget* w){return w==library_.get() || w==&assetName_ || std::any_of(buttons_.begin(),buttons_.begin()+6,[&](const auto& b){return b.get()==w;})?clipped:clipped.clipped(inspector_.origin,inspector_.size);};
     UIDropdown* expanded=nullptr;
     for(auto* dropdown:{library_.get(),kind_.get(),state_.get()})if(dropdown->isVisible() && dropdown->isExpanded()){expanded=dropdown;dropdown->update(source(dropdown),dt);break;}
     for(auto* w:controls())if(w->isVisible() && w!=expanded)w->update(source(w),dt);
     actions_.update(clipped.clipped(inspector_.origin,inspector_.size),dt,
-        {{inspector_.origin.x+8,inspector_.origin.y+390-scroll_.getScrollOffset()},{248,530}},panel);
+        {{inspector_.origin.x+8,inspector_.origin.y+390-scroll_.getScrollOffset()},{std::max(0.f,inspector_.size.x-20),530}},panel);
     canvas_.setPanelID(panel);canvas_.update(clipped,dt);scroll_.setPanelID(panel);scroll_.update(clipped,dt);
     libraryTimer_+=std::max(0.f,dt);
     if(libraryTimer_>=2 && !library_->isExpanded()){libraryTimer_=0;act([this]{refreshLibrary();});}
 }
-void UIWorldAssetsView::hide(){actions_.hide();for(auto* w:controls())w->cancelInput();for(auto* d:{library_.get(),kind_.get(),state_.get()})d->collapse();canvas_.cancelInput();scroll_.cancelInput();libraryTimer_=2;}
+void UIWorldAssetsView::hide(){librarySplit_.cancelInput();inspectorSplit_.cancelInput();browser_->hide();actions_.hide();for(auto* w:controls())w->cancelInput();for(auto* d:{library_.get(),kind_.get(),state_.get()})d->collapse();canvas_.cancelInput();scroll_.cancelInput();libraryTimer_=2;}
 void UIWorldAssetsView::draw(OverlayRenderer& r,const PanelRect& area) {
     using namespace UITheme::Colors;layout(area);r.pushClipRect(area.origin,area.size);
     library_->drawOverlay(r,{});assetName_.drawOverlay(r,{});
@@ -144,9 +161,11 @@ void UIWorldAssetsView::draw(OverlayRenderer& r,const PanelRect& area) {
     if(state_->isVisible())state_->drawOverlay(r,{});
     r.drawText({x,y+228},"Type for New asset / Add inside",TextMuted,12);kind_->drawOverlay(r,{});
     for(size_t i=6;i<buttons_.size();++i)buttons_[i]->drawOverlay(r,{});
-    actions_.draw(r,{{x,y+390},{248,530}});
+    actions_.draw(r,{{x,y+390},{std::max(0.f,inspector_.size.x-20),530}});
     for(auto* d:{kind_.get(),state_.get()})if(d->isVisible() && d->isExpanded())d->drawExpandedList(r,{});
     r.popClipRect();
+    librarySplit_.drawOverlay(r,{});inspectorSplit_.drawOverlay(r,{});
+    browser_->drawOverlay(r,{});browser_->drawFloating(r);
     r.drawText({area.origin.x+8,area.origin.y+area.size.y-34},status_,TextSecondary,12);
     if(library_->isExpanded())library_->drawExpandedList(r,{});r.popClipRect();
 }

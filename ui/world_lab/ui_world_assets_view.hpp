@@ -2,11 +2,13 @@
 #include "world_asset.hpp"
 #include "ui_world_actions.hpp"
 #include "ui_world_canvas.hpp"
+#include "ui_world_asset_browser.hpp"
 #include "ui/primitives/ui_button.hpp"
 #include "ui/primitives/ui_dropdown.hpp"
 #include "ui/primitives/ui_inputbox.hpp"
 #include "ui/primitives/ui_scrollbox.hpp"
 #include "ui/primitives/ui_panel.hpp"
+#include "ui/primitives/ui_split_pane.hpp"
 #include <memory>
 
 class UIWorldAssetsView {
@@ -32,8 +34,11 @@ private:
     std::vector<Widget*> controls();
     GRIM::WorldLab::Editor editor_;
     UIWorldCanvas canvas_{editor_};
+    UISplitPane librarySplit_{UISplitPane::Axis::Vertical};
+    UISplitPane inspectorSplit_{UISplitPane::Axis::Horizontal};
     UIWorldActions actions_{editor_};
     std::filesystem::path directory_,path_;
+    std::unique_ptr<UIWorldAssetBrowser> browser_;
     std::string root_,status_="Create an asset or select a saved one. Add to world inserts an independent copy.";
     nlohmann::json baseline_;
     std::string baselineRoot_;

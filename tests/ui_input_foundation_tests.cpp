@@ -57,6 +57,7 @@ static void begin(bool cancel = false) { router.beginFrame(cancel); router.curre
 static void end() { router.endFrame(); }
 
 void runCanvasTests();
+void runSplitPaneTests();
 #ifdef GRIM_WORLD_LAB_TESTS
 void runWorldLabTests();
 void runWorldAssetTests();
@@ -64,7 +65,7 @@ void runWorldAssetTests();
 #ifdef GRIM_TEXTWORLD_INTEGRATION
 void runTextWorldClientTests();
 #endif
-int main() {
+int main() try {
 #ifdef GRIM_TEXTWORLD_INTEGRATION
     runTextWorldClientTests();
 #endif
@@ -73,6 +74,7 @@ int main() {
     runWorldAssetTests();
 #endif
     runCanvasTests();
+    runSplitPaneTests();
     // Console-style title controls update after panel chrome. They must win
     // capture over dragging, including when released outside the panel.
     struct ToolbarPanel : UIPanel {
@@ -205,4 +207,7 @@ int main() {
     begin(); check(router.allowsWheel(20), "Wheel consumption survived a frame"); end();
     check(UTF8Edit::printable(std::string("\xc0\xaf",2)).empty(), "Invalid UTF-8 accepted");
     std::cout << "Input foundation tests passed\n";
+} catch (const std::exception& e) {
+    std::cerr << "Test failure: " << e.what() << std::endl;
+    return 1;
 }

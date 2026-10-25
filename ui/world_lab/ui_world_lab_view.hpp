@@ -8,11 +8,13 @@
 #include "ui_world_session.hpp"
 #include "world_asset.hpp"
 #include "ui_world_actions.hpp"
+#include "ui_world_asset_browser.hpp"
+#include "ui/primitives/ui_split_pane.hpp"
 #include <memory>
 
 class UIWorldLabView {
 public:
-    explicit UIWorldLabView(std::filesystem::path recoveryPath = {}, std::filesystem::path gamesDirectory = {});
+    explicit UIWorldLabView(std::filesystem::path recoveryPath = {}, std::filesystem::path gamesDirectory = {}, std::filesystem::path assetsDirectory = {});
     ~UIWorldLabView();
     const GRIM::WorldLab::Document& document() const { return editor_.document(); }
     void update(const InputState&, float dt, const PanelRect&, uint64_t panel);
@@ -33,7 +35,10 @@ private:
     std::vector<Widget*> controls();
     GRIM::WorldLab::Editor editor_;
     UIWorldCanvas canvas_{editor_};
+    UISplitPane librarySplit_{UISplitPane::Axis::Vertical};
+    UISplitPane inspectorSplit_{UISplitPane::Axis::Horizontal};
     UIWorldActions actions_{editor_};
+    std::unique_ptr<UIWorldAssetBrowser> browser_;
     std::vector<std::unique_ptr<UIButton>> toolbar_;
     UIInputBox path_, title_, name_, description_;
     UIScrollBox inspectorScroll_;

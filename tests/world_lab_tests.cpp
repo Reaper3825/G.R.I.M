@@ -98,7 +98,7 @@ void runWorldLabTests(){
     // Drawing and tab lifecycle execute with the existing renderer sinks.
     OverlayRenderer renderer;canvas.drawOverlay(renderer,{});
     UIWorldLabView view(directory/"recovery.json",directory/"games");
-    auto viewFrame=[&](const InputState& in){router.beginFrame();router.currentPanel=90;view.update(in,0,{{0,0},{1000,650}},90);view.draw(renderer,{{0,0},{1000,650}});router.endFrame();};
+    auto viewFrame=[&](const InputState& in){router.beginFrame();router.currentPanel=90;view.update(in,0,{{0,0},{1000,900}},90);view.draw(renderer,{{0,0},{1000,900}});router.endFrame();};
     auto click=[&](Vec2 p){InputState in;in.mousePos=p;in.mousePressed[0]=in.mouseDown[0]=true;viewFrame(in);in.mousePressed[0]=in.mouseDown[0]=false;in.mouseReleased[0]=true;viewFrame(in);};
     viewFrame({});
     click({900,455});check(view.document().entities.size()==2,"Inspector Add button failed");
@@ -125,7 +125,7 @@ void runWorldLabTests(){
     click({50,90});click({50,170}); // Second entry: world.
     check(view.document().json()==savedWorld,"Saved-game dropdown did not load selected world");
     {std::ofstream malformed(library/"aaa.grimworld.json");malformed<<"invalid";}
-    router.beginFrame();router.currentPanel=90;view.update({},2,{{0,0},{1000,650}},90);router.endFrame();
+    router.beginFrame();router.currentPanel=90;view.update({},2,{{0,0},{1000,900}},90);router.endFrame();
     click({50,90});click({50,145});
     check(view.document().json()==savedWorld,"Malformed library game replaced document");
     view.hide();

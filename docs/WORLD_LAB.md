@@ -15,7 +15,7 @@ not require tool calls. An answer boundary ends a response cycle, not necessaril
 the challenge. Model dispatch and feedback insertion remain pending; see the
 [integration reference](WORLD_LAB_REFERENCE.md#recurrent-model-interaction-contract-selected-integration-pending).
 
-## Challenge and manual playtest
+## Goal and manual playtest
 
 1. Open `examples/world_lab/locked_door.grimworld.json` using the file field for
    a complete two-room puzzle, or author a world in the canvas.
@@ -23,7 +23,7 @@ the challenge. Model dispatch and feedback insertion remain pending; see the
    select its matching key, and Apply changes. A blank name means an ordinary
    passage. A locked door must have a key. Deleting that key clears the reference
    and changes the door to closed; undo restores both.
-3. Choose Challenge. Enter the objective and add conditions using the predicate,
+3. Choose Goal. Enter the objective and add conditions using the predicate,
    subject, and (where needed) target controls. **Every win condition must hold
    together; any fail condition ends the challenge in failure.** These are state
    conditions, not ordered milestones. Select a saved condition and Remove to

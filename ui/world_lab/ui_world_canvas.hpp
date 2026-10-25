@@ -14,6 +14,12 @@ public:
     std::function<void()> onChanged;
     void cancelInput() override;
     void fitWorld();
+    std::string assetHolderAt(Vec2 screen) const {
+        if(!containsScreenPoint(screen))return {};
+        const auto id=hitEntity(screenToWorld(screen));
+        const auto* e=editor_.document().find(id);
+        return e && (e->kind=="room" || e->kind=="container" || e->kind=="supporter")?id:std::string{};
+    }
     void setPlayState(const nlohmann::json& state);
     bool wantsFocus() const override { return true; }
 protected:

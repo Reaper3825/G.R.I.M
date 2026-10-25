@@ -14,7 +14,14 @@ struct Asset {
     static Asset create(const std::string& kind);
     std::string insert(Document&, const std::string& parent, float x, float y) const;
 };
-struct AssetEntry { std::filesystem::path path; std::string name; };
+struct AssetEntry {
+    std::filesystem::path path;
+    std::string name, kind, searchText;
+    size_t entityCount = 0;
+    bool valid = false;
+};
 std::vector<AssetEntry> listAssets(const std::filesystem::path& directory);
+// Indices ordered by textual relevance, with deterministic library-order ties.
+std::vector<size_t> searchAssets(const std::vector<AssetEntry>&, const std::string& query, const std::string& kind);
 std::filesystem::path newAssetPath(const std::filesystem::path& directory, const Asset&);
 }

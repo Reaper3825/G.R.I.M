@@ -3,7 +3,7 @@
 Verified against the repository implementation on 2026-10-23.
 
 This guide covers the environment-authoring system in **Training Control → World Lab**
-and **Training Control → Assets**. Challenge, Play, and Inspect are modes within
+and **Training Control → Assets**. Goal, Play, and Inspect are modes within
 World Lab, not separate top-level tabs. The other Training Control tabs are
 covered by [the panel README](../ui/UI_TRAINING_PANEL_README.md).
 
@@ -17,7 +17,7 @@ use TextWorld's physical-world subset.
 1. [Quick workflow](#quick-workflow)
 2. [World Lab controls](#world-lab-controls)
 3. [Entity types and customization](#entity-types-and-customization)
-4. [Challenge conditions](#challenge-conditions)
+4. [Goal conditions](#goal-conditions)
 5. [Playtesting and solutions](#playtesting-and-solutions)
 6. [Assets and presets](#assets-and-presets)
 7. [Files, recovery, and limits](#files-recovery-and-limits)
@@ -33,7 +33,7 @@ use TextWorld's physical-world subset.
 3. Connect rooms by dragging a compass handle onto another room.
 4. Add objects using Inspect, or insert presets from Assets.
 5. Select the starting room and choose **Set player start**.
-6. Choose Challenge, describe the objective, and add win/fail conditions.
+6. Choose Goal, describe the objective, and add win/fail conditions.
 7. Choose Play → Compile & Play, then enter commands to test the game.
 8. Optionally Record a successful run and choose Save solution.
 9. Save the world to retain the authored game and its verified solution.
@@ -43,6 +43,14 @@ interpreter state. Picking up an object during play does not move it in the save
 world's starting layout.
 
 ## World Lab controls
+
+World Lab and Assets have draggable pane dividers. Drag the vertical grip between
+the canvas and inspector to adjust the inspector width. Drag the horizontal grip
+above the Asset Library to adjust its height. Right-click a divider to restore
+its default size; Escape cancels an active resize. Completed adjustments survive
+tab switches for the current application session, but are not saved across
+restarts or stored in world/asset files. Minimum sizes constrain the panes when
+space permits; shrinking the outer panel does not erase the preferred sizes.
 
 | Control | Behavior |
 |---|---|
@@ -56,7 +64,7 @@ world's starting layout.
 | Fit | Frames all rooms. |
 | Recover | Loads the per-user recovery snapshot and marks it unsaved. Save it to the intended world path. |
 | Inspect | Shows properties for the selected room, object, or passage. |
-| Challenge | Shows objective and condition editing. |
+| Goal | Shows objective and condition editing. |
 | Play | Shows manual playtest controls and command history. |
 
 **Canvas interactions**
@@ -123,7 +131,7 @@ The editor allows more nesting than TextWorld can compile. For playable worlds,
 place containers and supporters directly in rooms; put portable items in rooms,
 inside containers, or on supporters.
 
-## Challenge conditions
+## Goal conditions
 
 The objective is player-facing text. The actual win/loss rules come from the
 condition lists; writing a goal in the objective does not create those rules.
@@ -190,7 +198,7 @@ Custom action authoring and non-compass transitions remain future work.
 
 | Control | Behavior |
 |---|---|
-| Validate (Challenge) | Compiles and resets a temporary candidate interpreter, then closes it. Checks compatibility, not solvability; does not replace an existing live play session. |
+| Validate (Goal) | Compiles and resets a temporary candidate interpreter, then closes it. Checks compatibility, not solvability; does not replace an existing live play session. |
 | Compile & Play | Compiles the current authored world and starts its live interpreter from the beginning. |
 | Command field / Send / Enter | Sends one text command to the live game. |
 | Reset | Restarts the compiled game from its original state. |
@@ -215,6 +223,27 @@ closing the application. A solution is a command list, not a transcript or model
 training episode, and successful verification is evidence for that exact game.
 
 ## Assets and presets
+
+World Lab has an **Asset Library** at the bottom of the panel. Saved assets
+appear as scrollable tiles showing their type and entity count. Filter by the
+asset's root type (room, object, key, container, supporter, or food), or search
+names, descriptions, and nested contents. Results rank name matches above
+contents matches; this is text relevance, not semantic similarity. The library
+refreshes periodically and when returning to World Lab.
+
+Drag a tile onto the canvas to insert an independent copy. Rooms are positioned
+at the drop point without changing the canvas view. Other assets must be dropped
+on a room header, container row, or supporter row. The drag label indicates
+whether the target is valid. Escape, hiding the panel, or releasing outside a
+valid target cancels placement. Each successful insertion is one undoable change;
+save the world to persist it. Invalid asset files are labelled and cannot be
+dragged. Use the Assets tab to create, edit, and save templates.
+
+The **Assets** tab also includes this tiled library, with the same search and
+type filters. Click a tile there to load its saved template into the editor.
+Save or Discard edits before switching templates; a blocked selection preserves
+the draft. Saving updates the opened asset file. Tiles in Assets do not insert
+copies into the preview or world; use **Add to world** for world insertion.
 
 Assets are reusable templates stored independently of games. A room asset includes
 its contained objects. An object asset can include descendants, such as a chest
@@ -341,7 +370,7 @@ directory and atomic destination replacement; failed writes preserve the old fil
 | Asset root | The one room/object from which all saved asset descendants originate. |
 | Authored state | Starting entities, locations, door states, and rules saved in the world. |
 | Canvas | The pannable/zoomable room-card workspace or asset preview. |
-| Challenge | Objective text plus win/fail state conditions. |
+| Goal | Objective text plus win/fail state conditions. |
 | Compile | Translate the authored game into a temporary playable TextWorld artifact. |
 | Condition | A predicate with a subject and, where needed, target. |
 | Container | An openable/closable holder with contents inside. |
@@ -385,7 +414,7 @@ directory and atomic destination replacement; failed writes preserve the old fil
 | `ui/world_lab/ui_world_canvas.hpp`, `.cpp` | Cards, entity rows, selection, drag gestures, compass connections, highlights, selection-only asset mode. |
 | `ui/world_lab/world_asset.hpp`, `.cpp` | Asset schema, extraction, validation, synthetic previews, insertion/remapping, naming, file discovery. |
 | `ui/world_lab/ui_world_assets_view.hpp`, `.cpp` | Independent asset editor, library controls, draft protection, save/copy/archive. |
-| `ui/world_lab/ui_world_session.hpp`, `.cpp` | Challenge UI, play controls, async responses, command history and solution recording. |
+| `ui/world_lab/ui_world_session.hpp`, `.cpp` | Goal UI, play controls, async responses, command history and solution recording. |
 | `ui/world_lab/world_actions.*`, `ui_world_actions.*` | Shared catalog access, typed ID binding, action inspection and command composition. |
 | `ui/world_lab/textworld_action_catalog.generated.hpp` | Generated offline TextWorld rules; do not edit by hand. |
 | `scripts/textworld/action_catalog.py` | Exports native TextWorld rules for offline inspection and runtime compatibility checks. |
@@ -509,7 +538,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundatio
 This uses renderer sinks, not the full application. Relevant suites:
 
 - `tests/world_lab_tests.cpp`: document validation, persistence, gestures,
-  inspector interactions, game library, recovery, challenge editing.
+  inspector interactions, game library, recovery, goal editing.
 - `tests/world_asset_tests.cpp`: extraction, invalid trees, persistence, repeated
   insertion, fresh IDs/names, atomic undo, dirty protection, library and archive UI.
 - `tests/ui_input_foundation_tests.cpp`, `tests/ui_canvas_tests.cpp`: shared input,

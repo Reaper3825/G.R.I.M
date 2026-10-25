@@ -14,9 +14,23 @@ std::string pathText(const std::filesystem::path& path) {
 const std::vector<std::string> kinds{"object","key","container","supporter","food"};
 void place(Widget& w,float x,float y,float width,float height=28) {w.setPosition(x,y);w.setSize(width,height);}
 }
-UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesystem::path gamesDirectory)
+UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesystem::path gamesDirectory, std::filesystem::path assetsDirectory)
     : recoveryPath_(std::move(recoveryPath)), gamesDirectory_(std::move(gamesDirectory)) {
     if(gamesDirectory_.empty())gamesDirectory_=std::filesystem::current_path()/"resources"/"models"/"games";
+    if(assetsDirectory.empty())assetsDirectory=gamesDirectory_.parent_path()/"world_assets";
+    browser_=std::make_unique<UIWorldAssetBrowser>(std::move(assetsDirectory));
+    browser_->onError=[this](const std::string& message){status_=message;};
+    browser_->canDrop=[this](const Asset& asset,Vec2 point){
+        if(!canvas_.containsScreenPoint(point))return false;
+        const auto root=std::find_if(asset.entities.begin(),asset.entities.end(),[&](const Entity& e){return e.id==asset.root;});
+        return root!=asset.entities.end() && (root->kind=="room" || !canvas_.assetHolderAt(point).empty());
+    };
+    browser_->onDrop=[this](const Asset& asset,Vec2 point){act([&]{
+        if(!apply())return;
+        const auto parent=canvas_.assetHolderAt(point);const auto world=canvas_.screenToWorld(point);std::string id;
+        editor_.change([&](Document& d){id=asset.insert(d,parent,world.x,world.y);});
+        canvas_.selected=id;refresh();status_="Inserted asset. Undo removes the entire copy. Save the game to keep it.";
+    });};
     games_=std::make_unique<UIDropdown>("",std::vector<std::string>{"Saved games"},0,[this](int index,const std::string&){
         if(index>0 && index<=static_cast<int>(gameFiles_.size())) {
             const auto file=gameFiles_[index-1];
@@ -52,7 +66,7 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
     actions_.onPrepare=[this](const std::string& command){
         sessionVisible_=true;session_->setChallenge(false);session_->prepareCommand(command);
     };
-    button("Challenge",[this]{if(!apply())return;sessionVisible_=true;session_->setChallenge(true);});
+    button("Goal",[this]{if(!apply())return;sessionVisible_=true;session_->setChallenge(true);});
     button("Play",[this]{if(!apply())return;sessionVisible_=true;session_->setChallenge(false);});
     button("Inspect",[this]{if(!apply())return;sessionVisible_=false;refresh();});
     kind_=std::make_unique<UIDropdown>("",kinds,0,[](int,const std::string&){});
@@ -166,13 +180,20 @@ void UIWorldLabView::layout(const PanelRect& content) {
     for(size_t i=0;i<toolbar_.size();++i){const float bw=i>=8?84.f:i==5?78.f:64.f;place(*toolbar_[i],bx,y+36,bw);bx+=bw+5;}
     place(*games_,x,y+72,168);
     place(path_,x+180,y+72,std::max(40.f,w-180));
-    const float paneWidth=sessionVisible_?340.f:268.f;
-    const float canvasWidth=std::max(80.f,w-paneWidth-12);
-    canvas_.setPosition(x,y+112);canvas_.setSize(canvasWidth,std::max(40.f,content.size.y-174));
-    inspector_={{x+canvasWidth+12,y+112},{paneWidth,std::max(40.f,content.size.y-174)}};
+    librarySplit_.setPosition(x,y+112);librarySplit_.setSize(w,std::max(0.f,content.size.y-170));
+    librarySplit_.setMinimumSizes(100,130);
+    librarySplit_.setDefaultSecondSize(std::min(210.f,std::max(130.f,content.size.y*0.28f)));
+    const auto upper=librarySplit_.firstRect(),library=librarySplit_.secondRect();
+    browser_->setPosition(library.origin);browser_->setSize(library.size);
+    inspectorSplit_.setPosition(upper.origin);inspectorSplit_.setSize(upper.size);
+    inspectorSplit_.setMinimumSizes(160,sessionVisible_?340.f:268.f);
+    inspectorSplit_.setDefaultSecondSize(sessionVisible_?340.f:268.f);
+    const auto canvas=inspectorSplit_.firstRect();inspector_=inspectorSplit_.secondRect();
+    canvas_.setPosition(canvas.origin);canvas_.setSize(canvas.size);
     inspectorScroll_.setPosition(inspector_.origin);inspectorScroll_.setSize(inspector_.size);inspectorScroll_.setContentHeight(1040);
     x=inspector_.origin.x+10;y=inspector_.origin.y-inspectorScroll_.getScrollOffset();
-    place(name_,x,y+48,232);place(description_,x,y+102,232);
+    const float fields=std::max(0.f,inspector_.size.x-36);
+    place(name_,x,y+48,fields);place(description_,x,y+102,fields);
     place(*apply_,x,y+140,150);
     place(*actionsShortcut_,x+156,y+140,76);
     place(*location_,x,y+204,168);place(*state_,x,y+260,168);
@@ -226,8 +247,12 @@ void UIWorldLabView::autosave() {
 void UIWorldLabView::update(const InputState& input,float dt,const PanelRect& content,uint64_t panel) {
     layout(content);canvas_.setPanelID(panel);
     const auto clipped=input.clipped(content.origin,content.size);
+    librarySplit_.setPanelID(panel);inspectorSplit_.setPanelID(panel);
+    librarySplit_.update(clipped,dt);layout(content);
+    inspectorSplit_.update(clipped,dt);layout(content);
     gamesTimer_+=std::max(0.f,dt);
     if(gamesTimer_>=2 && !games_->isExpanded()){gamesTimer_=0;act([this]{refreshGames();});}
+    browser_->setPanelID(panel);browser_->update(clipped,dt);
     // Open dropdowns receive input before siblings so dismissals never click through.
     std::vector<UIDropdown*> dropdowns=sessionVisible_?std::vector<UIDropdown*>{}:std::vector<UIDropdown*>{kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get()};
     dropdowns.insert(dropdowns.begin(),games_.get());
@@ -247,7 +272,7 @@ void UIWorldLabView::update(const InputState& input,float dt,const PanelRect& co
     if(sessionVisible_)session_->update(clipped,dt,inspector_);
     else{
         actions_.update(clipped.clipped(inspector_.origin,inspector_.size),dt,
-            {{inspector_.origin.x+10,inspector_.origin.y+500-inspectorScroll_.getScrollOffset()},{232,530}},panel);
+            {{inspector_.origin.x+10,inspector_.origin.y+500-inspectorScroll_.getScrollOffset()},{std::max(0.f,inspector_.size.x-36),530}},panel);
         inspectorScroll_.setPanelID(panel);inspectorScroll_.update(clipped,dt);
     }
     canvas_.update(clipped,dt);
@@ -255,6 +280,8 @@ void UIWorldLabView::update(const InputState& input,float dt,const PanelRect& co
     if(recoveryTimer_>=10){recoveryTimer_=0;act([this]{if(apply())autosave();});}
 }
 void UIWorldLabView::hide() {
+    librarySplit_.cancelInput();inspectorSplit_.cancelInput();
+    if(browser_)browser_->hide();
     actions_.hide();
     act([this]{if(apply())autosave();});
     canvas_.cancelInput();inspectorScroll_.cancelInput();for(auto* w:controls())w->cancelInput();
@@ -300,13 +327,16 @@ void UIWorldLabView::draw(OverlayRenderer& r,const PanelRect& content) {
         }
     } else r.drawText({x,y+48},"Select a room or object.",TextMuted,13);
     for(auto* w:std::vector<Widget*>{apply_.get(),kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get(),add_.get(),spawn_.get(),erase_.get(),saveAsset_.get(),actionsShortcut_.get()})if(w->isVisible())w->drawOverlay(r,{});
-    actions_.draw(r,{{x,y+500},{232,530}});
+    actions_.draw(r,{{x,y+500},{std::max(0.f,inspector_.size.x-36),530}});
     for(auto* dropdown:{kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get()})if(dropdown->isVisible() && dropdown->isExpanded())dropdown->drawExpandedList(r,{});
     r.popClipRect();
     }
+    librarySplit_.drawOverlay(r,{});inspectorSplit_.drawOverlay(r,{});
+    browser_->drawOverlay(r,{});
     const float bottom=content.origin.y+content.size.y;
     r.drawText({content.origin.x+8,bottom-42},status_,TextSecondary,12);
     r.drawText({content.origin.x+8,bottom-22},"Drag rooms / objects  |  Drag compass handles to connect  |  Middle-drag to pan  |  Wheel to zoom",TextMuted,12);
+    browser_->drawFloating(r);
     if(games_->isExpanded())games_->drawExpandedList(r,{});
     r.popClipRect();
 }

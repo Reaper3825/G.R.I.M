@@ -153,7 +153,7 @@ void UIWorldSession::receive(){
         history_->setItems(labels);historyIndex_=static_cast<int>(labels.size())-1;history_->setSelectedIndex(historyIndex_);scroll_.scrollTo(0);
         if(onState)onState(currentGame()?state:nlohmann::json{});
         if(operation_=="step")command_.clear();
-        message_=state.value("won",false)?"Won!":state.value("lost",false)?"Challenge failed.":recording_?"Recording from the starting state.":"Ready for a command.";
+        message_=state.value("won",false)?"Won!":state.value("lost",false)?"Goal failed.":recording_?"Recording from the starting state.":"Ready for a command.";
         if(!catalogCompatible_)message_="Catalog mismatch: composer disabled; free-text commands remain available.";
     }
     if(result.contains("warnings"))for(const auto& warning:result["warnings"])message_+=" "+warning.get<std::string>();
@@ -198,7 +198,7 @@ void UIWorldSession::hide(){apply();actions_.hide();for(auto* w:controls()){w->c
 void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
     using namespace UITheme::Colors;layout(area);r.pushClipRect(area.origin,area.size);r.drawRect(area.origin,area.size,CardSurface);
     const float x=area.origin.x+8,y=area.origin.y;
-    r.drawText({x,y+10},challenge_?"Challenge":"Manual playtest",TextPrimary,16);
+    r.drawText({x,y+10},challenge_?"Goal":"Manual playtest",TextPrimary,16);
     if(challenge_){
         r.drawText({x,y+26},"Objective",TextMuted,11);r.drawText({x,y+82},"Condition",TextMuted,12);
         r.drawText({x,y+136},"Subject",TextMuted,12);if(target_->isVisible())r.drawText({x,y+190},"Target",TextMuted,12);
