@@ -3,6 +3,7 @@
 #include "../core/delegate.hpp"
 #include <string>
 #include <cstdint>
+#include <vector>
 
 class UIInputBox : public Widget {
 public:
@@ -18,6 +19,11 @@ public:
     void setText(const std::string& text);
     void clear();
     void setClearOnSubmit(bool clear) { clearOnSubmit = clear; }
+    // Visual wrapping only. Enter still submits; line breaks in incoming text
+    // become spaces. Existing single-line controls are unchanged by default.
+    void setWordWrap(bool enabled);
+    bool wordWrap() const { return wordWrap_; }
+    float getContentHeight();
     
     bool wantsFocus() const override { return true; }
 
@@ -26,6 +32,18 @@ public:
 private:
     void submitTextInput(const std::string& text);
     int charIndexAtX(float clickX) const;
+    int charIndexAtPoint(Vec2 point);
+    void refreshWrap(const class OverlayRenderer&);
+    int wrappedRow(int offset) const;
+    int wrappedOffset(int row, float x, const class OverlayRenderer&) const;
+    void revealWrappedCaret();
+    void drawWrapped(class OverlayRenderer&);
+    struct WrapLine { int begin, end; };
+    std::vector<WrapLine> wrapLines_;
+    std::string wrapText_;
+    float wrapWidth_ = -1, wrapHeight_ = -1;
+    int firstWrapRow_ = 0, lastWrapCursor_ = -1;
+    bool wordWrap_ = false;
     void deleteSelection();
     bool hasSelection() const { return selStart != selEnd; }
     std::string selectedText() const;

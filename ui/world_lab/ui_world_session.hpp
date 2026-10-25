@@ -41,6 +41,7 @@ private:
     std::string operation_,sentCommand_,details_,message_="Define a challenge, then Compile & Play.";
     nlohmann::json compiled_,sentDocument_,lastDocument_;
     UIInputBox objective_,command_;
+    float objectiveExtra_=0;
     UIScrollBox scroll_;
     PanelRect area_{},transcript_{};
     std::unique_ptr<UIDropdown> predicate_,subject_,target_,conditions_,history_;

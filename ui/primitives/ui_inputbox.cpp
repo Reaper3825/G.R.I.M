@@ -13,11 +13,23 @@
 #include "core/grim_platform.h"
 #include "core/platform_clipboard.hpp"
 #include <algorithm>
+#include <cmath>
 
 
 
 namespace {
 constexpr float kTextPaddingX = 6.0f;
+constexpr float kWrapLineHeight = 20.0f;
+std::string singleLine(std::string text) {
+    std::string result;
+    for(size_t i=0;i<text.size();++i) {
+        if(text[i]=='\r' || text[i]=='\n') {
+            if(text[i]=='\r' && i+1<text.size() && text[i+1]=='\n')++i;
+            result+=' ';
+        } else result+=text[i];
+    }
+    return UTF8Edit::printable(result);
+}
 constexpr const char* kOverflowPrefix = "...";
 
 struct InputBoxDisplayLayout {
@@ -123,6 +135,93 @@ int UIInputBox::charIndexAtX(float clickX) const {
     return static_cast<int>(buffer.length());
 }
 
+void UIInputBox::setWordWrap(bool enabled) {
+    wordWrap_=enabled;wrapWidth_=-1;firstWrapRow_=0;lastWrapCursor_=-1;
+    if(enabled)setText(buffer);
+}
+void UIInputBox::refreshWrap(const OverlayRenderer& renderer) {
+    if(wrapText_!=buffer || wrapWidth_!=size.x || wrapLines_.empty()) {
+        wrapText_=buffer;wrapWidth_=size.x;wrapLines_.clear();
+        const float width=std::max(1.f,size.x-12);
+        const int length=static_cast<int>(buffer.size());
+        for(int begin=0;begin<length;) {
+            int end=begin,lastSpace=-1;
+            while(end<length) {
+                const int next=UTF8Edit::next(buffer,end);
+                if(renderer.measureTextWidth(buffer.substr(begin,next-begin))>width && end>begin)break;
+                if(buffer[end]==' ')lastSpace=next;
+                end=next;
+            }
+            if(end<length && lastSpace>begin)end=lastSpace;
+            wrapLines_.push_back({begin,end});begin=end;
+        }
+        if(wrapLines_.empty())wrapLines_.push_back({0,0});
+        // Reflow shows the caret while editing, and the beginning otherwise.
+        if(focused)revealWrappedCaret();else firstWrapRow_=0;
+    }
+    const int rows=std::max(1,static_cast<int>((size.y-8)/kWrapLineHeight));
+    firstWrapRow_=std::clamp(firstWrapRow_,0,std::max(0,static_cast<int>(wrapLines_.size())-rows));
+    if(wrapHeight_!=size.y) {
+        wrapHeight_=size.y;
+        if(focused)revealWrappedCaret();
+    }
+    if(lastWrapCursor_!=cursorPos) {
+        if(focused)revealWrappedCaret();
+        lastWrapCursor_=cursorPos;
+    }
+}
+int UIInputBox::wrappedRow(int offset) const {
+    for(int i=0;i<static_cast<int>(wrapLines_.size())-1;++i)if(offset<wrapLines_[i].end)return i;
+    return static_cast<int>(wrapLines_.size())-1;
+}
+int UIInputBox::wrappedOffset(int row,float x,const OverlayRenderer& renderer) const {
+    row=std::clamp(row,0,static_cast<int>(wrapLines_.size())-1);
+    const auto line=wrapLines_[row];float previous=0;
+    for(int i=line.begin;i<line.end;) {
+        const int next=UTF8Edit::next(buffer,i);
+        const float width=renderer.measureTextWidth(buffer.substr(line.begin,next-line.begin));
+        if(x<(previous+width)/2)return i;
+        previous=width;i=next;
+    }
+    // Shared wrap boundaries belong to the next row. Keep clicks at the right
+    // edge on this row, before its trailing space/codepoint.
+    return row+1<static_cast<int>(wrapLines_.size())?UTF8Edit::previous(buffer,line.end):line.end;
+}
+void UIInputBox::revealWrappedCaret() {
+    const int row=wrappedRow(cursorPos),rows=std::max(1,static_cast<int>((size.y-8)/kWrapLineHeight));
+    if(row<firstWrapRow_)firstWrapRow_=row;
+    else if(row>=firstWrapRow_+rows)firstWrapRow_=row-rows+1;
+}
+int UIInputBox::charIndexAtPoint(Vec2 point) {
+    if(!wordWrap_)return charIndexAtX(point.x);
+    const auto& renderer=UIRoot::get().getRenderer();refreshWrap(renderer);
+    const int row=firstWrapRow_+static_cast<int>(std::floor((point.y-position.y-6)/kWrapLineHeight));
+    return wrappedOffset(row,point.x-position.x-6,renderer);
+}
+float UIInputBox::getContentHeight() {
+    if(!wordWrap_)return 28;
+    refreshWrap(UIRoot::get().getRenderer());
+    return std::max(28.f,8.f+wrapLines_.size()*kWrapLineHeight);
+}
+void UIInputBox::drawWrapped(OverlayRenderer& renderer) {
+    refreshWrap(renderer);
+    using namespace UITheme::Colors;
+    renderer.pushClipRect(position,size);
+    if(buffer.empty())renderer.drawText({position.x+6,position.y+6},placeholder,TextDisabled);
+    for(int row=firstWrapRow_;row<static_cast<int>(wrapLines_.size());++row) {
+        const auto line=wrapLines_[row];
+        const float y=position.y+6+(row-firstWrapRow_)*kWrapLineHeight;
+        if(y>=position.y+size.y)break;
+        const auto width=[&](int offset){return renderer.measureTextWidth(buffer.substr(line.begin,offset-line.begin));};
+        const int lo=std::max(line.begin,std::min(selStart,selEnd)),hi=std::min(line.end,std::max(selStart,selEnd));
+        if(focused && hi>lo)renderer.drawRect({position.x+6+width(lo),y},{width(hi)-width(lo),kWrapLineHeight},0xE63366AA);
+        renderer.drawText({position.x+6,y},buffer.substr(line.begin,line.end-line.begin),TextLight);
+        if(focused && caretVisible && wrappedRow(cursorPos)==row)
+            renderer.drawRect({position.x+6+width(cursorPos),y},{1.5f,kWrapLineHeight-2},TextLight);
+    }
+    renderer.popClipRect();
+}
+
 void UIInputBox::deleteSelection() {
     if (!hasSelection()) return;
     int lo = std::min(selStart, selEnd);
@@ -170,11 +269,12 @@ void UIInputBox::update(const InputState& source, float dt) {
     // -------------------------------------------------------
     if (input.mousePressed[0]) {
         if (overBox) {
+            const int clicked=charIndexAtPoint(m);
             if (!focused) {
                 setFocused(true);
 
             }
-            cursorPos = charIndexAtX(m.x);
+            cursorPos = clicked;
             if (input.shift) {
                 selEnd = cursorPos;
             } else {
@@ -195,7 +295,7 @@ void UIInputBox::update(const InputState& source, float dt) {
         }
     } else if (dragging) {
         if (input.mouseDown[0]) {
-            int dragPos = charIndexAtX(m.x);
+            int dragPos = charIndexAtPoint(m);
             if (dragPos != selEnd) {
                 selEnd = dragPos;
                 cursorPos = dragPos;
@@ -208,6 +308,14 @@ void UIInputBox::update(const InputState& source, float dt) {
         }
     }
 
+    if(wordWrap_) {
+        refreshWrap(UIRoot::get().getRenderer());
+        if(overBox && input.mouseInputEnabled && input.mouseWheelDelta!=0) {
+            const int rows=std::max(1,static_cast<int>((size.y-8)/kWrapLineHeight));
+            firstWrapRow_=std::clamp(firstWrapRow_-static_cast<int>(input.scrollSteps().y*3),0,std::max(0,static_cast<int>(wrapLines_.size())-rows));
+            consumeScroll();
+        }
+    }
     if (!focused) return;
 
     // While mouse is actively dragging, skip keyboard input so
@@ -324,14 +432,23 @@ void UIInputBox::update(const InputState& source, float dt) {
         lastBlink = now;
     }
 
+    if(wordWrap_ && (input.keyPressed[VK_UP] || input.keyPressed[VK_DOWN])) {
+        const auto& renderer=UIRoot::get().getRenderer();refreshWrap(renderer);
+        const int row=wrappedRow(cursorPos);
+        const float x=renderer.measureTextWidth(buffer.substr(wrapLines_[row].begin,cursorPos-wrapLines_[row].begin));
+        cursorPos=wrappedOffset(row+(input.keyPressed[VK_UP]?-1:1),x,renderer);
+        if(input.shift)selEnd=cursorPos;else clearSelection();
+        caretVisible=true;lastBlink=now;
+    }
+    if(wordWrap_)refreshWrap(UIRoot::get().getRenderer());
     // Home / End
     if (input.keyPressed[Key::toPlatformCode(KeyCode::Home)]) {
-        cursorPos = 0;
+        cursorPos = wordWrap_ && !input.ctrl ? wrapLines_[wrappedRow(cursorPos)].begin : 0;
         if (input.shift) selEnd = cursorPos;
         else clearSelection();
     }
     if (input.keyPressed[Key::toPlatformCode(KeyCode::End)]) {
-        cursorPos = static_cast<int>(buffer.length());
+        cursorPos = wordWrap_ && !input.ctrl ? wrappedOffset(wrappedRow(cursorPos),1e9f,UIRoot::get().getRenderer()) : static_cast<int>(buffer.length());
         if (input.shift) selEnd = cursorPos;
         else clearSelection();
     }
@@ -363,7 +480,7 @@ void UIInputBox::update(const InputState& source, float dt) {
 
     if (input.pasteRequested && !input.pastedText.empty()) {
         if (hasSelection()) deleteSelection();
-        const auto filtered = UTF8Edit::printable(input.pastedText, false);
+        const auto filtered = wordWrap_ ? singleLine(input.pastedText) : UTF8Edit::printable(input.pastedText, false);
         buffer.insert(cursorPos, filtered);
         cursorPos += static_cast<int>(filtered.length());
         clearSelection();
@@ -403,7 +520,7 @@ void UIInputBox::update(const InputState& source, float dt) {
     // -------------------------------------------------------
     // Text input from platform (WM_CHAR / macOS text callback)
     // -------------------------------------------------------
-    const auto inserted = UTF8Edit::printable(input.textInput);
+    const auto inserted = wordWrap_ ? singleLine(input.textInput) : UTF8Edit::printable(input.textInput);
     if (!inserted.empty()) {
         if (hasSelection()) deleteSelection();
         buffer.insert(cursorPos, inserted);
@@ -427,6 +544,22 @@ void UIInputBox::draw(UIRenderer& renderer) {
     uint32_t bgColor = focused ? 0xFF2A2A38 : 0xD9222238;
     renderer.drawRect(position, size, bgColor);
     
+    if(wordWrap_) {
+        refreshWrap(UIRoot::get().getRenderer());
+        if(buffer.empty())renderer.drawText({position.x+6,position.y+6},placeholder,0xFF505050);
+        for(int row=firstWrapRow_;row<static_cast<int>(wrapLines_.size());++row) {
+            const float y=position.y+6+(row-firstWrapRow_)*kWrapLineHeight;
+            if(y+kWrapLineHeight>position.y+size.y+2)break;
+            const auto line=wrapLines_[row];
+            const auto width=[&](int offset){return UIRoot::get().getRenderer().measureTextWidth(buffer.substr(line.begin,offset-line.begin));};
+            const int lo=std::max(line.begin,std::min(selStart,selEnd)),hi=std::min(line.end,std::max(selStart,selEnd));
+            if(focused && hi>lo)renderer.drawRect({position.x+6+width(lo),y},{width(hi)-width(lo),kWrapLineHeight},0xE63366AA);
+            renderer.drawText({position.x+6,y},buffer.substr(line.begin,line.end-line.begin),0xFFEAEAEA);
+            if(focused && caretVisible && wrappedRow(cursorPos)==row)
+                renderer.drawRect({position.x+6+width(cursorPos),y},{1.5f,kWrapLineHeight-2},0xFFEAEAEA);
+        }
+        return;
+    }
     std::string display = buffer.empty() ? placeholder : buffer;
     uint32_t textColor = buffer.empty() ? 0xFF505050 : 0xFFEAEAEA;
     
@@ -446,6 +579,7 @@ void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     using namespace UITheme;
     if (!isVisible()) return;
 
+    if(wordWrap_){drawWrapped(renderer);return;}
     const InputBoxDisplayLayout layout = buildDisplayLayout(buffer, size.x, renderer);
     const std::string display = buffer.empty() ? placeholder : layout.display;
 
@@ -487,10 +621,10 @@ void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
 // ---------------------------------------------------------------
 
 void UIInputBox::setText(const std::string& text) {
-    buffer = text;
+    buffer = wordWrap_ ? singleLine(text) : text;
     cursorPos = static_cast<int>(buffer.length());
     clearSelection();
-    if (externalBind) *externalBind = text;
+    if (externalBind) *externalBind = buffer;
 }
 
 void UIInputBox::clear() {

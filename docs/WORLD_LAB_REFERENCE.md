@@ -133,6 +133,12 @@ inside containers, or on supporters.
 
 ## Goal conditions
 
+The Objective field wraps words visually as the pane width changes. It grows to
+five visible lines and scrolls for longer text. Enter applies the objective;
+pasted line breaks become spaces, so the saved objective remains a single line.
+This uses the shared `UIInputBox::setWordWrap(true)` option; other input boxes
+remain single-line by default.
+
 The objective is player-facing text. The actual win/loss rules come from the
 condition lists; writing a goal in the objective does not create those rules.
 

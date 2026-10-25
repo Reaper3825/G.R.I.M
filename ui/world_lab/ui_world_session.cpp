@@ -23,6 +23,7 @@ UIWorldSession::UIWorldSession(Editor& editor):editor_(editor),actions_(editor) 
         available_->setSelectedIndex(0);
     });
     available_->setFullWidth(true);available_->setMaxVisibleItems(4);
+    objective_.setWordWrap(true);
     objective_.setPlaceholder("Describe the objective");command_.setPlaceholder("Type a game command");
     objective_.OnTextSubmitted.Bind([this](const auto&){apply();});
     command_.OnTextSubmitted.Bind([this](const auto&){request("step");});
@@ -170,15 +171,19 @@ void UIWorldSession::setChallenge(bool value){
 }
 void UIWorldSession::layout(const PanelRect& area){
     area_=area;const float x=area.origin.x+8,y=area.origin.y,w=area.size.x-16;
-    place(objective_,x,y+42,w);place(*predicate_,x,y+100);
-    place(*subject_,x,y+154);place(*target_,x,y+208);place(*conditions_,x,y+302);
-    place(*challengeButtons_[0],x,y+248,90);place(*challengeButtons_[1],x+98,y+248,90);
-    place(*challengeButtons_[2],x+176,y+302,80);place(*challengeButtons_[3],x,y+350,100);place(*challengeButtons_[4],x+108,y+350,110);
+    objective_.setPosition(x,y+42);objective_.setSize(w,objective_.getSize().y);
+    const float height=std::clamp(objective_.getContentHeight(),28.f,108.f);
+    objective_.setSize(w,height);objectiveExtra_=height-28;
+    const float goalY=y+objectiveExtra_;
+    place(*predicate_,x,goalY+100);
+    place(*subject_,x,goalY+154);place(*target_,x,goalY+208);place(*conditions_,x,goalY+302);
+    place(*challengeButtons_[0],x,goalY+248,90);place(*challengeButtons_[1],x+98,goalY+248,90);
+    place(*challengeButtons_[2],x+176,goalY+302,80);place(*challengeButtons_[3],x,goalY+350,100);place(*challengeButtons_[4],x+108,goalY+350,110);
     place(*playButtons_[0],x,y+36,140);place(*playButtons_[1],x+148,y+36,70);place(*playButtons_[2],x+226,y+36,65);
     place(*playButtons_[3],x,y+74,75);place(*playButtons_[4],x+83,y+74,115);place(*playButtons_[6],x+206,y+74,100);
     place(*history_,x,y+114);place(command_,x,y+154,std::max(80.f,w-74));place(*playButtons_[5],x+w-66,y+154,66);
     place(*available_,x,y+190,w-92);place(*playButtons_[7],x+w-84,y+190,84);
-    const float transcriptY=challenge_?414.f:composerVisible_?390.f:226.f;
+    const float transcriptY=challenge_?414.f+objectiveExtra_:composerVisible_?390.f:226.f;
     transcript_={{x,y+transcriptY},{w,std::max(24.f,area.size.y-transcriptY-50)}};
     scroll_.setPosition(transcript_.origin);scroll_.setSize(transcript_.size);
 }
@@ -200,10 +205,10 @@ void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
     const float x=area.origin.x+8,y=area.origin.y;
     r.drawText({x,y+10},challenge_?"Goal":"Manual playtest",TextPrimary,16);
     if(challenge_){
-        r.drawText({x,y+26},"Objective",TextMuted,11);r.drawText({x,y+82},"Condition",TextMuted,12);
-        r.drawText({x,y+136},"Subject",TextMuted,12);if(target_->isVisible())r.drawText({x,y+190},"Target",TextMuted,12);
-        r.drawText({x,y+284},"Win: ALL conditions / Fail: ANY",TextSecondary,12);
-        r.drawText({x,y+390},"Saved solution: "+std::to_string(editor_.document().solution.size())+" commands",TextMuted,12);
+        r.drawText({x,y+26},"Objective",TextMuted,11);r.drawText({x,y+82+objectiveExtra_},"Condition",TextMuted,12);
+        r.drawText({x,y+136+objectiveExtra_},"Subject",TextMuted,12);if(target_->isVisible())r.drawText({x,y+190+objectiveExtra_},"Target",TextMuted,12);
+        r.drawText({x,y+284+objectiveExtra_},"Win: ALL conditions / Fail: ANY",TextSecondary,12);
+        r.drawText({x,y+390+objectiveExtra_},"Saved solution: "+std::to_string(editor_.document().solution.size())+" commands",TextMuted,12);
     }else{
         r.drawText({x+178,y+121},live_&&!currentGame()?"World changed - recompile":recording_?"REC":"History",live_&&!currentGame()?Warning:TextMuted,11);
     }
