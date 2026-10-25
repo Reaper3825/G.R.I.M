@@ -1,6 +1,6 @@
 #include "concept_block_io_flatbuffer.hpp"
 
-#include "../concept_block_generated.h"
+#include <grim_concept/concept_block_generated.h>
 
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/verifier.h>

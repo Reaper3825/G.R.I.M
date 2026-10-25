@@ -1,5 +1,5 @@
 #include "unified_memory.hpp"
-#include "unified_memory_generated.h"  // FlatBuffers generated header
+#include <grim_memory/unified_memory_generated.h>
 #include "atomic_writer.hpp"
 #include "logger.hpp"
 #include <fstream>

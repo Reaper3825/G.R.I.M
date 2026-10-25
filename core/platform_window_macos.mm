@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <string>
 #include <functional>
+#include <stdexcept>
 #include <vector>
 #include <cstring>
 #include <atomic>
@@ -69,6 +70,122 @@
     if (self.layer) {
         ((CAMetalLayer*)self.layer).contentsScale = self.window.backingScaleFactor;
     }
+}
+
+@end
+
+@interface GRIMViewportView : GRIMMetalView {
+@private
+    PlatformWindow::ViewportInputCallback _inputCallback;
+}
+- (void)setInputCallback:(PlatformWindow::ViewportInputCallback)callback;
+@end
+
+@implementation GRIMViewportView
+
+- (BOOL)isFlipped { return YES; }
+
+- (void)setInputCallback:(PlatformWindow::ViewportInputCallback)callback {
+    _inputCallback = std::move(callback);
+}
+
+- (PlatformWindow::ViewportInputModifiers)inputModifiers:(NSEvent*)event {
+    const NSEventModifierFlags flags = event.modifierFlags;
+    return {
+        .ctrl = (flags & NSEventModifierFlagControl) != 0,
+        .shift = (flags & NSEventModifierFlagShift) != 0,
+        .alt = (flags & NSEventModifierFlagOption) != 0
+    };
+}
+
+- (void)dispatchMouseEvent:(NSEvent*)event
+                     type:(PlatformWindow::ViewportInputEventType)type
+                   button:(PlatformWindow::ViewportMouseButton)button {
+    if (!_inputCallback)
+        return;
+
+    const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    PlatformWindow::ViewportInputEvent input;
+    input.type = type;
+    input.button = button;
+    input.x = static_cast<int>(point.x);
+    input.y = static_cast<int>(point.y);
+    input.modifiers = [self inputModifiers:event];
+    _inputCallback(input);
+}
+
+- (void)mouseDown:(NSEvent*)event {
+    [self.window makeFirstResponder:self];
+    [self dispatchMouseEvent:event
+                        type:PlatformWindow::ViewportInputEventType::MouseDown
+                      button:PlatformWindow::ViewportMouseButton::Left];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+    [self dispatchMouseEvent:event
+                        type:PlatformWindow::ViewportInputEventType::MouseUp
+                      button:PlatformWindow::ViewportMouseButton::Left];
+}
+
+- (void)rightMouseDown:(NSEvent*)event {
+    [self.window makeFirstResponder:self];
+    [self dispatchMouseEvent:event
+                        type:PlatformWindow::ViewportInputEventType::MouseDown
+                      button:PlatformWindow::ViewportMouseButton::Right];
+}
+
+- (void)rightMouseUp:(NSEvent*)event {
+    [self dispatchMouseEvent:event
+                        type:PlatformWindow::ViewportInputEventType::MouseUp
+                      button:PlatformWindow::ViewportMouseButton::Right];
+}
+
+- (void)otherMouseDown:(NSEvent*)event {
+    [self.window makeFirstResponder:self];
+    [self dispatchMouseEvent:event
+                        type:PlatformWindow::ViewportInputEventType::MouseDown
+                      button:PlatformWindow::ViewportMouseButton::Middle];
+}
+
+- (void)otherMouseUp:(NSEvent*)event {
+    [self dispatchMouseEvent:event
+                        type:PlatformWindow::ViewportInputEventType::MouseUp
+                      button:PlatformWindow::ViewportMouseButton::Middle];
+}
+
+- (void)mouseMoved:(NSEvent*)event {
+    [self dispatchMouseEvent:event
+                        type:PlatformWindow::ViewportInputEventType::MouseMove
+                      button:PlatformWindow::ViewportMouseButton::None];
+}
+
+- (void)mouseDragged:(NSEvent*)event { [self mouseMoved:event]; }
+- (void)rightMouseDragged:(NSEvent*)event { [self mouseMoved:event]; }
+- (void)otherMouseDragged:(NSEvent*)event { [self mouseMoved:event]; }
+
+- (void)scrollWheel:(NSEvent*)event {
+    if (!_inputCallback)
+        return;
+
+    const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    PlatformWindow::ViewportInputEvent input;
+    input.type = PlatformWindow::ViewportInputEventType::MouseWheel;
+    input.x = static_cast<int>(point.x);
+    input.y = static_cast<int>(point.y);
+    input.wheelDelta = static_cast<int>(
+        event.hasPreciseScrollingDeltas ? event.scrollingDeltaY * 3.0
+                                        : event.scrollingDeltaY * 120.0);
+    input.modifiers = [self inputModifiers:event];
+    _inputCallback(input);
+}
+
+- (BOOL)resignFirstResponder {
+    if (_inputCallback) {
+        PlatformWindow::ViewportInputEvent input;
+        input.type = PlatformWindow::ViewportInputEventType::FocusLost;
+        _inputCallback(input);
+    }
+    return [super resignFirstResponder];
 }
 
 @end
@@ -338,18 +455,79 @@ void setWindowVisible(void* handle, bool visible) {
 }
 
 void* createViewportWindow(void* overlayWindowHandle, const char* debugName) {
-    (void)overlayWindowHandle;
-    (void)debugName;
-    return nullptr;
+    if (!overlayWindowHandle)
+        throw std::runtime_error("createViewportWindow requires a valid overlay window");
+    if (!debugName || debugName[0] == '\0')
+        throw std::runtime_error("createViewportWindow requires a non-empty debug name");
+
+    @autoreleasepool {
+        NSWindow* overlay = (__bridge NSWindow*)overlayWindowHandle;
+        NSWindow* window = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 1, 1)
+                      styleMask:NSWindowStyleMaskBorderless
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        if (!window)
+            throw std::runtime_error("createViewportWindow failed to allocate NSWindow");
+
+        window.title = [NSString stringWithUTF8String:debugName];
+        window.releasedWhenClosed = NO;
+        window.opaque = YES;
+        window.backgroundColor = NSColor.blackColor;
+        window.hasShadow = NO;
+        window.level = overlay.level - 1;
+        window.acceptsMouseMovedEvents = YES;
+
+        GRIMViewportView* view =
+            [[GRIMViewportView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
+        if (!view)
+            throw std::runtime_error("createViewportWindow failed to allocate Metal view");
+        view.wantsLayer = YES;
+        window.contentView = view;
+        [window orderOut:nil];
+
+        return static_cast<void*>(window);
+    }
 }
 
 void destroyViewportWindow(void* viewportWindowHandle) {
-    (void)viewportWindowHandle;
+    if (!viewportWindowHandle)
+        throw std::runtime_error("destroyViewportWindow requires a valid viewport window");
+
+    @autoreleasepool {
+        NSWindow* window = (__bridge NSWindow*)viewportWindowHandle;
+        GRIMViewportView* view = (GRIMViewportView*)window.contentView;
+        [view setInputCallback:{}];
+        [window orderOut:nil];
+        [window close];
+        [window release];
+    }
 }
 
 void setViewportWindowVisible(void* viewportWindowHandle, bool visible) {
-    (void)viewportWindowHandle;
-    (void)visible;
+    if (!viewportWindowHandle)
+        throw std::runtime_error("setViewportWindowVisible requires a valid viewport window");
+
+    @autoreleasepool {
+        NSWindow* window = (__bridge NSWindow*)viewportWindowHandle;
+        if (visible)
+            [window orderFront:nil];
+        else
+            [window orderOut:nil];
+    }
+}
+
+void setViewportInputCallback(void* viewportWindowHandle, ViewportInputCallback callback) {
+    if (!viewportWindowHandle)
+        throw std::runtime_error("setViewportInputCallback requires a valid viewport window");
+
+    @autoreleasepool {
+        NSWindow* window = (__bridge NSWindow*)viewportWindowHandle;
+        NSView* contentView = window.contentView;
+        if (![contentView isKindOfClass:[GRIMViewportView class]])
+            throw std::runtime_error("setViewportInputCallback received a window without GRIMViewportView");
+        [(GRIMViewportView*)contentView setInputCallback:std::move(callback)];
+    }
 }
 
 void setViewportWindowBounds(void* viewportWindowHandle,
@@ -358,12 +536,24 @@ void setViewportWindowBounds(void* viewportWindowHandle,
                              int y,
                              int width,
                              int height) {
-    (void)viewportWindowHandle;
-    (void)overlayWindowHandle;
-    (void)x;
-    (void)y;
-    (void)width;
-    (void)height;
+    if (!viewportWindowHandle)
+        throw std::runtime_error("setViewportWindowBounds requires a valid viewport window");
+    if (!overlayWindowHandle)
+        throw std::runtime_error("setViewportWindowBounds requires a valid overlay window");
+    if (width <= 0 || height <= 0)
+        throw std::runtime_error("setViewportWindowBounds requires positive dimensions");
+
+    @autoreleasepool {
+        NSWindow* window = (__bridge NSWindow*)viewportWindowHandle;
+        NSWindow* overlay = (__bridge NSWindow*)overlayWindowHandle;
+        const NSRect overlayFrame = overlay.frame;
+        const NSRect frame = NSMakeRect(
+            NSMinX(overlayFrame) + x,
+            NSMaxY(overlayFrame) - y - height,
+            width,
+            height);
+        [window setFrame:frame display:YES];
+    }
 }
 
 void getVirtualScreenRect(int& x, int& y, int& width, int& height) {

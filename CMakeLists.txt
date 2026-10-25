@@ -343,8 +343,68 @@ include(${CMAKE_SOURCE_DIR}/cmake/Shaders.cmake)
 
 if(NOT TARGET flatbuffers::flatc)
   message(FATAL_ERROR
-    "GRIM session schema generation requires the flatc executable target.")
+    "GRIM schema generation requires the flatc executable target.")
 endif()
+
+set(GRIM_UNIFIED_MEMORY_SCHEMA
+    ${CMAKE_SOURCE_DIR}/memory/unified_memory.fbs)
+set(GRIM_UNIFIED_MEMORY_GENERATED_ROOT
+    ${CMAKE_CURRENT_BINARY_DIR}/generated)
+set(GRIM_UNIFIED_MEMORY_GENERATED_DIR
+    ${GRIM_UNIFIED_MEMORY_GENERATED_ROOT}/grim_memory)
+set(GRIM_UNIFIED_MEMORY_GENERATED_HEADER
+    ${GRIM_UNIFIED_MEMORY_GENERATED_DIR}/unified_memory_generated.h)
+
+add_custom_command(
+  OUTPUT ${GRIM_UNIFIED_MEMORY_GENERATED_HEADER}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${GRIM_UNIFIED_MEMORY_GENERATED_DIR}
+  COMMAND $<TARGET_FILE:flatbuffers::flatc>
+          --cpp
+          -o ${GRIM_UNIFIED_MEMORY_GENERATED_DIR}
+          ${GRIM_UNIFIED_MEMORY_SCHEMA}
+  DEPENDS flatbuffers::flatc ${GRIM_UNIFIED_MEMORY_SCHEMA}
+  COMMENT "Generating unified-memory FlatBuffer schema"
+  VERBATIM
+)
+add_custom_target(generate_grim_unified_memory_schema
+  DEPENDS ${GRIM_UNIFIED_MEMORY_GENERATED_HEADER})
+add_dependencies(GRIM generate_grim_unified_memory_schema)
+target_sources(GRIM PRIVATE ${GRIM_UNIFIED_MEMORY_GENERATED_HEADER})
+target_include_directories(GRIM PRIVATE ${GRIM_UNIFIED_MEMORY_GENERATED_ROOT})
+
+if(TARGET unified_memory_async_tests)
+  add_dependencies(unified_memory_async_tests generate_grim_unified_memory_schema)
+  target_sources(unified_memory_async_tests PRIVATE
+      ${GRIM_UNIFIED_MEMORY_GENERATED_HEADER})
+  target_include_directories(unified_memory_async_tests PRIVATE
+      ${GRIM_UNIFIED_MEMORY_GENERATED_ROOT})
+endif()
+
+set(GRIM_CONCEPT_BLOCK_SCHEMA
+    ${CMAKE_SOURCE_DIR}/DataCollection/concept_block.fbs)
+set(GRIM_CONCEPT_BLOCK_GENERATED_ROOT
+    ${CMAKE_CURRENT_BINARY_DIR}/generated)
+set(GRIM_CONCEPT_BLOCK_GENERATED_DIR
+    ${GRIM_CONCEPT_BLOCK_GENERATED_ROOT}/grim_concept)
+set(GRIM_CONCEPT_BLOCK_GENERATED_HEADER
+    ${GRIM_CONCEPT_BLOCK_GENERATED_DIR}/concept_block_generated.h)
+
+add_custom_command(
+  OUTPUT ${GRIM_CONCEPT_BLOCK_GENERATED_HEADER}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${GRIM_CONCEPT_BLOCK_GENERATED_DIR}
+  COMMAND $<TARGET_FILE:flatbuffers::flatc>
+          --cpp --scoped-enums
+          -o ${GRIM_CONCEPT_BLOCK_GENERATED_DIR}
+          ${GRIM_CONCEPT_BLOCK_SCHEMA}
+  DEPENDS flatbuffers::flatc ${GRIM_CONCEPT_BLOCK_SCHEMA}
+  COMMENT "Generating ConceptBlock FlatBuffer schema"
+  VERBATIM
+)
+add_custom_target(generate_grim_concept_block_schema
+  DEPENDS ${GRIM_CONCEPT_BLOCK_GENERATED_HEADER})
+add_dependencies(GRIM generate_grim_concept_block_schema)
+target_sources(GRIM PRIVATE ${GRIM_CONCEPT_BLOCK_GENERATED_HEADER})
+target_include_directories(GRIM PRIVATE ${GRIM_CONCEPT_BLOCK_GENERATED_ROOT})
 
 set(GRIM_SESSION_SCHEMA
     ${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/training/schemas/grim_session.fbs)
@@ -467,5 +527,3 @@ if(WIN32)
   add_subdirectory(plugins/osint_plugin)
   add_subdirectory(plugins/network_test_plugin)
 endif()
-
-
