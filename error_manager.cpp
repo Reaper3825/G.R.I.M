@@ -137,7 +137,7 @@ CommandResult ErrorManager::report(const std::string& code) {
     result.errorCode = code;
     result.voice     = "";
     result.category  = "error";
-    result.color     = Colors::Red.toUInt();
+    result.color     = Colors::Red;
 
     setConsoleColor(Colors::Red);
     Logger::logMessage(Logger::Level::Error, code + " -> " + debugMsg);

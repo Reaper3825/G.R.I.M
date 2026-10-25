@@ -53,9 +53,11 @@ endif()
 message(STATUS "[GRIM] Found shaderc: ${BGFX_SHADERC}")
 
 # ---- Platform / profiles ----
-# NOTE: "wgsl" (WebGPU) is intentionally omitted — this bgfx build's
-# embedded_shader.h has no WGSL backend, so the symbol is never referenced,
-# and shaderc here lacks the tint toolchain to emit it (it would fail the build).
+# WGSL is intentionally omitted because shaderc here lacks the tint toolchain
+# required to emit it. Keep bgfx's embedded-shader table aligned with the
+# profiles generated below.
+target_compile_definitions(GRIM PRIVATE BGFX_PLATFORM_SUPPORTS_WGSL=0)
+
 if(APPLE AND NOT IOS)
     set(_SHADERC_PLATFORM "osx")
     set(_SHADERC_VS_PROFILES  "120" "300_es" "spirv" "metal")
