@@ -55,6 +55,26 @@ The test container has networking disabled and no workspace mounts.
 Successful output includes `"status": "passed"`. Import success alone does not
 establish that game compilation and execution work.
 
+## macOS setup
+
+Install and start Docker Desktop. On Apple Silicon, Docker runs the pinned
+Linux x86_64 TextWorld image through its platform emulation because the official
+TextWorld 1.7.0 wheel is x86_64-only.
+
+From the repository root:
+
+```bash
+docker build --platform linux/amd64 \
+  -t grim-textworld:1.7.0 scripts/textworld
+docker run --rm --platform linux/amd64 --network none \
+  grim-textworld:1.7.0
+```
+
+The second command runs the same standalone compilation/gameplay smoke check as
+the Windows setup script. Successful output includes `"status": "passed"`.
+World Lab then discovers `docker` from PATH or Docker Desktop's standard
+application bundle and launches the temporary worker on demand.
+
 ## Standalone use
 
 ```powershell

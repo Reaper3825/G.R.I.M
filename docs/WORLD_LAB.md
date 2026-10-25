@@ -65,7 +65,8 @@ actionable validation errors rather than silently rewriting an authored world.
 ## Worker requirements and transport
 
 Use the already installed Docker Desktop Linux engine and `grim-textworld:1.7.0`
-image. The client searches PATH and Docker Desktop's standard Program Files path.
+image. On Windows and macOS, the client searches PATH and Docker Desktop's
+standard installation path.
 It finds `scripts/textworld/world_worker.py` by walking ancestors of the working
 directory and executable. No image rebuild is needed: the worker source is mounted
 read-only. The client never pulls/builds an image or installs dependencies.
@@ -77,8 +78,8 @@ versioned, ID-matched JSON files published by rename, limited to 16 MB. This fil
 mailbox keeps compiler stdout/stderr out of the protocol and avoids blocking pipe
 writes on the UI thread. The worker keeps one interpreter alive between requests.
 Temporary games and logs are removed with the owned session on shutdown. The
-worker also exits after 15 minutes without requests. The native client currently
-supports Windows; other hosts report an explicit unsupported-host error.
+worker also exits after 15 minutes without requests. The native client supports
+Windows and POSIX hosts, including macOS.
 
 ## Editing
 
