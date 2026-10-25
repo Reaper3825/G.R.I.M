@@ -34,6 +34,7 @@ static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_
 static Popup3DRenderer g_popup3D;
 static PopupRenderInput g_popup3DInput;
 static std::atomic<bool> g_popup3DInitialized{ false };
+static constexpr const char* kPopup3DRenderPassName = "popup_3d";
 
 static void popup3DPreFrameCallback(uint32_t bgfxFrame)
 {
@@ -150,8 +151,7 @@ void runPopupUI(int width, int height)
                 g_popup3DInput.height    = static_cast<uint32_t>(height);
                 g_popup3DInput.visible   = true;
 
-                // Register pre-frame callback so main thread renders the cube
-                WindowManager::registerPreFrameCallback(popup3DPreFrameCallback);
+                WindowManager::registerRenderPass(kPopup3DRenderPassName, popup3DPreFrameCallback);
                 g_popup3DInitialized = true;
 
                 LOG_DEBUG("PopupUI", "Popup 3D renderer initialized (GRIM object, macOS)");
@@ -307,9 +307,9 @@ void runPopupUI(int width, int height)
     // Shutdown 3D renderer before exiting
     if (g_popup3DInitialized.load())
     {
-        WindowManager::registerPreFrameCallback(nullptr);
-        popup3DRendererShutdown(g_popup3D);
         g_popup3DInitialized = false;
+        WindowManager::unregisterRenderPass(kPopup3DRenderPassName);
+        popup3DRendererShutdown(g_popup3D);
     }
 
     LOG_DEBUG("PopupUI", "Popup UI Thread Exited (macOS)");
@@ -326,7 +326,7 @@ void showPopup()
         g_popupVisible = true;
         LOG_DEBUG("PopupUI", "PopupUI shown — 3DInit=" +
                   std::to_string(g_popup3DInitialized.load()) +
-                  " hasPreFrame=" + std::to_string(WindowManager::hasPreFrameCallback()) +
+                  " hasRenderPass=" + std::to_string(WindowManager::hasEnabledRenderPasses()) +
                   " bgfxInit=" + std::to_string(WindowManager::isInitialized()) +
                   " handle=" + std::to_string((uintptr_t)g_popupHandle));
         WindowManager::setVisibility("popup", true);
