@@ -1,11 +1,11 @@
-"""Pure Goal binding/evaluation; no interpreter, database or model dependency."""
+"""Typed Goal binding and TextWorld-native Quest evaluation for reusable worlds."""
 from dataclasses import dataclass
 import copy
 import hashlib
 import json
 
 # Bump when action/binding/evaluation semantics change, invalidating witnesses.
-SEMANTICS = "grim-textworld-goal-v1"
+SEMANTICS = "grim-textworld-native-quest-v2"
 PORTABLE = {"object", "key", "food"}
 
 
@@ -95,21 +95,58 @@ class BoundGoal:
                     raise GoalError(str(error), source_id, collection, index, entity_id) from error
 
     def evaluate(self, facts):
-        facts = set(facts)
+        """Evaluate an independent snapshot; episodes retain their own progression."""
+        return NativeGoal(self).evaluate(facts)
+
+
+class NativeGoal:
+    def __init__(self, bound, kb=None):
+        # Binding remains usable on the host without installing TextWorld.
+        from textworld.generator.data import KnowledgeBase
+        from textworld.generator.game import Event, Quest, QuestProgression
+        from textworld.logic import Proposition, Variable
+
+        self.kb = kb if kb is not None else KnowledgeBase.default()
+        self.bound = bound
+        self.events = [None if check.fact is None else Event(conditions=[
+            Proposition(check.fact[0], [Variable(name, type_) for name, type_ in check.fact[1]])
+        ]) for check in bound.checks]
+        self.complete = all(event is not None for event in self.events)
+        wins = [event for check, event in zip(bound.checks, self.events)
+                if check.collection == "success_criteria"]
+        self.covered = self.complete and bool(wins)
+        # Native win_events are alternatives. One event holds ALL success
+        # conditions so they must hold simultaneously, rather than latch apart.
+        win_events = [Event(conditions=[fact for event in wins
+                                       for fact in event.condition.preconditions])] if self.covered else []
+        fail_events = [event for check, event in zip(bound.checks, self.events)
+                       if check.collection == "constraints" and event is not None]
+        self.quest = Quest(win_events=win_events, fail_events=fail_events) if win_events or fail_events else None
+        self.progression = QuestProgression(self.quest, self.kb) if self.quest is not None else None
+
+    def evaluate(self, facts):
+        from textworld.logic import Proposition, State, Variable
+
+        state = State(self.kb.logic, [Proposition(name, [Variable(n, t) for n, t in args])
+                                     for name, args in facts])
         results = [{"collection": check.collection, "index": check.index, "text": check.text,
-                    "status": "unverified" if check.fact is None else
-                              "satisfied" if check.fact in facts else "unsatisfied"} for check in self.checks]
-        failed = any(r["collection"] == "constraints" and r["status"] == "satisfied" for r in results)
-        complete = all(r["status"] != "unverified" for r in results)
-        wins = [r for r in results if r["collection"] == "success_criteria"]
-        succeeded = bool(wins) and complete and all(r["status"] == "satisfied" for r in wins)
+                    "status": "unverified" if event is None else
+                              "satisfied" if event.is_triggering(state) else "unsatisfied"}
+                   for check, event in zip(self.bound.checks, self.events)]
+        if self.progression is not None:
+            self.progression.update(state=state)
+        failed = self.progression is not None and self.progression.failed
+        succeeded = self.progression is not None and self.progression.completed
+        # TextWorld can report both on the same transition; preserve the Goal
+        # contract's failure precedence at the episode boundary.
         return {"status": "failed" if failed else "succeeded" if succeeded else "active",
-                "coverage": "complete" if complete and wins else "unverified", "requirements": results}
+                "coverage": "complete" if self.covered else "unverified", "requirements": results}
 
 
 class Episode:
-    def __init__(self, bound, environment_id, initial_facts):
+    def __init__(self, bound, environment_id, initial_facts, kb=None):
         self.bound = bound
+        self.native = NativeGoal(bound, kb)
         self.commands = []
         self.witness_verified = False
         self.identity = {"environment": environment_id, "starting_state": identity(sorted(initial_facts)),
@@ -122,7 +159,7 @@ class Episode:
             if self.result.get("status") != "active":
                 raise GoalError("Episode is finished; reset or start another Goal")
             self.commands.append(command)
-        self.result = self.bound.evaluate(facts)
+        self.result = self.native.evaluate(facts)
         if self.result["status"] == "active" and (engine_done or len(self.commands) >= 1000):
             self.result.update(status="stopped", reason="engine_terminated" if engine_done else "command_limit")
         self.result["identity"] = self.identity

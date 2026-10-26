@@ -114,14 +114,22 @@ class WorkerTests(unittest.TestCase):
                 self.session.handle(compile_request(world))
 
     def test_reuses_one_compilation_for_two_database_goals(self):
+        from textworld.generator.game import Quest, QuestProgression
         compiled = self.session.handle(compile_request(puzzle()))
+        native_a = self.session.episode.native
+        self.assertIsInstance(native_a.quest, Quest)
+        self.assertIsInstance(native_a.progression, QuestProgression)
         artifact = Path(self.session.game_file)
         before = artifact.read_bytes()
         for command in SOLUTION:
             self.session.handle({"op": "step", "command": command})
         self.assertTrue(self.session.done)
+        self.assertTrue(native_a.progression.completed)
         new_goal = {"success_criteria": [{"criterion": "Eat apple", "evidence": {"predicate": "eaten", "subject": "f1"}}]}
         started = self.session.handle({"op": "start_episode", "source_id": "goal-b", "goal": new_goal})
+        native_b = self.session.episode.native
+        self.assertIsNot(native_b.progression, native_a.progression)
+        self.assertFalse(native_b.progression.completed)
         self.assertEqual(started["build_id"], compiled["build_id"])
         self.assertEqual(Path(self.session.game_file), artifact)
         self.assertEqual(artifact.read_bytes(), before)
@@ -134,6 +142,7 @@ class WorkerTests(unittest.TestCase):
         self.session.handle({"op": "step", "command": "take apple"})
         state = self.session.handle({"op": "step", "command": "eat apple"})["state"]
         self.assertTrue(state["won"])
+        self.assertTrue(native_b.progression.completed)
         self.assertFalse(state["engine"]["won"])
 
     def test_initial_success_failure_and_zero_command_witness(self):

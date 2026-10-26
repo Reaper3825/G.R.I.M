@@ -501,6 +501,22 @@ existing features to build assumptions around.
 
 ### Recurrent model interaction contract (selected; integration pending)
 
+Course-driven assignment is the selected upstream connection to native Quest
+progression: `Curriculum -> Course -> ConceptBlock -> Goal evidence -> Quest ->
+QuestProgression`. The course supplies ConceptBlock membership through
+`concept_block_ids` and an optional environment reference through `environment_id`.
+Each assigned ConceptBlock supplies its own frozen Goal; each episode receives
+fresh interpreter state and native progression. Compatible Goals reuse compilation.
+Goals from course membership are not implicitly merged, and episode success does
+not by itself define course completion or advancement.
+
+The manual Goal-to-progression path is implemented. Persistent environment
+identity/resolution and course-driven assignment remain pending. Empty environment
+references mean no environment assignment; unresolved references or invalid
+bindings require explicit diagnostics. Model routing is separate from course
+orchestration. See the [course-driven flow](WORLD_LAB.md#course-driven-quest-assignment-selected-integration-pending)
+and [next-phase scope](WORLD_LAB_GOAL_INTEGRATION_PLAN.md#next-phase-course-driven-assignment-integration-pending).
+
 The [GRIM reasoning contract](GRIM_REASONING_DATA_CONTRACT.md) governs the model
 side of future challenge assignment. The Goal describes the desired outcome,
 success criteria, and constraints. Its paired structured evidence supplies the
@@ -509,9 +525,15 @@ entities by stable ID and validate predicate argument types. Binding registers
 checks; it does not assert facts or change world state. Criterion prose does not
 become a predicate automatically, and not every GRIM constraint is an environment
 fact. The episode retains a frozen Goal snapshot and owns check results and
-completion status. The reusable path evaluates checks externally at reset and
-after commands, with failure taking precedence, rather than embedding each Goal
-in a separately compiled TextWorld Quest. This manual Play/replay evaluator is
+completion status. The reusable path supplies a native TextWorld `Quest` to
+Python `QuestProgression` at reset and after commands. One win Event combines
+all success evidence, and separate fail Events represent constraint violations.
+Per-requirement checks use native `Event.is_triggering`. Coverage guards prevent
+unverified success; failure takes precedence if both native outcomes are true.
+Compiled Quest endings stay empty, permitting Goal changes without recompilation.
+Each reset/replay creates fresh native progression with the game's knowledge base.
+The `grim-textworld-native-quest-v2` semantics identity invalidates old witnesses.
+This manual Play/replay evaluator is
 implemented; automatic model routing remains pending. See
 [episode evidence binding](WORLD_LAB.md#episode-evidence-binding)
 for the full lifecycle and separation of episode setup from evidence.

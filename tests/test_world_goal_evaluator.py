@@ -1,4 +1,5 @@
 import copy
+import importlib.util
 from pathlib import Path
 import sys
 import unittest
@@ -21,6 +22,10 @@ def requirement(pred="carrying", subject="key", target=None):
 
 
 class EvaluatorTests(unittest.TestCase):
+    def setUp(self):
+        if self._testMethodName != "test_invalid_bindings_have_source_locations" and importlib.util.find_spec("textworld") is None:
+            self.skipTest("Native evaluation runs in the existing grim-textworld:1.7.0 image")
+
     def bind(self, entries=None, constraints=None):
         return BoundGoal({"success_criteria": entries if entries is not None else [requirement()],
                           "constraints": constraints or []}, "source", ENTITIES)
@@ -71,6 +76,42 @@ class EvaluatorTests(unittest.TestCase):
         self.assertEqual(bound.evaluate(first)["status"], "active")
         self.assertEqual(bound.evaluate(second)["status"], "active")
         self.assertEqual(bound.evaluate(first | second)["status"], "succeeded")
+        episode = Episode(bound, "environment", set())
+        episode.advance(first, command="take key")
+        episode.advance(second, command="drop key and move")
+        self.assertEqual(episode.result["status"], "active")
+        episode.advance(first | second, command="take key")
+        self.assertEqual(episode.result["status"], "succeeded")
+
+    def test_native_quest_structure_and_progression(self):
+        from textworld.generator.game import Event, Quest, QuestProgression
+
+        bound = self.bind([requirement(), requirement("player_at", "room")], [
+            {"constraint": "Do not eat", "evidence": {"predicate": "eaten", "subject": "apple"}},
+            {"constraint": "Do not open", "evidence": {"predicate": "open", "subject": "door"}}])
+        episode = Episode(bound, "environment", set())
+        native = episode.native
+        self.assertIsInstance(native.quest, Quest)
+        self.assertIsInstance(native.progression, QuestProgression)
+        self.assertEqual(len(native.quest.win_events), 1)
+        self.assertIsInstance(native.quest.win_events[0], Event)
+        self.assertEqual(len(native.quest.win_events[0].condition.preconditions), 2)
+        self.assertEqual(len(native.quest.fail_events), 2)
+        episode.advance({("open", (("d_0", "d"),))}, command="open door")
+        self.assertTrue(native.progression.failed)
+        self.assertEqual(episode.result["status"], "failed")
+
+    def test_native_failure_precedence_and_missing_constraint_coverage(self):
+        entry = requirement()
+        facts = {("in", (("k_0", "k"), ("I", "I")))}
+        episode = Episode(self.bind([entry], [{"constraint": "Avoid", "evidence": entry["evidence"]}]),
+                          "environment", facts)
+        self.assertTrue(episode.native.progression.completed)
+        self.assertTrue(episode.native.progression.failed)
+        self.assertEqual(episode.result["status"], "failed")
+        episode = Episode(self.bind([entry], [{"constraint": "Unverified"}]), "environment", facts)
+        self.assertEqual(episode.native.quest, None)
+        self.assertEqual(episode.result["status"], "active")
 
     def test_unverified_requirements_prevent_whole_goal_success(self):
         fact = {("in", (("k_0", "k"), ("I", "I")))}

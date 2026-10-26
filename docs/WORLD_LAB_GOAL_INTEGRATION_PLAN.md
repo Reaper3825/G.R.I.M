@@ -42,16 +42,21 @@ binder/evaluator interface.
 | Native Goal selection adapter | Read the selected ConceptBlock by ID, validate its Goal JSON, and send only a Goal snapshot plus source identity to the worker. Do not send reasoning phases, answer text, or whole database access into Docker. |
 | Environment builder | Build entities, passages, initial facts, action rules, and an authoritative stable-ID/runtime-symbol map. Compile without challenge-specific Quest endings. |
 | Evidence binder | Resolve and type-check conditions once, retaining requirement collection/index for diagnostics. Return immutable bound checks without modifying world facts. |
-| Evidence evaluator | Compare bound conditions with authoritative interpreter facts. Return per-requirement results and aggregate Goal status. Never parse observation prose or trust an action request as proof. |
+| Evidence evaluator | Supply bound conditions to native TextWorld Quest/Event/QuestProgression using authoritative facts and the game's knowledge base. Return current Event checks and native progression outcomes with coverage guards and failure precedence. |
 | Worker episode controller | Own a frozen Goal, bindings, fresh interpreter state, history, and terminal status. Evaluate on reset and after each command; prevent commands after termination. |
 | Native Play view | Display the selected Goal and progress, and consume controller status. Keep inspection history separate from live state. |
 | Solution verifier | Replay in an independent interpreter with the same Goal, binder, evaluator, and termination rules; retain pairing metadata with verified commands. |
 
 Keep predicate semantics in one worker-side module, separate from file-mailbox
-transport and interpreter lifecycle. A small pure evaluator module should be
-testable without TextWorld installed. TextWorld adaptation resolves typed symbols
-and provides fact identities; it does not duplicate the evaluator. Reuse the
-existing condition translation as the starting point. Native authoring controls
+transport and interpreter lifecycle. Binding remains testable without TextWorld;
+native evaluation tests run in the existing TextWorld image. The adapter creates
+one win Event containing all success conditions and separate fail Events for
+constraints. It updates episode-owned QuestProgression from authoritative facts,
+and uses Event.is_triggering for current per-requirement display. Missing evidence
+disables winning, while executable failures remain active. Empty/sandbox Goals
+create no Quest. Compiled endings remain empty; Goal replacement reuses the
+artifact. The native-quest-v2 semantics identity invalidates earlier witnesses.
+Native authoring controls
 may filter choices, but worker validation remains authoritative.
 
 ## Implementation sequence
@@ -110,8 +115,8 @@ do not assume how native questless `done`, `score`, `won`, or `lost` behave.
 Separate compile/validate-environment operations from start/reset/step-episode
 operations. The episode-start request carries source identity and a Goal snapshot
 separately from the environment. Return explicit episode status and requirement
-results. Preserve raw engine status separately for diagnostics; native Quest
-`won`/`lost` are not the new challenge authority. Version the mailbox protocol
+results. Preserve raw compiled-engine status separately for diagnostics; native
+Python Quest progression supplies challenge outcomes. Version the mailbox protocol
 for this semantic change and update the client and worker together.
 
 Invalidate old compiled snapshots that contain embedded challenge endings and
@@ -157,7 +162,7 @@ Do not retain a solution as an unqualified property of a reusable environment.
 
 ## Validation and acceptance
 
-Use pure Python tests for binding/evaluation and focused native host tests for
+Use host Python tests for binding, existing-image tests for native evaluation, and focused native host tests for
 snapshot transport, selection, persistence, and UI/session lifecycle. Extend
 `tests/test_world_worker.py` for real compilation/interpreter checks using only
 the existing Docker image. No application/trainer/model-server build or run,
@@ -188,3 +193,46 @@ Completion means manual Play and replay use the database Goal as their sole
 challenge authority, the same compiled environment supports multiple Goals, old
 embedded endings cannot interfere, and documentation distinguishes the completed
 manual integration from pending model-driven interaction and reachability work.
+
+## Next phase: course-driven assignment (integration pending)
+
+Replace manual environment/Goal selection with course-driven assignment into
+the implemented episode path:
+
+```text
+Curriculum -> Course -> ConceptBlock -> Goal evidence -> native Quest -> QuestProgression
+                 |
+                 +-> environment_id -> resolved reusable environment
+```
+
+`Course::concept_block_ids` supplies membership, and `Course::environment_id`
+supplies the optional environment reference. The selected ConceptBlock supplies
+the frozen Goal and its evidence. The course assigns episodes; native TextWorld
+Quest progression evaluates each episode's success/failure. Course completion
+and advancement policy are separate decisions, not inferred from one successful
+Quest. Member Goals are not implicitly merged into a course-wide Quest.
+
+Required integration:
+
+1. Establish persistent environment identity and resolution. Never resolve a
+   course reference through a worker's temporary artifact filename or an entity ID.
+2. Resolve the selected course's environment and member ConceptBlock by stable
+   IDs, then pass the Goal snapshot and source ID into the existing episode path.
+3. Start fresh interpreter state and native progression for every assignment;
+   reuse compilation for compatible Goals against unchanged environment content.
+4. Report missing ConceptBlocks/Goals, unresolved environment references, and
+   binding failures explicitly. Empty environment references mean no environment
+   assignment; missing evidence retains the existing unverified coverage behavior.
+5. Preserve frozen active Goals and witness compatibility. Apply database/course
+   edits through explicit subsequent assignment rather than mutating live episodes.
+
+Acceptance should demonstrate two ConceptBlocks in one course producing two
+distinct native Quests against one resolved environment, with fresh progression
+and unchanged compiled artifact/build count. Also verify unresolved references,
+missing Goals, incompatible entity bindings, empty environment assignment, and
+database edits during an active episode. Continue to distinguish binding validity
+from verified achievability.
+
+This phase connects course selection and assignment to existing evaluation.
+Model-driven commands/feedback, general reachability proof, object provisioning,
+training export, and course completion/advancement policy remain separate work.

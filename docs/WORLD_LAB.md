@@ -15,6 +15,45 @@ course-to-world resolution and an environment picker remain pending. Document
 entity IDs identify entities within a world; worker `environment-N` filenames are
 temporary session artifacts and must not be used as course environment IDs.
 
+## Course-driven Quest assignment (selected; integration pending)
+
+Courses will supply the environment reference and ConceptBlock membership used
+to assign episodes. The selected flow is:
+
+```text
+Curriculum -> Course
+                |-> environment_id -> resolve reusable environment
+                |-> concept_block_ids -> select ConceptBlock -> frozen Goal
+                                                               |
+                                 bind Goal evidence to environment entities
+                                                               |
+                               native Quest / Events -> QuestProgression
+                                                               |
+                                      initial state + post-command facts
+                                                               |
+                                           episode success / failure
+```
+
+The course owns assignment: which environment to use and which ConceptBlocks
+belong to that course. Each selected ConceptBlock owns its Goal, including the
+success and constraint evidence supplied to native Quest progression. Each
+episode owns fresh interpreter state and fresh progression for that Goal.
+Course membership does not combine all member Goals into one Quest or make
+episode success mean that the entire course is complete.
+
+The downstream Goal binding, native evaluation, reset, and replay path is
+implemented through manual selection. Remaining work is persistent environment
+identity/resolution and course-driven ConceptBlock assignment into that same
+path. Switching between compatible Goals in a course should reuse the compiled
+environment and start fresh episode state. Missing Goals, unresolved environment
+references, and invalid evidence bindings need explicit assignment diagnostics;
+they must not silently become a verified challenge. An empty `environment_id`
+continues to mean no environment assignment.
+
+Course orchestration does not require model-command routing; model-driven play
+and feedback insertion remain separate pending work. See the
+[next integration phase](WORLD_LAB_GOAL_INTEGRATION_PLAN.md#next-phase-course-driven-assignment-integration-pending).
+
 ## Reusable environments and Goal achievability
 
 Manual Goal-driven episodes are implemented. The environment owns entities,
@@ -48,7 +87,7 @@ future model interaction must use a separate permitted observation projection.
 
 ### Episode evidence binding
 
-`scripts/textworld/goal_evaluator.py` supplies the shared pure binder/evaluator
+`scripts/textworld/goal_evaluator.py` supplies the shared typed binder and native Quest adapter
 used by startup, reset, commands, and independent replay. Stable world entity IDs
 resolve to the compiled entities' typed runtime IDs. The pinned TextWorld 1.7
 adapter requires tracked `_facts`; public `facts` substitute display names and
@@ -70,12 +109,24 @@ inventing a constraint violation. Evaluation results distinguish satisfied,
 unsatisfied, and unverified checks; a satisfied constraint check means a
 violation occurred.
 
+The adapter constructs TextWorld `Quest`, `Event`, and `QuestProgression` objects.
+One win Event contains all success conditions; separate fail Events represent
+constraint violations. The progression receives authoritative facts using the
+compiled game's knowledge base. Per-requirement display uses native
+`Event.is_triggering`. Incomplete evidence disables the win Event while leaving
+executable failure Events active. Sandbox/empty Goals create no Quest. Each
+episode/reset/replay owns fresh progression. Condition-only Events supply no
+action-policy witness or general reachability proof. The semantics identity
+`grim-textworld-native-quest-v2` invalidates saved custom-evaluator witnesses.
+
 ### Compilation and challenge termination
 
-`build_world()` no longer constructs Goal-specific native Quests. Compiled games
+`build_world()` leaves compiled Quest endings empty. Native Quests are supplied
+to the episode's Python `QuestProgression` at startup. Compiled games
 contain environment dynamics, while the episode controller owns challenge
 termination and rejects commands after any terminal result. Returned `done`,
-`won`, `lost`, and challenge `score` reflect that controller; raw engine status is
+`won`, `lost`, and challenge `score` reflect native Quest results with coverage
+guards, failure precedence, and controller stop limits; raw engine status is
 separate under `state.engine`. Goal-only changes reuse compilation. Environment
 changes require recompilation; layout, document title, and legacy challenge
 metadata do not alter compiled identity.
@@ -217,7 +268,7 @@ is a single per-user snapshot, not a multi-process document library.
   bounded versioned episode-record reads, and safe record filenames.
 - `ui/world_lab/ui_world_session.*`: selection, immutable snapshots, Play lifecycle,
   separate witness persistence, and progress display.
-- `scripts/textworld/goal_evaluator.py`: pure typed binding/evaluation and episode
+- `scripts/textworld/goal_evaluator.py`: typed binding, native Quest evaluation, and episode
   status; bump its semantics identity when action/check behavior changes.
 - `scripts/textworld/world_worker.py`: questless compilation, typed-state adapter,
   transactional episode startup, command handling, and isolated replay.
@@ -255,10 +306,12 @@ ports, object relocation, inspector creation/type selection, recovery, and tab
 lifecycle. Rendering uses test sinks. Native visual QA requires a separately
 authorized application build/run.
 
-Pure binding/evaluation tests need no TextWorld installation:
+Host binding tests need no TextWorld installation; native evaluation cases skip
+when it is absent. Run the full evaluation suite in the existing image:
 
 ```powershell
 python -m unittest discover -s tests -p test_world_goal_evaluator.py -v
+docker run --rm --pull never --network none --entrypoint python --mount 'type=bind,source=D:/G.R.I.M/scripts/textworld,target=/worker,readonly' --mount 'type=bind,source=D:/G.R.I.M/tests,target=/tests,readonly' -e PYTHONPATH=/worker grim-textworld:1.7.0 -m unittest discover -s /tests -p test_world_goal_evaluator.py -v
 ```
 
 For real Docker compiler/interpreter and native transport integration, using only

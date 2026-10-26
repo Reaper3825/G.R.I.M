@@ -498,7 +498,16 @@ typed runtime IDs; public facts use human-readable names and are not verifier
 identities. Full verifier data remains separate from permitted model observations.
 
 Manual Play and independent solution replay evaluate initial and post-command
-states through the same binder/evaluator. Any true constraint-violation check
+states through the same binder and TextWorld-native `Quest`/`Event`/
+`QuestProgression` adapter. All success evidence is combined into one win Event
+(native win Events are alternatives); each executable constraint supplies a
+separate fail Event. Each episode owns fresh progression using the compiled
+game's knowledge base, updated from authoritative interpreter facts. Requirement
+display uses native `Event.is_triggering` for current-state checks. An incomplete
+verification envelope creates no win Event, while executable failure checks remain
+active. No native Quest is created for an empty/sandbox Goal. Condition-only Events
+carry no action-policy witness and do not establish general reachability.
+Any true constraint-violation check
 fails the episode before success is considered. Automatic whole-Goal success
 requires at least one success criterion, all success checks true simultaneously,
 and valid executable evidence for every criterion and constraint. Missing
@@ -513,7 +522,12 @@ Reset retains the frozen Goal. Database edits do not silently change that snapsh
 The controller enforces terminal state and rejects later commands until reset or
 new episode. `state.done/won/lost/score` describe the controller result, while
 `state.engine` retains raw engine diagnostics. Goal completion is independent of
-native Quest status and generated answer-span completion. Protocol 2 rejects stale
+compiled-engine Quest status and generated answer-span completion. Native Python
+Quest progression supplies success/failure; the controller applies coverage guards,
+failure precedence when both native results are true, and non-Goal stop limits.
+Quest replacement needs no compilation because compiled endings remain empty.
+The `grim-textworld-native-quest-v2` semantics identity invalidates earlier custom
+evaluator witnesses. Protocol 2 rejects stale
 workers/clients; existing compiled endings require recompilation and are never
 loaded as reusable artifacts. See [episode binding](WORLD_LAB.md#episode-evidence-binding)
 and [compilation/termination](WORLD_LAB.md#compilation-and-challenge-termination).

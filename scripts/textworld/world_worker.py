@@ -116,7 +116,7 @@ def build_world(document):
                 maker.add_fact("match", mapped[key], door)
     maker.set_player(mapped[document["spawn"]])
 
-    # Goal-specific endings are evaluated by Episode, never compiled.
+    # Native Quests are attached to episode progression, not compiled endings.
     maker.validate()
     return maker, mapped
 
@@ -185,7 +185,8 @@ class Session:
         candidate = self.open_game(game_file)
         try:
             state = candidate.reset()
-            episode = Episode(bound, environment_id, raw_facts(state))
+            episode = Episode(bound, environment_id, raw_facts(state),
+                              kb=state["_game_progression"].game.kb)
             return candidate, state, episode
         except BaseException:
             candidate.close()
