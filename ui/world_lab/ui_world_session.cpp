@@ -1,9 +1,9 @@
 #include "ui_world_session.hpp"
+#include "world_transcript.hpp"
 #include "core/input_parser.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include <algorithm>
-#include <sstream>
 
 using namespace GRIM::WorldLab;
 namespace {
@@ -23,6 +23,7 @@ UIWorldSession::UIWorldSession(Editor& editor):editor_(editor),actions_(editor) 
         available_->setSelectedIndex(0);
     });
     available_->setFullWidth(true);available_->setMaxVisibleItems(4);
+    transcriptText_.setReadOnly(true);
     objective_.setWordWrap(true);
     objective_.setPlaceholder("Describe the objective");command_.setPlaceholder("Type a game command");
     objective_.OnTextSubmitted.Bind([this](const auto&){apply();});
@@ -32,7 +33,7 @@ UIWorldSession::UIWorldSession(Editor& editor):editor_(editor),actions_(editor) 
     target_=std::make_unique<UIDropdown>("",std::vector<std::string>{},0,[](int,const auto&){});
     conditions_=std::make_unique<UIDropdown>("",std::vector<std::string>{},0,[](int,const auto&){});
     history_=std::make_unique<UIDropdown>("",std::vector<std::string>{},0,[this](int index,const auto&){
-        if(index>=0 && index<static_cast<int>(historyEntries_.size())){historyIndex_=index;scroll_.scrollTo(0);if(onState)onState(historyEntries_[index].state);}
+        if(index>=0 && index<static_cast<int>(historyEntries_.size())){historyIndex_=index;transcriptText_.scrollToTop();if(onState)onState(historyEntries_[index].state);}
     });
     auto challengeButton=[&](const std::string& name,std::function<void()> fn){challengeButtons_.push_back(std::make_unique<UIButton>(name,[this,fn]{report(fn);}));};
     challengeButton("Add win",[this]{addCondition(false);});
@@ -149,9 +150,19 @@ void UIWorldSession::receive(){
         std::vector<std::string> availableLabels{"Live available commands"};
         if(!done_)availableLabels.insert(availableLabels.end(),availableCommands_.begin(),availableCommands_.end());
         available_->collapse();available_->setItems(availableLabels);available_->setSelectedIndex(0);
-        historyEntries_.push_back({operation_=="step"?sentCommand_:"Start",state.value("feedback",std::string{}),state});
+        std::string feedback=cleanTranscript(state.value("feedback",std::string{}));
+        if(operation_=="compile" || operation_=="reset" || operation_=="record"){
+            // Startup feedback includes TextWorld branding. Use the structured room
+            // description for the playtest view, keeping the original state intact.
+            const auto description=cleanTranscript(state.value("description",std::string{}));
+            if(!description.empty()){
+                const auto objective=compiled_.value("objective",std::string{});
+                feedback=objective.empty()?description:objective+"\n\n"+description;
+            }
+        }
+        historyEntries_.push_back({operation_=="step"?sentCommand_:"Start",std::move(feedback),state});
         std::vector<std::string> labels;for(size_t i=0;i<historyEntries_.size();++i)labels.push_back(std::to_string(i)+": "+historyEntries_[i].command);
-        history_->setItems(labels);historyIndex_=static_cast<int>(labels.size())-1;history_->setSelectedIndex(historyIndex_);scroll_.scrollTo(0);
+        history_->setItems(labels);historyIndex_=static_cast<int>(labels.size())-1;history_->setSelectedIndex(historyIndex_);transcriptText_.scrollToTop();
         if(onState)onState(currentGame()?state:nlohmann::json{});
         if(operation_=="step")command_.clear();
         message_=state.value("won",false)?"Won!":state.value("lost",false)?"Goal failed.":recording_?"Recording from the starting state.":"Ready for a command.";
@@ -164,10 +175,11 @@ std::vector<Widget*> UIWorldSession::controls(){
     std::vector<Widget*> result;
     if(challenge_){result={&objective_,predicate_.get(),subject_.get(),target_.get(),conditions_.get()};for(auto& b:challengeButtons_)result.push_back(b.get());}
     else{result={&command_,history_.get(),available_.get()};for(auto& b:playButtons_)result.push_back(b.get());}
+    result.push_back(&transcriptText_);
     return result;
 }
 void UIWorldSession::setChallenge(bool value){
-    apply();actions_.hide();for(auto* w:controls()){w->cancelInput();if(auto* d=dynamic_cast<UIDropdown*>(w))d->collapse();}challenge_=value;refresh();scroll_.scrollTo(0);
+    apply();actions_.hide();for(auto* w:controls()){w->cancelInput();if(auto* d=dynamic_cast<UIDropdown*>(w))d->collapse();}challenge_=value;refresh();transcriptText_.scrollToTop();
 }
 void UIWorldSession::layout(const PanelRect& area){
     area_=area;const float x=area.origin.x+8,y=area.origin.y,w=area.size.x-16;
@@ -185,7 +197,7 @@ void UIWorldSession::layout(const PanelRect& area){
     place(*available_,x,y+190,w-92);place(*playButtons_[7],x+w-84,y+190,84);
     const float transcriptY=challenge_?414.f+objectiveExtra_:composerVisible_?390.f:226.f;
     transcript_={{x,y+transcriptY},{w,std::max(24.f,area.size.y-transcriptY-50)}};
-    scroll_.setPosition(transcript_.origin);scroll_.setSize(transcript_.size);
+    transcriptText_.setPosition(transcript_.origin);transcriptText_.setSize(transcript_.size);
 }
 void UIWorldSession::update(const InputState& input,float dt,const PanelRect& area){
     report([&]{receive();});
@@ -197,9 +209,8 @@ void UIWorldSession::update(const InputState& input,float dt,const PanelRect& ar
     for(auto* w:widgets)if(auto* d=dynamic_cast<UIDropdown*>(w);d && d->isVisible() && d->isExpanded()){popup=w;w->update(clipped,dt);break;}
     for(auto* w:widgets)if(w!=popup && w->isVisible())w->update(clipped,dt);
     if(!challenge_ && composerVisible_)actions_.update(clipped,dt,{{area.origin.x+8,area.origin.y+226},{area.size.x-16,160}},GRIM::UI::InputRouter::get().currentPanel);
-    scroll_.update(clipped,dt);
 }
-void UIWorldSession::hide(){apply();actions_.hide();for(auto* w:controls()){w->cancelInput();if(auto* d=dynamic_cast<UIDropdown*>(w))d->collapse();}scroll_.cancelInput();client_.stop();live_=false;recording_=false;if(onState)onState({});}
+void UIWorldSession::hide(){apply();actions_.hide();for(auto* w:controls()){w->cancelInput();if(auto* d=dynamic_cast<UIDropdown*>(w))d->collapse();}client_.stop();live_=false;recording_=false;if(onState)onState({});}
 void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
     using namespace UITheme::Colors;layout(area);r.pushClipRect(area.origin,area.size);r.drawRect(area.origin,area.size,CardSurface);
     const float x=area.origin.x+8,y=area.origin.y;
@@ -212,25 +223,16 @@ void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
     }else{
         r.drawText({x+178,y+121},live_&&!currentGame()?"World changed - recompile":recording_?"REC":"History",live_&&!currentGame()?Warning:TextMuted,11);
     }
-        scroll_.drawOverlay(r,{});r.pushClipRect(transcript_.origin,transcript_.size);
         std::string text=details_.empty()?"":details_+"\n\n";
         if(challenge_){
             for(const auto& c:editor_.document().winConditions)text+="Win: "+describe(editor_.document(),c)+"\n";
             for(const auto& c:editor_.document().failConditions)text+="Fail: "+describe(editor_.document(),c)+"\n";
         }else if(historyIndex_>=0 && historyIndex_<static_cast<int>(historyEntries_.size())){
-            const auto& e=historyEntries_[historyIndex_];text+="> "+e.command+"\n"+e.feedback+"\n\n"+e.state.value("inventory",std::string{});
+            const auto& e=historyEntries_[historyIndex_];text+="> "+e.command+"\n"+e.feedback+"\n\n"+cleanTranscript(e.state.value("inventory",std::string{}));
             text+="\n\nAvailable commands (author aid):\n";
             for(const auto& command:e.state.value("admissible_commands",std::vector<std::string>{}))text+=command+"\n";
         }
-        std::vector<std::string> lines;std::istringstream input(text);std::string logical;
-        while(std::getline(input,logical)){
-            std::istringstream words(logical);std::string word,line;
-            while(words>>word){if(!line.empty() && r.measureTextWidth(line+" "+word,12)>transcript_.size.x-22){lines.push_back(line);line.clear();}if(!line.empty())line+=' ';line+=word;}
-            lines.push_back(line);
-        }
-        scroll_.setContentHeight(static_cast<float>(lines.size())*17+8);
-        float top=transcript_.origin.y+4-scroll_.getScrollOffset();for(const auto& line:lines){r.drawText({x+4,top},line,TextSecondary,12);top+=17;}
-        r.popClipRect();
+        transcriptText_.setText(text);
     for(auto* w:controls())if(w->isVisible())w->drawOverlay(r,{});
     if(!challenge_ && composerVisible_)actions_.draw(r,{{area.origin.x+8,area.origin.y+226},{area.size.x-16,160}},false);
     for(auto* w:controls())if(auto* d=dynamic_cast<UIDropdown*>(w);d && d->isVisible() && d->isExpanded())d->drawExpandedList(r,{});

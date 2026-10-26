@@ -14,6 +14,10 @@ public:
     void draw(class UIRenderer& renderer) override;
     
     void setText(const std::string& text);
+    // Read-only keeps focus, navigation, selection, and clipboard copying enabled.
+    void setReadOnly(bool value) { readOnly = value; }
+    bool isReadOnly() const { return readOnly; }
+    void scrollToTop() { scrollOffset = 0.0f; reflowAnchorLine = -1; }
     std::string getText() const { return text; }
     std::string getLabel() const { return label; }
     
@@ -27,6 +31,7 @@ private:
     std::string placeholder;
     std::function<void(const std::string&)> callback;
     
+    bool readOnly = false;
     bool hovered = false;
     int cursorPos = 0;
     float scrollOffset = 0.0f;
@@ -51,7 +56,9 @@ private:
         std::string text;
     };
     std::vector<WrapLine> wrappedLines;
-    float lastWrapWidth = 0.0f;
+    float lastWrapWidth = -1.0f;
+    bool wrapDirty = true;
+    int reflowAnchorLine = -1, reflowAnchorCol = 0;
 
     // Caret blink
     bool caretVisible = true;
@@ -64,12 +71,11 @@ private:
     static constexpr float kRepeatRate = 0.035f;
     bool repeatFiring = false;
 
-    static constexpr float kCharWidth = 8.4f;
     static constexpr float kLineHeight = 16.0f;
     static constexpr float kTextPad = 8.0f;
     
     void updateLines();
-    void rebuildWrappedLines();
+    void rebuildWrappedLines(const class OverlayRenderer& renderer);
     void handleInput(const InputState& input, float dt);
 
     // Cursor helpers

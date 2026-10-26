@@ -21,9 +21,14 @@ UITextArea::UITextArea(const std::string& lbl, const std::string& initialText,
 }
 
 void UITextArea::setText(const std::string& newText) {
+    if (text == newText) return;
     text = newText;
     updateLines();
-    cursorPos = std::min(cursorPos, static_cast<int>(text.length()));
+    cursorPos = UTF8Edit::boundary(text, std::min(cursorPos, static_cast<int>(text.length())));
+    clearSelection();
+    scrollOffset = 0.0f;
+    dragging = false;
+    releasePointer();
 }
 
 // ─── Line management ────────────────────────────────────
@@ -41,42 +46,56 @@ void UITextArea::updateLines() {
     }
     lines.push_back(current);
     if (lines.empty()) lines.push_back("");
-    rebuildWrappedLines();
+    wrapDirty = true;
+    reflowAnchorLine = -1;
 }
 
-void UITextArea::rebuildWrappedLines() {
+void UITextArea::rebuildWrappedLines(const OverlayRenderer& renderer) {
+    // Preserve a source-text anchor across successive resize frames.
+    if (!wrapDirty && reflowAnchorLine < 0 && !wrappedLines.empty()) {
+        const auto& top = wrappedLines[std::clamp(static_cast<int>(scrollOffset),
+            0, static_cast<int>(wrappedLines.size()) - 1)];
+        reflowAnchorLine = top.logicalLine;
+        reflowAnchorCol = top.colStart;
+    }
     wrappedLines.clear();
-    float availW = size.x - kTextPad * 2.0f;
-    lastWrapWidth = availW;
-    size_t maxChars = (availW > kCharWidth) ? static_cast<size_t>(availW / kCharWidth) : 1;
-
+    const float availW = std::max(0.0f, size.x - kTextPad * 2.0f);
+    lastWrapWidth = size.x - kTextPad * 2.0f;
+    wrapDirty = false;
     for (int li = 0; li < static_cast<int>(lines.size()); ++li) {
         const auto& line = lines[li];
-        if (line.size() <= maxChars) {
-            wrappedLines.push_back({li, 0, line});
-        } else {
-            size_t pos = 0;
-            while (pos < line.size()) {
-                size_t end = UTF8Edit::boundary(line, static_cast<int>(pos + maxChars));
-                if (end <= pos) end = UTF8Edit::next(line, static_cast<int>(pos));
-                if (end >= line.size()) {
-                    wrappedLines.push_back({li, static_cast<int>(pos), line.substr(pos)});
+        if (line.empty()) wrappedLines.push_back({li, 0, ""});
+        int pos = 0;
+        while (pos < static_cast<int>(line.size())) {
+            int end = pos;
+            int lastSpace = -1;
+            while (end < static_cast<int>(line.size())) {
+                const int next = UTF8Edit::next(line, end);
+                if (renderer.measureTextWidth(line.substr(pos, next - pos)) > availW && end > pos)
                     break;
-                }
-                size_t breakAt = line.rfind(' ', end);
-                if (breakAt != std::string::npos && breakAt > pos) {
-                    wrappedLines.push_back({li, static_cast<int>(pos), line.substr(pos, breakAt - pos)});
-                    pos = breakAt + 1;
-                } else {
-                    wrappedLines.push_back({li, static_cast<int>(pos), line.substr(pos, end - pos)});
-                    pos = end;
-                }
+                if (line[end] == ' ') lastSpace = end;
+                end = next;
             }
+            int nextPos = end;
+            if (end < static_cast<int>(line.size()) && lastSpace > pos) {
+                end = lastSpace;
+                nextPos = lastSpace + 1;
+            }
+            wrappedLines.push_back({li, pos, line.substr(pos, end - pos)});
+            pos = nextPos;
         }
     }
+    if (reflowAnchorLine >= 0) {
+        for (int i = 0; i < static_cast<int>(wrappedLines.size()); ++i) {
+            const auto& row = wrappedLines[i];
+            if (row.logicalLine == reflowAnchorLine && row.colStart <= reflowAnchorCol)
+                scrollOffset = static_cast<float>(i);
+        }
+    }
+    const int visible = std::max(1, static_cast<int>((size.y - kTextPad * 2.0f) / kLineHeight));
+    scrollOffset = std::clamp(scrollOffset, 0.0f,
+        static_cast<float>(std::max(0, static_cast<int>(wrappedLines.size()) - visible)));
 }
-
-// ─── Cursor helpers ─────────────────────────────────────
 
 void UITextArea::cursorToLineCol(int pos, int& line, int& col) const {
     int p = 0;
@@ -147,6 +166,7 @@ int UITextArea::cursorFromWrappedClick(int wrappedIdx, int clickCol) const {
 }
 
 void UITextArea::ensureCursorVisible() {
+    reflowAnchorLine = -1;
     int wIdx = wrapIndexForCursor();
     if (wIdx < 0) return;
 
@@ -252,9 +272,10 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         }
     }
 
+    const int previousCursor = cursorPos;
     bool changed = false;
 
-    if (processActionKey(KeyCode::Backspace, VK_BACK)) {
+    if (!readOnly && processActionKey(KeyCode::Backspace, VK_BACK)) {
         if (hasSelection()) {
             deleteSelection();
             changed = true;
@@ -267,7 +288,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         caretVisible = true; lastBlink = now;
     }
 
-    if (processActionKey(KeyCode::Delete, VK_DELETE)) {
+    if (!readOnly && processActionKey(KeyCode::Delete, VK_DELETE)) {
         if (hasSelection()) {
             deleteSelection();
             changed = true;
@@ -316,7 +337,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             cursorPos = cursorFromWrappedClick(wIdx - 1, visualCol);
         }
         if (input.shift) selEnd = cursorPos;
-        else if (hasSelection()) clearSelection();
+        else clearSelection();
         caretVisible = true; lastBlink = now;
     }
 
@@ -329,7 +350,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             cursorPos = cursorFromWrappedClick(wIdx + 1, visualCol);
         }
         if (input.shift) selEnd = cursorPos;
-        else if (hasSelection()) clearSelection();
+        else clearSelection();
         caretVisible = true; lastBlink = now;
     }
 
@@ -360,7 +381,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         }
     }
 
-    if (input.cutRequested) {
+    if (!readOnly && input.cutRequested) {
         if (hasSelection()) {
             PlatformClipboard::copyText(selectedText());
             deleteSelection();
@@ -368,7 +389,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         }
     }
 
-    if (input.pasteRequested && !input.pastedText.empty()) {
+    if (!readOnly && input.pasteRequested && !input.pastedText.empty()) {
         if (hasSelection()) {
             deleteSelection();
             changed = true;
@@ -380,7 +401,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         changed = true;
     }
 
-    if (input.keyPressed[Key::toPlatformCode(KeyCode::Enter)]) {
+    if (!readOnly && input.keyPressed[Key::toPlatformCode(KeyCode::Enter)]) {
         if (hasSelection()) { deleteSelection(); changed = true; }
         text.insert(text.begin() + cursorPos, '\n');
         cursorPos++;
@@ -390,7 +411,7 @@ void UITextArea::handleInput(const InputState& input, float dt) {
     }
 
     const auto inserted = UTF8Edit::printable(input.textInput);
-    if (!inserted.empty()) {
+    if (!readOnly && !inserted.empty()) {
         if (hasSelection()) deleteSelection();
         text.insert(cursorPos, inserted);
         cursorPos += static_cast<int>(inserted.size());
@@ -401,9 +422,10 @@ void UITextArea::handleInput(const InputState& input, float dt) {
 
     if (changed) {
         updateLines();
+        rebuildWrappedLines(UIRoot::get().getRenderer());
         if (callback) callback(text);
     }
-    ensureCursorVisible();
+    if (changed || cursorPos != previousCursor) ensureCursorVisible();
 }
 
 // ─── Update ─────────────────────────────────────────────
@@ -417,7 +439,7 @@ void UITextArea::update(const InputState& source, float dt) {
 
     // Rebuild wrapped lines if widget width changed
     float availW = size.x - kTextPad * 2.0f;
-    if (availW != lastWrapWidth) rebuildWrappedLines();
+    if (wrapDirty || availW != lastWrapWidth) rebuildWrappedLines(UIRoot::get().getRenderer());
 
     // ─── Unified mouse: click-to-cursor + drag-to-select ────
     // Uses InputState directly (no Mouse:: static class mixing)
@@ -472,10 +494,11 @@ void UITextArea::update(const InputState& source, float dt) {
 
     // Mouse wheel scroll (against wrapped line count)
     if (hovered && input.mouseWheelDelta != 0.0f) {
+        reflowAnchorLine = -1;
         const float previousScroll = scrollOffset;
         scrollOffset -= input.scrollSteps().y * 3.0f;
-        float maxScroll = std::max(0.0f, static_cast<float>(wrappedLines.size()) -
-                          (size.y - kTextPad * 2.0f) / kLineHeight);
+        const int visibleLines = std::max(1, static_cast<int>((size.y - kTextPad * 2.0f) / kLineHeight));
+        float maxScroll = static_cast<float>(std::max(0, static_cast<int>(wrappedLines.size()) - visibleLines));
         scrollOffset = std::clamp(scrollOffset, 0.0f, maxScroll);
         if (scrollOffset != previousScroll) consumeScroll();
     }
@@ -514,11 +537,14 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
 
     // Rebuild if width changed since last wrap
     float availW = size.x - kTextPad * 2.0f;
-    if (availW != lastWrapWidth) rebuildWrappedLines();
+    if (wrapDirty || availW != lastWrapWidth) rebuildWrappedLines(renderer);
 
     float availH = size.y - kTextPad * 2.0f;
     int maxVisLines = std::max(1, static_cast<int>(availH / kLineHeight));
 
+    scrollOffset = std::clamp(scrollOffset, 0.0f,
+        static_cast<float>(std::max(0, static_cast<int>(wrappedLines.size()) - maxVisLines)));
+    renderer.pushClipRect(position, size);
     if (text.empty() && !focused) {
         if (!placeholder.empty())
             renderer.drawText({position.x + kTextPad, position.y + kTextPad}, placeholder, Colors::TextDisabled);
@@ -576,6 +602,8 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         }
     }
 
+    renderer.popClipRect();
+    if (readOnly) return;
     std::string charCount = std::to_string(text.length()) + " chars";
     renderer.drawText({position.x + size.x - 80, position.y + size.y - 18}, charCount, 0xFF909090);
 }

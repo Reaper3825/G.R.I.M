@@ -6,7 +6,7 @@
 #include "ui/primitives/ui_button.hpp"
 #include "ui/primitives/ui_inputbox.hpp"
 #include "ui/primitives/ui_dropdown.hpp"
-#include "ui/primitives/ui_scrollbox.hpp"
+#include "ui/primitives/ui_textarea.hpp"
 #include <functional>
 
 class UIWorldSession {
@@ -42,7 +42,7 @@ private:
     nlohmann::json compiled_,sentDocument_,lastDocument_;
     UIInputBox objective_,command_;
     float objectiveExtra_=0;
-    UIScrollBox scroll_;
+    UITextArea transcriptText_{"", "", {}};
     PanelRect area_{},transcript_{};
     std::unique_ptr<UIDropdown> predicate_,subject_,target_,conditions_,history_;
     std::unique_ptr<UIDropdown> available_;
