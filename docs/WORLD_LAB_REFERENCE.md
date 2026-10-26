@@ -502,9 +502,28 @@ existing features to build assumptions around.
 
 The [GRIM reasoning contract](GRIM_REASONING_DATA_CONTRACT.md) governs the model
 side of future challenge assignment. The Goal describes the desired outcome,
-success criteria, and constraints. The TextWorld quest supplies executable
-environment checks. Align them explicitly; criterion prose does not become a
-predicate automatically, and not every GRIM constraint is an environment fact.
+success criteria, and constraints. Its paired structured evidence supplies the
+executable checks. At episode creation, bind those checks to existing environment
+entities by stable ID and validate predicate argument types. Binding registers
+checks; it does not assert facts or change world state. Criterion prose does not
+become a predicate automatically, and not every GRIM constraint is an environment
+fact. The episode retains a frozen Goal snapshot and owns check results and
+completion status. The reusable path evaluates checks externally at reset and
+after commands, with failure taking precedence, rather than embedding each Goal
+in a separately compiled TextWorld Quest. Current manual Play still uses compiled
+Quest endings; this external evaluator is pending. See
+[episode evidence binding](WORLD_LAB.md#episode-evidence-binding-selected-design-pending)
+for the full lifecycle and separation of episode setup from evidence.
+
+For the reusable path, remove Goal-specific `maker.quests` assignment before
+environment compilation and rebuild existing artifacts that embed challenge
+endings. Goal success-criterion and constraint evidence then supplies all
+challenge win/fail checks at episode startup; the environment has no separate
+challenge condition list. The controller ends the episode and rejects further
+gameplay commands when those checks establish failure or success. Goal-only
+changes reuse the compiled environment with fresh episode state. Saved-solution
+replay uses the same evaluator. See the
+[compilation transition](WORLD_LAB.md#compilation-and-challenge-termination-transition-pending).
 
 Each model cycle follows Determine, optional Define, optional Execute, and
 Answer, with optional Update where appropriate. Define and Execute need not

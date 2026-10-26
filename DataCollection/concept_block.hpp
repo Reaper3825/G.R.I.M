@@ -16,22 +16,9 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "../resources/models/GRIM-text/Shared/Goal/GoalContract.hpp"
 
 namespace GRIM {
-
-// Optional evidence stays nested with its criterion so downstream verification
-// never has to infer the association from parallel arrays or criterion text
-// keys. An empty string means the criterion is waiting for evidence generation.
-struct ConceptBlockSuccessCriterion {
-    std::string criterion;
-    std::string evidence;
-};
-
-struct ConceptBlockGoal {
-    std::string target_state;
-    std::vector<ConceptBlockSuccessCriterion> success_criteria;
-    std::vector<std::string> constraints;
-};
 
 struct ConceptBlock {
     std::string id;
@@ -121,6 +108,9 @@ struct Course {
     std::string id;
     std::string name;
     std::vector<std::string> concept_block_ids;
+    // Persistent environment/game reference; empty means no environment assigned.
+    // World Lab game-ID assignment and resolution are pending integration.
+    std::string environment_id;
 };
 
 struct Curriculum {

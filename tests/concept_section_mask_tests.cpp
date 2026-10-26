@@ -8,9 +8,9 @@ int main() try {
     const nlohmann::json data = {
         {"prompt", "Question"}, {"goal", {
             {"target_state", "Outcome"},
-            {"success_criteria", {{{"criterion", "Check"}, {"evidence", "Support"}},
-                                  {{"criterion", "Other"}, {"evidence", "More"}}}},
-            {"constraints", {"Limit"}}}},
+            {"success_criteria", {{{"criterion", "Check"}, {"evidence", {{"predicate", "carrying"}, {"subject", "key_1"}}}},
+                                  {{"criterion", "Other"}}}},
+            {"constraints", {{{"constraint", "Limit"}}}}}},
         {"knowns", {"Known"}}, {"unknowns", {"Unknown"}},
         {"explanation", {"Legacy"}}, {"determine", "Work"}, {"define", "Terms"},
         {"execute", "Result"}, {"update", "State"}, {"answer", "Response"}};
@@ -38,21 +38,25 @@ int main() try {
     for (auto& d : definitions) d.supervision = Policy::Context;
     auto& criteria = definitions[2];
     criteria.supervision = Policy::Supervised;
-    criteria.children[0].children[1].supervision = Policy::Context;
+    criteria.children[0].children[0].supervision = Policy::Context;
     auto row = testSpanSequence(data, definitions);
     assert(GRIMText::Training::projectConceptSupervision(row, definitions, "override"));
     for (const auto& e : row.named_concept_spans->entries)
-        if (e.name == "evidence")
+        if (e.name == "criterion")
             for (int i = e.span.begin; i < e.span.end; ++i) assert(row.targets[i - 1] == -1);
     // Ignore removes data and remaps the tree and all token channels.
-    criteria.children[0].children[1].supervision = Policy::Ignore;
+    criteria.children[0].children[0].supervision = Policy::Ignore;
     row = testSpanSequence(data, definitions);
     const auto before = row.token_ids.size();
     assert(GRIMText::Training::projectConceptSupervision(row, definitions, "ignore"));
-    assert(row.token_ids.size() < before && row.named_concept_spans->count("evidence") == 0);
+    assert(row.token_ids.size() < before && row.named_concept_spans->count("criterion") == 0);
     GRIM::validateNamedConceptSpans(*row.named_concept_spans, row.token_ids.size());
     assert(row.token_ids.size() == row.token_local_atom_indices.size());
     // Short windows clip parents and children rather than dropping or orphaning them.
+    // Give every window supervised content; evidence is no longer a text span,
+    // and the preceding ignore test leaves only the criteria wrapper supervised.
+    for (auto& d : definitions) d.supervision = Policy::Supervised;
+    criteria.children[0].children[0].supervision = Policy::Inherit;
     std::vector<GRIM::TokenizerArtifacts::GrmtSequence> rows{testSpanSequence(data, definitions)};
     GRIMText::Training::applySlidingWindows(rows, "clip", GRIM::HyperParameters::TrainingStage::SFT,
         definitions, 120, 100, 1, true, false, logger);

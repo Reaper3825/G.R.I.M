@@ -79,26 +79,7 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
         }
     }
     if (j.contains("goal") && j["goal"].is_object()) {
-        GRIM::ConceptBlockGoal goal;
-        goal.target_state = j["goal"].value("target_state", std::string());
-        if (j["goal"].contains("success_criteria")
-            && j["goal"]["success_criteria"].is_array()) {
-            for (const auto& item : j["goal"]["success_criteria"]) {
-                if (!item.is_object()) continue;
-                goal.success_criteria.push_back(GRIM::ConceptBlockSuccessCriterion{
-                    item.value("criterion", std::string()),
-                    item.value("evidence", std::string())});
-            }
-        }
-        if (j["goal"].contains("constraints")
-            && j["goal"]["constraints"].is_array()) {
-            for (const auto& item : j["goal"]["constraints"]) {
-                if (item.is_string()) {
-                    goal.constraints.push_back(item.get<std::string>());
-                }
-            }
-        }
-        cb.goal = std::move(goal);
+        cb.goal = GRIM::goalFromJson(j["goal"]);
     }
 
     if (j.contains("intermediates") && j["intermediates"].is_array()) {
@@ -654,8 +635,11 @@ bool DatasetTarget::loadConceptBlocks() {
         try {
             conceptBlocks_.push_back(conceptBlockFromJson(json::parse(line)));
         } catch (const std::exception& ex) {
-            std::cerr << "[DatasetTarget] Skipping invalid legacy concept block at line "
+            std::cerr << "[DatasetTarget] Refusing partial legacy migration at line "
                       << line_number << ": " << ex.what() << "\n";
+            conceptBlocks_.clear();
+            rebuildCBIndex();
+            return false;
         }
     }
     rebuildCBIndex();
@@ -866,6 +850,7 @@ bool DatasetTarget::loadCurriculumRegistry() {
             course.id = entry.at("id").get<std::string>();
             course.name = entry.at("name").get<std::string>();
             course.concept_block_ids = entry.at("concept_block_ids").get<std::vector<std::string>>();
+            course.environment_id = entry.value("environment_id", std::string{});
             if (course.id.empty() || !getCourseById(course.id).id.empty())
                 throw std::runtime_error("Invalid or duplicate course ID");
             courses_.push_back(std::move(course));
@@ -935,7 +920,8 @@ bool DatasetTarget::saveCurriculumRegistry() const {
     j["courses"] = json::array();
     for (const auto& course : courses_)
         j["courses"].push_back({{"id", course.id}, {"name", course.name},
-                                 {"concept_block_ids", course.concept_block_ids}});
+                                 {"concept_block_ids", course.concept_block_ids},
+                                 {"environment_id", course.environment_id}});
     j["curriculums"] = json::array();
     for (const auto& curr : curriculums_) {
         json cj;

@@ -561,7 +561,7 @@ GeneratedConceptFrame ConceptGenerator::assemble(
         for (const auto& evidence : bindings.evidence) {
             goal.success_criteria.push_back({
                 applyAtomBindings(evidence.criterion, bindings.atoms),
-                evidence.quote
+                std::nullopt // Source quotations are not executable Goal evidence.
             });
         }
         block.goal = std::move(goal);

@@ -15,8 +15,8 @@ int main() try {
     });
     const nlohmann::json source{
         {"prompt", "Question"}, {"goal", {
-            {"success_criteria", {{{"criterion", "Check"}, {"evidence", "Proof"}},
-                                  {{"criterion", "Other"}, {"evidence", ""}}}}}},
+            {"success_criteria", {{{"criterion", "Check"}, {"evidence", {{"predicate", "carrying"}, {"subject", "key_1"}}}},
+                                  {{"criterion", "Other"}}}}}},
         {"answer", "Result"}};
     size_t calls = 0;
     const auto tokenize = [&](const std::string& text, const auto& boundaries, auto* counts) {
@@ -62,7 +62,7 @@ int main() try {
     assert(loaded.sequences[0].token_ids == row.token_ids);
     assert(loaded.sequences[0].concept_span_layout == loaded.sequences[1].concept_span_layout);
     const auto& tree = *loaded.sequences[0].named_concept_spans;
-    assert(tree.count("success_criterion") == 2 && tree.count("evidence") == 1);
+    assert(tree.count("success_criterion") == 2 && tree.count("evidence") == 0);
     GRIM::validateNamedConceptSpans(tree, row.token_ids.size());
     for (size_t i = 0; i < tree.size(); ++i) {
         const auto& expected = row.named_concept_spans->entries[i];

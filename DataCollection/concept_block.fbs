@@ -9,15 +9,28 @@
 // explicit migration behavior.
 namespace GRIMConcept;
 
+table EvidenceCondition {
+    predicate: string;
+    subject: string;
+    target: string;
+}
+
 table SuccessCriterion {
     criterion: string;
-    evidence: string;
+    legacy_evidence: string; // Original slot: migration input only, never written.
+    evidence: EvidenceCondition;
+}
+
+table Constraint {
+    constraint: string;
+    evidence: EvidenceCondition;
 }
 
 table Goal {
     target_state: string;
     success_criteria: [SuccessCriterion];
-    constraints: [string];
+    legacy_constraints: [string]; // Original slot: read-only compatibility.
+    constraints: [Constraint];
 }
 
 table ConceptBlock {

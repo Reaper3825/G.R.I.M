@@ -71,16 +71,7 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
         {"raw", cb.raw}
     };
     if (cb.goal.has_value()) {
-        nlohmann::json goal{{"target_state", cb.goal->target_state}};
-        goal["success_criteria"] = nlohmann::json::array();
-        for (const auto& entry : cb.goal->success_criteria) {
-            goal["success_criteria"].push_back(nlohmann::json{
-                {"criterion", entry.criterion},
-                {"evidence", entry.evidence}
-            });
-        }
-        goal["constraints"] = cb.goal->constraints;
-        j["goal"] = std::move(goal);
+        j["goal"] = goalToJson(*cb.goal);
     }
     return j;
 }

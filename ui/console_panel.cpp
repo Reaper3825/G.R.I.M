@@ -461,7 +461,10 @@ void ConsolePanel::submitPrompt(const std::string& prompt)
         (hasText(goal.target_state) ? "populated" : "(empty)");
     stateNote += " | Goal success criteria: " +
         (criteriaCount == 0 ? std::string("(empty)") : std::to_string(criteriaCount) + " populated");
-    stateNote += " | Goal constraints: " + entrySummary(goal.constraints);
+    const auto constraintCount = std::count_if(goal.constraints.begin(), goal.constraints.end(),
+        [&hasText](const auto& entry) { return hasText(entry.constraint); });
+    stateNote += " | Goal constraints: " + (constraintCount == 0 ? std::string("(empty)")
+        : std::to_string(constraintCount) + " populated");
     history.push(stateNote, UITheme::Colors::TextSecondary, "user");
 
     const std::string turnId = std::to_string(

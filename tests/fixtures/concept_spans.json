@@ -37,15 +37,6 @@
             "source_path": "/criterion",
             "repeat": false,
             "children": []
-          },
-          {
-            "name": "evidence",
-            "supervision": "inherit",
-            "open_delimiter": "<evidence>",
-            "close_delimiter": "</evidence>",
-            "source_path": "/evidence",
-            "repeat": false,
-            "children": []
           }
         ],
         "source_path": "",
@@ -62,13 +53,23 @@
     "close_delimiter": "</constraints>",
     "children": [
       {
-        "name": "constraint",
+        "name": "constraint_entry",
         "supervision": "inherit",
-        "open_delimiter": "<constraint>",
-        "close_delimiter": "</constraint>",
+        "open_delimiter": "",
+        "close_delimiter": "",
         "source_path": "",
         "repeat": true,
-        "children": []
+        "children": [
+          {
+            "name": "constraint",
+            "supervision": "inherit",
+            "open_delimiter": "<constraint>",
+            "close_delimiter": "</constraint>",
+            "source_path": "/constraint",
+            "repeat": false,
+            "children": []
+          }
+        ]
       }
     ],
     "source_path": "/goal/constraints",

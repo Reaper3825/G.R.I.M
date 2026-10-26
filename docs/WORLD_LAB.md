@@ -7,6 +7,154 @@ World Lab is an authoring tab in the Training Control panel. It stores an editab
 world locally. Validate and Compile & Play start an isolated TextWorld Docker
 worker on demand. No model, inference service, or training process is started.
 
+Courses store an optional environment reference as `Course::environment_id`,
+persisted in each course entry in `curriculum_registry.json`. An empty string
+means no environment is assigned; older registries without the field load with
+that default. World Lab documents do not yet have persistent game IDs, and
+course-to-world resolution and an environment picker remain pending. Document
+entity IDs identify entities within a world; worker `game-N` filenames are
+temporary session artifacts and must not be used as course environment IDs.
+
+## Reusable environments and Goal achievability (selected design; pending)
+
+A reusable environment owns the subjects/entities, map, initial state, and
+permitted action rules. It remains stateful during play. The selected Goal owns
+success checks and constraint-violation checks. Separating the Goal from the
+environment does not make gameplay stateless. Different ConceptBlocks may use
+the same environment with different Goals and fresh episode states.
+
+Before starting a challenge, validate the combination of environment and Goal:
+
+- Resolve every evidence subject and optional target in the selected environment;
+  validate predicate support and argument types. Missing entities or unsupported
+  checks make the combination invalid.
+- Check the success conditions together, including obvious contradictions such
+  as requiring the same object in two exclusive locations. Check for conflicts
+  with failure conditions. Individually possible criteria need not be jointly
+  achievable.
+- From the actual episode starting state, establish a permitted action sequence
+  that reaches a state satisfying every success condition without triggering any
+  constraint-violation condition along the way or at the final state. A required
+  key existing somewhere in the world does not prove it is obtainable.
+- Evaluate initial success/failure as well as subsequent states, with failure
+  taking precedence. Report an already satisfied Goal separately from a challenge
+  requiring actions; an initial violation is a failed starting state.
+
+Validation must distinguish `invalid`, `achievable`, `unachievable`, and
+`unknown`. A verified successful replay is a witness for `achievable`. A bounded
+search that finds no solution returns `unknown` unless it exhausts the complete
+reachable state space; contradictions or an exhaustive search can establish
+`unachievable`. Do not label compilation, type validation, a search timeout, or
+the model's claim as proof of achievability or impossibility. Only validated,
+achievable combinations qualify as verified challenges.
+
+Run reachability checks on an isolated state, using the same action transitions
+and evidence evaluator as gameplay. Associate any witness or cached result with
+the environment content/revision, episode starting state, Goal evidence, and
+action/evaluator semantics; changes invalidate the result. Verifier access to
+full world state and solution witnesses does not authorize exposing them to the
+model. Goals containing requirements without executable evidence cannot receive
+an automatic whole-Goal achievability guarantee.
+
+The reusable-game path is intended to evaluate Goal evidence in the controller
+after each transition, without embedding each Goal's endings into a separate
+compiled game. That controller and the achievability validator are pending.
+Current manual Play still compiles the document's Quest into the game, and
+Validate checks compilation/reset rather than general solvability.
+
+### Episode evidence binding (selected design; pending)
+
+The Goal storage prerequisite is implemented: ConceptBlock criteria and
+constraints can persist optional structured evidence, and the model renderer
+excludes that evidence. See the
+[Goal evidence contract and migration](GRIM_REASONING_DATA_CONTRACT.md#44-evidence--system-facing-executable-condition).
+This does not yet attach those Goals to manual Play; the binding, evaluator,
+compilation, and episode changes below remain pending.
+
+The environment definition owns a stable identity/revision, entities, passages,
+initial state, and action rules. The ConceptBlock Goal owns the target text,
+success criteria, constraints, and their structured evidence. An episode owns
+the selected environment instance, a frozen Goal snapshot with source identity,
+bound evidence checks, command history, evaluation results, and terminal status.
+Editing a ConceptBlock must not change a running episode's Goal.
+
+Attaching a Goal registers checks against the environment; it does not insert
+the requested conditions as true world facts or alter the starting state.
+For example, binding `{"predicate":"carrying","subject":"key_1"}` resolves
+the stable entity ID `key_1` and prepares a check for TextWorld's
+`in(resolved_key, inventory)` proposition. It does not give the player the key.
+Display names are not binding keys. Evidence remains paired with its criterion
+or constraint; current truth values and verification diagnostics belong to the
+episode, separately from those definitions.
+
+Episode creation and execution follow this lifecycle:
+
+1. Load the selected environment and its stable-ID-to-runtime-entity mapping.
+2. Load and freeze the selected ConceptBlock Goal and its source identity.
+3. Bind each evidence `predicate`, `subject`, and optional `target` against that
+   mapping. Validate predicate support, entity existence, and argument types;
+   reject invalid bindings before challenge execution. Do not derive executable
+   conditions from requirement prose or treat missing evidence as a pass.
+4. Perform the combination/achievability validation described above on an
+   isolated state. Keep bound success and violation checks in the episode.
+5. Evaluate the initial state and the authoritative state after every command.
+   Any constraint violation fails the episode; otherwise, all success checks
+   must hold simultaneously for automatic success. Requirements without an
+   applicable verifier prevent an automatic whole-Goal success guarantee.
+
+Use shared predicate definitions and binding/evaluation semantics for authoring
+validation, live play, reachability checks, and saved-solution replay. The
+existing worker's condition-to-proposition conversion is the starting point for
+that shared binding layer. The reusable path compiles the environment without
+Goal-specific Quest endings and attaches checks to an episode-owned evaluator.
+Changing only the Goal may reuse the compiled environment, with a fresh episode
+state. The controller's evaluated Goal status is authoritative for these
+challenges; quest-specific TextWorld `won`/`lost` fields are not its completion
+signal. Engine termination and episode limits must still be handled separately.
+Verifier access to authoritative facts does not make those facts model-visible.
+
+### Compilation and challenge termination transition (pending)
+
+The Goal is the source of the quest's win/fail conditions:
+`success_criteria[].evidence` supplies success checks, and
+`constraints[].evidence` supplies constraint-violation checks. Their paired
+`criterion` and `constraint` text supplies the model-facing requirements. The
+reusable environment must not maintain a second independent set of challenge
+win/fail conditions.
+
+Currently, `build_world()` assigns document conditions to `maker.quests` before
+`maker.compile()` creates the playable `.z8` file. Those compiled Quest events
+can end the interpreter's game when their conditions fire. The reusable path
+must remove that Goal-specific Quest construction from environment compilation;
+merely attaching a new Goal evaluator to an old compiled game would leave the
+old endings active.
+
+Recompile existing games used by the reusable path to remove those embedded
+challenge endings, and invalidate cached artifacts that still contain them.
+Thereafter, changing only the selected Goal binds new episode checks without
+recompiling an otherwise unchanged environment. Environment or action-rule
+changes can still require recompilation.
+
+The episode controller evaluates the selected Goal at reset and after each
+command, marks the challenge failed on any constraint violation or successful
+when all success checks hold, and rejects further gameplay commands once the
+episode is terminal until a reset or new episode. Saved-solution replay uses
+the same checks and termination rules. Native engine termination or an episode
+limit does not by itself establish Goal success. These are implementation
+requirements for the selected design; current manual Play is unchanged.
+
+Saved solution witnesses belong to the environment-and-Goal pairing, including
+the starting state and semantics revisions used for verification, rather than
+to the environment alone. Revalidate them when those inputs change.
+
+The first binding implementation requires referenced entities to exist in the
+authored environment. If future quests introduce objects or alter initial
+placements, represent that as an explicit episode setup operation, apply it
+before evidence binding, and include its resulting starting state in validation
+and cache identity. Evidence itself never performs setup. Parameterized Goal
+templates and role-to-entity bindings are future extensions, not prerequisites
+for reusing one environment across different Goals.
+
 Future model-driven play follows the
 [recurrent reasoning contract](GRIM_REASONING_DATA_CONTRACT.md): observe DDE,
 submit only the completed Answer command, then supply actual environment feedback

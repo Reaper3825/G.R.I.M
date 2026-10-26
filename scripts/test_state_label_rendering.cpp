@@ -4,7 +4,7 @@ int main() {
     const auto definitions = testSpanDefinitions();
     using namespace GRIM::ConceptCanonical;
     const nlohmann::json minimal{{"prompt", "Question?"}, {"knowns", {""}},
-                                 {"goal", {{"success_criteria", {{{"criterion", ""}, {"evidence", ""}}}}}}};
+                                 {"goal", {{"success_criteria", {{{"criterion", ""}}}}}}};
     const auto result = render(minimal, definitions);
     assert(result.text == "<prompt>\nQuestion?\n</prompt>\n\n");
     assert(result.named_spans.size() == 1 && result.delimiters.size() == 2);

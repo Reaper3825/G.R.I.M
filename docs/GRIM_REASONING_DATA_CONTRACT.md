@@ -34,11 +34,26 @@ The normative implementation is split across:
   masked context before window construction.
 - [`concept_block.fbs`](../DataCollection/concept_block.fbs): persisted training
   example fields. This is supporting storage, not the organizing model contract.
+- [`GoalContract.hpp`](../resources/models/GRIM-text/Shared/Goal/GoalContract.hpp):
+  shared Goal/evidence types and strict JSON validation, independent of training
+  entries; [`goal_flatbuffer.hpp`](../DataCollection/io/goal_flatbuffer.hpp)
+  supplies the shared database/corpus Goal decoder.
 
 For descriptions of implemented behavior, executable code is authoritative.
 The recurrent contract below is the selected direction; explicitly marked
 pending integration and storage changes must not be mistaken for implemented
 behavior. Update this document alongside those implementations.
+
+**Implemented Goal storage and rendering:** each success criterion pairs
+model-facing `criterion` text with optional system-facing `evidence`; each
+constraint pairs model-facing `constraint` text with optional `evidence` defining
+a failure condition. Evidence is a structured condition (`predicate`, `subject`,
+and optional `target`), not model-visible text or an observation/result. Source
+schema version 3, C++ Goal types, JSON/database adapters, inference transport,
+and active renderer configuration use this representation. Sections 4.4 and 4.5
+define its semantics. Existing datasets have not been rewritten automatically;
+explicit migration tooling is described below. TextWorld binding, evaluation,
+and episode lifecycle integration remain pending.
 
 ## 1. The inference contract in one view
 
@@ -53,7 +68,7 @@ UPSTREAM-SUPPLIED PREFIX                         MODEL CONTINUATION / OUTPUT
 
 prompt
   -> target_state
-  -> success criteria + available evidence
+  -> success criteria (criterion text only)
   -> constraints
   -> persisted knowns/unknowns (later passes only)
   || inference boundary ||
@@ -158,12 +173,14 @@ retaining their distinct annotated-input response contract. Prefill-only
 inspection has no text output. This refactor preserves training encoding and does
 not require corpus regeneration.
 
-## 2. Existing single-block canonical model-visible order
+## 2. Selected single-block canonical model-visible order
 
 Only non-empty fields render. Authored array order is preserved. This is the
-current persisted ConceptBlock rendering for one cycle/example, not a limit of
+selected ConceptBlock rendering for one cycle/example, not a limit of
 one reasoning cycle per task. Recurrent trajectory serialization is not yet
 represented by repeated phase fields in the source schema.
+The active renderer configuration excludes evidence leaves entirely and renders
+only the text from criterion and constraint objects.
 
 ```text
 <prompt>
@@ -178,10 +195,6 @@ TARGET STATE VALUE
 <criterion>
 CRITERION 1 VALUE
 </criterion>
-
-<evidence>
-EVIDENCE 1 VALUE
-</evidence>
 
 <criterion>
 CRITERION 2 VALUE
@@ -242,7 +255,8 @@ Important rendering facts:
   tokens/bytes.
 - Every known and unknown is rendered in its own repeated section. There is no
   outer knowns collection or outer unknowns collection.
-- Each evidence span belongs to the immediately preceding criterion.
+- Evidence stays paired with its criterion in system storage and is excluded
+  from the model-visible text and span tree under the selected contract.
 - Legacy `explanation`/`intermediates` text is unlabeled and appears immediately
   before `determine`.
 - Each phase and answer has at most one field in the current persisted
@@ -261,7 +275,7 @@ The normal structured inference prefix is:
 ```text
 prompt
 [target_state]
-[criteria/evidence]
+[criteria text]
 [constraints]
 [knowns]
 [unknowns]
@@ -328,15 +342,20 @@ object declares `name`, `supervision`, `source_path`, `repeat`,
   selection happens before window construction.
 
 The active configuration supervises determine, define, execute, and answer.
-Prompt, target state, criteria/evidence, constraints, knowns, unknowns, legacy
+Evidence has no model-visible span or supervision policy in the active
+configuration. Legacy evidence leaves have been removed.
+Prompt, target state, criteria text, constraints, knowns, unknowns, legacy
 reasoning, and update are context. Criterion/evidence pair children and constraint
 entries inherit their parents unless explicitly overridden.
 
-For example the criteria root selects `/goal/success_criteria`; its transparent
-`success_criterion` child selects `""` with `repeat: true`, and that child's
-criterion/evidence leaves select `/criterion` and `/evidence`. Constraints use
-the identical structure with a repeated scalar child. No field-name switches
-are involved in rendering, token-span projection, or supervision.
+The criteria root selects `/goal/success_criteria`; its transparent
+`success_criterion` child selects `""` with `repeat: true`, and its sole text
+leaf selects `/criterion`. No evidence leaf is configured. Constraints repeat
+objects through a transparent `constraint_entry` child under `/goal/constraints`
+and render only each object's `/constraint` text, excluding its `/evidence`.
+No field-name switches are involved in rendering, token-span projection, or
+supervision. Custom configurations must preserve this system/model boundary;
+legacy layouts must be updated before compiling new corpora.
 
 ## 4. Semantic contract for each model-visible span
 
@@ -393,7 +412,7 @@ Example:
 The consumed volume is known and reported in liters.
 ```
 
-### 4.3 Success criterion — verifier condition
+### 4.3 Success criterion — model-facing requirement
 
 Canonical position: inside `<criteria>`, after target state.
 
@@ -423,41 +442,137 @@ Example:
 The response reports the difference between the initial and remaining volumes.
 ```
 
-### 4.4 Evidence — criterion support available to the model
+### 4.4 Evidence — system-facing executable condition
 
-Canonical position: immediately after its paired criterion.
+Implemented storage, transport, and rendering contract; environment binding and
+evaluation remain pending.
+This field has no model-visible form. It is paired with one criterion or
+constraint in system storage; only the paired requirement text is supplied to
+the model. This section describes success evidence; section 4.5 applies the
+same condition structure to failure evidence.
 
-Visible form:
+Definition: the structured condition the system checks to verify the paired
+criterion. Evidence describes the check, not its current truth value, an
+execution result, or a model-generated justification.
 
-```text
-<evidence>
-VALUE
-</evidence>
+```json
+{
+  "criterion": "The player is carrying the key.",
+  "evidence": {
+    "predicate": "carrying",
+    "subject": "key_1",
+    "target": ""
+  }
+}
 ```
 
-Inference ownership: optionally supplied with its criterion. An empty evidence
-value is allowed and produces no evidence section.
+- `predicate` identifies the supported check.
+- `subject` identifies the world entity being checked, using its stable world ID.
+- `target` identifies a second entity when the predicate requires one. It may
+  be omitted or empty for unary checks; for example, `in` needs a container
+  target, whereas `carrying` does not.
+- Evidence remains nested with its criterion, never in a parallel array or
+  associated by matching criterion text.
+- A criterion used for automatic TextWorld verification requires valid evidence.
+  A criterion without an applicable verifier may omit evidence; the system must
+  not infer that it passed or manufacture a TextWorld condition from its text.
+- Structured evidence is excluded from model rendering, prefill, and token-span
+  projection. Actual observations may enter permitted feedback or knowns under
+  their own availability rules; they do not replace this condition definition.
 
-Definition: information that supports the paired success criterion. At
-inference time, supplied evidence is context already available before the model
-continuation; it must not pretend that a future answer has already been
-generated.
+The current World Lab adapter translates these authored predicates into
+TextWorld propositions: `player_at` becomes `at(P, room)`, `carrying` becomes
+`in(object, I)`, and `eaten`, `open`, `closed`, `locked`, `at`, `in`, and `on`
+map to corresponding facts. Current manual Play constructs Quest events from
+the world document's conditions before compilation. In the selected reusable
+integration, episode creation instead validates predicate support, stable entity
+references, and argument types, then binds Goal evidence to checks against the
+environment's authoritative state. Attaching evidence does not insert facts or
+change entity state: `carrying(key_1)` checks `in(resolved_key, inventory)`; it
+does not place the key in inventory.
 
-Rules:
+The episode owns a frozen Goal snapshot, bound checks, evaluation results, and
+completion status. The environment owns entities, initial state, and transitions;
+the ConceptBlock Goal retains the evidence definitions beside their requirements.
+The episode evaluator checks the initial state and each post-command state, with
+any constraint violation taking precedence over success. It can attach different
+Goals to fresh instances of the same compiled environment without compiling
+Goal-specific Quest endings. Automatic completion for this path comes from the
+controller's evidence evaluation, independently of TextWorld's quest-specific
+`won`/`lost` fields and answer-span completion. Full verifier facts remain
+separate from permitted model observations. See
+[episode evidence binding](WORLD_LAB.md#episode-evidence-binding-selected-design-pending)
+for ownership, lifecycle, shared evaluator semantics, and setup boundaries.
 
-- Support only the adjacent criterion.
-- Include only evidence known at the point where the prefix is constructed.
-- Never place a future model answer or future execution result in the inference
-  prefix as evidence.
-- Leave evidence empty when it is intended to be produced or verified later.
+Goal success-criterion evidence and constraint-violation evidence are the sole
+source of challenge win/fail checks in this reusable path. Environment
+compilation must omit the current Goal-specific `maker.quests` construction.
+Existing compiled games carrying those endings must be rebuilt and their cached
+artifacts invalidated before reuse; attaching new checks does not remove old
+compiled endings. Subsequent Goal-only changes require new episode bindings,
+not environment recompilation. The episode controller enforces terminal status
+by rejecting further gameplay commands until reset or a new episode, and saved
+solution replay follows the same evaluator and termination semantics. See the
+[compilation transition](WORLD_LAB.md#compilation-and-challenge-termination-transition-pending).
 
-This temporal distinction is critical: evidence text that quotes the authored
-final answer may be valid as an offline verification annotation, but supplying
-that same text in the inference prefix leaks the answer.
+TextWorld ANDs conditions within an Event and ORs events within each Quest
+win/fail list. World Lab currently puts all winning conditions in one Event
+and each failing condition in a separate Event. Mapping success-criterion
+evidence through that existing arrangement means all success checks must hold
+simultaneously. Evidence itself does not encode alternative event groups
+or temporal ordering. Constraint evidence supplies failure checks using the
+same structure, as specified in section 4.5. The compiled game checks failure before
+success each turn for an unfinished quest. Goal completion must come from
+verified environment status, independently of answer-span completion.
+
+Binding checks alone do not establish achievability. The selected reusable
+environment integration must additionally validate that, from the episode's
+starting state, all success evidence can hold together along a permitted path
+that never triggers constraint failure evidence. See
+[environment/Goal achievability](WORLD_LAB.md#reusable-environments-and-goal-achievability-selected-design-pending)
+for validation outcomes, witness requirements, and cache invalidation. This
+validator and external Goal evaluation are pending; the compiled Quest behavior
+above describes the current manual-play path.
+
+The version-3 source schema appends structured evidence and constraint fields;
+original string-evidence and scalar-constraint slots remain read-only migration
+inputs. Native readers accept legacy empty evidence as absent and wrap legacy
+constraint strings as text-only objects, but reject non-empty prose evidence
+with an explicit migration error. JSON authoring and inference accept only the
+new object shape; omit evidence when no executable verifier is available. Null,
+string, malformed, or unknown evidence fields are rejected. Predicate and subject
+must be non-empty strings; target may be omitted or an empty string. This is
+structural validation, not a claim of predicate support or achievability.
+
+`scripts/migrate_goal_evidence.py` accepts old JSONL or GRCB FlatBuffers and
+exports new JSONL plus a separate archive of non-empty legacy prose with block
+identity and source path. It leaves the source untouched and refuses existing
+output/archive paths. Empty evidence becomes absent; scalar constraints become
+text-only constraint objects. It never derives a predicate from prose. Authors
+must supply valid conditions before automatic verification can cover these
+requirements. `scripts/build_concept_blocks_flatbuffer.py` validates Goals and
+writes version-3 datasets; legacy JSON imports fail rather than silently saving
+a partially skipped dataset. Source-document quotations in generator bindings
+remain source quotations and do not populate executable Goal evidence.
+
+Example migration (writes new artifacts only):
+
+```powershell
+python scripts/migrate_goal_evidence.py --input path/to/concept_blocks.fb --output path/to/migrated.jsonl --archive path/to/legacy-evidence.jsonl
+python scripts/build_concept_blocks_flatbuffer.py --jsonl path/to/migrated.jsonl --output path/to/migrated.fb
+```
+
+The DataHub Goal editor accepts optional condition JSON for success and violation
+evidence and validates it before saving. Environment IDs and predicate argument
+types are validated later by the pending binder. Focused verification uses
+`tests/run_goal_evidence.ps1` and `python -m unittest discover -s scripts -p test_goal_evidence.py`.
+Existing source datasets are not rewritten by this implementation. The changed
+span layout requires regenerating affected GRMT corpora before use; regeneration
+and trainer/runtime execution are not part of the storage milestone.
 
 ### 4.5 Constraint — invariant or boundary
 
-Canonical position: after all criteria/evidence, before knowns.
+Canonical position: after all criterion text, before knowns.
 
 Visible form:
 
@@ -474,6 +589,37 @@ Inference ownership: optionally supplied in `ReasoningState.goal`.
 
 Definition: a boundary the reasoning transition and final response must
 preserve.
+
+Implemented storage: each entry pairs `constraint` text
+with `evidence` using the same condition structure as success criteria:
+
+```json
+{
+  "constraint": "Do not eat the apple.",
+  "evidence": {
+    "predicate": "eaten",
+    "subject": "apple_1",
+    "target": ""
+  }
+}
+```
+
+Only `constraint` text renders inside `<constraint>`. Its evidence is system
+metadata and must not enter model text, prefill, or token-span projection.
+
+Constraint evidence defines the condition whose truth establishes a violation
+and triggers failure. It does not define a condition that must remain true:
+in this example, `eaten(apple_1)` being true means failure. Success-criterion
+evidence being true means that criterion is satisfied. Both use `predicate`,
+`subject`, and optional `target`, with the same entity/type validation.
+
+Under the existing World Lab event arrangement, each constraint's evidence
+becomes a separate failing Event, so any one violation fails the quest. A
+constraint used for automatic TextWorld enforcement requires valid evidence.
+Without an applicable verifier, evidence may be omitted; the system must not
+claim the constraint was checked or translate its prose into an invented check.
+Failure evaluation uses the actual environment state and the quest lifecycle;
+the model does not generate the evidence definition or decide whether it fired.
 
 Rules:
 
@@ -537,7 +683,7 @@ Rules:
 - Include only unknowns relevant to the target or a necessary dependency.
 - Separate unknowns that require distinct derivations or checks.
 - Do not list an item as unknown if the same prefix already supplies it as a
-  known or as evidence.
+  known or as permitted feedback.
 
 Unknowns form the work queue for the next transition.
 
@@ -832,7 +978,7 @@ It must not flow backward. In particular:
 - unknowns must not name a value as though already resolved;
 - determine must not contain the execution result;
 - define must not perform the calculation or contain the execution result;
-- inference-time evidence must not quote a future answer;
+- system-facing evidence conditions must not be rendered into the model prefix;
 - execute must not rely on facts first introduced by update or answer.
 
 ### 5.2 Determine/define/execute alignment
@@ -884,12 +1030,11 @@ The reasoning-state object is:
     "target_state": "The consumed volume is known and reported in liters.",
     "success_criteria": [
       {
-        "criterion": "The response reports the difference between the initial and remaining volumes.",
-        "evidence": ""
+        "criterion": "The response reports the difference between the initial and remaining volumes."
       }
     ],
     "constraints": [
-      "Preserve liters as the unit."
+      {"constraint": "Preserve liters as the unit."}
     ]
   },
   "knowns": [],
@@ -897,8 +1042,12 @@ The reasoning-state object is:
 }
 ```
 
-Evidence is intentionally empty: `36 liters` does not exist yet at the
-inference boundary.
+This example uses the implemented constraint-object transport shape.
+Evidence is omitted from both requirement types because this arithmetic example
+has no TextWorld verifier.
+The system-facing TextWorld evidence example in section 4.4 illustrates the
+selected structured representation. Neither verifier metadata nor a future
+answer is included in the model-visible prefix.
 
 ### 6.2 Exact model-visible inference prefix
 
@@ -1088,10 +1237,11 @@ The source ConceptBlock FlatBuffer and its JSON adapter remain authoring
 storage. Adding a genuinely new source property may still require changing that
 source model/adapter, but not the GRMT span format.
 
-No source-schema, renderer configuration, supervision, or corpus migration is
-performed by this documentation transition. Recurrent episode storage and
-feedback projection must be implemented explicitly; a challenge, an interaction
-cycle, and a persisted SFT ConceptBlock are not assumed to have a 1:1 mapping.
+The structured evidence milestone updates source storage, transport, and renderer
+configuration; existing source datasets and GRMT corpora still require explicit
+migration/regeneration. Recurrent episode storage and feedback projection remain
+pending; a challenge, an interaction cycle, and a persisted SFT ConceptBlock are
+not assumed to have a 1:1 mapping.
 
 ## 8. Supporting storage and non-visible data
 
@@ -1107,6 +1257,8 @@ following fields do not become canonical model-visible text:
 | `timestamp` | int64 | persisted timestamp |
 | `intermediate_count` | int | derived compatibility count |
 | `step_index` | vector of int | derived compatibility indices |
+| `goal.success_criteria[].evidence` | optional structured condition | system-facing criterion verification; excluded from model text |
+| `goal.constraints[].evidence` | optional structured condition | system-facing failure check for the paired constraint; excluded from model text |
 
 `raw:string` is the exception: when non-empty it replaces the entire structured
 rendering. It has no structured goal/state/reasoning spans and is rejected as a
@@ -1126,7 +1278,11 @@ For every example, verify:
 - Fields appear in canonical order and use the exact visible labels.
 - The target state is an outcome, criteria are checks, and constraints are
   boundaries.
-- Each evidence value is temporally available at the point it is supplied.
+- Each automatically verified TextWorld criterion has structured evidence with
+  valid predicate/entity bindings; evidence is excluded from model input.
+- Each automatically enforced TextWorld constraint pairs its model-facing text
+  with structured evidence defining a violation, not a condition to preserve.
+  Any such violation triggers failure under the current event arrangement.
 - Knowns are supported facts; unknowns are genuinely unresolved.
 - Determine directly states the contextualized work without narrating its own
   phase or mechanically copying state entries, identifiers, values, operand
@@ -1138,7 +1294,7 @@ For every example, verify:
 - Answer contains only the recipient-facing response for its cycle. For TextWorld,
   only its validated command is submitted; DDE is observed separately.
 - Each feedback item follows the submission that produced it; no cycle sees
-  hidden world facts, future results, or saved solutions as supplied evidence.
+  hidden world facts, future results, or saved solutions as supplied context.
 - Goal completion is checked independently from answer-span completion.
 - The active supervision/window policy actually targets the phases the example
   is intended to teach.

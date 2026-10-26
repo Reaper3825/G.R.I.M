@@ -2,6 +2,7 @@
 
 #include "CurriculumRegistry.hpp"
 #include "../../../../../DataCollection/concept_block_generated.h"
+#include "../../../../../DataCollection/io/goal_flatbuffer.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -44,24 +45,7 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 		for (const auto* value : *values) j["unknowns"].push_back(fbString(value));
 	}
 	if (const auto* goal = source.goal()) {
-		json goal_json{{"target_state", fbString(goal->target_state())}};
-		goal_json["success_criteria"] = json::array();
-		if (const auto* criteria = goal->success_criteria()) {
-			for (const auto* entry : *criteria) {
-				if (!entry) continue;
-				goal_json["success_criteria"].push_back(json{
-					{"criterion", fbString(entry->criterion())},
-					{"evidence", fbString(entry->evidence())}
-				});
-			}
-		}
-		goal_json["constraints"] = json::array();
-		if (const auto* constraints = goal->constraints()) {
-			for (const auto* constraint : *constraints) {
-				goal_json["constraints"].push_back(fbString(constraint));
-			}
-		}
-		j["goal"] = std::move(goal_json);
+		j["goal"] = goalToJson(GoalStorage::fromFlatBuffer(*goal));
 	}
 
 	j["intermediates"] = json::array();
@@ -138,7 +122,7 @@ void loadConceptBlocks(const fs::path& cache_dir,
 				flatbuffer_path.string());
 		}
 		const auto* dataset = GRIMConcept::GetConceptBlockDataset(buffer.data());
-		constexpr uint32_t supported_schema_version = 2;
+		constexpr uint32_t supported_schema_version = 3;
 		if (!dataset || dataset->schema_version() > supported_schema_version) {
 			throw std::runtime_error(
 				"[DataLoader] FATAL: unsupported concept-block schema version " +
@@ -184,10 +168,12 @@ void loadConceptBlocks(const fs::path& cache_dir,
 			auto j = json::parse(line);
 			++total;
 			if (!selectedByCurriculum(j.value("id", std::string()), out_metadata)) continue;
+			if (j.contains("goal") && !j.at("goal").is_null())
+				j["goal"] = goalToJson(goalFromJson(j.at("goal")));
 			out.push_back(std::move(j));
 			++accepted;
 		} catch (const std::exception& e) {
-			std::cerr << "[DataLoader] concept_blocks.jsonl skip line: " << e.what() << "\n";
+			throw std::runtime_error(std::string("[DataLoader] Invalid ConceptBlock JSONL; migrate legacy Goal evidence before use: ") + e.what());
 		}
 	}
 	std::cout << "[DataLoader] Loaded " << accepted;

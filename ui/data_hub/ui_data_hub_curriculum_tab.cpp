@@ -355,7 +355,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         const float innerW = eInnerW - 2.0f * sectionPad;
         const float criterionAreaH = 44.0f;
         const float criterionBlockH = 148.0f;
-        const float constraintBlockH = 76.0f;
+        const float constraintBlockH = 148.0f;
         const float goalSectionH = sectionPad + 22.0f + 20.0f + areaH + 14.0f
             + criterionBlockH * static_cast<float>(cbSuccessCriterionRows_.size())
             + 32.0f
@@ -389,7 +389,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             row.criterionArea->drawOverlay(renderer, position);
             ey += criterionAreaH + 8.0f;
 
-            renderer.drawText({innerLeft, ey}, "Evidence (required)",
+            renderer.drawText({innerLeft, ey}, "Success evidence (optional condition JSON)",
                               UITheme::Colors::TextMuted);
             ey += 20.0f;
             row.evidenceArea->setPosition(innerLeft, ey);
@@ -411,6 +411,13 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             cbConstraintAreas_[ci]->setPosition(innerLeft, ey);
             cbConstraintAreas_[ci]->setSize(innerW, criterionAreaH);
             cbConstraintAreas_[ci]->drawOverlay(renderer, position);
+            ey += criterionAreaH + 8.0f;
+            renderer.drawText({innerLeft, ey}, "Violation evidence (optional condition JSON)",
+                              UITheme::Colors::TextMuted);
+            ey += 20.0f;
+            cbConstraintEvidenceAreas_[ci]->setPosition(innerLeft, ey);
+            cbConstraintEvidenceAreas_[ci]->setSize(innerW, criterionAreaH);
+            cbConstraintEvidenceAreas_[ci]->drawOverlay(renderer, position);
             ey += criterionAreaH + 12.0f;
         }
 
@@ -702,10 +709,13 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
             cbSuccessCriterionRows_[i].criterionArea->setText(
                 cb.goal->success_criteria[i].criterion);
             cbSuccessCriterionRows_[i].evidenceArea->setText(
-                cb.goal->success_criteria[i].evidence);
+                cb.goal->success_criteria[i].evidence
+                    ? GRIM::evidenceConditionToJson(*cb.goal->success_criteria[i].evidence).dump() : "");
         }
         for (size_t i = 0; i < cb.goal->constraints.size(); ++i) {
-            cbConstraintAreas_[i]->setText(cb.goal->constraints[i]);
+            cbConstraintAreas_[i]->setText(cb.goal->constraints[i].constraint);
+            cbConstraintEvidenceAreas_[i]->setText(cb.goal->constraints[i].evidence
+                ? GRIM::evidenceConditionToJson(*cb.goal->constraints[i].evidence).dump() : "");
         }
     }
     for (size_t i = 0; i < cb.knowns.size(); ++i) {
@@ -742,6 +752,7 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
     cbSuccessCriterionRows_.clear();
     cbConstraintAreas_.clear();
+    cbConstraintEvidenceAreas_.clear();
     cbKnownAreas_.clear();
     cbUnknownAreas_.clear();
     cbIntermediateAreas_.clear();
@@ -770,9 +781,12 @@ void UIDataHubPanel::syncConstraintAreas(int count) {
     while (static_cast<int>(cbConstraintAreas_.size()) < count) {
         cbConstraintAreas_.push_back(std::make_shared<UITextArea>(
             "", "", [](const std::string&) {}));
+        cbConstraintEvidenceAreas_.push_back(std::make_shared<UITextArea>(
+            "", "", [](const std::string&) {}));
     }
     while (static_cast<int>(cbConstraintAreas_.size()) > count) {
         cbConstraintAreas_.pop_back();
+        cbConstraintEvidenceAreas_.pop_back();
     }
 }
 
@@ -867,8 +881,14 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
                     + " cannot be empty";
                 return false;
             }
-            goal.success_criteria.push_back(
-                GRIM::ConceptBlockSuccessCriterion{criterion, evidence});
+            try {
+                goal.success_criteria.push_back({criterion, evidence.empty()
+                    ? std::optional<GRIM::EvidenceCondition>{}
+                    : GRIM::evidenceConditionFromJson(nlohmann::json::parse(evidence))});
+            } catch (const std::exception& ex) {
+                validation_error = "Success criterion " + std::to_string(i + 1) + " evidence: " + ex.what();
+                return false;
+            }
         }
         for (size_t i = 0; i < cbConstraintAreas_.size(); ++i) {
             const std::string constraint = cbConstraintAreas_[i]
@@ -878,7 +898,15 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
                     + " cannot be empty";
                 return false;
             }
-            goal.constraints.push_back(constraint);
+            try {
+                const auto evidence = trim(cbConstraintEvidenceAreas_[i]->getText());
+                goal.constraints.push_back({constraint, evidence.empty()
+                    ? std::optional<GRIM::EvidenceCondition>{}
+                    : GRIM::evidenceConditionFromJson(nlohmann::json::parse(evidence))});
+            } catch (const std::exception& ex) {
+                validation_error = "Constraint " + std::to_string(i + 1) + " evidence: " + ex.what();
+                return false;
+            }
         }
         out.goal = std::move(goal);
     }

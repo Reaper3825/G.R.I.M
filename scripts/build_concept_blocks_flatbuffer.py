@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from goal_evidence import validate_goal
 
 
 def default_flatc(repo_root: Path) -> Path:
@@ -22,7 +23,7 @@ def write_dataset_envelope(jsonl_path: Path, output_path: Path) -> int:
     with jsonl_path.open("r", encoding="utf-8") as source, output_path.open(
         "w", encoding="utf-8", newline="\n"
     ) as output:
-        output.write('{"schema_version":2,"blocks":[')
+        output.write('{"schema_version":3,"blocks":[')
         for line_number, line in enumerate(source, 1):
             stripped = line.strip()
             if not stripped:
@@ -35,6 +36,11 @@ def write_dataset_envelope(jsonl_path: Path, output_path: Path) -> int:
                 raise ValueError(f"{jsonl_path}:{line_number}: missing string id")
             if "question" in entry:
                 raise ValueError(f"{jsonl_path}:{line_number}: legacy question field is forbidden")
+            if entry.get("goal") is not None:
+                try:
+                    validate_goal(entry["goal"])
+                except ValueError as error:
+                    raise ValueError(f"{jsonl_path}:{line_number}: {error}; migrate legacy Goals with scripts/migrate_goal_evidence.py") from error
             prompt = entry.get("prompt")
             raw = entry.get("raw")
             if not ((isinstance(prompt, str) and prompt) or

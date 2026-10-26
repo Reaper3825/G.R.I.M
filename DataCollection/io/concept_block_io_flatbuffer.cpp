@@ -1,4 +1,5 @@
 #include "concept_block_io_flatbuffer.hpp"
+#include "goal_flatbuffer.hpp"
 
 #include <grim_concept/concept_block_generated.h>
 
@@ -19,6 +20,14 @@ namespace {
 
 std::string stringValue(const flatbuffers::String* value) {
     return value ? value->str() : std::string{};
+}
+
+flatbuffers::Offset<GRIMConcept::EvidenceCondition> createEvidence(
+    flatbuffers::FlatBufferBuilder& builder, const std::optional<EvidenceCondition>& value) {
+    if (!value) return 0;
+    (void)evidenceConditionToJson(*value);
+    return GRIMConcept::CreateEvidenceCondition(builder, builder.CreateString(value->predicate),
+        builder.CreateString(value->subject), value->target.empty() ? 0 : builder.CreateString(value->target));
 }
 
 template <typename T>
@@ -58,19 +67,7 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.source_sequence_id = stringValue(source.source_sequence_id());
     block.timestamp = source.timestamp();
     if (const auto* goal = source.goal()) {
-        ConceptBlockGoal decoded_goal;
-        decoded_goal.target_state = stringValue(goal->target_state());
-        if (const auto* criteria = goal->success_criteria()) {
-            decoded_goal.success_criteria.reserve(criteria->size());
-            for (const auto* source_criterion : *criteria) {
-                if (!source_criterion) continue;
-                decoded_goal.success_criteria.push_back(ConceptBlockSuccessCriterion{
-                    stringValue(source_criterion->criterion()),
-                    stringValue(source_criterion->evidence())});
-            }
-        }
-        decoded_goal.constraints = stringVectorValue(goal->constraints());
-        block.goal = std::move(decoded_goal);
+        block.goal = GoalStorage::fromFlatBuffer(*goal);
     }
 
     // Derived fields are normalized on load so older/additive schema versions
@@ -115,13 +112,17 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
             criteria.push_back(GRIMConcept::CreateSuccessCriterion(
                 builder,
                 builder.CreateString(entry.criterion),
-                builder.CreateString(entry.evidence)));
+                0, createEvidence(builder, entry.evidence)));
         }
+        std::vector<flatbuffers::Offset<GRIMConcept::Constraint>> constraints;
+        for (const auto& entry : block.goal->constraints)
+            constraints.push_back(GRIMConcept::CreateConstraint(builder,
+                builder.CreateString(entry.constraint), createEvidence(builder, entry.evidence)));
         goal = GRIMConcept::CreateGoal(
             builder,
             builder.CreateString(block.goal->target_state),
             builder.CreateVector(criteria),
-            createStringVector(builder, block.goal->constraints));
+            0, builder.CreateVector(constraints));
     }
 
     return GRIMConcept::CreateConceptBlock(
@@ -171,10 +172,13 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
         for (const auto& text : block.explanation) add(8 + text.size());
         if (block.goal.has_value()) {
             add(16 + block.goal->target_state.size());
+            const auto evidenceSize = [](const auto& evidence) -> size_t {
+                return evidence ? 48 + evidence->predicate.size() + evidence->subject.size() + evidence->target.size() : 0;
+            };
             for (const auto& entry : block.goal->success_criteria)
-                add(32 + entry.criterion.size() + entry.evidence.size());
-            for (const auto& constraint : block.goal->constraints)
-                add(8 + constraint.size());
+                add(32 + entry.criterion.size() + evidenceSize(entry.evidence));
+            for (const auto& entry : block.goal->constraints)
+                add(32 + entry.constraint.size() + evidenceSize(entry.evidence));
         }
         add(block.step_index.size() * sizeof(int32_t));
     }

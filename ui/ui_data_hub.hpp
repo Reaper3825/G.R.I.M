@@ -444,6 +444,7 @@ private:
     };
     std::vector<CBSuccessCriterionRow> cbSuccessCriterionRows_;
     std::vector<std::shared_ptr<UITextArea>> cbConstraintAreas_;
+    std::vector<std::shared_ptr<UITextArea>> cbConstraintEvidenceAreas_;
     std::vector<std::shared_ptr<UITextArea>> cbKnownAreas_;
     std::vector<std::shared_ptr<UITextArea>> cbUnknownAreas_;
     std::shared_ptr<UITextArea>  cbDetermineArea_;

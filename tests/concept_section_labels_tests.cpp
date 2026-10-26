@@ -6,9 +6,9 @@ int main() {
     const nlohmann::json row = {
         {"prompt", "Question"}, {"goal", {
             {"target_state", "Outcome"},
-            {"success_criteria", {{{"criterion", "Check one"}, {"evidence", "Support"}},
-                                  {{"criterion", "Check two"}, {"evidence", ""}}}},
-            {"constraints", {"Limit one", "Limit two"}}}},
+            {"success_criteria", {{{"criterion", "Check one"}, {"evidence", {{"predicate", "carrying"}, {"subject", "key_1"}}}},
+                                  {{"criterion", "Check two"}}}},
+            {"constraints", {{{"constraint", "Limit one"}}, {{"constraint", "Limit two"}}}}}},
         {"knowns", {"Known one", "Known two"}}, {"unknowns", {"Unknown"}},
         {"explanation", {"Legacy line"}}, {"determine", "Work"},
         {"define", "Terms"}, {"execute", "Result"}, {"update", "State"}, {"answer", "Response"}};
@@ -28,9 +28,10 @@ int main() {
     const auto& tree = *sequence.named_concept_spans;
     GRIM::validateNamedConceptSpans(tree, sequence.token_ids.size());
     assert(tree.count("knowns") == 2 && tree.count("success_criterion") == 2);
-    assert(tree.count("evidence") == 1 && tree.count("constraint") == 2);
+    assert(tree.count("evidence") == 0 && tree.count("constraint") == 2);
+    assert(rendered.text.find("key_1") == std::string::npos);
     for (const auto& e : tree.entries) {
-        if (e.name == "evidence") {
+        if (e.name == "criterion") {
             const auto& pair = tree.entries.at(e.parent_entry_index);
             assert(pair.name == "success_criterion");
             assert(tree.entries.at(pair.parent_entry_index).name == "success_criteria_and_evidence");

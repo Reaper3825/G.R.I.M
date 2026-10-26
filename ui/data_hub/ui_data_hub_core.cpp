@@ -701,7 +701,7 @@ UIDataHubPanel::UIDataHubPanel()
     }, UITheme::Colors::Success);
     constraintsActionMenu_->addItem("- Constraint", [this]() {
         if (!cbConstraintAreas_.empty())
-            cbConstraintAreas_.pop_back();
+            syncConstraintAreas(static_cast<int>(cbConstraintAreas_.size()) - 1);
     }, UITheme::Colors::Danger);
 
     knownsActionMenu_ = std::make_shared<UIActionMenu>("Knowns");
@@ -1488,6 +1488,8 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                 if (row.evidenceArea)  row.evidenceArea->update(input, dt);
             }
             for (auto& area : cbConstraintAreas_)
+                if (area) area->update(input, dt);
+            for (auto& area : cbConstraintEvidenceAreas_)
                 if (area) area->update(input, dt);
             for (auto& area : cbKnownAreas_)
                 if (area) area->update(input, dt);
