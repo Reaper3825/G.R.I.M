@@ -1,0 +1,109 @@
+import copy
+from pathlib import Path
+import sys
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/textworld"))
+from goal_evaluator import BoundGoal, Episode, GoalError
+
+
+ENTITIES = {key: {"kind": kind, "symbol": (symbol, type_)} for key, kind, symbol, type_ in (
+    ("room", "room", "r_0", "r"), ("key", "key", "k_0", "k"),
+    ("apple", "food", "f_0", "f"), ("box", "container", "c_0", "c"),
+    ("table", "supporter", "s_0", "s"), ("door", "door", "d_0", "d"))}
+
+
+def requirement(pred="carrying", subject="key", target=None):
+    evidence = {"predicate": pred, "subject": subject}
+    if target is not None:
+        evidence["target"] = target
+    return {"criterion": "Requirement", "evidence": evidence}
+
+
+class EvaluatorTests(unittest.TestCase):
+    def bind(self, entries=None, constraints=None):
+        return BoundGoal({"success_criteria": entries if entries is not None else [requirement()],
+                          "constraints": constraints or []}, "source", ENTITIES)
+
+    def test_predicates_and_typed_identities(self):
+        for pred, subject, target, fact in (
+            ("player_at", "room", None, ("at", (("P", "P"), ("r_0", "r")))),
+            ("carrying", "key", None, ("in", (("k_0", "k"), ("I", "I")))),
+            ("at", "key", "room", ("at", (("k_0", "k"), ("r_0", "r")))),
+            ("in", "apple", "box", ("in", (("f_0", "f"), ("c_0", "c")))),
+            ("on", "apple", "table", ("on", (("f_0", "f"), ("s_0", "s")))),
+            ("eaten", "apple", None, ("eaten", (("f_0", "f"),))),
+            ("open", "door", None, ("open", (("d_0", "d"),))),
+            ("closed", "box", None, ("closed", (("c_0", "c"),))),
+            ("locked", "door", None, ("locked", (("d_0", "d"),))),
+        ):
+            with self.subTest(predicate=pred):
+                bound = self.bind([requirement(pred, subject, target)])
+                self.assertEqual(bound.evaluate({fact})["status"], "succeeded")
+                self.assertEqual(bound.evaluate(set())["status"], "active")
+                wrong_types = (fact[0], tuple((name, "wrong") for name, _ in fact[1]))
+                self.assertEqual(bound.evaluate({wrong_types})["status"], "active")
+
+    def test_invalid_bindings_have_source_locations(self):
+        with self.assertRaises(GoalError):
+            BoundGoal({"success_criteria": [requirement()]}, "", ENTITIES)
+        for entry in (requirement("unknown"), requirement(subject="missing"), requirement("player_at", "key"),
+                      requirement("carrying", "key", "box"), requirement("in", "key"),
+                      requirement("in", "key", "room"), requirement("eaten", "key"),
+                      requirement("open", "table"), requirement("at", "room", "room"),
+                      {"criterion": "C", "evidence": "legacy"}):
+            with self.subTest(entry=entry), self.assertRaises(GoalError) as error:
+                self.bind([entry])
+            self.assertEqual(error.exception.source_id, "source")
+            self.assertEqual(error.exception.collection, "success_criteria")
+            self.assertEqual(error.exception.index, 0)
+
+    def test_failure_precedes_success(self):
+        entry = requirement()
+        bound = self.bind([entry], [{"constraint": "Avoid", "evidence": entry["evidence"]}])
+        facts = {("in", (("k_0", "k"), ("I", "I")))}
+        self.assertEqual(bound.evaluate(facts)["status"], "failed")
+
+    def test_checks_are_simultaneous_not_latched(self):
+        bound = self.bind([requirement(), requirement("player_at", "room")])
+        first = {("in", (("k_0", "k"), ("I", "I")))}
+        second = {("at", (("P", "P"), ("r_0", "r")))}
+        self.assertEqual(bound.evaluate(first)["status"], "active")
+        self.assertEqual(bound.evaluate(second)["status"], "active")
+        self.assertEqual(bound.evaluate(first | second)["status"], "succeeded")
+
+    def test_unverified_requirements_prevent_whole_goal_success(self):
+        fact = {("in", (("k_0", "k"), ("I", "I")))}
+        for bound in (self.bind([requirement(), {"criterion": "Review"}]),
+                      self.bind(constraints=[{"constraint": "Review"}])):
+            self.assertEqual(bound.evaluate(fact)["status"], "active")
+            self.assertEqual(bound.evaluate(fact)["coverage"], "unverified")
+        self.assertEqual(self.bind([]).evaluate(set())["status"], "active")
+        self.assertEqual(BoundGoal(None, "", ENTITIES).evaluate(set())["status"], "active")
+
+    def test_snapshot_and_terminal_rules(self):
+        goal = {"success_criteria": [requirement()]}
+        before = copy.deepcopy(ENTITIES)
+        bound = BoundGoal(goal, "source", ENTITIES)
+        goal["success_criteria"].clear()
+        episode = Episode(bound, "environment", set())
+        self.assertEqual(ENTITIES, before)
+        self.assertEqual(len(bound.goal["success_criteria"]), 1)
+        episode.advance({("in", (("k_0", "k"), ("I", "I")))}, command="take key")
+        self.assertEqual(episode.result["status"], "succeeded")
+        with self.assertRaises(GoalError):
+            episode.advance(set(), command="look")
+
+    def test_engine_and_budget_stops_are_not_goal_failure(self):
+        episode = Episode(self.bind(), "environment", set())
+        episode.advance(set(), engine_done=True, command="quit")
+        self.assertEqual(episode.result["status"], "stopped")
+        self.assertEqual(episode.result["achievability"], "unknown")
+        episode = Episode(self.bind(), "environment", set())
+        for _ in range(1000):
+            episode.advance(set(), command="look")
+        self.assertEqual(episode.result["reason"], "command_limit")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -71,6 +71,8 @@ public:
 
     void        setView(DataHubView view);
     DataHubView currentView() const { return activeView_; }
+    std::vector<nlohmann::json> worldGoalSelections(const std::string& query) const;
+    void importWorldGoal(const nlohmann::json& selection);
 
 private:
     // ═════════════════════════════════════════════════════
@@ -183,6 +185,7 @@ private:
     std::unique_ptr<GRIM::Pipeline::PipelineOrchestrator> pipelineOrchestrator_;
     std::unique_ptr<GRIM::DataCollection::HuggingFaceWebhook>    hfWebhook_;
     std::unique_ptr<DatasetTarget>                               datasetTarget_;
+    bool worldGoalDatabaseReady_=false;
     std::unique_ptr<GRIM::DataCollection::DataStructurer>        structurer_;
     std::unique_ptr<GRIM::DataCollection::ConceptGenerator>      conceptGenerator_;
     std::shared_ptr<GRIM::DataCollection::IConceptBindingAdapter> generatorAdapter_;

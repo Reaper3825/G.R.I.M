@@ -5,6 +5,8 @@
 #include "world_lab/ui_world_assets_view.hpp"
 #include "resources.hpp"
 #include "ai/grim_text_server_manager.hpp"
+#include "ui_root.hpp"
+#include "ui_data_hub.hpp"
 
 using namespace GRIMText;
 using namespace UITheme;
@@ -62,6 +64,13 @@ UITrainingPanel::UITrainingPanel()
     });
     tabWorldLabBtn_->setSize(100.0f, 28.0f);
     worldLab_ = std::make_unique<UIWorldLabView>(std::filesystem::path{}, std::filesystem::path(getResourcePath()) / "models" / "games", std::filesystem::path(getResourcePath()) / "models" / "world_assets");
+    const auto dataHub=[] {
+        auto hub=std::dynamic_pointer_cast<UIDataHubPanel>(UIRoot::get().getPanel("DataHub"));
+        if(!hub)throw std::runtime_error("Open DataHub to access the ConceptBlock database");
+        return hub;
+    };
+    worldLab_->setGoalAccess({[dataHub](const std::string& query){return dataHub()->worldGoalSelections(query);},
+                            [dataHub](const nlohmann::json& value){dataHub()->importWorldGoal(value);}});
     tabAssetsBtn_ = std::make_shared<UIButton>("Assets", [this]() {setView(TrainingPanelTab::Assets);});
     tabAssetsBtn_->setSize(80.0f,28.0f);
     worldAssets_ = std::make_unique<UIWorldAssetsView>(std::filesystem::path(getResourcePath()) / "models" / "world_assets");

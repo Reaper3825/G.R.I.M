@@ -2,6 +2,29 @@
 
 using namespace UIDataHubDetail;
 
+std::vector<nlohmann::json> UIDataHubPanel::worldGoalSelections(const std::string& query) const {
+    if(!datasetTarget_ || !worldGoalDatabaseReady_)throw std::runtime_error("ConceptBlock database failed to load. Migrate legacy evidence and reopen DataHub before selecting Goals.");
+    std::vector<nlohmann::json> result;
+    for(const auto& block:datasetTarget_->searchGoalConceptBlocks(query)){
+        if(block.goal)result.push_back({{"source_id",block.id},{"name",block.name},{"goal",GRIM::goalToJson(*block.goal)}});
+    }
+    return result;
+}
+void UIDataHubPanel::importWorldGoal(const nlohmann::json& selection) {
+    if(!datasetTarget_ || !worldGoalDatabaseReady_)throw std::runtime_error("ConceptBlock database failed to load; import cannot overwrite it. Migrate legacy evidence and reopen DataHub.");
+    GRIM::ConceptBlock block;block.id=selection.at("source_id").get<std::string>();
+    block.name=selection.value("name",block.id);block.goal=GRIM::goalFromJson(selection.at("goal"));
+    block.prompt="Play the selected TextWorld challenge.";
+    const auto previous=datasetTarget_->getConceptBlockById(block.id);
+    if(!previous.id.empty()){
+        if(!previous.goal || GRIM::goalToJson(*previous.goal)!=GRIM::goalToJson(*block.goal))throw std::runtime_error("Imported Goal ID already exists with different content");
+        return;
+    }
+    size_t added=0;
+    if(!datasetTarget_->addConceptBlocks({block},added))throw std::runtime_error("Failed to save imported ConceptBlock Goal; legacy world preserved");
+    cbFilterDirty_=true;
+}
+
 UIDataHubPanel::UIDataHubPanel()
     : UIPanel("DataHub", true)
 {
@@ -1052,7 +1075,7 @@ UIDataHubPanel::UIDataHubPanel()
     refreshStructurerState();
     refreshGeneratorState();
 
-    if (datasetTarget_) datasetTarget_->loadConceptBlocks();
+    worldGoalDatabaseReady_ = datasetTarget_ && datasetTarget_->loadConceptBlocks();
     if (datasetTarget_) datasetTarget_->loadCurriculumRegistry();
 
     addLog("DataHub initialized", 0);

@@ -10,6 +10,7 @@ import time
 import traceback
 from pathlib import Path
 from action_catalog import action_catalog
+from goal_evaluator import BoundGoal, Episode, GoalError, identity, SEMANTICS
 
 TYPES = {"room": "r", "object": "o", "key": "k", "container": "c",
          "supporter": "s", "food": "f"}
@@ -43,10 +44,9 @@ def game_text(value, entity_id, name=False):
 
 def build_world(document):
     import textworld
-    from textworld.generator.game import Event, Quest
 
     need(textworld.__version__ == "1.7.0", "World Lab requires TextWorld 1.7.0")
-    need(document.get("format") == "grim-world" and document.get("version") in (1, 2), "Unsupported world format")
+    need(document.get("format") == "grim-world" and document.get("version") in (1, 2, 3), "Unsupported world format")
     entities = document.get("entities", [])
     passages = document.get("passages", [])
     need(isinstance(entities, list) and 0 < len(entities) <= 1000, "Playable worlds support 1-1000 entities")
@@ -116,39 +116,21 @@ def build_world(document):
                 maker.add_fact("match", mapped[key], door)
     maker.set_player(mapped[document["spawn"]])
 
-    def condition(c):
-        ident = c["subject"]
-        need(ident in mapped, "Condition references a missing entity or door", ident)
-        kind = source[ident]["kind"]
-        subject = mapped[ident]
-        pred = c["predicate"]
-        if pred == "player_at":
-            need(kind == "room", "Player location must be a room", ident)
-            return maker.new_fact("at", maker.player, subject)
-        if pred == "carrying":
-            need(kind in PORTABLE, "Only portable objects can be carried", ident)
-            return maker.new_fact("in", subject, maker.inventory)
-        if pred == "eaten":
-            need(kind == "food", "Only food can be eaten", ident)
-            return maker.new_fact("eaten", subject)
-        if pred in ("open", "closed", "locked"):
-            need(kind in ("container", "passage"), "State condition needs a container or door", ident)
-            return maker.new_fact(pred, subject)
-        target = c.get("target", "")
-        target_kind = {"at": "room", "in": "container", "on": "supporter"}.get(pred)
-        need(kind in PORTABLE and target_kind and target in mapped and source[target]["kind"] == target_kind,
-             "Invalid location condition", ident)
-        return maker.new_fact(pred, subject, mapped[target])
-
-    wins = document.get("win_conditions", [])
-    fails = document.get("fail_conditions", [])
-    need(len(wins) <= 64 and len(fails) <= 64, "Too many conditions")
-    if wins or fails:
-        objective = game_text(document.get("objective") or "Complete the authored challenge.", "")
-        maker.quests = [Quest(win_events=[Event(conditions=[condition(c) for c in wins])] if wins else [],
-                             fail_events=[Event(conditions=[condition(c)]) for c in fails], desc=objective)]
+    # Goal-specific endings are evaluated by Episode, never compiled.
     maker.validate()
     return maker, mapped
+
+
+def raw_facts(state):
+    # TextWorld 1.7's public facts replace IDs with human-readable names.
+    # Require its tracked symbolic state; never fall back to prose/name matching.
+    need(state.get("_facts") is not None, "TextWorld authoritative symbolic facts unavailable")
+    return {(f.name, tuple((a.name, a.type) for a in f.arguments)) for f in state["_facts"]}
+
+
+def environment_identity(document):
+    return identity({"semantics": SEMANTICS, "spawn": document["spawn"],
+                     "entities": document["entities"], "passages": document.get("passages", [])})
 
 
 class Session:
@@ -157,9 +139,14 @@ class Session:
         self.env = None
         self.game_file = None
         self.mapping = {}
-        self.done = False
-        self.commands = []
+        self.bindings = {}
+        self.episode = None
+        self.environment_id = ""
         self.build_id = 0
+
+    @property
+    def done(self):
+        return self.episode is not None and self.episode.result["status"] != "active"
 
     def close(self):
         if self.env:
@@ -173,77 +160,103 @@ class Session:
             won=True, lost=True, score=True, moves=True, location=True,
             inventory=True, description=True, facts=True, admissible_commands=True))
 
-    def observation(self, state, score=0, done=False):
-        facts = [{"predicate": f.name, "arguments": [self.mapping.get(a.name, a.name) for a in f.arguments]}
-                 for f in state.get("facts", [])]
+    def observation(self, state, engine_score=0, engine_done=False):
+        facts = [{"predicate": name, "arguments": [self.mapping.get(symbol, symbol[0]) for symbol in args]}
+                 for name, args in sorted(raw_facts(state))]
         room = next((f["arguments"][1] for f in facts
                      if f["predicate"] == "at" and f["arguments"][0] == "P"), "")
+        episode = self.episode.result
         return {"feedback": state.feedback, "description": state.get("description", ""),
                 "inventory": state.get("inventory", ""), "location": state.get("location", ""),
-                "room_id": room, "score": score, "moves": state.get("moves", 0),
-                "done": bool(done), "won": bool(state.get("won")), "lost": bool(state.get("lost")),
+                "room_id": room, "moves": state.get("moves", 0),
+                "done": self.done, "won": episode["status"] == "succeeded", "lost": episode["status"] == "failed",
+                "score": int(episode["status"] == "succeeded"), "episode": episode,
+                "engine": {"done": bool(engine_done), "score": engine_score,
+                           "won": bool(state.get("won")), "lost": bool(state.get("lost"))},
                 "facts": facts, "admissible_commands": state.get("admissible_commands", [])}
+
+    @staticmethod
+    def command(value):
+        need(isinstance(value, str) and 0 < len(value.strip()) <= 512 and not any(c in value for c in "\r\n\x00"),
+             "Enter one command (512 characters max)")
+        return value.strip()
+
+    def candidate_episode(self, game_file, bound, environment_id):
+        candidate = self.open_game(game_file)
+        try:
+            state = candidate.reset()
+            episode = Episode(bound, environment_id, raw_facts(state))
+            return candidate, state, episode
+        except BaseException:
+            candidate.close()
+            raise
 
     def handle(self, request):
         op = request["op"]
         if op in ("compile", "validate"):
-            maker, mapping = build_world(request["document"])
-            self.build_id += 1
-            path = self.directory / ("game-%d.z8" % self.build_id)
+            document = request["document"]
+            maker, mapping = build_world(document)
+            next_build = self.build_id + 1
+            path = self.directory / ("environment-%d.z8" % next_build)
+            sources = {e["id"]: e for e in document["entities"]}
+            sources.update({p["id"]: {"kind": "door"} for p in document.get("passages", []) if p.get("door_name")})
+            bindings = {ident: {"kind": sources[ident]["kind"], "symbol": (entity.id, entity.type)}
+                        for ident, entity in mapping.items()}
+            # Goals travel separately; document-owned legacy endings are never applied.
+            bound = BoundGoal(request.get("goal"), request.get("source_id", ""), bindings)
             game_file = maker.compile(str(path))
-            candidate = self.open_game(game_file)
-            try:
-                state = candidate.reset()
-            except BaseException:
-                candidate.close()
-                raise
-            warnings = []
-            if not request["document"].get("win_conditions"):
-                warnings.append("No winning conditions: exploration only.")
+            env_id = environment_identity(document)
+            candidate, state, episode = self.candidate_episode(game_file, bound, env_id)
+            warnings = (["Achievability unknown until a successful replay; manual playtest only."]
+                        if episode.result["achievability"] == "unknown" else [])
+            if document.get("win_conditions") or document.get("fail_conditions"):
+                warnings.append("Legacy world conditions ignored. Import them as a ConceptBlock Goal explicitly.")
             if op == "validate":
                 candidate.close()
-                return {"validated": True, "warnings": warnings}
+                return {"validated": True, "warnings": warnings, "episode": episode.result}
             self.close()
-            self.env = candidate
-            self.game_file = game_file
-            self.mapping = {entity.id: ident for ident, entity in mapping.items()}
-            # EnvInfos exposes human-readable variables in facts in TextWorld 1.7.
-            self.mapping.update({entity.name: ident for ident, entity in mapping.items()})
-            self.commands = []
-            self.done = False
+            self.env, self.game_file, self.bindings = candidate, game_file, bindings
+            self.mapping = {(entity.id, entity.type): ident for ident, entity in mapping.items()}
+            self.environment_id, self.episode, self.build_id = env_id, episode, next_build
             return {"state": self.observation(state), "warnings": warnings,
-                    "action_catalog": action_catalog()}
-        need(self.env is not None, "Compile and play a world first")
-        if op == "reset":
-            state = self.env.reset()
-            self.commands = []
-            self.done = False
-            return {"state": self.observation(state)}
+                    "action_catalog": action_catalog(), "build_id": self.build_id, "environment_id": env_id}
+        need(self.env is not None, "Compile an environment first")
+        if op in ("start_episode", "reset"):
+            bound = (BoundGoal(request.get("goal"), request.get("source_id", ""), self.bindings)
+                     if op == "start_episode" else self.episode.bound)
+            candidate, state, episode = self.candidate_episode(self.game_file, bound, self.environment_id)
+            self.close()
+            self.env, self.episode = candidate, episode
+            return {"state": self.observation(state), "build_id": self.build_id, "environment_id": self.environment_id}
         if op == "step":
-            need(not self.done, "Episode is finished; reset to play again")
-            command = request.get("command", "").strip()
-            need(0 < len(command) <= 512 and not any(c in command for c in "\r\n\x00"), "Enter one command (512 characters max)")
-            need(len(self.commands) < 1000, "Episode reached 1000 commands; reset to continue")
-            state, score, self.done = self.env.step(command)
-            self.commands.append(command)
-            return {"state": self.observation(state, score, self.done)}
+            need(not self.done, "Episode is finished; reset or start another Goal")
+            command = self.command(request.get("command", ""))
+            state, score, engine_done = self.env.step(command)
+            self.episode.advance(raw_facts(state), engine_done, command)
+            return {"state": self.observation(state, score, engine_done)}
         if op == "verify_solution":
             commands = request.get("commands", [])
-            need(isinstance(commands, list) and 0 < len(commands) <= 1000, "A solution needs 1-1000 commands")
-            replay = self.open_game(self.game_file)
+            need(isinstance(commands, list) and len(commands) <= 1000, "A solution supports 0-1000 commands")
+            commands = [self.command(command) for command in commands]
+            witness = request.get("witness")
+            if witness is not None:
+                need(isinstance(witness, dict) and witness.get("identity") == self.episode.identity,
+                     "Saved solution is stale for the environment, starting state, Goal, or evaluator")
+            replay, state, episode = self.candidate_episode(self.game_file, self.episode.bound, self.environment_id)
             try:
-                replay.reset()
-                done = False
+                need(episode.identity == self.episode.identity, "Replay starting state differs from the active episode")
                 for command in commands:
-                    need(not done, "Solution contains commands after the episode ended")
-                    need(isinstance(command, str) and 0 < len(command) <= 512 and not any(c in command for c in "\r\n\x00"), "Invalid solution command")
+                    need(episode.result["status"] == "active", "Solution contains commands after the episode ended")
                     state, _, done = replay.step(command)
-                need(done and state.get("won"), "Recorded commands do not reach a win")
-                return {"verified": True, "commands": commands}
+                    episode.advance(raw_facts(state), done, command)
+                need(episode.result["status"] == "succeeded", "Recorded commands do not verify Goal success")
+                self.episode.witness_verified = True
+                self.episode.result["achievability"] = "achievable"
+                return {"verified": True, "commands": commands, "achievability": "achievable",
+                        "witness": {"identity": episode.identity, "commands": commands}}
             finally:
                 replay.close()
         raise WorldError("Unknown operation: " + str(op))
-
 
 def serve(directory):
     directory = Path(directory)
@@ -262,12 +275,14 @@ def serve(directory):
                 need(request_path.stat().st_size <= MAX_BYTES, "Request exceeds 16 MB")
                 request = json.loads(request_path.read_text(encoding="utf-8"))
                 request_id = request["id"]
-                need(request.get("protocol") == 1, "Unsupported worker protocol")
-                response = {"protocol": 1, "id": request_id, "ok": True, "result": session.handle(request)}
+                need(request.get("protocol") == 2, "Unsupported worker protocol; restart/recompile with the current client")
+                response = {"protocol": 2, "id": request_id, "ok": True, "result": session.handle(request)}
             except Exception as error:
                 traceback.print_exc()
-                response = {"protocol": 1, "id": request_id, "ok": False,
-                            "error": str(error), "entity_id": getattr(error, "entity_id", "")}
+                response = {"protocol": 2, "id": request_id, "ok": False,
+                            "error": str(error), "entity_id": getattr(error, "entity_id", ""),
+                            "source_id": getattr(error, "source_id", ""),
+                            "collection": getattr(error, "collection", ""), "index": getattr(error, "index", -1)}
             request_path.unlink(missing_ok=True)
             temporary = directory / "response.tmp"
             temporary.write_text(json.dumps(response, ensure_ascii=True), encoding="utf-8")

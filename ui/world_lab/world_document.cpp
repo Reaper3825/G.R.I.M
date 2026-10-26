@@ -141,21 +141,30 @@ void Document::validateCondition(const Condition& c) const {
     require(valid,"Invalid "+c.predicate+" condition for "+c.subject);
 }
 nlohmann::json Document::json() const {
-    nlohmann::json j={{"format","grim-world"},{"version",2},{"title",title},{"spawn",spawn},{"next_id",nextId},
+    const bool legacy=!objective.empty() || !winConditions.empty() || !failConditions.empty() || !solution.empty();
+    nlohmann::json j={{"format","grim-world"},{"version",legacy?2:3},{"title",title},{"spawn",spawn},{"next_id",nextId},
         {"entities",nlohmann::json::array()},{"passages",nlohmann::json::array()},{"editor",{{"rooms",nlohmann::json::array()}}}};
     for(const auto& e:entities) j["entities"].push_back({{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}});
     for(const auto& p:passages) j["passages"].push_back({{"id",p.id},{"from",p.from},{"to",p.to},{"direction",p.direction},{"door_name",p.doorName},{"door_state",p.doorState},{"key",p.key}});
     for(const auto& p:layout) j["editor"]["rooms"].push_back({{"id",p.id},{"x",p.x},{"y",p.y}});
+    if(legacy){
     j["objective"]=objective;j["solution"]=solution;
     j["win_conditions"]=nlohmann::json::array();j["fail_conditions"]=nlohmann::json::array();
     for(const auto& c:winConditions)j["win_conditions"].push_back({{"predicate",c.predicate},{"subject",c.subject},{"target",c.target}});
     for(const auto& c:failConditions)j["fail_conditions"].push_back({{"predicate",c.predicate},{"subject",c.subject},{"target",c.target}});
+    }
     return j;
 }
-nlohmann::json Document::gameJson() const { auto j=json();j.erase("editor");j.erase("solution");j.erase("next_id");return j; }
+nlohmann::json Document::gameJson() const {
+    auto j=json();
+    for(const auto* field:{"editor","next_id","objective","solution","win_conditions","fail_conditions","title"})j.erase(field);
+    j["version"]=3;return j;
+}
 Document Document::parse(const nlohmann::json& j) {
-    require(j.at("format")=="grim-world" && (j.at("version")==1 || j.at("version")==2), "Unsupported world file format/version");
+    require(j.at("format")=="grim-world" && (j.at("version")==1 || j.at("version")==2 || j.at("version")==3), "Unsupported world file format/version");
     Document d;
+    if(j.at("version")==3)for(const auto* field:{"objective","solution","win_conditions","fail_conditions"})
+        require(!j.contains(field),"Version-3 worlds cannot contain challenge metadata; import legacy version-2 data explicitly");
     d.title=j.at("title").get<std::string>(); d.spawn=j.at("spawn").get<std::string>();
     require(j.at("next_id").is_number_integer(),"Invalid next ID");
     const auto next=j.at("next_id").get<int64_t>(); require(next>0 && next<1000000000,"Invalid next ID"); d.nextId=static_cast<unsigned>(next);

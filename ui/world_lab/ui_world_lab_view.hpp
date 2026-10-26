@@ -20,6 +20,7 @@ public:
     void update(const InputState&, float dt, const PanelRect&, uint64_t panel);
     void draw(OverlayRenderer&, const PanelRect&);
     void hide();
+    void setGoalAccess(GRIM::WorldLab::GoalAccess access) { session_->setGoalAccess(std::move(access)); }
     void insertAsset(const GRIM::WorldLab::Asset&);
     std::function<void(const GRIM::WorldLab::Document&,const std::string&)> onSaveAsset;
 private:

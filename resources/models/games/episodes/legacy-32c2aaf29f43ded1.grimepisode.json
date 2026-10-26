@@ -1,0 +1,121 @@
+{
+  "commands": [
+    "take brass key from kitchen table",
+    "go east",
+    "open seed box",
+    "take seed packet from seed box",
+    "unlock garden gate with brass key",
+    "open garden gate",
+    "go north"
+  ],
+  "environment": {
+    "entities": [
+      {
+        "description": "Morning light fills a small cottage. A brass key rests on the kitchen table. The shed is east.",
+        "id": "r1",
+        "kind": "room",
+        "name": "Cottage",
+        "parent": "",
+        "state": "open"
+      },
+      {
+        "description": "A tidy shed smells of fresh wood. A seed box sits on the floor. The cottage is west and the garden is north beyond a locked gate.",
+        "id": "r2",
+        "kind": "room",
+        "name": "Shed",
+        "parent": "",
+        "state": "open"
+      },
+      {
+        "description": "Sunlight warms the empty flower beds. This is the perfect place for the seeds. The shed is south.",
+        "id": "r3",
+        "kind": "room",
+        "name": "Garden",
+        "parent": "",
+        "state": "open"
+      },
+      {
+        "description": "A sturdy wooden table with a brass key on top.",
+        "id": "s1",
+        "kind": "supporter",
+        "name": "kitchen table",
+        "parent": "r1",
+        "state": "open"
+      },
+      {
+        "description": "A small brass key for the garden gate.",
+        "id": "k1",
+        "kind": "key",
+        "name": "brass key",
+        "parent": "s1",
+        "state": "open"
+      },
+      {
+        "description": "A small wooden box. Open it to find the seeds.",
+        "id": "c1",
+        "kind": "container",
+        "name": "seed box",
+        "parent": "r2",
+        "state": "closed"
+      },
+      {
+        "description": "A paper packet of sunflower seeds, ready for the garden.",
+        "id": "o1",
+        "kind": "object",
+        "name": "seed packet",
+        "parent": "c1",
+        "state": "open"
+      }
+    ],
+    "format": "grim-world",
+    "passages": [
+      {
+        "direction": "east",
+        "door_name": "",
+        "door_state": "open",
+        "from": "r1",
+        "id": "p1",
+        "key": "",
+        "to": "r2"
+      },
+      {
+        "direction": "north",
+        "door_name": "garden gate",
+        "door_state": "locked",
+        "from": "r2",
+        "id": "p2",
+        "key": "k1",
+        "to": "r3"
+      }
+    ],
+    "spawn": "r1",
+    "version": 3
+  },
+  "format": "grim-episode",
+  "selection": {
+    "goal": {
+      "constraints": [],
+      "success_criteria": [
+        {
+          "criterion": "player_at Garden",
+          "evidence": {
+            "predicate": "player_at",
+            "subject": "r3"
+          }
+        },
+        {
+          "criterion": "carrying seed packet",
+          "evidence": {
+            "predicate": "carrying",
+            "subject": "o1"
+          }
+        }
+      ],
+      "target_state": "Find the seed packet in the shed and carry it into the garden. The brass key in the cottage opens the garden gate."
+    },
+    "name": "The Garden Delivery (imported Goal)",
+    "source_id": "world-legacy-e50d95e03a25a43e"
+  },
+  "verified": false,
+  "version": 1
+}

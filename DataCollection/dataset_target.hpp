@@ -162,6 +162,8 @@ public:
 
     std::vector<size_t> searchConceptBlocks(const std::string& query,
                                             size_t max_results = 50) const;
+    std::vector<GRIM::ConceptBlock> searchGoalConceptBlocks(const std::string& query,
+                                                          size_t max_results = 100) const;
     std::vector<size_t> filterConceptBlocks(const std::string& format_type,
                                             const std::string& search_query = "") const;
 

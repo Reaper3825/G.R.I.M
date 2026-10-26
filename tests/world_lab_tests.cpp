@@ -135,19 +135,38 @@ void runWorldLabTests(){
     std::filesystem::remove(library);
     std::filesystem::remove(directory/"recovery.json");std::filesystem::remove(directory);
     Editor conditionEditor;
-    conditionEditor.change([](Document& d){d.addObject(d.spawn,"key");});
-    UIWorldSession challengePanel(conditionEditor);
+    conditionEditor.change([](Document& d){
+        const auto key=d.addObject(d.spawn,"key");
+        d.objective="Find the key";d.winConditions={{"carrying",key,""}};d.solution={"take New key"};
+    });
+    const auto legacyDocument=conditionEditor.document().json();
+    check(legacyDocument.at("version")==2,"Legacy document preservation failed");
+    const auto environment=conditionEditor.document().gameJson();
+    check(!environment.contains("win_conditions") && !environment.contains("objective") && environment.at("version")==3,"Environment still owns challenge conditions");
+    UIWorldSession challengePanel(conditionEditor,directory/"episodes");
+    std::vector<nlohmann::json> database;
+    bool failImport=true;
+    challengePanel.setGoalAccess({[&](const std::string&){return database;},[&](const nlohmann::json& selection){
+        if(failImport)throw std::runtime_error("simulated database save failure");
+        database.push_back(selection);
+    }});
+    rejects([&]{challengePanel.importLegacyGoal();},"Failed import unexpectedly succeeded");
+    check(conditionEditor.document().json()==legacyDocument,"Failed import discarded legacy world data");
+    failImport=false;challengePanel.importLegacyGoal();
+    check(database.size()==1 && database.front().at("goal").at("success_criteria")[0].at("evidence").at("predicate")=="carrying","Legacy evidence was not imported into database Goal");
+    check(!hasLegacyChallenge(conditionEditor.document()) && conditionEditor.document().json().at("version")==3,"Imported world did not become environment-only");
+    check(conditionEditor.document().gameJson()==environment,"Attaching Goal changed environment facts");
+    const auto selection=challengePanel.selectedGoal();
+    const auto archive=readEpisodeRecord(directory/"episodes"/("legacy-"+recordKey(selection.at("source_id"))+".grimepisode.json"));
+    check(archive.at("commands")==legacyDocument.at("solution") && !archive.at("verified").get<bool>(),"Legacy solution archive lost commands or claimed verification");
+    database[0]["goal"]["target_state"]="Changed in database";challengePanel.reloadGoals();
+    check(challengePanel.selectedGoal()==selection,"Database refresh mutated selected snapshot");
+    rejects([&]{challengePanel.selectGoal({{"source_id","bad"},{"goal",{{"constraints",{"legacy text"}}}}});},"Malformed Goal accepted");
     auto challengeFrame=[&](const InputState& in){router.beginFrame();router.currentPanel=90;challengePanel.update(in,0,{{0,0},{340,600}});challengePanel.draw(renderer,{{0,0},{340,600}});router.endFrame();};
-    auto challengeClick=[&](Vec2 p){InputState in;in.mousePos=p;in.mousePressed[0]=in.mouseDown[0]=true;challengeFrame(in);in.mousePressed[0]=in.mouseDown[0]=false;in.mouseReleased[0]=true;challengeFrame(in);};
-    challengeFrame({});challengeClick({40,260});
-    check(conditionEditor.document().winConditions.size()==1 && conditionEditor.document().winConditions.front().predicate=="player_at","Challenge condition creation failed");
-    challengeClick({40,112});challengeClick({40,164});challengeClick({40,260});
-    check(conditionEditor.document().winConditions.size()==2 && conditionEditor.document().winConditions.back().predicate=="carrying","Challenge predicate selection failed");
-    challengeClick({40,54});InputState typed;typed.textInput="Find the key";challengeFrame(typed);typed.textInput.clear();typed.keyPressed[VK_RETURN]=true;challengeFrame(typed);
-    check(conditionEditor.document().objective=="Find the key","Challenge objective commit failed");
-    conditionEditor.undo();challengeFrame({});
-    check(conditionEditor.document().objective.empty(),"Challenge field overwrote external undo");
-    challengePanel.hide();
+    challengeFrame({});challengePanel.hide();
+    conditionEditor.undo();check(conditionEditor.document().json()==legacyDocument,"Legacy conversion was not undoable");
+    for(const auto& entry:std::filesystem::directory_iterator(directory/"episodes"))std::filesystem::remove(entry.path());
+    std::filesystem::remove(directory/"episodes");std::filesystem::remove(directory);
     // Catalog binding is typed and ID-based, independent of starting/live state.
     auto rule=[](const std::string& id)->nlohmann::json {
         for(const auto& a:actionCatalog()["actions"])if(a["id"]==id)return a;

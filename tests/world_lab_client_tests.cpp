@@ -38,8 +38,10 @@ void runTextWorldClientTests(){
     Editor example;
     example.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"examples/world_lab/locked_door.grimworld.json");
     const Document d=example.document();
+    const auto selection=legacyGoal(d);
     TextWorldClient client;
-    auto start=request(client,{{"op","compile"},{"document",d.gameJson()}});
+    auto start=request(client,{{"op","compile"},{"document",d.gameJson()},
+        {"source_id",selection.at("source_id")},{"goal",selection.at("goal")}});
     check(start.at("action_catalog")==actionCatalog(),"Runtime catalog differs from native action definitions");
     check(start.at("state").at("room_id")==d.spawn,"Client did not receive initial room");
     const std::vector<std::string> solution{"open toolbox","take brass key from toolbox","unlock oak door with brass key","open oak door","go east"};
@@ -55,7 +57,8 @@ void runTextWorldClientTests(){
     client.stop();wait(client);
     // Drive the actual play controls with routed input and the installed worker.
     example.change([](Document& world){world.solution.clear();});
-    UIWorldSession panel(example);panel.setChallenge(false);
+    const auto records=std::filesystem::temp_directory_path()/("grim-episode-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    UIWorldSession panel(example,records);panel.selectGoal(selection);panel.setChallenge(false);
     auto frame=[&](const InputState& input){auto& router=GRIM::UI::InputRouter::get();router.beginFrame();router.currentPanel=90;panel.update(input,0,{{0,0},{340,650}});router.endFrame();};
     auto click=[&](float x,float y){InputState input;input.mousePos={x,y};input.mousePressed[0]=input.mouseDown[0]=true;frame(input);input.mousePressed[0]=input.mouseDown[0]=false;input.mouseReleased[0]=true;frame(input);};
     auto ready=[&]{const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(135);while(panel.busy() && std::chrono::steady_clock::now()<deadline){frame({});std::this_thread::sleep_for(std::chrono::milliseconds(20));}check(!panel.busy(),"Play panel request timed out");};
@@ -76,10 +79,26 @@ void runTextWorldClientTests(){
         click(20,166);InputState input;input.textInput=command;frame(input);input.textInput.clear();input.keyPressed[VK_RETURN]=true;frame(input);ready();
     }
     check(panel.status()=="Won!","Play panel commands did not win");
-    click(130,86);ready();check(example.document().solution==solution,"Play panel did not save verified recording");
+    click(130,86);ready();check(example.document().solution.empty(),"Solution leaked back into environment document");
+    check(std::filesystem::is_directory(records),"Play panel did not save an episode record");
+    const auto recordFile=std::filesystem::directory_iterator(records)->path();
+    const auto record=readEpisodeRecord(recordFile);
+    check(record.at("commands")==solution && record.at("verified").get<bool>(),"Play panel did not save verified recording");
+    click(250,86);ready();check(panel.status()=="Solution verified and saved for this environment/Goal pairing.","Saved witness replay failed");
+    GRIM::ConceptBlockGoal initialGoal;
+    initialGoal.success_criteria.push_back({"At starting room",GRIM::EvidenceCondition{"player_at",d.spawn,""}});
+    panel.selectGoal({{"source_id","initial-goal"},{"goal",GRIM::goalToJson(initialGoal)}});
+    click(50,48);ready();check(panel.status()=="Won!","Goal-only start did not evaluate initial success");
+    click(40,86);ready();click(130,86);ready();
+    check(panel.status()=="Solution verified and saved for this environment/Goal pairing.","Zero-command solution was not saved");
+    panel.selectGoal(selection);click(50,48);ready();
     example.change([](Document& world){world.objective="A changed objective.";});frame({});
+    click(180,48);ready();check(panel.status()=="Ready for a command.","Legacy metadata incorrectly invalidated environment compilation");
+    example.change([](Document& world){world.find(world.spawn)->description="Changed environment description.";});frame({});
     click(180,48);check(panel.status()=="Compile & Play the current world first","Play panel reused a stale compiled world");
     panel.hide();ready();
+    for(const auto& entry:std::filesystem::directory_iterator(records))std::filesystem::remove(entry.path());
+    std::filesystem::remove(records);
     check(sessions()==sessionsBefore,"TextWorld client leaked temporary session folders");
     std::cout<<"TextWorld client compile/play/reset/solution/cancellation integration passed\n";
 }

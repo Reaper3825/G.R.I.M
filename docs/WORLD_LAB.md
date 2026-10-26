@@ -1,10 +1,10 @@
-# World Lab — Stages 1 and 2
+# World Lab — reusable environments and Goal-driven manual episodes
 
 For the full control reference, customization guide, terminology index, and agent
 maintenance notes, see [World Lab and Assets reference](WORLD_LAB_REFERENCE.md).
 
 World Lab is an authoring tab in the Training Control panel. It stores an editable
-world locally. Validate and Compile & Play start an isolated TextWorld Docker
+world locally. Validate world and Compile / Start start an isolated TextWorld Docker
 worker on demand. No model, inference service, or training process is started.
 
 Courses store an optional environment reference as `Course::environment_id`,
@@ -12,203 +12,131 @@ persisted in each course entry in `curriculum_registry.json`. An empty string
 means no environment is assigned; older registries without the field load with
 that default. World Lab documents do not yet have persistent game IDs, and
 course-to-world resolution and an environment picker remain pending. Document
-entity IDs identify entities within a world; worker `game-N` filenames are
+entity IDs identify entities within a world; worker `environment-N` filenames are
 temporary session artifacts and must not be used as course environment IDs.
 
-## Reusable environments and Goal achievability (selected design; pending)
+## Reusable environments and Goal achievability
 
-A reusable environment owns the subjects/entities, map, initial state, and
-permitted action rules. It remains stateful during play. The selected Goal owns
-success checks and constraint-violation checks. Separating the Goal from the
-environment does not make gameplay stateless. Different ConceptBlocks may use
-the same environment with different Goals and fresh episode states.
+Manual Goal-driven episodes are implemented. The environment owns entities,
+passages, initial facts, and action rules. The database ConceptBlock Goal owns
+success criteria, constraints, and their evidence. An episode binds a frozen
+Goal snapshot to a fresh interpreter state. Different Goals reuse one compiled
+environment; neither evidence attachment nor Goal selection inserts world facts.
+See the completed [integration scope](WORLD_LAB_GOAL_INTEGRATION_PLAN.md).
 
-Before starting a challenge, validate the combination of environment and Goal:
+Binding validates predicate support, entity existence, argument types, and arity.
+Missing or invalid references reject the candidate without replacing the current
+session. An omitted evidence definition is unverified, not a pass. Automatic
+whole-Goal success requires at least one success criterion, all success checks
+true simultaneously, and executable evidence for every criterion and constraint.
+Any true constraint-violation check fails the episode, with failure taking
+precedence. Checks are not latched milestones. Sandbox/empty Goals never win by
+vacuous truth; Goals with only constraints can fail but cannot automatically win.
 
-- Resolve every evidence subject and optional target in the selected environment;
-  validate predicate support and argument types. Missing entities or unsupported
-  checks make the combination invalid.
-- Check the success conditions together, including obvious contradictions such
-  as requiring the same object in two exclusive locations. Check for conflicts
-  with failure conditions. Individually possible criteria need not be jointly
-  achievable.
-- From the actual episode starting state, establish a permitted action sequence
-  that reaches a state satisfying every success condition without triggering any
-  constraint-violation condition along the way or at the final state. A required
-  key existing somewhere in the world does not prove it is obtainable.
-- Evaluate initial success/failure as well as subsequent states, with failure
-  taking precedence. Report an already satisfied Goal separately from a challenge
-  requiring actions; an initial violation is a failed starting state.
+Binding validity and compilation do not prove achievability. Manual playtests
+remain labelled unknown until successful isolated solution replay supplies a
+witness; an already satisfied Goal has a zero-command witness. A failed replay
+proves neither impossibility nor general solvability. Only validated, achievable
+combinations qualify as verified challenges. A general validator/search that can
+prove contradictions or exhaust reachable states remains pending; bounded search
+would return unknown rather than unachievable when its budget expires.
 
-Validation must distinguish `invalid`, `achievable`, `unachievable`, and
-`unknown`. A verified successful replay is a witness for `achievable`. A bounded
-search that finds no solution returns `unknown` unless it exhausts the complete
-reachable state space; contradictions or an exhaustive search can establish
-`unachievable`. Do not label compilation, type validation, a search timeout, or
-the model's claim as proof of achievability or impossibility. Only validated,
-achievable combinations qualify as verified challenges.
+Witnesses include environment content, starting-state facts, source ConceptBlock
+ID, frozen Goal identity, and action/evaluator semantics. Changes invalidate prior
+verification. Full verifier facts and saved solutions are authoring/system data;
+future model interaction must use a separate permitted observation projection.
 
-Run reachability checks on an isolated state, using the same action transitions
-and evidence evaluator as gameplay. Associate any witness or cached result with
-the environment content/revision, episode starting state, Goal evidence, and
-action/evaluator semantics; changes invalidate the result. Verifier access to
-full world state and solution witnesses does not authorize exposing them to the
-model. Goals containing requirements without executable evidence cannot receive
-an automatic whole-Goal achievability guarantee.
+### Episode evidence binding
 
-The reusable-game path is intended to evaluate Goal evidence in the controller
-after each transition, without embedding each Goal's endings into a separate
-compiled game. That controller and the achievability validator are pending.
-Current manual Play still compiles the document's Quest into the game, and
-Validate checks compilation/reset rather than general solvability.
+`scripts/textworld/goal_evaluator.py` supplies the shared pure binder/evaluator
+used by startup, reset, commands, and independent replay. Stable world entity IDs
+resolve to the compiled entities' typed runtime IDs. The pinned TextWorld 1.7
+adapter requires tracked `_facts`; public `facts` substitute display names and
+are not used for verification. `carrying(key_1)` checks the corresponding
+`in(resolved_key, inventory)` proposition; it does not give the player a key.
 
-### Episode evidence binding (selected design; pending)
+The supported predicates are `player_at`, `carrying`, `at`, `in`, `on`, `open`,
+`closed`, `locked`, and `eaten`. Unary predicates reject non-empty targets;
+binary predicates require correctly typed targets. Passage state checks require
+an actual named door. Binding errors report the source ConceptBlock ID,
+requirement collection/index, and offending entity when available.
 
-The Goal storage prerequisite is implemented: ConceptBlock criteria and
-constraints can persist optional structured evidence, and the model renderer
-excludes that evidence. See the
-[Goal evidence contract and migration](GRIM_REASONING_DATA_CONTRACT.md#44-evidence--system-facing-executable-condition).
-This does not yet attach those Goals to manual Play; the binding, evaluator,
-compilation, and episode changes below remain pending.
+Episode status is `active`, `succeeded`, `failed`, or `stopped`. Reset preserves
+the frozen Goal and restarts its initial state. Starting another Goal opens a
+fresh interpreter on the same compiled artifact. Database refreshes/edits do not
+silently replace an active snapshot. Engine termination and the 1000-command
+limit stop an otherwise active episode without asserting Goal success or
+inventing a constraint violation. Evaluation results distinguish satisfied,
+unsatisfied, and unverified checks; a satisfied constraint check means a
+violation occurred.
 
-The environment definition owns a stable identity/revision, entities, passages,
-initial state, and action rules. The ConceptBlock Goal owns the target text,
-success criteria, constraints, and their structured evidence. An episode owns
-the selected environment instance, a frozen Goal snapshot with source identity,
-bound evidence checks, command history, evaluation results, and terminal status.
-Editing a ConceptBlock must not change a running episode's Goal.
+### Compilation and challenge termination
 
-Attaching a Goal registers checks against the environment; it does not insert
-the requested conditions as true world facts or alter the starting state.
-For example, binding `{"predicate":"carrying","subject":"key_1"}` resolves
-the stable entity ID `key_1` and prepares a check for TextWorld's
-`in(resolved_key, inventory)` proposition. It does not give the player the key.
-Display names are not binding keys. Evidence remains paired with its criterion
-or constraint; current truth values and verification diagnostics belong to the
-episode, separately from those definitions.
+`build_world()` no longer constructs Goal-specific native Quests. Compiled games
+contain environment dynamics, while the episode controller owns challenge
+termination and rejects commands after any terminal result. Returned `done`,
+`won`, `lost`, and challenge `score` reflect that controller; raw engine status is
+separate under `state.engine`. Goal-only changes reuse compilation. Environment
+changes require recompilation; layout, document title, and legacy challenge
+metadata do not alter compiled identity.
 
-Episode creation and execution follow this lifecycle:
+Mailbox protocol 2 rejects stale clients/workers. Existing workers must restart
+and recompile their environment; old binaries with embedded endings are not
+loaded into the new session path. Validate world compiles/resets an isolated
+candidate and checks binding without replacing live play. Compilation and new
+Goal startup preserve the previous session if candidate creation fails.
 
-1. Load the selected environment and its stable-ID-to-runtime-entity mapping.
-2. Load and freeze the selected ConceptBlock Goal and its source identity.
-3. Bind each evidence `predicate`, `subject`, and optional `target` against that
-   mapping. Validate predicate support, entity existence, and argument types;
-   reject invalid bindings before challenge execution. Do not derive executable
-   conditions from requirement prose or treat missing evidence as a pass.
-4. Perform the combination/achievability validation described above on an
-   isolated state. Keep bound success and violation checks in the episode.
-5. Evaluate the initial state and the authoritative state after every command.
-   Any constraint violation fails the episode; otherwise, all success checks
-   must hold simultaneously for automatic success. Requirements without an
-   applicable verifier prevent an automatic whole-Goal success guarantee.
+The first binding implementation requires referenced entities to exist already.
+Quest-specific object insertion/setup, role-bound Goal templates, persistent
+environment/course resolution, model Answer routing, feedback insertion, and
+training episode export remain future work. Evidence itself never performs setup.
 
-Use shared predicate definitions and binding/evaluation semantics for authoring
-validation, live play, reachability checks, and saved-solution replay. The
-existing worker's condition-to-proposition conversion is the starting point for
-that shared binding layer. The reusable path compiles the environment without
-Goal-specific Quest endings and attaches checks to an episode-owned evaluator.
-Changing only the Goal may reuse the compiled environment, with a fresh episode
-state. The controller's evaluated Goal status is authoritative for these
-challenges; quest-specific TextWorld `won`/`lost` fields are not its completion
-signal. Engine termination and episode limits must still be handled separately.
-Verifier access to authoritative facts does not make those facts model-visible.
+## Goal selection, manual playtest, and solutions
 
-### Compilation and challenge termination transition (pending)
+1. Open or author an environment. Doors, keys, containment, and action inspection
+   continue to work as before.
+2. Choose **Goal**, then **Reload Goals** to list ConceptBlocks with Goals from
+   DataHub's database. Search by ID, name, target, or requirement text (first
+   100 matches). Select one to load a snapshot. Edit its requirement text
+   and optional condition JSON in DataHub, not in a second World Lab condition
+   list. A database load/migration failure blocks selection/import rather than
+   overwriting that database. No whole ConceptBlock or database access enters
+   the Docker worker: only source identity and Goal JSON are transmitted.
+3. For a version-2 world such as `examples/world_lab/locked_door.grimworld.json`,
+   choose **Import legacy** explicitly. This creates a ConceptBlock Goal from
+   the existing structured conditions and readable deterministic labels. It
+   archives the old solution as unverified in a separate episode record, then
+   clears legacy metadata in one undoable document edit. Failed persistence
+   preserves the original world data. Save the world to persist version 3.
+   Legacy conditions are otherwise inactive and never mixed into a selected Goal.
+4. **Compile / Start** compiles a changed environment; if it is already current,
+   it starts the selected Goal from fresh state without recompiling. Goal view
+   shows requirements, binding diagnostics, coverage, and live evaluation results.
+   **Validate world** checks a candidate, not general solvability.
+5. Choose **Play** and submit one command with Send/Enter. History inspects prior
+   observations without rewinding the interpreter; available commands use the
+   latest live state. Canvas highlights reflect the selected observation while
+   cards still describe the authored initial world.
+6. **Reset** restarts the same frozen Goal. **Record** resets and records commands.
+   **Save solution** independently replays them through the same evaluator and
+   saves a witness only on verified success. Zero-command solutions are supported
+   when initial success holds. **Check saved** replays the matching saved witness
+   or verifies an imported unverified command list. Stale pairings are rejected.
+   Replay never advances or resets the interactive episode.
 
-The Goal is the source of the quest's win/fail conditions:
-`success_criteria[].evidence` supplies success checks, and
-`constraints[].evidence` supplies constraint-violation checks. Their paired
-`criterion` and `constraint` text supplies the model-facing requirements. The
-reusable environment must not maintain a second independent set of challenge
-win/fail conditions.
+Episode records live in `models/games/episodes/*.grimepisode.json` (format
+`grim-episode`, version 1), separately from environments. Verified records contain
+Goal/source snapshot, environment content, commands, and the worker's witness
+identity. Imported records retain legacy commands with `verified: false` until
+successful replay. Atomic file replacement and bounded reads apply to these
+records as to world files. A solution is never an unqualified environment field.
 
-Currently, `build_world()` assigns document conditions to `maker.quests` before
-`maker.compile()` creates the playable `.z8` file. Those compiled Quest events
-can end the interpreter's game when their conditions fire. The reusable path
-must remove that Goal-specific Quest construction from environment compilation;
-merely attaching a new Goal evaluator to an old compiled game would leave the
-old endings active.
-
-Recompile existing games used by the reusable path to remove those embedded
-challenge endings, and invalidate cached artifacts that still contain them.
-Thereafter, changing only the selected Goal binds new episode checks without
-recompiling an otherwise unchanged environment. Environment or action-rule
-changes can still require recompilation.
-
-The episode controller evaluates the selected Goal at reset and after each
-command, marks the challenge failed on any constraint violation or successful
-when all success checks hold, and rejects further gameplay commands once the
-episode is terminal until a reset or new episode. Saved-solution replay uses
-the same checks and termination rules. Native engine termination or an episode
-limit does not by itself establish Goal success. These are implementation
-requirements for the selected design; current manual Play is unchanged.
-
-Saved solution witnesses belong to the environment-and-Goal pairing, including
-the starting state and semantics revisions used for verification, rather than
-to the environment alone. Revalidate them when those inputs change.
-
-The first binding implementation requires referenced entities to exist in the
-authored environment. If future quests introduce objects or alter initial
-placements, represent that as an explicit episode setup operation, apply it
-before evidence binding, and include its resulting starting state in validation
-and cache identity. Evidence itself never performs setup. Parameterized Goal
-templates and role-to-entity bindings are future extensions, not prerequisites
-for reusing one environment across different Goals.
-
-Future model-driven play follows the
-[recurrent reasoning contract](GRIM_REASONING_DATA_CONTRACT.md): observe DDE,
-submit only the completed Answer command, then supply actual environment feedback
-before the next cycle. Define and Execute are optional; ordinary responses do
-not require tool calls. An answer boundary ends a response cycle, not necessarily
-the challenge. Model dispatch and feedback insertion remain pending; see the
-[integration reference](WORLD_LAB_REFERENCE.md#recurrent-model-interaction-contract-selected-integration-pending).
-
-## Goal and manual playtest
-
-1. Open `examples/world_lab/locked_door.grimworld.json` using the file field for
-   a complete two-room puzzle, or author a world in the canvas.
-2. Select a passage and use Inspect. Enter a door name, choose open/closed/locked,
-   select its matching key, and Apply changes. A blank name means an ordinary
-   passage. A locked door must have a key. Deleting that key clears the reference
-   and changes the door to closed; undo restores both.
-3. Choose Goal. Enter the objective and add conditions using the predicate,
-   subject, and (where needed) target controls. **Every win condition must hold
-   together; any fail condition ends the challenge in failure.** These are state
-   conditions, not ordered milestones. Select a saved condition and Remove to
-   delete it. Supported conditions cover player location, carrying, object
-   location, container/door state, and eaten food.
-4. Validate compiles a temporary game and resets its interpreter. It checks
-   TextWorld constraints and compiler compatibility, not general solvability.
-   Errors identify an editor entity when possible. With no win conditions the
-   world is an exploration sandbox.
-5. Choose Play, then Compile & Play. Enter commands and press Enter or Send.
-   History shows each response, inventory, and available commands as an authoring
-   aid. Selecting a history entry inspects that observation; it does not rewind
-   the live interpreter. The next command always acts on the latest live state.
-   The current room is outlined in green; changed objects are highlighted in
-   amber. Card placement and object lists still show the authored starting state.
-6. Reset returns the compiled game to its starting state. Record resets first and
-   records subsequent commands. Save solution replays those commands in a separate
-   interpreter and only saves them into the document if they reach a win.
-   Check saved replays the document's saved solution against the compiled game.
-   Save the world file to persist the solution. Verification never advances or
-   resets the interactive session.
-
-Semantic edits require a fresh Compile & Play before commands, reset, or solution
-verification. Layout-only moves and solution metadata do not invalidate the game.
-Stop cancels an in-flight operation and removes the owned worker. Leaving/hiding
-the World Lab tab also stops it; reopening requires compilation again. Requests
-have a 120-second timeout and only one can run at a time. Episodes/solutions are
-limited to 1000 commands.
-
-TextWorld's supported authoring subset has tighter constraints than the document:
-playable names are unique (case-insensitive), begin with a letter, and contain
-ASCII letters, digits, spaces, and hyphens (80 characters maximum). Quotes,
-brackets, backslashes, and line breaks in names/descriptions/objectives are rejected
-because TextWorld embeds them into Inform source. Containers and supporters must
-be directly in rooms; portable objects may be inside containers or on supporters.
-The worker accepts up to 1000 entities and 2000 passages. These limits produce
-actionable validation errors rather than silently rewriting an authored world.
+Stop or hiding/leaving World Lab cancels its worker. Requests remain single-flight
+with a 120-second timeout. Play supports 1000 commands and replay supports 0-1000.
+Playable names remain unique ASCII names of at most 80 characters, starting with
+a letter. TextWorld source delimiters in names/descriptions are rejected.
+Containers/supporters must be directly in rooms; portable objects may be nested.
+The worker supports 1000 entities and 2000 passages.
 
 ## Worker requirements and transport
 
@@ -222,7 +150,7 @@ read-only. The client never pulls/builds an image or installs dependencies.
 `ui/world_lab/textworld_client.*` launches a hidden Docker process asynchronously
 with networking disabled. It mounts only the worker directory read-only and an
 exclusively created temporary session directory writable. Requests/responses are
-versioned, ID-matched JSON files published by rename, limited to 16 MB. This file
+protocol-2, ID-matched JSON files published by rename, limited to 16 MB. This file
 mailbox keeps compiler stdout/stderr out of the protocol and avoids blocking pipe
 writes on the UI thread. The worker keeps one interpreter alive between requests.
 Temporary games and logs are removed with the owned session on shutdown. The
@@ -284,10 +212,20 @@ is a single per-user snapshot, not a multi-process document library.
 - `ui/world_lab/ui_world_canvas.*`: room and object presentation, hit testing,
   drag previews, compass connections, selection, canvas shortcuts.
 - `ui/world_lab/ui_world_lab_view.*`: inspector, toolbar, recovery and lifecycle.
-- `ui/ui_training_panel.*`: World Lab tab registration and dispatch.
+- `ui/ui_training_panel.*`: World Lab registration and Goal database callbacks.
+- `ui/world_lab/world_goal.hpp`: Goal selection boundary, legacy conversion,
+  bounded versioned episode-record reads, and safe record filenames.
+- `ui/world_lab/ui_world_session.*`: selection, immutable snapshots, Play lifecycle,
+  separate witness persistence, and progress display.
+- `scripts/textworld/goal_evaluator.py`: pure typed binding/evaluation and episode
+  status; bump its semantics identity when action/check behavior changes.
+- `scripts/textworld/world_worker.py`: questless compilation, typed-state adapter,
+  transactional episode startup, command handling, and isolated replay.
 
-The version-2 JSON format is identified by `format: "grim-world"`. Version-1 files
-load with empty challenges/solutions and doorless passages; saves use version 2.
+The JSON format is identified by `format: "grim-world"`. New environment-only
+files save as version 3. Version-1 and version-2 files remain readable; pending
+legacy challenge data saves as version 2 until explicitly converted, preventing
+silent loss. Version-3 files reject challenge/solution fields.
 Entities and
 passages use stable IDs; `spawn` references a room. Parent references represent
 containment. `editor.rooms` holds layout independently of passage directions and
@@ -296,10 +234,11 @@ holders, containment cycles, conflicting exits, missing layouts, and nonfinite o
 out-of-range positions. Files are limited to 16 MB, 10,000 entities and 20,000
 passages. This is structural validation, not proof that a puzzle is solvable.
 
-Version 2 adds door name/state/key fields, objective text, win/fail condition
-arrays, and a recorded solution. Deleting entities removes dependent conditions
-in the same undo transaction. Model episodes and curriculum generation remain
-Stage 3. Importing arbitrary TextWorld games is not supported.
+Version 2 introduced door fields and embedded challenge/solution metadata.
+Version 3 retains door fields but separates challenge data into ConceptBlock
+Goals and episode records. Deleting entities still cleans pending legacy
+references atomically. Model episodes and curriculum generation remain pending;
+importing arbitrary TextWorld games is not supported.
 
 ## Validation
 
@@ -309,11 +248,18 @@ Run the host-only tests with the existing MSVC toolchain:
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -WorldLab
 ```
 
-The suite covers round-trip and replacement saves, failed loads/saves, invalid
+The suite covers Goal selection/import, legacy preservation, episode-record
+persistence, round-trip and replacement saves, failed loads/saves, invalid
 worlds, cascading deletion, history, cancelled gestures, room creation through
 ports, object relocation, inspector creation/type selection, recovery, and tab
 lifecycle. Rendering uses test sinks. Native visual QA requires a separately
 authorized application build/run.
+
+Pure binding/evaluation tests need no TextWorld installation:
+
+```powershell
+python -m unittest discover -s tests -p test_world_goal_evaluator.py -v
+```
 
 For real Docker compiler/interpreter and native transport integration, using only
 the existing image:

@@ -9,6 +9,7 @@ if Path("/worker").exists():
     sys.path.insert(0, "/worker")
 from world_worker import Session, WorldError, build_world
 from action_catalog import action_catalog
+from goal_evaluator import GoalError
 
 
 def puzzle():
@@ -24,6 +25,16 @@ def puzzle():
                           "door_name": "oak door", "door_state": "locked", "key": "k1"}],
             "win_conditions": [{"predicate": "player_at", "subject": "r2"}, {"predicate": "carrying", "subject": "k1"}],
             "fail_conditions": [{"predicate": "eaten", "subject": "f1"}]}
+
+
+def goal(document):
+    return {"target_state": document.get("objective", "Challenge"),
+            "success_criteria": [{"criterion": "Win check", "evidence": c} for c in document.get("win_conditions", [])],
+            "constraints": [{"constraint": "Do not violate", "evidence": c} for c in document.get("fail_conditions", [])]}
+
+
+def compile_request(document):
+    return {"op": "compile", "document": document, "source_id": "test-goal", "goal": goal(document)}
 
 
 SOLUTION = ["open toolbox", "take brass key from toolbox", "unlock oak door with brass key", "open oak door", "go east"]
@@ -53,7 +64,7 @@ class WorkerTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_locked_puzzle_reset_recording_and_failure(self):
-        compiled = self.session.handle({"op": "compile", "document": puzzle()})
+        compiled = self.session.handle(compile_request(puzzle()))
         self.assertEqual(compiled["action_catalog"], action_catalog())
         initial = compiled["state"]
         self.assertEqual(initial["room_id"], "r1")
@@ -77,11 +88,11 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(state["done"] and state["lost"])
 
     def test_failed_compile_preserves_session(self):
-        self.session.handle({"op": "compile", "document": puzzle()})
+        self.session.handle(compile_request(puzzle()))
         bad = puzzle()
         bad["entities"][2]["parent"] = "missing"
         with self.assertRaises(WorldError) as error:
-            self.session.handle({"op": "compile", "document": bad})
+            self.session.handle(compile_request(bad))
         self.assertEqual(error.exception.entity_id, "c1")
         self.assertEqual(self.session.handle({"op": "step", "command": "look"})["state"]["room_id"], "r1")
         valid = self.session.handle({"op": "validate", "document": puzzle()})
@@ -99,14 +110,85 @@ class WorkerTests(unittest.TestCase):
         ):
             world = puzzle()
             mutate(world)
-            with self.assertRaises(WorldError):
-                build_world(world)
+            with self.assertRaises((WorldError, GoalError)):
+                self.session.handle(compile_request(world))
+
+    def test_reuses_one_compilation_for_two_database_goals(self):
+        compiled = self.session.handle(compile_request(puzzle()))
+        artifact = Path(self.session.game_file)
+        before = artifact.read_bytes()
+        for command in SOLUTION:
+            self.session.handle({"op": "step", "command": command})
+        self.assertTrue(self.session.done)
+        new_goal = {"success_criteria": [{"criterion": "Eat apple", "evidence": {"predicate": "eaten", "subject": "f1"}}]}
+        started = self.session.handle({"op": "start_episode", "source_id": "goal-b", "goal": new_goal})
+        self.assertEqual(started["build_id"], compiled["build_id"])
+        self.assertEqual(Path(self.session.game_file), artifact)
+        self.assertEqual(artifact.read_bytes(), before)
+        self.assertEqual(started["state"]["room_id"], "r1")
+        self.assertFalse(started["state"]["done"])
+        for command in SOLUTION:
+            state = self.session.handle({"op": "step", "command": command})["state"]
+        self.assertFalse(state["done"])  # Old endings cannot terminate the new Goal.
+        self.session.handle({"op": "step", "command": "go west"})
+        self.session.handle({"op": "step", "command": "take apple"})
+        state = self.session.handle({"op": "step", "command": "eat apple"})["state"]
+        self.assertTrue(state["won"])
+        self.assertFalse(state["engine"]["won"])
+
+    def test_initial_success_failure_and_zero_command_witness(self):
+        initial = {"predicate": "player_at", "subject": "r1"}
+        request = {"op": "compile", "document": puzzle(), "source_id": "initial", "goal": {
+            "success_criteria": [{"criterion": "At start", "evidence": initial}]}}
+        state = self.session.handle(request)["state"]
+        self.assertTrue(state["won"])
+        witness = self.session.handle({"op": "verify_solution", "commands": []})["witness"]
+        self.assertEqual(witness["commands"], [])
+        with self.assertRaises(WorldError):
+            self.session.handle({"op": "step", "command": "look"})
+        failed = self.session.handle({"op": "start_episode", "source_id": "initial", "goal": {
+            "success_criteria": request["goal"]["success_criteria"],
+            "constraints": [{"constraint": "Avoid start", "evidence": initial}]}})["state"]
+        self.assertTrue(failed["lost"])
+        with self.assertRaises(WorldError):
+            self.session.handle({"op": "verify_solution", "commands": [], "witness": witness})
+
+    def test_frozen_goal_invalid_candidate_and_stale_witness(self):
+        self.session.handle(compile_request(puzzle()))
+        verified = self.session.handle({"op": "verify_solution", "commands": SOLUTION})
+        self.assertFalse(self.session.done)
+        self.assertEqual(self.session.episode.result["achievability"], "achievable")
+        bad = {"success_criteria": [{"criterion": "Missing", "evidence": {"predicate": "carrying", "subject": "absent"}}]}
+        previous = self.session.env
+        with self.assertRaises(GoalError):
+            self.session.handle({"op": "start_episode", "source_id": "bad", "goal": bad})
+        self.assertIs(self.session.env, previous)
+        self.assertEqual(self.session.handle({"op": "step", "command": "look"})["state"]["room_id"], "r1")
+        self.assertEqual(self.session.episode.result["achievability"], "achievable")
+        changed = goal(puzzle())
+        changed["success_criteria"] = [{"criterion": "Eat", "evidence": {"predicate": "eaten", "subject": "f1"}}]
+        self.session.handle({"op": "start_episode", "source_id": "different", "goal": changed})
+        changed["success_criteria"].clear()
+        self.assertEqual(len(self.session.episode.bound.goal["success_criteria"]), 1)
+        with self.assertRaises(WorldError):
+            self.session.handle({"op": "verify_solution", "commands": SOLUTION, "witness": verified["witness"]})
+
+    def test_bind_arity_doorless_passage_and_unverified_goal(self):
+        world = puzzle()
+        world["passages"][0].update(door_name="", door_state="open", key="")
+        self.session.handle({"op": "compile", "document": world})
+        for evidence in ({"predicate": "open", "subject": "p1"},
+                         {"predicate": "carrying", "subject": "k1", "target": "r1"}):
+            with self.assertRaises(GoalError):
+                self.session.handle({"op": "start_episode", "source_id": "invalid", "goal": {"success_criteria": [{"criterion": "Invalid", "evidence": evidence}]}})
+        self.session.handle({"op": "start_episode", "source_id": "manual", "goal": {"success_criteria": [{"criterion": "Review manually"}]}})
+        self.assertEqual(self.session.handle({"op": "step", "command": "look"})["state"]["episode"]["coverage"], "unverified")
 
     def test_win_all_fail_any_and_legacy_sandbox(self):
         world = puzzle()
         world["passages"][0]["door_state"] = "open"
         world["fail_conditions"].append({"predicate": "closed", "subject": "p1"})
-        self.session.handle({"op": "compile", "document": world})
+        self.session.handle(compile_request(world))
         state = self.session.handle({"op": "step", "command": "go east"})["state"]
         self.assertFalse(state["won"])  # Correct room alone does not satisfy ALL.
         self.session.handle({"op": "reset"})
@@ -115,7 +197,7 @@ class WorkerTests(unittest.TestCase):
         world["version"] = 1
         world.pop("win_conditions")
         world.pop("fail_conditions")
-        result = self.session.handle({"op": "compile", "document": world})
+        result = self.session.handle(compile_request(world))
         self.assertTrue(result["warnings"])
         self.assertFalse(self.session.handle({"op": "step", "command": "look"})["state"]["done"])
 

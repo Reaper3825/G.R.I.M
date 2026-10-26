@@ -779,6 +779,22 @@ std::vector<size_t> DatasetTarget::searchConceptBlocks(
     return results;
 }
 
+std::vector<GRIM::ConceptBlock> DatasetTarget::searchGoalConceptBlocks(
+    const std::string& query, size_t max_results) const {
+    std::vector<GRIM::ConceptBlock> result;
+    if(max_results==0)return result;
+    const auto needle=toLower(query);
+    for(const auto& block:conceptBlocks_){
+        if(!block.goal)continue;
+        const auto matches=[&](const std::string& text){return toLower(text).find(needle)!=std::string::npos;};
+        bool match=needle.empty() || matches(block.id) || matches(block.name) || matches(block.goal->target_state);
+        if(!match)for(const auto& entry:block.goal->success_criteria)if(matches(entry.criterion)){match=true;break;}
+        if(!match)for(const auto& entry:block.goal->constraints)if(matches(entry.constraint)){match=true;break;}
+        if(match){result.push_back(block);if(result.size()>=max_results)break;}
+    }
+    return result;
+}
+
 std::vector<size_t> DatasetTarget::filterConceptBlocks(
     const std::string& format_type,
     const std::string& search_query) const {

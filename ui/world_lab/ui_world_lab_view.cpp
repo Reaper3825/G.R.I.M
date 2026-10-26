@@ -59,7 +59,7 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
     button("+ Room",[this]{if(!apply())return;std::string id;const auto r=canvas_.visibleWorldRect();editor_.change([&](Document& d){id=d.addRoom(r.origin.x+r.size.x/2-115,r.origin.y+r.size.y/2-45);});canvas_.selected=id;refresh();});
     button("Fit",[this]{canvas_.fitWorld();});
     button("Recover",[this]{if(!apply())return;editor_.load(recoveryPath_);editor_.markUnsaved();canvas_.cancelInput();canvas_.selected=editor_.document().spawn;refresh();canvas_.fitWorld();status_="Recovered last autosave. Save to the chosen world file; Undo restores prior edits.";});
-    session_=std::make_unique<UIWorldSession>(editor_);
+    session_=std::make_unique<UIWorldSession>(editor_,gamesDirectory_/"episodes");
     session_->onErrorEntity=[this](const std::string& id){canvas_.selected=id;status_="TextWorld validation points to "+id;refresh();};
     session_->onState=[this](const nlohmann::json& state){canvas_.setPlayState(state);};
     actions_.beforePrepare=[this]{return apply();};

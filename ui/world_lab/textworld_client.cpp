@@ -279,7 +279,7 @@ struct TextWorldClient::Impl {
         try {
             start();
             const auto requestId=++sequence;
-            request["id"]=requestId;request["protocol"]=1;
+            request["id"]=requestId;request["protocol"]=2;
             const auto body=request.dump();if(body.size()>16*1024*1024)throw std::runtime_error("World request exceeds 16 MB");
             {std::ofstream out(directory/"request.tmp",std::ios::binary);out<<body;out.close();if(!out)throw std::runtime_error("Cannot write TextWorld request");}
             fs::rename(directory/"request.tmp",directory/"request.json");
@@ -291,7 +291,7 @@ struct TextWorldClient::Impl {
                 if(fs::exists(response)) {
                     if(fs::file_size(response)>16*1024*1024)throw std::runtime_error("TextWorld response exceeds 16 MB");
                     std::ifstream in(response,std::ios::binary);nlohmann::json result;in>>result;in.close();fs::remove(response);
-                    if(result.at("protocol")!=1 || result.at("id")!=requestId)throw std::runtime_error("TextWorld response ID/protocol mismatch");
+                    if(result.at("protocol")!=2 || result.at("id")!=requestId)throw std::runtime_error("TextWorld response ID/protocol mismatch");
                     return result;
                 }
 #ifdef _WIN32

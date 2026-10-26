@@ -53,7 +53,8 @@ schema version 3, C++ Goal types, JSON/database adapters, inference transport,
 and active renderer configuration use this representation. Sections 4.4 and 4.5
 define its semantics. Existing datasets have not been rewritten automatically;
 explicit migration tooling is described below. TextWorld binding, evaluation,
-and episode lifecycle integration remain pending.
+and the manual episode lifecycle are implemented; model-driven routing and
+feedback insertion remain pending.
 
 ## 1. The inference contract in one view
 
@@ -444,8 +445,8 @@ The response reports the difference between the initial and remaining volumes.
 
 ### 4.4 Evidence — system-facing executable condition
 
-Implemented storage, transport, and rendering contract; environment binding and
-evaluation remain pending.
+Implemented storage, transport, rendering, and manual TextWorld binding/evaluation
+contract. Automatic model-command routing remains pending.
 This field has no model-visible form. It is paired with one criterion or
 constraint in system storage; only the paired requirement text is supplied to
 the model. This section describes success evidence; section 4.5 applies the
@@ -480,59 +481,50 @@ execution result, or a model-generated justification.
   projection. Actual observations may enter permitted feedback or knowns under
   their own availability rules; they do not replace this condition definition.
 
-The current World Lab adapter translates these authored predicates into
-TextWorld propositions: `player_at` becomes `at(P, room)`, `carrying` becomes
-`in(object, I)`, and `eaten`, `open`, `closed`, `locked`, `at`, `in`, and `on`
-map to corresponding facts. Current manual Play constructs Quest events from
-the world document's conditions before compilation. In the selected reusable
-integration, episode creation instead validates predicate support, stable entity
-references, and argument types, then binds Goal evidence to checks against the
-environment's authoritative state. Attaching evidence does not insert facts or
-change entity state: `carrying(key_1)` checks `in(resolved_key, inventory)`; it
-does not place the key in inventory.
+World Lab binds authored predicates to typed TextWorld propositions:
+`player_at` becomes `at(P, room)`, `carrying` becomes `in(object, I)`, and
+`eaten`, `open`, `closed`, `locked`, `at`, `in`, and `on` map to corresponding
+facts. The shared worker binder validates support, stable entity references,
+argument types, and arity. Unary checks reject non-empty targets, binary checks
+require a correctly typed target, and passage-state checks require a named door.
+Binding errors include source ConceptBlock ID, requirement collection/index, and
+entity reference when available. A non-sandbox Goal requires a source ID.
 
-The episode owns a frozen Goal snapshot, bound checks, evaluation results, and
-completion status. The environment owns entities, initial state, and transitions;
-the ConceptBlock Goal retains the evidence definitions beside their requirements.
-The episode evaluator checks the initial state and each post-command state, with
-any constraint violation taking precedence over success. It can attach different
-Goals to fresh instances of the same compiled environment without compiling
-Goal-specific Quest endings. Automatic completion for this path comes from the
-controller's evidence evaluation, independently of TextWorld's quest-specific
-`won`/`lost` fields and answer-span completion. Full verifier facts remain
-separate from permitted model observations. See
-[episode evidence binding](WORLD_LAB.md#episode-evidence-binding-selected-design-pending)
-for ownership, lifecycle, shared evaluator semantics, and setup boundaries.
+Attaching evidence does not insert facts or change entity state: carrying a key
+is checked, never granted. The environment owns entities, initial state, and
+transitions. The episode owns a frozen Goal snapshot, bound checks, results, and
+terminal status. The pinned TextWorld 1.7 adapter reads tracked `_facts` with
+typed runtime IDs; public facts use human-readable names and are not verifier
+identities. Full verifier data remains separate from permitted model observations.
 
-Goal success-criterion evidence and constraint-violation evidence are the sole
-source of challenge win/fail checks in this reusable path. Environment
-compilation must omit the current Goal-specific `maker.quests` construction.
-Existing compiled games carrying those endings must be rebuilt and their cached
-artifacts invalidated before reuse; attaching new checks does not remove old
-compiled endings. Subsequent Goal-only changes require new episode bindings,
-not environment recompilation. The episode controller enforces terminal status
-by rejecting further gameplay commands until reset or a new episode, and saved
-solution replay follows the same evaluator and termination semantics. See the
-[compilation transition](WORLD_LAB.md#compilation-and-challenge-termination-transition-pending).
+Manual Play and independent solution replay evaluate initial and post-command
+states through the same binder/evaluator. Any true constraint-violation check
+fails the episode before success is considered. Automatic whole-Goal success
+requires at least one success criterion, all success checks true simultaneously,
+and valid executable evidence for every criterion and constraint. Missing
+evidence is unverified, never a pass. Checks do not encode alternative event
+groups or temporal milestones. No Goal/empty success lists never win vacuously;
+constraint-only Goals can fail. Engine termination and command limits stop an
+otherwise active episode without establishing success or inventing a violation.
 
-TextWorld ANDs conditions within an Event and ORs events within each Quest
-win/fail list. World Lab currently puts all winning conditions in one Event
-and each failing condition in a separate Event. Mapping success-criterion
-evidence through that existing arrangement means all success checks must hold
-simultaneously. Evidence itself does not encode alternative event groups
-or temporal ordering. Constraint evidence supplies failure checks using the
-same structure, as specified in section 4.5. The compiled game checks failure before
-success each turn for an unfinished quest. Goal completion must come from
-verified environment status, independently of answer-span completion.
+Environment compilation omits Goal-specific native Quest endings. Selecting a
+different Goal starts fresh interpreter state on the same compiled artifact;
+Reset retains the frozen Goal. Database edits do not silently change that snapshot.
+The controller enforces terminal state and rejects later commands until reset or
+new episode. `state.done/won/lost/score` describe the controller result, while
+`state.engine` retains raw engine diagnostics. Goal completion is independent of
+native Quest status and generated answer-span completion. Protocol 2 rejects stale
+workers/clients; existing compiled endings require recompilation and are never
+loaded as reusable artifacts. See [episode binding](WORLD_LAB.md#episode-evidence-binding)
+and [compilation/termination](WORLD_LAB.md#compilation-and-challenge-termination).
 
-Binding checks alone do not establish achievability. The selected reusable
-environment integration must additionally validate that, from the episode's
-starting state, all success evidence can hold together along a permitted path
-that never triggers constraint failure evidence. See
-[environment/Goal achievability](WORLD_LAB.md#reusable-environments-and-goal-achievability-selected-design-pending)
-for validation outcomes, witness requirements, and cache invalidation. This
-validator and external Goal evaluation are pending; the compiled Quest behavior
-above describes the current manual-play path.
+Binding checks alone do not establish achievability. Current manual playtesting
+reports unknown until independent successful replay produces a witness; verified
+initial success has a zero-command witness. Saved witnesses include environment
+content, initial state, source ID, Goal identity, and action/evaluator semantics.
+Stale witnesses are rejected. General contradiction/reachability proof and
+verified-challenge admission remain pending. Failed replay or compilation is not
+proof of impossibility or solvability. See [achievability](WORLD_LAB.md#reusable-environments-and-goal-achievability).
 
 The version-3 source schema appends structured evidence and constraint fields;
 original string-evidence and scalar-constraint slots remain read-only migration
@@ -563,8 +555,8 @@ python scripts/build_concept_blocks_flatbuffer.py --jsonl path/to/migrated.jsonl
 ```
 
 The DataHub Goal editor accepts optional condition JSON for success and violation
-evidence and validates it before saving. Environment IDs and predicate argument
-types are validated later by the pending binder. Focused verification uses
+evidence and validates it before saving. Environment references, supported predicates, arity, and argument types are
+validated by the worker binder when an episode starts. Focused verification uses
 `tests/run_goal_evidence.ps1` and `python -m unittest discover -s scripts -p test_goal_evidence.py`.
 Existing source datasets are not rewritten by this implementation. The changed
 span layout requires regenerating affected GRMT corpora before use; regeneration
@@ -613,9 +605,8 @@ in this example, `eaten(apple_1)` being true means failure. Success-criterion
 evidence being true means that criterion is satisfied. Both use `predicate`,
 `subject`, and optional `target`, with the same entity/type validation.
 
-Under the existing World Lab event arrangement, each constraint's evidence
-becomes a separate failing Event, so any one violation fails the quest. A
-constraint used for automatic TextWorld enforcement requires valid evidence.
+The episode evaluator fails the challenge when any constraint's evidence is
+true. A constraint used for automatic TextWorld enforcement requires valid evidence.
 Without an applicable verifier, evidence may be omitted; the system must not
 claim the constraint was checked or translate its prose into an invented check.
 Failure evaluation uses the actual environment state and the quest lifecycle;

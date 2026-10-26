@@ -17,7 +17,7 @@ use TextWorld's physical-world subset.
 1. [Quick workflow](#quick-workflow)
 2. [World Lab controls](#world-lab-controls)
 3. [Entity types and customization](#entity-types-and-customization)
-4. [Goal conditions](#goal-conditions)
+4. [Goal selection and evidence](#goal-selection-and-evidence)
 5. [Playtesting and solutions](#playtesting-and-solutions)
 6. [Assets and presets](#assets-and-presets)
 7. [Files, recovery, and limits](#files-recovery-and-limits)
@@ -33,10 +33,12 @@ use TextWorld's physical-world subset.
 3. Connect rooms by dragging a compass handle onto another room.
 4. Add objects using Inspect, or insert presets from Assets.
 5. Select the starting room and choose **Set player start**.
-6. Choose Goal, describe the objective, and add win/fail conditions.
-7. Choose Play → Compile & Play, then enter commands to test the game.
+6. Choose Goal, search/reload database Goals, then select a ConceptBlock snapshot.
+   Use Import legacy for old world-owned conditions.
+7. Choose Play → Compile / Start, then enter commands to test the challenge.
 8. Optionally Record a successful run and choose Save solution.
-9. Save the world to retain the authored game and its verified solution.
+9. Save the world to retain environment edits. Verified solutions save separately
+   in episode records.
 
 The editor changes the authored starting state. Playing changes a separate
 interpreter state. Picking up an object during play does not move it in the saved
@@ -64,7 +66,7 @@ space permits; shrinking the outer panel does not erase the preferred sizes.
 | Fit | Frames all rooms. |
 | Recover | Loads the per-user recovery snapshot and marks it unsaved. Save it to the intended world path. |
 | Inspect | Shows properties for the selected room, object, or passage. |
-| Goal | Shows objective and condition editing. |
+| Goal | Searches/selects database Goals, imports legacy conditions, and displays verification progress. |
 | Play | Shows manual playtest controls and command history. |
 
 **Canvas interactions**
@@ -131,46 +133,38 @@ The editor allows more nesting than TextWorld can compile. For playable worlds,
 place containers and supporters directly in rooms; put portable items in rooms,
 inside containers, or on supporters.
 
-## Goal conditions
+## Goal selection and evidence
 
-The Objective field wraps words visually as the pane width changes. It grows to
-five visible lines and scrolls for longer text. Enter applies the objective;
-pasted line breaks become spaces, so the saved objective remains a single line.
-This uses the shared `UIInputBox::setWordWrap(true)` option; other input boxes
-remain single-line by default.
+Goal view selects a ConceptBlock from DataHub's database. **Reload Goals** refreshes
+choices without changing a selected/running snapshot. Search by ID, name, target,
+or requirement text; results are bounded to the first 100 matching Goals. Select an entry explicitly
+to load its latest Goal; **Compile / Start** begins a fresh episode. Requirement
+text and optional structured evidence are edited in DataHub. World Lab has no
+second editable condition list. The Goal view shows coverage, per-requirement
+results, and binding diagnostics. Missing evidence stays unverified.
 
-The objective is player-facing text. The actual win/loss rules come from the
-condition lists; writing a goal in the objective does not create those rules.
+Legacy version-2 worlds can be converted using **Import legacy**. Existing typed
+conditions become criterion/constraint evidence in a new database ConceptBlock,
+and the original solution is archived separately as unverified. Successful
+persistence precedes one undoable clearing of the document's legacy metadata;
+failed persistence preserves it. Save the world afterward to persist version 3.
+Without explicit import, legacy conditions are inactive. They are never mixed
+with a selected database Goal.
 
-Choose a condition, subject, and optional target; then press Add win or Add fail.
-Select a saved condition and Remove to delete it. Apply goal commits the objective.
-To change a condition, remove the old condition and add its replacement.
+Supported predicates are `player_at` (room), `carrying` (portable object),
+`eaten` (food), `open`/`closed`/`locked` (container or named door), and
+`at`/`in`/`on` (portable object plus room/container/supporter). Unary checks reject
+non-empty targets. Binary checks require a typed target. An item inside a box is
+not directly on the room floor. These are simultaneous state tests, not ordered
+milestones or alternative event groups.
 
-| UI label | Stored predicate | Subject | Target | Meaning |
-|---|---|---|---|---|
-| Player is in room | `player_at` | Room | None | Player occupies that room. |
-| Player carries | `carrying` | Object, key, or food | None | Item is in player inventory. |
-| Object is in room | `at` | Object, key, or food | Room | Item is directly in the room. |
-| Object is inside | `in` | Object, key, or food | Container | Item is inside the container. |
-| Object is on | `on` | Object, key, or food | Supporter | Item rests on the supporter. |
-| Is open | `open` | Container or named door | None | Selected holder/door is open. |
-| Is closed | `closed` | Container or named door | None | Selected holder/door is closed. |
-| Is locked | `locked` | Container or named door | None | Selected holder/door has the locked fact; see container limitation above. |
-| Has been eaten | `eaten` | Food | None | Food has been consumed. |
-
-**Every win condition must hold together. Any single fail condition can end the
-run in failure.** Conditions are state tests, not ordered checkpoints. There is no
-UI for OR groups of winning conditions, negation, timed objectives, or sequences.
-
-Containment conditions are precise: an item inside a box is not directly on the
-room floor. Use `in(item, box)` rather than `at(item, room)` for that goal.
-
-Example: The Garden Delivery requires `player_at(Garden)` and
-`carrying(seed packet)`. It has no fail conditions. A rule such as
-`eaten(red apple)` could be added as a failure condition in another game.
-
-No win conditions means no authored victory goal. A world with neither wins nor
-fails is an exploration sandbox; a world with only fail conditions can still lose.
+All success checks must hold together; any true constraint-violation check fails,
+with failure taking precedence. Automatic whole-Goal success also requires every
+criterion and constraint to have valid executable evidence and at least one
+success criterion. A sandbox/empty Goal never wins by vacuous truth. Binding and
+compilation do not prove reachability. Successful independent replay supplies an
+achievability witness; general search/proof remains pending. Full verifier facts
+are authoring/system data, not authorized model observations.
 
 ## Playtesting and solutions
 
@@ -204,14 +198,14 @@ Custom action authoring and non-compass transitions remain future work.
 
 | Control | Behavior |
 |---|---|
-| Validate (Goal) | Compiles and resets a temporary candidate interpreter, then closes it. Checks compatibility, not solvability; does not replace an existing live play session. |
-| Compile & Play | Compiles the current authored world and starts its live interpreter from the beginning. |
+| Validate world | Compiles/resets a candidate and checks Goal binding; does not prove solvability or replace live play. |
+| Compile / Start | Compiles a changed environment, or reuses the current artifact to start the selected Goal from fresh state. |
 | Command field / Send / Enter | Sends one text command to the live game. |
-| Reset | Restarts the compiled game from its original state. |
+| Reset | Restarts the same frozen Goal and environment from the initial state. |
 | Stop | Stops the worker and cancels the session/request. Compile again to resume play. |
 | Record | Resets first, then records subsequent commands. |
-| Save solution | Replays recorded commands in a separate interpreter; stores them in the document only if replay reaches a win. Save the world file afterward. |
-| Check saved | Replays the document's saved solution without changing the live interpreter. |
+| Save solution | Independently replays commands using the Goal evaluator and saves a matching episode witness on success. |
+| Check saved | Replays a matching episode witness or verifies imported legacy commands; never changes the live interpreter. |
 | History | Displays an earlier observation; does not rewind gameplay. |
 
 Typical commands include `look`, `inventory`, `go east`, `open seed box`,
@@ -222,11 +216,12 @@ The canvas highlights the current room and changed objects. Its cards and object
 lists still represent the authored world. History selection can show highlights
 from an older observation; the next command always acts on the live state.
 
-Changing semantic game data requires recompilation. Moving cards or changing
-solution metadata does not. Leaving/hiding/minimizing World Lab stops its worker;
+Changing environment dynamics/content requires recompilation. Moving cards,
+renaming the document title, or changing legacy challenge metadata does not.
+Selecting another Goal requires a fresh episode, using the same compiled game. Leaving/hiding/minimizing World Lab stops its worker;
 visiting Assets therefore ends the play session too. Save the world before
 closing the application. A solution is a command list, not a transcript or model
-training episode, and successful verification is evidence for that exact game.
+training episode, and successful verification is evidence for the exact environment/starting-state/Goal pairing.
 
 ## Assets and presets
 
@@ -309,7 +304,8 @@ stated otherwise. In this checkout that directory is `D:\G.R.I.M\resources`.
 
 | Data | Location / format |
 |---|---|
-| Games | `models/games/*.grimworld.json`; format `grim-world`, version 2. Version 1 can still load. |
+| Games | `models/games/*.grimworld.json`; environment-only version 3. Versions 1/2 load; unconverted legacy data remains version 2 on save. |
+| Episodes | `models/games/episodes/*.grimepisode.json`; format `grim-episode`, version 1; Goal/source snapshot, environment, commands, and optional verified witness. |
 | Room templates | `models/world_assets/rooms/*.grimasset.json`; format `grim-world-asset`, version 1. |
 | Object templates | `models/world_assets/objects/*.grimasset.json`; same asset format. |
 | Deleted templates | `models/world_assets/.trash/<original filename>.<timestamp>`. |
@@ -341,7 +337,7 @@ path after undoing Open/New before saving.
 | Objective | 4,096 bytes in native document validation. |
 | Name / description in document | Name 1–256 bytes; description up to 16,384 bytes. |
 | Playable names | Unique case-insensitively; 1–80 ASCII characters, starting with a letter; letters, digits, spaces and hyphens only. |
-| Episode / saved solution | Up to 1,000 commands; solution verification needs at least one. |
+| Episode / saved solution | Up to 1,000 commands; verified initial success supports a zero-command witness. |
 | Commands | Native stored commands limited to 512 bytes; worker checks 512 characters and rejects line breaks/NUL. |
 | Undo snapshots | Up to 100 committed edits. |
 | Worker request | One in flight; 120-second timeout; worker idle exit after 15 minutes. |
@@ -376,7 +372,7 @@ directory and atomic destination replacement; failed writes preserve the old fil
 | Asset root | The one room/object from which all saved asset descendants originate. |
 | Authored state | Starting entities, locations, door states, and rules saved in the world. |
 | Canvas | The pannable/zoomable room-card workspace or asset preview. |
-| Goal | Objective text plus win/fail state conditions. |
+| Goal | Database ConceptBlock target text plus criterion/evidence and constraint/evidence pairs. |
 | Compile | Translate the authored game into a temporary playable TextWorld artifact. |
 | Condition | A predicate with a subject and, where needed, target. |
 | Container | An openable/closable holder with contents inside. |
@@ -439,18 +435,22 @@ World selection → Asset.capture → independent asset draft → `.grimasset.js
 Asset.insert → one destination Editor transaction. The original game, library file,
 and inserted instance do not share mutable state.
 
-World JSON stores `format`, `version`, `title`, `spawn`, `next_id`, `entities`,
-`passages`, `editor.rooms`, `objective`, `win_conditions`, `fail_conditions`, and
-`solution`. Entity entries contain `id`, `name`, `kind`, `parent`, `description`,
-and `state`. Passages contain endpoint IDs, direction, and door state/key data.
-Conditions contain `predicate`, `subject`, and `target`.
+Version-3 world JSON stores `format`, `version`, `title`, `spawn`, `next_id`,
+`entities`, `passages`, and `editor.rooms`. Entities retain `id`, `name`, `kind`,
+`parent`, `description`, and `state`; passages retain endpoints, direction, and
+door/key data. Version-2 challenge fields remain read-only conversion input and
+are preserved on save until explicitly imported. Version 3 rejects those fields.
+Goal JSON lives in the ConceptBlock database. Episode records store selection,
+environment, commands, verified status, and optional witness identity.
 
 Asset JSON stores `format`, `version`, `name`, `root`, and `entities`. IDs in an
 asset are local to that asset and must be remapped on insertion. The synthetic
 preview room is editor scaffolding, never part of an object template on disk.
 
-`gameJson()` excludes editor coordinates, next-ID bookkeeping, and solution
-metadata. The session compares this representation against its compiled snapshot.
+`gameJson()` excludes editor coordinates, next-ID bookkeeping, document title,
+and all legacy challenge/solution fields, and uses version 3. Native compilation
+compatibility compares this environment representation. Episode compatibility
+also compares the selected frozen Goal snapshot.
 Keep that boundary accurate when adding fields: gameplay changes must invalidate
 old sessions, while purely visual edits should not.
 
@@ -489,7 +489,8 @@ old sessions, while purely visual edits should not.
 | New tab/control | Registration, update/draw layout, focus/capture lifecycle, hide/minimize handling, host input tests. |
 | New worker operation | Client request lifecycle, worker protocol, structured error handling, timeout/cancel behavior, stale-world responses, integration tests. |
 
-Version 1 worlds load into the version 2 model; current saves emit version 2.
+New worlds save as version 3. Version-1/2 input remains supported; pending legacy
+challenge data saves as version 2 until explicit conversion prevents data loss.
 Asset format is separately versioned at 1. Do not silently reinterpret older files
 when changing semantics. Preserve user-authored games/assets and unrelated changes.
 
@@ -510,20 +511,19 @@ become a predicate automatically, and not every GRIM constraint is an environmen
 fact. The episode retains a frozen Goal snapshot and owns check results and
 completion status. The reusable path evaluates checks externally at reset and
 after commands, with failure taking precedence, rather than embedding each Goal
-in a separately compiled TextWorld Quest. Current manual Play still uses compiled
-Quest endings; this external evaluator is pending. See
-[episode evidence binding](WORLD_LAB.md#episode-evidence-binding-selected-design-pending)
+in a separately compiled TextWorld Quest. This manual Play/replay evaluator is
+implemented; automatic model routing remains pending. See
+[episode evidence binding](WORLD_LAB.md#episode-evidence-binding)
 for the full lifecycle and separation of episode setup from evidence.
 
-For the reusable path, remove Goal-specific `maker.quests` assignment before
-environment compilation and rebuild existing artifacts that embed challenge
-endings. Goal success-criterion and constraint evidence then supplies all
+The reusable path omits Goal-specific `maker.quests` assignment. Existing workers
+restart/recompile under mailbox protocol 2; old embedded endings are not loaded. Goal success-criterion and constraint evidence then supplies all
 challenge win/fail checks at episode startup; the environment has no separate
 challenge condition list. The controller ends the episode and rejects further
 gameplay commands when those checks establish failure or success. Goal-only
 changes reuse the compiled environment with fresh episode state. Saved-solution
 replay uses the same evaluator. See the
-[compilation transition](WORLD_LAB.md#compilation-and-challenge-termination-transition-pending).
+[compilation transition](WORLD_LAB.md#compilation-and-challenge-termination).
 
 Each model cycle follows Determine, optional Define, optional Execute, and
 Answer, with optional Update where appropriate. Define and Execute need not
@@ -563,7 +563,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundatio
 This uses renderer sinks, not the full application. Relevant suites:
 
 - `tests/world_lab_tests.cpp`: document validation, persistence, gestures,
-  inspector interactions, game library, recovery, goal editing.
+  inspector interactions, game library, recovery, Goal selection/import, snapshot isolation, and episode records.
 - `tests/world_asset_tests.cpp`: extraction, invalid trees, persistence, repeated
   insertion, fresh IDs/names, atomic undo, dirty protection, library and archive UI.
 - `tests/ui_input_foundation_tests.cpp`, `tests/ui_canvas_tests.cpp`: shared input,
