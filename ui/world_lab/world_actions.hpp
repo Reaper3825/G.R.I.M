@@ -4,6 +4,7 @@
 namespace GRIM::WorldLab {
 // Offline snapshot exported from the installed TextWorld knowledge base.
 const nlohmann::json& actionCatalog();
+nlohmann::json actionCatalog(const Document&);
 bool actionTypeMatches(const std::string& type, const std::string& kind);
 std::vector<std::string> actionCandidates(const Document&, const std::string& type);
 std::string actionEntityName(const Document&, const std::string& id);

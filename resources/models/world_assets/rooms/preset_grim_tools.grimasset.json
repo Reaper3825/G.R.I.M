@@ -1,0 +1,48 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "GRIM - Tools",
+  "root": "tools",
+  "entities": [
+    {
+      "id": "tools",
+      "name": "tools",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the tools subsystem, where available commands are described and requests are prepared for execution. The tool catalog, argument reference, execution desk, and result reference explain this boundary. These are fixed reference stations rather than working command terminals. No external tool is executed by examining them.",
+      "state": "open"
+    },
+    {
+      "id": "tool_catalog",
+      "name": "tool catalog",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This catalog describes GRIM's command registry. Registered tools can provide a name, description, usage, category, aliases, and parameter metadata. Entries can distinguish informational commands from state-changing actions and indicate confirmation requirements. The reference explains how capabilities are discovered; it is not a snapshot of currently registered tools.",
+      "state": "open"
+    },
+    {
+      "id": "argument_reference",
+      "name": "argument reference",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This reference explains how a command states the arguments it expects. Parameter metadata can include a name, type, description, and whether the argument is required. A capability description helps select and prepare a request, while the implementation determines whether the supplied arguments are valid. A plausible command name alone is not evidence that a capability is registered or usable.",
+      "state": "open"
+    },
+    {
+      "id": "execution_desk",
+      "name": "execution desk",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This desk marks the boundary between describing a desired action and submitting it to an implementation. A request needs a concrete command and the arguments required by that command. Informational requests and state-changing requests have different effects, and command metadata may specify a confirmation requirement. This desk has no active dispatch binding in the authored environment.",
+      "state": "open"
+    },
+    {
+      "id": "result_reference",
+      "name": "result reference",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This reference explains the difference between a submitted request and its returned result. A command can fail, return partial information, or succeed without establishing a larger task's completion. Interpret the actual result and any relevant observation before concluding that an intended change occurred. Registry usage statistics describe past executions rather than proving the outcome of a new request.",
+      "state": "open"
+    }
+  ]
+}

@@ -9,8 +9,10 @@ covered by [the panel README](../ui/UI_TRAINING_PANEL_README.md).
 
 Physical navigation is the current pilot. The broader direction includes other
 navigation/action tasks, such as simulated UI workflows and problem solving.
-Those mechanics are not implemented yet; the current schema and worker still
-use TextWorld's physical-world subset.
+Generic hierarchical path navigation is also available, independently of any
+specific environment. See [the path navigation primitive](WORLD_LAB.md#path-navigation-primitive)
+for the version-4 schema, authoring workflow, command rules, and validation.
+Other simulated UI and problem-solving mechanics remain future work.
 
 ## Contents
 
@@ -60,7 +62,8 @@ space permits; shrinking the outer panel does not erase the preferred sizes.
 | New | Starts a one-room world and selects an unused default filename. Prior document changes remain available through Undo. |
 | Open | Loads the path in the file field. Invalid files leave the current world intact. |
 | Saved games | Opens a direct `.grimworld.json` child of the games folder. Labels derive from filenames. |
-| Save | Applies valid edits and saves to the displayed path. Change this path to save another copy. |
+| Save | Applies valid edits, saves the persistent environment ID, and registers its location. Duplicate live IDs at different paths are rejected. |
+| Save copy | Saves an independent environment under an unused `-copy` filename with a fresh ID. |
 | Undo / Redo | Restores document snapshots, including New/Open and whole asset insertions. File paths and filesystem operations are not document history. |
 | + Room | Creates a room near the canvas center. |
 | Fit | Frames all rooms. |
@@ -304,7 +307,8 @@ stated otherwise. In this checkout that directory is `D:\G.R.I.M\resources`.
 
 | Data | Location / format |
 |---|---|
-| Games | `models/games/*.grimworld.json`; environment-only version 3. Versions 1/2 load; unconverted legacy data remains version 2 on save. |
+| Games | `models/games/*.grimworld.json`; environment-only version 3 with persistent `environment_id`. Versions 1/2 load; unconverted legacy data remains version 2 on save. |
+| Environment registry | `models/games/environment_registry.json`; format `grim-environments`, version 1; maps ID to title and absolute UTF-8 world-file path. |
 | Episodes | `models/games/episodes/*.grimepisode.json`; format `grim-episode`, version 1; Goal/source snapshot, environment, commands, and optional verified witness. |
 | Room templates | `models/world_assets/rooms/*.grimasset.json`; format `grim-world-asset`, version 1. |
 | Object templates | `models/world_assets/objects/*.grimasset.json`; same asset format. |
@@ -412,6 +416,7 @@ directory and atomic destination replacement; failed writes preserve the old fil
 |---|---|
 | `ui/ui_training_panel.hpp`, `.cpp` | Top-level tab registration, view ownership, dispatch, and cross-tab callbacks/lifecycle. |
 | `ui/world_lab/world_document.hpp`, `.cpp` | Entity/passage/condition schema, structural validation, ID allocation, history, version migration, JSON persistence. |
+| `ui/world_lab/environment_registry.hpp` | Atomic ID/location index, validated resolution, saved-file discovery, missing/mismatched/duplicate identity diagnostics. |
 | `ui/world_lab/ui_world_lab_view.hpp`, `.cpp` | World toolbar, inspector, game discovery, recovery, selection capture and asset insertion. |
 | `ui/world_lab/ui_world_canvas.hpp`, `.cpp` | Cards, entity rows, selection, drag gestures, compass connections, highlights, selection-only asset mode. |
 | `ui/world_lab/world_asset.hpp`, `.cpp` | Asset schema, extraction, validation, synthetic previews, insertion/remapping, naming, file discovery. |
@@ -435,7 +440,7 @@ World selection → Asset.capture → independent asset draft → `.grimasset.js
 Asset.insert → one destination Editor transaction. The original game, library file,
 and inserted instance do not share mutable state.
 
-Version-3 world JSON stores `format`, `version`, `title`, `spawn`, `next_id`,
+Version-3 world JSON stores `format`, `version`, `environment_id`, `title`, `spawn`, `next_id`,
 `entities`, `passages`, and `editor.rooms`. Entities retain `id`, `name`, `kind`,
 `parent`, `description`, and `state`; passages retain endpoints, direction, and
 door/key data. Version-2 challenge fields remain read-only conversion input and
@@ -447,7 +452,24 @@ Asset JSON stores `format`, `version`, `name`, `root`, and `entities`. IDs in an
 asset are local to that asset and must be remapped on insertion. The synthetic
 preview room is editor scaffolding, never part of an object template on disk.
 
-`gameJson()` excludes editor coordinates, next-ID bookkeeping, document title,
+`environment_id` is additive for supported world versions. Older files without
+it receive a new ID in memory and are marked unsaved; explicit Save persists the
+ID and registers the path. Loading does not rewrite the source. New and Save copy
+allocate independent IDs; regular edits and Save retain identity. Duplicate live
+files with the same ID are rejected. Recovery files retain ID without registration.
+
+DataHub's Curriculum tab provides the course Environment picker and **Courses →
+Refresh Environments**. Picking an environment validates its registry reference
+and persists `Course::environment_id`; No environment clears it. Missing/unregistered
+assignments remain visible. Refresh discovers IDs in direct games-folder children
+and relinks moved files when the former path is absent. Open a file's new path in
+World Lab to relink a move outside that folder. Invalid files or duplicates abort
+discovery without partially updating the index. Resolution checks the file's ID;
+no fallback to a different world is allowed. World and registry writes are each
+atomic; registry failure after world save reports the partial save and retains
+the editor's pre-save state. Open the saved file and retry Save after repair.
+
+`gameJson()` excludes the persistent environment ID, editor coordinates, next-ID bookkeeping, document title,
 and all legacy challenge/solution fields, and uses version 3. Native compilation
 compatibility compares this environment representation. Episode compatibility
 also compares the selected frozen Goal snapshot.
@@ -501,17 +523,23 @@ existing features to build assumptions around.
 
 ### Recurrent model interaction contract (selected; integration pending)
 
-Course-driven assignment is the selected upstream connection to native Quest
-progression: `Curriculum -> Course -> ConceptBlock -> Goal evidence -> Quest ->
-QuestProgression`. The course supplies ConceptBlock membership through
-`concept_block_ids` and an optional environment reference through `environment_id`.
-Each assigned ConceptBlock supplies its own frozen Goal; each episode receives
-fresh interpreter state and native progression. Compatible Goals reuse compilation.
-Goals from course membership are not implicitly merged, and episode success does
-not by itself define course completion or advancement.
+One course represents one game session; each ConceptBlock Goal represents an
+assignment supplying a native Quest. The course supplies membership through
+`concept_block_ids` and its environment through `environment_id`. The planned
+course runtime retains one shared world state and aggregates its Quests through
+native GameProgression. Assignment completion contributes to overall course
+completion; choosing another assignment does not reset the course world.
 
-The manual Goal-to-progression path is implemented. Persistent environment
-identity/resolution and course-driven assignment remain pending. Empty environment
+The next World Lab authoring feature is course selection, a member-assignment
+list, and explicit Play selected. That isolated manual test binds only the chosen
+Goal in the course environment through the existing QuestProgression path. Test
+results describe the assignment, not course completion. Selecting a list row
+does not silently reset live play. Goals requiring prior world changes may need
+manual gameplay setup; an isolated test does not prove full-course reachability.
+
+The manual Goal-to-progression path, persistent environment identity/resolution,
+and course environment picker are implemented. Course-scoped selected-assignment
+playtesting and the shared multi-Quest course runtime remain pending. Empty environment
 references mean no environment assignment; unresolved references or invalid
 bindings require explicit diagnostics. Model routing is separate from course
 orchestration. See the [course-driven flow](WORLD_LAB.md#course-driven-quest-assignment-selected-integration-pending)

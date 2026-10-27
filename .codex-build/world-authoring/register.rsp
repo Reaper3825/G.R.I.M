@@ -1,0 +1,10 @@
+/nologo
+/std:c++20
+/EHsc
+/DNOMINMAX
+/DGRIM_BUILD_HOST
+/I"D:\G.R.I.M"
+/I"D:\G.R.I.M/vcpkg_installed/x64-windows/include"
+register_world.cpp
+"D:\G.R.I.M\.codex-build\ui-input-tests\world_document.obj"
+/Fe:register_world.exe

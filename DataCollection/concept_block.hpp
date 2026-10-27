@@ -109,7 +109,7 @@ struct Course {
     std::string name;
     std::vector<std::string> concept_block_ids;
     // Persistent environment/game reference; empty means no environment assigned.
-    // World Lab game-ID assignment and resolution are pending integration.
+    // Resolved through World Lab's environment registry; independent of entity IDs.
     std::string environment_id;
 };
 

@@ -1,4 +1,5 @@
 #include "ui/world_lab/world_document.hpp"
+#include "ui/world_lab/environment_registry.hpp"
 #include "ui/world_lab/ui_world_canvas.hpp"
 #include "ui/world_lab/ui_world_lab_view.hpp"
 #include "ui/world_lab/ui_world_session.hpp"
@@ -24,10 +25,49 @@ void drag(UIWorldCanvas& canvas,Vec2 from,Vec2 to,bool cancel=false){
 }
 }
 void runWorldLabTests(){
+    {
+        Editor paths;const auto root=paths.document().spawn;std::string child,leaf;
+        paths.change([&](Document& d){d.enablePathNavigation(root);child=d.addRoom(300,0);d.setRoomPath(child,"/alpha");leaf=d.addRoom(600,0);d.setRoomPath(leaf,"/alpha/leaf");});
+        const auto snapshot=paths.document().json();
+        check(snapshot.at("version")==4 && Document::parse(snapshot).json()==snapshot,"Path world roundtrip failed");
+        check(paths.document().roomPath(root)=="/" && paths.document().roomPath(leaf)=="/alpha/leaf","Wrong derived path");
+        bool pathRule=false;
+        const auto pathCatalog=actionCatalog(paths.document());
+        for(const auto& action:pathCatalog["actions"]) {
+            const auto actionId=action.at("id").get<std::string>();
+            check(actionId!="go/north" && actionId!="go/east","Path catalog retained compass moves");
+            if(actionId=="go/path") {
+                pathRule=true;
+                check(composeAction(paths.document(),action,{leaf})=="go /alpha/leaf","Composer used room name instead of path");
+            }
+        }
+        check(pathRule,"Path primitive missing from composer");
+        rejects([&]{paths.change([&](Document& d){d.connect(root,child,"east");});},"Path world accepted compass passage");
+        rejects([&]{paths.change([&](Document& d){d.setRoomPath(child,"/missing/alpha");});},"Missing parent accepted");
+        rejects([&]{paths.change([&](Document& d){d.setRoomPath(child,"/alpha/leaf/cycle");});},"Path cycle accepted");
+        rejects([&]{paths.change([&](Document& d){d.setRoomPath(child,"/..");});},"Reserved segment accepted");
+        rejects([&]{paths.change([&](Document& d){d.setRoomPath(leaf,"/alpha");});},"Duplicate path accepted");
+        check(paths.document().json()==snapshot,"Rejected path edit mutated document");
+        paths.change([&](Document& d){d.setRoomPath(child,"/renamed");});
+        check(paths.document().roomPath(leaf)=="/renamed/leaf" && paths.document().find(leaf),"Parent rename lost descendant ID/path");
+        paths.change([&](Document& d){d.erase(child);});
+        check(!paths.document().find(leaf) && paths.document().paths.size()==1,"Path deletion orphaned descendants");
+        paths.undo();check(paths.document().roomPath(leaf)=="/renamed/leaf","Undo lost path subtree");
+        paths.change([&](Document& d){d.erase(root);});
+        check(paths.document().entities.empty() && paths.document().paths.empty(),"Root deletion left navigation data");
+        auto invalid=snapshot;invalid["navigation"]["rooms"][1]["parent"]="missing";
+        rejects([&]{Document::parse(invalid);},"Dangling navigation parent accepted");
+        invalid=snapshot;invalid["version"]=3;rejects([&]{Document::parse(invalid);},"Legacy world accepted ignored navigation");
+    }
     Editor editor;
+    const auto initialEnvironment=editor.document().environmentId;
+    check(initialEnvironment!=Document::initial().environmentId,"New worlds share an environment ID");
     std::string room=editor.document().spawn,other,box,key,edge;
     editor.change([&](Document& d){other=d.addRoom(430,80);box=d.addObject(room,"container");key=d.addObject(box,"key");edge=d.connect(room,other,"east");});
     const auto original=editor.document().json();
+    check(original.at("environment_id")==initialEnvironment,"Missing persisted environment ID");
+    auto identityOnly=editor.document();identityOnly.environmentId=makeEnvironmentId();
+    check(identityOnly.gameJson()==editor.document().gameJson(),"Environment ID changed compiled content");
     rejects([&]{editor.change([&](Document& d){d.find(box)->parent=key;});},"Invalid holder accepted");
     rejects([&]{editor.change([&](Document& d){d.find(box)->parent=box;});},"Containment cycle accepted");
     rejects([&]{editor.change([&](Document& d){auto third=d.addRoom(0,0);d.connect(room,third,"east");});},"Occupied exit accepted");
@@ -56,6 +96,51 @@ void runWorldLabTests(){
     invalid=original;invalid["passages"][0]["direction"]="up";rejects([&]{Document::parse(invalid);},"Invalid direction accepted");
     const auto directory=std::filesystem::temp_directory_path()/("grim-world-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directory(directory);
+    {
+        const auto root=directory/"environments";
+        std::filesystem::create_directory(root);
+        const EnvironmentRegistry registry(root);
+        const auto firstPath=root/"first.grimworld.json",movedPath=root/"moved.grimworld.json",copyPath=root/"copy.grimworld.json";
+        Editor environment;environment.save(firstPath);registry.registerFile(firstPath);
+        const auto id=environment.document().environmentId;
+        check(registry.load(id).environmentId==id,"Registry did not resolve persisted ID");
+        check(EnvironmentRegistry(root).resolve(id).path==std::filesystem::weakly_canonical(firstPath),"Registry did not survive reopen");
+        rejects([&]{registry.checkDestination(environment.document(),registry.file());},"World save could overwrite environment registry");
+        rejects([&]{registry.resolve("");},"Empty course environment resolved");
+        rejects([&]{registry.resolve("missing");},"Unknown environment resolved");
+        environment.change([](Document& d){d.title="Renamed environment";});environment.save(firstPath);registry.registerFile(firstPath);
+        check(registry.resolve(id).title=="Renamed environment","Registry retained stale title");
+        std::filesystem::copy_file(firstPath,copyPath);
+        const auto indexBefore=loadJsonFile(registry.file());
+        rejects([&]{registry.registerFile(copyPath);},"Duplicate live environment ID accepted");
+        rejects([&]{registry.indexDirectory();},"Ambiguous directory index accepted");
+        check(loadJsonFile(registry.file())==indexBefore,"Rejected duplicate damaged registry");
+        rejects([&]{registry.checkDestination(environment.document(),copyPath);},"Save at duplicate live location accepted");
+        std::filesystem::remove(copyPath);
+        std::filesystem::rename(firstPath,movedPath);
+        rejects([&]{registry.resolve(id);},"Moved environment silently resolved old path");
+        registry.indexDirectory();
+        check(registry.resolve(id).path==std::filesystem::weakly_canonical(movedPath),"Moved environment was not relinked");
+        const auto content=environment.document().gameJson();environment.copyWorld();
+        check(environment.document().environmentId!=id && environment.document().gameJson()==content,"Copy did not separate identity from content");
+        registry.checkDestination(environment.document(),copyPath);environment.save(copyPath);registry.registerFile(copyPath);
+        check(registry.entries().size()==2,"Independent copy not registered separately");
+        rejects([&]{registry.checkDestination(environment.document(),movedPath);},"Copy could overwrite another environment");
+        auto mismatched=loadJsonFile(movedPath);mismatched["environment_id"]="wrong-id";saveJsonFile(movedPath,mismatched);
+        rejects([&]{registry.resolve(id);},"Registry accepted mismatched file ID");
+        const auto legacyPath=root/"legacy.grimworld.json";
+        auto legacy=environment.document().json();legacy.erase("environment_id");saveJsonFile(legacyPath,legacy);
+        Editor migrated;migrated.load(legacyPath);
+        check(migrated.dirty() && !migrated.document().environmentId.empty(),"Legacy ID migration not marked unsaved");
+        rejects([&]{registry.registerFile(legacyPath);},"Legacy file registered without persisted ID");
+        check(!loadJsonFile(legacyPath).contains("environment_id"),"Legacy load rewrote source");
+        migrated.save(legacyPath);registry.registerFile(legacyPath);
+        check(registry.load(migrated.document().environmentId).environmentId==migrated.document().environmentId,"Migrated ID not resolvable");
+        saveJsonFile(registry.file(),{{"format","corrupt"}});
+        rejects([&]{registry.registerFile(legacyPath);},"Corrupt registry silently overwritten");
+        for(const auto& entry:std::filesystem::directory_iterator(root))std::filesystem::remove(entry.path());
+        std::filesystem::remove(root);
+    }
     const auto path=directory/"world.json",bad=directory/"invalid.json";
     editor.save(path);check(!editor.dirty(),"Save did not clear dirty flag");
     const auto saved=editor.document().json();
@@ -101,6 +186,13 @@ void runWorldLabTests(){
     auto viewFrame=[&](const InputState& in){router.beginFrame();router.currentPanel=90;view.update(in,0,{{0,0},{1000,900}},90);view.draw(renderer,{{0,0},{1000,900}});router.endFrame();};
     auto click=[&](Vec2 p){InputState in;in.mousePos=p;in.mousePressed[0]=in.mouseDown[0]=true;viewFrame(in);in.mousePressed[0]=in.mouseDown[0]=false;in.mouseReleased[0]=true;viewFrame(in);};
     viewFrame({});
+    click({750,340});click({750,390});
+    check(view.document().paths.size()==1 && view.document().roomPath(view.document().spawn)=="/","Inspector did not enable path navigation");
+    click({370,57});
+    check(view.document().paths.size()==2,"New room did not receive a path entry");
+    click({240,57});click({240,57});
+    check(view.document().paths.empty() && view.document().entities.size()==1,"Path authoring Undo failed");
+    click({110,220}); // Undo removed the selected new room; reselect the survivor.
     click({900,455});check(view.document().entities.size()==2,"Inspector Add button failed");
     click({110,220}); // Select starting room again.
     click({750,455}); // Open kind dropdown.
@@ -128,10 +220,17 @@ void runWorldLabTests(){
     router.beginFrame();router.currentPanel=90;view.update({},2,{{0,0},{1000,900}},90);router.endFrame();
     click({50,90});click({50,145});
     check(view.document().json()==savedWorld,"Malformed library game replaced document");
+    const auto worldId=view.document().environmentId;
+    view.saveEnvironment(library/"copy.grimworld.json",true);
+    check(view.document().environmentId!=worldId,"Save copy reused environment ID");
+    view.openEnvironment(worldId);
+    check(view.document().json()==savedWorld,"Open by environment ID failed");
     view.hide();
     std::filesystem::remove(library/"aaa.grimworld.json");
     std::filesystem::remove(library/"world.grimworld.json");
     std::filesystem::remove(library/"world-2.grimworld.json");
+    std::filesystem::remove(library/"copy.grimworld.json");
+    std::filesystem::remove(library/"environment_registry.json");
     std::filesystem::remove(library);
     std::filesystem::remove(directory/"recovery.json");std::filesystem::remove(directory);
     Editor conditionEditor;

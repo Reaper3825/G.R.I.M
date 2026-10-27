@@ -1,0 +1,270 @@
+{
+  "format": "grim-world",
+  "version": 4,
+  "environment_id": "env-4056413a539c4244b300030bbd119462",
+  "title": "GRIM",
+  "spawn": "hub",
+  "next_id": 1,
+  "entities": [
+    {
+      "id": "hub",
+      "name": "System Hub",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in GRIM's system hub, an orientation space for its internal subsystems. A system map shows how the rooms relate, and a subsystem index explains their responsibilities. These panels describe the environment; they do not display live system status. Inspect either panel before choosing a subsystem to explore.",
+      "state": "open"
+    },
+    {
+      "id": "system_map",
+      "name": "system map",
+      "kind": "supporter",
+      "parent": "hub",
+      "description": "The map describes four subsystem rooms: perception, tools, computer, and memory. Perception supplies observations, tools exposes callable capabilities, computer represents the digital workspace and its controls, and memory stores and retrieves information. The intended layout places these rooms beneath the system hub. Actual room addresses and available routes are supplied by the assembled world.",
+      "state": "open"
+    },
+    {
+      "id": "subsystem_index",
+      "name": "subsystem index",
+      "kind": "supporter",
+      "parent": "hub",
+      "description": "Choose perception to understand what GRIM can observe and how observations reach context. Choose tools to understand command discovery, arguments, and results. Choose computer to understand displays, applications, keyboard input, and pointer control. Choose memory to understand retained information, retrieval, and session context. Visiting or examining a subsystem describes its role; execution requires a separately implemented action.",
+      "state": "open"
+    },
+    {
+      "id": "perception",
+      "name": "perception",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the perception subsystem, where sensory inputs become observations that reasoning can use. Fixed stations surround you: digital capture, text recognition, interface inspection, physical world state, and perception context. They explain the observation pipeline without starting captures or showing live readings. Computer control and durable memory storage belong to other subsystems.",
+      "state": "open"
+    },
+    {
+      "id": "digital_capture",
+      "name": "digital capture",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes acquiring screen images from a selected monitor, window, or virtual desktop. Capture attempts carry their source, time, geometry, and success or failure status. Consumers share an immutable frame so downstream observations can refer to the same capture. An unavailable frame must be represented as unavailable rather than treated as a current view.",
+      "state": "open"
+    },
+    {
+      "id": "text_recognition",
+      "name": "text recognition",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes extracting text regions from a captured screen image. Recognized text and its associated regions belong to a particular source frame. Recognition status distinguishes a completed observation from a failed or unavailable analysis. Reading text supplies evidence about the screen; it does not click controls or type into them.",
+      "state": "open"
+    },
+    {
+      "id": "interface_inspection",
+      "name": "interface inspection",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes optional native inspection of structured interface controls. A provider can supplement screen text with control information from the host platform. That information must retain the identity of its source frame and device. Missing native inspection does not imply that the screen is empty, and inspecting a control does not activate it.",
+      "state": "open"
+    },
+    {
+      "id": "physical_world_state",
+      "name": "physical world state",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes the camera perception pipeline and its downstream representation of the physical scene. Acquisition, frame conditioning, analysis, and world-state construction have distinct responsibilities. Stage results are shared as snapshots, and their source and availability matter when interpreting them. This reference station contains no camera feed or observed entities.",
+      "state": "open"
+    },
+    {
+      "id": "perception_context",
+      "name": "perception context",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes projecting perception snapshots into the context available to reasoning. Digital capture and extracted primitives must remain coherent with their source frame. Observations can be stale, missing, or unsuccessful, so their provenance and status must travel with their content. Supplying current context is distinct from retaining a durable memory.",
+      "state": "open"
+    },
+    {
+      "id": "tools",
+      "name": "tools",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the tools subsystem, where available commands are described and requests are prepared for execution. The tool catalog, argument reference, execution desk, and result reference explain this boundary. These are fixed reference stations rather than working command terminals. No external tool is executed by examining them.",
+      "state": "open"
+    },
+    {
+      "id": "tool_catalog",
+      "name": "tool catalog",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This catalog describes GRIM's command registry. Registered tools can provide a name, description, usage, category, aliases, and parameter metadata. Entries can distinguish informational commands from state-changing actions and indicate confirmation requirements. The reference explains how capabilities are discovered; it is not a snapshot of currently registered tools.",
+      "state": "open"
+    },
+    {
+      "id": "argument_reference",
+      "name": "argument reference",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This reference explains how a command states the arguments it expects. Parameter metadata can include a name, type, description, and whether the argument is required. A capability description helps select and prepare a request, while the implementation determines whether the supplied arguments are valid. A plausible command name alone is not evidence that a capability is registered or usable.",
+      "state": "open"
+    },
+    {
+      "id": "execution_desk",
+      "name": "execution desk",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This desk marks the boundary between describing a desired action and submitting it to an implementation. A request needs a concrete command and the arguments required by that command. Informational requests and state-changing requests have different effects, and command metadata may specify a confirmation requirement. This desk has no active dispatch binding in the authored environment.",
+      "state": "open"
+    },
+    {
+      "id": "result_reference",
+      "name": "result reference",
+      "kind": "supporter",
+      "parent": "tools",
+      "description": "This reference explains the difference between a submitted request and its returned result. A command can fail, return partial information, or succeed without establishing a larger task's completion. Interpret the actual result and any relevant observation before concluding that an intended change occurred. Registry usage statistics describe past executions rather than proving the outcome of a new request.",
+      "state": "open"
+    },
+    {
+      "id": "computer",
+      "name": "computer",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the computer subsystem, a representation of the digital workspace and the controls used to interact with it. A display reference, application reference, keyboard console, and pointer console stand here. Perception supplies observations of that workspace, while computer controls can change it. These stations describe interfaces and contain no live desktop session.",
+      "state": "open"
+    },
+    {
+      "id": "display_reference",
+      "name": "display reference",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This reference describes monitors, selected windows, and the virtual desktop as possible screen-capture targets. Screen geometry identifies where a view lies, and a multi-monitor desktop may include negative coordinates. Any action based on a screen position needs the correct source geometry and current observation. This panel does not claim that a particular display is connected.",
+      "state": "open"
+    },
+    {
+      "id": "application_reference",
+      "name": "application reference",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This reference describes applications and their windows as parts of the digital workspace. Foreground-window metadata can help establish which application a captured view represents. Visible text and structured interface information come from perception, and available operations depend on the relevant command implementation. This reference does not enumerate running applications or open any of them.",
+      "state": "open"
+    },
+    {
+      "id": "keyboard_console",
+      "name": "keyboard console",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This console describes keyboard input through GRIM's input-control interfaces. Key presses and text input affect the application that receives them, so target and focus matter. Sending input is an action attempt; a subsequent observation is needed to establish how the application responded. This authored console has no keyboard-execution binding.",
+      "state": "open"
+    },
+    {
+      "id": "pointer_console",
+      "name": "pointer console",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This console describes mouse movement, button input, and scrolling. Coordinates and the active target determine where those inputs are delivered. A pointer operation should be interpreted together with the observation that motivated it and the observation that follows it. Examining this console does not move the real pointer, click a button, or scroll an application.",
+      "state": "open"
+    },
+    {
+      "id": "memory",
+      "name": "memory",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the memory subsystem, where information is retained and retrieved for later use. The memory access console, memory store, memory routing panel, session context panel, and retrieval trace explain its responsibilities. The stations contain architectural reference material rather than personal records or live search results. Observation, retrieval, and durable recording are separate operations.",
+      "state": "open"
+    },
+    {
+      "id": "memory_access_console",
+      "name": "memory access console",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This console describes the memory facade used by orchestration consumers. It offers retrieval for a prompt, direct search, tag-based lookup, and recording operations. Prompt retrieval can combine ranked stored memories with a session-context snapshot and retrieval breadcrumbs. The facade is an access surface, not a claim that every memory consumer already uses the same route.",
+      "state": "open"
+    },
+    {
+      "id": "memory_store",
+      "name": "memory store",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This station describes the indexed storage of structured memory records. A record can carry content and metadata that help classify and retrieve it. Short-term and long-term placement are distinct, and persisting a record is different from merely including it in a current context. This reference holds no actual stored memories and does not write to storage.",
+      "state": "open"
+    },
+    {
+      "id": "memory_routing_panel",
+      "name": "memory routing panel",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This panel describes classifying information for memory placement. Recording an interaction can use the memory router to decide short-term or long-term placement, while the facade also exposes explicit recording operations. Routing a record determines how it is retained; it does not establish that its content is true or that it will be relevant to every future prompt.",
+      "state": "open"
+    },
+    {
+      "id": "session_context_panel",
+      "name": "session context panel",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This panel describes session-scoped interaction state supplied alongside memory retrieval. Context can include recent commands, intents, mood, and other interaction information. A context snapshot represents a particular session state rather than the entire durable memory store. Keeping context current and retaining information across sessions are different responsibilities.",
+      "state": "open"
+    },
+    {
+      "id": "retrieval_trace",
+      "name": "retrieval trace",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This station describes the breadcrumbs returned with prompt-based memory retrieval. Breadcrumbs can identify the queries used and the number of results each produced, while ranked hits identify the retrieved records. An empty result means the search produced no relevant memory, not that an answer has been established. This panel contains no sample search results or fabricated retrieval history.",
+      "state": "open"
+    }
+  ],
+  "passages": [],
+  "navigation": {
+    "mode": "path",
+    "rooms": [
+      {
+        "id": "hub",
+        "parent": "",
+        "segment": ""
+      },
+      {
+        "id": "perception",
+        "parent": "hub",
+        "segment": "perception"
+      },
+      {
+        "id": "tools",
+        "parent": "hub",
+        "segment": "tools"
+      },
+      {
+        "id": "computer",
+        "parent": "hub",
+        "segment": "computer"
+      },
+      {
+        "id": "memory",
+        "parent": "hub",
+        "segment": "memory"
+      }
+    ]
+  },
+  "editor": {
+    "rooms": [
+      {
+        "id": "hub",
+        "x": 560,
+        "y": 80
+      },
+      {
+        "id": "perception",
+        "x": 80,
+        "y": 400
+      },
+      {
+        "id": "tools",
+        "x": 400,
+        "y": 400
+      },
+      {
+        "id": "computer",
+        "x": 720,
+        "y": 400
+      },
+      {
+        "id": "memory",
+        "x": 1040,
+        "y": 400
+      }
+    ]
+  }
+}

@@ -8,6 +8,17 @@ const nlohmann::json& actionCatalog() {
     static const auto catalog=nlohmann::json::parse(kTextWorldActionCatalog);
     return catalog;
 }
+nlohmann::json actionCatalog(const Document& d) {
+    auto result=actionCatalog();
+    if(d.paths.empty())return result;
+    auto& actions=result["actions"];
+    actions.erase(std::remove_if(actions.begin(),actions.end(),[](const auto& a){return a.at("id").template get<std::string>().starts_with("go/");}),actions.end());
+    actions.push_back({{"id","go/path"},{"command","go {r}"},{"parameters",nlohmann::json::array({{{"name","r"},{"type","r"}}})},
+        {"requires",{"at(P, current)","path_link(current, r)"}},{"adds",{"at(P, r)"}},{"removes",{"at(P, current)"}}});
+    actions.push_back({{"id","go/parent"},{"command","back"},{"parameters",nlohmann::json::array()},
+        {"requires",{"at(P, current)","parent(current, r)"}},{"adds",{"at(P, r)"}},{"removes",{"at(P, current)"}}});
+    return result;
+}
 bool actionTypeMatches(const std::string& type,const std::string& kind) {
     const bool portable=kind=="object" || kind=="key" || kind=="food";
     if(type=="t")return portable || kind=="container" || kind=="supporter" || kind=="door";
@@ -52,7 +63,7 @@ std::string composeAction(const Document& d,const nlohmann::json& action,const s
         for(size_t p=0;p<parameters.size();++p)if(parameters[p].at("name")==token) {
             const auto choices=actionCandidates(d,parameters[p].at("type"));
             if(std::find(choices.begin(),choices.end(),bindings[p])==choices.end())throw std::runtime_error("Choose a valid "+token+" parameter");
-            result+=actionEntityName(d,bindings[p]);found=true;break;
+            result+=action.at("id")=="go/path"?d.roomPath(bindings[p]):actionEntityName(d,bindings[p]);found=true;break;
         }
         if(!found)throw std::runtime_error("Unknown command parameter");i=end+1;
     }

@@ -1,0 +1,48 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "GRIM - Computer",
+  "root": "computer",
+  "entities": [
+    {
+      "id": "computer",
+      "name": "computer",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the computer subsystem, a representation of the digital workspace and the controls used to interact with it. A display reference, application reference, keyboard console, and pointer console stand here. Perception supplies observations of that workspace, while computer controls can change it. These stations describe interfaces and contain no live desktop session.",
+      "state": "open"
+    },
+    {
+      "id": "display_reference",
+      "name": "display reference",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This reference describes monitors, selected windows, and the virtual desktop as possible screen-capture targets. Screen geometry identifies where a view lies, and a multi-monitor desktop may include negative coordinates. Any action based on a screen position needs the correct source geometry and current observation. This panel does not claim that a particular display is connected.",
+      "state": "open"
+    },
+    {
+      "id": "application_reference",
+      "name": "application reference",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This reference describes applications and their windows as parts of the digital workspace. Foreground-window metadata can help establish which application a captured view represents. Visible text and structured interface information come from perception, and available operations depend on the relevant command implementation. This reference does not enumerate running applications or open any of them.",
+      "state": "open"
+    },
+    {
+      "id": "keyboard_console",
+      "name": "keyboard console",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This console describes keyboard input through GRIM's input-control interfaces. Key presses and text input affect the application that receives them, so target and focus matter. Sending input is an action attempt; a subsequent observation is needed to establish how the application responded. This authored console has no keyboard-execution binding.",
+      "state": "open"
+    },
+    {
+      "id": "pointer_console",
+      "name": "pointer console",
+      "kind": "supporter",
+      "parent": "computer",
+      "description": "This console describes mouse movement, button input, and scrolling. Coordinates and the active target determine where those inputs are delivered. A pointer operation should be interpreted together with the observation that motivated it and the observation that follows it. Examining this console does not move the real pointer, click a button, or scroll an application.",
+      "state": "open"
+    }
+  ]
+}

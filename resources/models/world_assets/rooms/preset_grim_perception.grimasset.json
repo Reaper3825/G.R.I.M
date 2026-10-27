@@ -1,0 +1,56 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "GRIM - Perception",
+  "root": "perception",
+  "entities": [
+    {
+      "id": "perception",
+      "name": "perception",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the perception subsystem, where sensory inputs become observations that reasoning can use. Fixed stations surround you: digital capture, text recognition, interface inspection, physical world state, and perception context. They explain the observation pipeline without starting captures or showing live readings. Computer control and durable memory storage belong to other subsystems.",
+      "state": "open"
+    },
+    {
+      "id": "digital_capture",
+      "name": "digital capture",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes acquiring screen images from a selected monitor, window, or virtual desktop. Capture attempts carry their source, time, geometry, and success or failure status. Consumers share an immutable frame so downstream observations can refer to the same capture. An unavailable frame must be represented as unavailable rather than treated as a current view.",
+      "state": "open"
+    },
+    {
+      "id": "text_recognition",
+      "name": "text recognition",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes extracting text regions from a captured screen image. Recognized text and its associated regions belong to a particular source frame. Recognition status distinguishes a completed observation from a failed or unavailable analysis. Reading text supplies evidence about the screen; it does not click controls or type into them.",
+      "state": "open"
+    },
+    {
+      "id": "interface_inspection",
+      "name": "interface inspection",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes optional native inspection of structured interface controls. A provider can supplement screen text with control information from the host platform. That information must retain the identity of its source frame and device. Missing native inspection does not imply that the screen is empty, and inspecting a control does not activate it.",
+      "state": "open"
+    },
+    {
+      "id": "physical_world_state",
+      "name": "physical world state",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes the camera perception pipeline and its downstream representation of the physical scene. Acquisition, frame conditioning, analysis, and world-state construction have distinct responsibilities. Stage results are shared as snapshots, and their source and availability matter when interpreting them. This reference station contains no camera feed or observed entities.",
+      "state": "open"
+    },
+    {
+      "id": "perception_context",
+      "name": "perception context",
+      "kind": "supporter",
+      "parent": "perception",
+      "description": "This station describes projecting perception snapshots into the context available to reasoning. Digital capture and extracted primitives must remain coherent with their source frame. Observations can be stale, missing, or unsuccessful, so their provenance and status must travel with their content. Supplying current context is distinct from retaining a durable memory.",
+      "state": "open"
+    }
+  ]
+}

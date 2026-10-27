@@ -1,4 +1,5 @@
 #include "ui_data_hub_internal.hpp"
+#include "ui/world_lab/environment_registry.hpp"
 
 using namespace UIDataHubDetail;
 
@@ -87,6 +88,11 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     courseActionMenu_->setPosition(x + fullW - menuW, y + 4.0f);
     courseActionMenu_->setSize(menuW, rowH - 8.0f);
     courseActionMenu_->drawOverlay(renderer, position);
+    y += rowH + 6.0f;
+
+    cbCourseEnvironmentDropdown_->setPosition(x,y);
+    cbCourseEnvironmentDropdown_->setSize(fullW,rowH);
+    cbCourseEnvironmentDropdown_->drawOverlay(renderer,position);
     y += rowH + 6.0f;
 
     // ── Toolbar row 2: Curriculum filter + Format filter + Generate + Search ──
@@ -1126,4 +1132,28 @@ void UIDataHubPanel::populateCBCourseDropdown() {
     cbCourseDropdown_->setItems(names);
     cbCourseDropdown_->setSelectedIndex(selected);
     cbCourseNameInput_->setText(datasetTarget_->getCourseById(activeCourseId_).name);
+    populateCourseEnvironments();
+}
+
+void UIDataHubPanel::populateCourseEnvironments(bool discover) {
+    if(!cbCourseEnvironmentDropdown_ || !datasetTarget_)return;
+    std::vector<std::string> ids{""},labels{"No environment"};int selected=0;
+    const auto course=datasetTarget_->getCourseById(activeCourseId_);
+    try {
+        const GRIM::WorldLab::EnvironmentRegistry registry(std::filesystem::path(getResourcePath())/"models"/"games");
+        if(discover)try{registry.indexDirectory();}catch(const std::exception& error){addLog(error.what(),2);}
+        for(const auto& entry:registry.entries()) {
+            std::string label;
+            try{label=registry.resolve(entry.id).title+" ["+entry.id+"]";}
+            catch(const std::exception& error){label="Unresolved: "+entry.title+" ["+entry.id+"]";if(entry.id==course.environment_id)addLog(error.what(),2);}
+            if(entry.id==course.environment_id)selected=static_cast<int>(ids.size());
+            ids.push_back(entry.id);labels.push_back(std::move(label));
+        }
+    }catch(const std::exception& error){addLog(error.what(),2);}
+    if(!course.environment_id.empty() && selected==0) {
+        selected=static_cast<int>(ids.size());ids.push_back(course.environment_id);
+        labels.push_back("Unregistered environment ["+course.environment_id+"]");
+    }
+    cbCourseEnvironmentIds_=std::move(ids);cbCourseEnvironmentDropdown_->setItems(labels);
+    cbCourseEnvironmentDropdown_->setSelectedIndex(selected);
 }

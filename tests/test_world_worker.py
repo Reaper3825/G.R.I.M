@@ -10,6 +10,7 @@ if Path("/worker").exists():
 from world_worker import Session, WorldError, build_world
 from action_catalog import action_catalog
 from goal_evaluator import GoalError
+from test_path_navigation import path_world
 
 
 def puzzle():
@@ -41,6 +42,57 @@ SOLUTION = ["open toolbox", "take brass key from toolbox", "unlock oak door with
 
 
 class WorkerTests(unittest.TestCase):
+    def test_native_path_movement_goal_replay_and_reset(self):
+        world = path_world()
+        request = {"op": "compile", "document": world, "source_id": "path-test", "goal": {
+            "success_criteria": [{"criterion": "Arrive", "evidence": {"predicate": "player_at", "subject": "c"}}]}}
+        initial = self.session.handle(request)["state"]
+        self.assertEqual(initial["location_path"], "/")
+        self.assertIn("enter alpha", initial["admissible_commands"])
+        self.assertFalse(any(c.startswith("pathgo") for c in initial["admissible_commands"]))
+        before = self.session.env.state
+        for command in ("go /alpha/child", "back", "go /absent"):
+            with self.assertRaises(WorldError):
+                self.session.handle({"op": "step", "command": command})
+            self.assertIs(self.session.env.state, before)
+        state = self.session.handle({"op": "step", "command": "enter alpha"})["state"]
+        self.assertEqual(state["room_id"], "a")
+        self.assertEqual(state["location_path"], "/alpha")
+        self.assertEqual(state["moves"], 1)
+        self.assertIn({"predicate": "at", "arguments": ["P", "a"]}, state["facts"])
+        self.assertIn("Room A", state["feedback"])
+        self.assertEqual(self.session.handle({"op": "step", "command": "go /"})["state"]["room_id"], "root")
+        commands = ["go alpha", "go ./child"]
+        for command in commands:
+            state = self.session.handle({"op": "step", "command": command})["state"]
+        self.assertTrue(state["won"])
+        self.assertEqual(state["location_path"], "/alpha/child")
+        self.assertTrue(self.session.handle({"op": "verify_solution", "commands": commands})["verified"])
+        self.assertEqual(self.session.handle({"op": "reset"})["state"]["location_path"], "/")
+        self.session.handle({"op": "step", "command": "enter alpha"})
+        self.assertEqual(self.session.handle({"op": "step", "command": "back"})["state"]["room_id"], "root")
+
+    def test_path_branching_more_than_four_and_identity(self):
+        from world_worker import environment_identity
+        world = path_world()
+        for i in range(6):
+            ident = "extra" + str(i)
+            world["entities"].append({"id": ident, "kind": "room", "name": "Extra room " + str(i)})
+            world["navigation"]["rooms"].append({"id": ident, "parent": "root", "segment": ident})
+        before = environment_identity(world)
+        world["navigation"]["rooms"][-1]["segment"] = "last"
+        self.assertNotEqual(before, environment_identity(world))
+        state = self.session.handle({"op": "compile", "document": world})["state"]
+        self.assertEqual(len(state["available_rooms"]), 8)
+        for command in ("enter last", "go ..", "enter beta", "back"):
+            state = self.session.handle({"op": "step", "command": command})["state"]
+        self.assertEqual(state["room_id"], "root")
+        bad = path_world()
+        bad["navigation"]["rooms"][1]["parent"] = "c"
+        with self.assertRaises(ValueError):
+            self.session.handle({"op": "compile", "document": bad})
+        self.assertEqual(self.session.handle({"op": "step", "command": "look"})["state"]["location_path"], "/")
+
     def test_action_catalog_matches_native_snapshot(self):
         root = Path(__file__).resolve().parents[1]
         header = root / "ui/world_lab/textworld_action_catalog.generated.hpp"

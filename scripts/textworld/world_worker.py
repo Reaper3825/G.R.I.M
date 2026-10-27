@@ -11,6 +11,7 @@ import traceback
 from pathlib import Path
 from action_catalog import action_catalog
 from goal_evaluator import BoundGoal, Episode, GoalError, identity, SEMANTICS
+from path_navigation import PathNavigation, path_knowledge_base
 
 TYPES = {"room": "r", "object": "o", "key": "k", "container": "c",
          "supporter": "s", "food": "f"}
@@ -46,7 +47,12 @@ def build_world(document):
     import textworld
 
     need(textworld.__version__ == "1.7.0", "World Lab requires TextWorld 1.7.0")
-    need(document.get("format") == "grim-world" and document.get("version") in (1, 2, 3), "Unsupported world format")
+    need(document.get("format") == "grim-world" and document.get("version") in (1, 2, 3, 4), "Unsupported world format")
+    navigation = PathNavigation(document)
+    need(document.get("version") != 4 or navigation.rooms, "Version-4 worlds require path navigation")
+    if navigation.rooms:
+        need(not any(field in document for field in ("objective", "solution", "win_conditions", "fail_conditions")),
+             "Path worlds store Goals and solutions separately")
     entities = document.get("entities", [])
     passages = document.get("passages", [])
     need(isinstance(entities, list) and 0 < len(entities) <= 1000, "Playable worlds support 1-1000 entities")
@@ -65,6 +71,8 @@ def build_world(document):
     need(document.get("spawn") in source and source[document["spawn"]]["kind"] == "room", "Select a player-start room")
     options = textworld.GameOptions()
     options.seeds = 1234
+    if navigation.rooms:
+        options.kb = path_knowledge_base()
     maker = textworld.GameMaker(options)
     mapped = {}
     for ident, e in source.items():
@@ -114,6 +122,15 @@ def build_world(document):
             if key:
                 need(key in source and source[key]["kind"] == "key", "Door key reference is invalid", ident)
                 maker.add_fact("match", mapped[key], door)
+    for ident, (parent, _) in navigation.rooms.items():
+        if parent:
+            maker.add_fact("path_link", mapped[parent], mapped[ident])
+            maker.add_fact("path_link", mapped[ident], mapped[parent])
+            # TextWorld's room emitter only serializes compass relations. Emit
+            # this extension's relations explicitly using generated engine IDs.
+            options.kb.inform7_addons_code += (
+                f"\nThe {mapped[parent].id} path-connects to the {mapped[ident].id}.\n"
+                f"The {mapped[ident].id} path-connects to the {mapped[parent].id}.\n")
     maker.set_player(mapped[document["spawn"]])
 
     # Native Quests are attached to episode progression, not compiled endings.
@@ -129,8 +146,12 @@ def raw_facts(state):
 
 
 def environment_identity(document):
-    return identity({"semantics": SEMANTICS, "spawn": document["spawn"],
-                     "entities": document["entities"], "passages": document.get("passages", [])})
+    content = {"semantics": SEMANTICS, "spawn": document["spawn"],
+               "entities": document["entities"], "passages": document.get("passages", [])}
+    if "navigation" in document:
+        content["navigation"] = document["navigation"]
+        content["navigation_semantics"] = "path-v1-adjacent"
+    return identity(content)
 
 
 class Session:
@@ -143,6 +164,8 @@ class Session:
         self.episode = None
         self.environment_id = ""
         self.build_id = 0
+        self.navigation = None
+        self.room_names = {}
 
     @property
     def done(self):
@@ -166,7 +189,7 @@ class Session:
         room = next((f["arguments"][1] for f in facts
                      if f["predicate"] == "at" and f["arguments"][0] == "P"), "")
         episode = self.episode.result
-        return {"feedback": state.feedback, "description": state.get("description", ""),
+        result = {"feedback": state.feedback, "description": state.get("description", ""),
                 "inventory": state.get("inventory", ""), "location": state.get("location", ""),
                 "room_id": room, "moves": state.get("moves", 0),
                 "done": self.done, "won": episode["status"] == "succeeded", "lost": episode["status"] == "failed",
@@ -174,6 +197,34 @@ class Session:
                 "engine": {"done": bool(engine_done), "score": engine_score,
                            "won": bool(state.get("won")), "lost": bool(state.get("lost"))},
                 "facts": facts, "admissible_commands": state.get("admissible_commands", [])}
+        if self.navigation and self.navigation.rooms:
+            nav = self.navigation
+            result["location_path"] = nav.paths[room]
+            result["available_rooms"] = [{"id": ident, "path": nav.paths[ident], "name": self.room_names[ident]}
+                                         for ident in nav.adjacent(room)]
+            commands = [c for c in result["admissible_commands"] if not c.startswith("pathgo ")]
+            commands += ["go " + nav.paths[ident] for ident in nav.adjacent(room)]
+            commands += ["enter " + segment for _, (parent, segment) in nav.rooms.items() if parent == room]
+            if nav.rooms[room][0]:
+                commands += ["back", "go .."]
+            result["admissible_commands"] = sorted(set(commands))
+            result["feedback"] += "\nLOCATION: " + nav.paths[room]
+        return result
+
+    def step(self, env, command):
+        """Shared dispatch for live play and deterministic witness replay."""
+        if self.navigation and self.navigation.rooms:
+            state = env.state
+            current = next(self.mapping[args[1]] for name, args in raw_facts(state)
+                           if name == "at" and args[0][1] == "P")
+            try:
+                destination = self.navigation.resolve(current, command)
+            except ValueError as error:
+                raise WorldError(str(error)) from error
+            need(not command.casefold().startswith("pathgo"), "Use enter, go <path>, or back")
+            if destination:
+                command = "pathgo " + self.room_names[destination]
+        return env.step(command)
 
     @staticmethod
     def command(value):
@@ -196,6 +247,7 @@ class Session:
         op = request["op"]
         if op in ("compile", "validate"):
             document = request["document"]
+            navigation = PathNavigation(document)
             maker, mapping = build_world(document)
             next_build = self.build_id + 1
             path = self.directory / ("environment-%d.z8" % next_build)
@@ -219,6 +271,8 @@ class Session:
             self.env, self.game_file, self.bindings = candidate, game_file, bindings
             self.mapping = {(entity.id, entity.type): ident for ident, entity in mapping.items()}
             self.environment_id, self.episode, self.build_id = env_id, episode, next_build
+            self.navigation = navigation
+            self.room_names = {e["id"]: e["name"] for e in document["entities"] if e["kind"] == "room"}
             return {"state": self.observation(state), "warnings": warnings,
                     "action_catalog": action_catalog(), "build_id": self.build_id, "environment_id": env_id}
         need(self.env is not None, "Compile an environment first")
@@ -232,7 +286,7 @@ class Session:
         if op == "step":
             need(not self.done, "Episode is finished; reset or start another Goal")
             command = self.command(request.get("command", ""))
-            state, score, engine_done = self.env.step(command)
+            state, score, engine_done = self.step(self.env, command)
             self.episode.advance(raw_facts(state), engine_done, command)
             return {"state": self.observation(state, score, engine_done)}
         if op == "verify_solution":
@@ -248,7 +302,7 @@ class Session:
                 need(episode.identity == self.episode.identity, "Replay starting state differs from the active episode")
                 for command in commands:
                     need(episode.result["status"] == "active", "Solution contains commands after the episode ended")
-                    state, _, done = replay.step(command)
+                    state, _, done = self.step(replay, command)
                     episode.advance(raw_facts(state), done, command)
                 need(episode.result["status"] == "succeeded", "Recorded commands do not verify Goal success")
                 self.episode.witness_verified = True

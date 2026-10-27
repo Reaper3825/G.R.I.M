@@ -4,8 +4,10 @@ Status: implemented for manual Play and independent solution replay. Goal bindin
 controller termination, protocol-2 worker operations, database selection/import,
 version-3 environment documents, and separate version-1 episode records are in
 place. The [World Lab guide](WORLD_LAB.md) documents current usage. Model routing,
-feedback insertion, general reachability proof, and course/environment registry
-resolution remain future work.
+feedback insertion, general reachability proof, and course-driven episode
+assignment remain future work. Persistent environment identity, registry
+resolution, and course environment assignment are implemented as the next-phase
+foundation described below.
 
 The sections below retain the implementation boundaries and acceptance criteria
 for maintenance; they do not imply those manual integration components are still
@@ -196,43 +198,73 @@ manual integration from pending model-driven interaction and reachability work.
 
 ## Next phase: course-driven assignment (integration pending)
 
-Replace manual environment/Goal selection with course-driven assignment into
-the implemented episode path:
+Environment foundation status: implemented. World documents persist independent
+IDs; `environment_registry.json` maps IDs to validated files; World Lab saves/opens
+register locations; DataHub offers course Environment assignment and discovery
+refresh. Explicit Save persists legacy IDs; Save copy creates a new identity.
+Missing files, mismatches, duplicates, and malformed registries produce errors.
+See [assignment and resolution](WORLD_LAB.md#assign-and-resolve-an-environment).
+The remaining work separates selected-assignment authoring from the overall
+course game session.
 
-```text
-Curriculum -> Course -> ConceptBlock -> Goal evidence -> native Quest -> QuestProgression
-                 |
-                 +-> environment_id -> resolved reusable environment
-```
+### Session ownership
 
-`Course::concept_block_ids` supplies membership, and `Course::environment_id`
-supplies the optional environment reference. The selected ConceptBlock supplies
-the frozen Goal and its evidence. The course assigns episodes; native TextWorld
-Quest progression evaluates each episode's success/failure. Course completion
-and advancement policy are separate decisions, not inferred from one successful
-Quest. Member Goals are not implicitly merged into a course-wide Quest.
+- One Course is one game session, using its resolved environment and shared world state.
+- Each member ConceptBlock Goal is one assignment, represented by one native Quest.
+- Assignment completion contributes toward overall course completion. Selecting
+  another assignment does not reset world state or discard completed assignments.
+- Native GameProgression is the planned course aggregate over individual
+  QuestProgression objects. Goals remain distinct Quests within that game.
 
-Required integration:
+### Next deliverable: play a chosen course assignment in World Lab
 
-1. Establish persistent environment identity and resolution. Never resolve a
-   course reference through a worker's temporary artifact filename or an entity ID.
-2. Resolve the selected course's environment and member ConceptBlock by stable
-   IDs, then pass the Goal snapshot and source ID into the existing episode path.
-3. Start fresh interpreter state and native progression for every assignment;
-   reuse compilation for compatible Goals against unchanged environment content.
-4. Report missing ConceptBlocks/Goals, unresolved environment references, and
-   binding failures explicitly. Empty environment references mean no environment
-   assignment; missing evidence retains the existing unverified coverage behavior.
-5. Preserve frozen active Goals and witness compatibility. Apply database/course
-   edits through explicit subsequent assignment rather than mutating live episodes.
+1. Add a course selector backed by the existing course registry. Resolve the
+   chosen course's environment ID through EnvironmentRegistry and load that world.
+2. List member ConceptBlocks by stable ID and name. Show missing blocks and
+   blocks without Goals as explicit diagnostics rather than silently omitting them.
+   Do not substitute the global Goal database search for course membership.
+3. Selecting a member previews its target, criteria, constraints, and binding
+   diagnostics. Keep source course ID, ConceptBlock ID, and frozen Goal snapshot.
+4. An explicit Play selected action starts the existing isolated single-Goal
+   manual test in the course environment. Only the chosen assignment's Quest
+   determines its test result. Reset test restarts that test; selecting another
+   row alone must not reset or replace live play. Goal-only tests reuse compilation.
+5. Label the result as assignment playtest success/failure, separate from overall
+   course completion. Save course/assignment provenance with any new test records;
+   existing manual records remain readable and are not retroactively course credit.
+6. Preserve the current document and running test if course/environment loading,
+   Goal lookup, or binding fails. Pending editor changes need explicit handling
+   before loading a different world; do not silently discard them.
 
-Acceptance should demonstrate two ConceptBlocks in one course producing two
-distinct native Quests against one resolved environment, with fresh progression
-and unchanged compiled artifact/build count. Also verify unresolved references,
-missing Goals, incompatible entity bindings, empty environment assignment, and
-database edits during an active episode. Continue to distinguish binding validity
-from verified achievability.
+Selected-assignment playtesting is an authoring capability, not the course runtime
+session boundary. It may begin from the saved environment's initial state and
+allow manual gameplay setup. An assignment depending on earlier assignments may
+not be achievable in isolation; report the result without declaring the course
+impossible or inventing prerequisite state. Automatically creating entities or
+injecting success facts is outside this feature.
 
-This phase connects course selection and assignment to existing evaluation.
-Model-driven commands/feedback, general reachability proof, object provisioning,
-training export, and course completion/advancement policy remain separate work.
+Acceptance: select one course with two member Goals, load its registered world,
+choose each Goal and explicitly playtest it, confirm native Quest evaluation and
+unchanged compiled artifact/build count for Goal-only changes. Verify membership
+filtering, missing blocks/Goals, unresolved worlds, invalid bindings, frozen
+snapshots, failed-load preservation, and distinct test-result provenance.
+
+### Subsequent deliverable: shared course game session
+
+Load the course's assignment Quests into one game session and aggregate their
+progress with native GameProgression. World changes and assignment completions
+persist across assignment focus changes. Completing one Quest must not terminate
+the game while overall course requirements remain incomplete. Reset course is a
+separate operation from an isolated assignment-test reset. Course requirement
+coverage and failure handling must remain explicit; missing evidence cannot
+produce a verified course-completion claim.
+
+Acceptance: complete two assignments in the same interpreter session, prove that
+world changes survive switching focus, and show assignment progress separately
+from course completion. The course must remain active after only the first
+required assignment completes.
+
+Neither deliverable requires model commands, inference feedback, training export,
+or a general reachability solver. The native GameProgression adapter and its
+aggregate semantics need focused validation against the pinned TextWorld version
+when the shared course runtime is implemented.

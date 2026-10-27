@@ -22,6 +22,8 @@ public:
     void hide();
     void setGoalAccess(GRIM::WorldLab::GoalAccess access) { session_->setGoalAccess(std::move(access)); }
     void insertAsset(const GRIM::WorldLab::Asset&);
+    void saveEnvironment(const std::filesystem::path&, bool independentCopy = false);
+    void openEnvironment(const std::string& id);
     std::function<void(const GRIM::WorldLab::Document&,const std::string&)> onSaveAsset;
 private:
     void layout(const PanelRect&);
@@ -41,9 +43,10 @@ private:
     UIWorldActions actions_{editor_};
     std::unique_ptr<UIWorldAssetBrowser> browser_;
     std::vector<std::unique_ptr<UIButton>> toolbar_;
-    UIInputBox path_, title_, name_, description_;
+    UIInputBox path_, title_, name_, description_, roomPath_;
     UIScrollBox inspectorScroll_;
     std::unique_ptr<UIDropdown> kind_, location_, state_;
+    std::unique_ptr<UIDropdown> navigation_;
     std::unique_ptr<UIDropdown> doorState_, doorKey_;
     std::vector<std::string> doorKeys_;
     std::unique_ptr<UIWorldSession> session_;

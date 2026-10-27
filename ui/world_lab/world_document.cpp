@@ -3,6 +3,10 @@
 #include <cmath>
 #include <chrono>
 #include <fstream>
+#include <random>
+#include <iomanip>
+#include <sstream>
+#include <cctype>
 #include <set>
 #include <stdexcept>
 #ifdef _WIN32
@@ -13,6 +17,12 @@
 #endif
 
 namespace GRIM::WorldLab {
+std::string makeEnvironmentId() {
+    std::random_device random;
+    std::ostringstream out;out << "env-" << std::hex << std::setfill('0');
+    for(int i=0;i<4;++i)out << std::setw(8) << static_cast<uint32_t>(random());
+    return out.str();
+}
 namespace {
 void require(bool ok, const std::string& message) { if (!ok) throw std::runtime_error(message); }
 bool room(const Entity* e) { return e && e->kind == "room"; }
@@ -45,6 +55,10 @@ std::string Document::addRoom(float x, float y) {
     auto id = allocate(*this);
     entities.push_back({id, "Room " + std::to_string(layout.size()+1), "room", "", ""});
     layout.push_back({id,x,y});
+    if(!paths.empty()) {
+        const auto root=std::find_if(paths.begin(),paths.end(),[](const auto& p){return p.parent.empty();});
+        paths.push_back({id,root->id,id});
+    }
     if (spawn.empty()) spawn = id;
     return id;
 }
@@ -56,6 +70,7 @@ std::string Document::addObject(const std::string& parent, const std::string& ki
     return id;
 }
 std::string Document::connect(const std::string& from, const std::string& to, const std::string& direction) {
+    require(paths.empty(), "Path worlds use room addresses instead of compass passages");
     require(room(find(from)) && room(find(to)) && from != to, "Connect two different rooms");
     const auto reverse = opposite(direction);
     for (const auto& p : passages) {
@@ -69,10 +84,51 @@ void Document::moveRoom(const std::string& id, float x, float y) {
     for (auto& p : layout) if (p.id == id) { p.x=x; p.y=y; return; }
     throw std::runtime_error("Room no longer exists");
 }
+void Document::enablePathNavigation(const std::string& root) {
+    require(room(find(root)),"Choose a root room first");
+    require(passages.empty(),"Remove compass passages before enabling path navigation");
+    if(!paths.empty())return;
+    for(const auto& e:entities)if(e.kind=="room")paths.push_back({e.id,e.id==root?"":root,e.id==root?"":e.id});
+}
+std::string Document::roomPath(const std::string& id) const {
+    std::vector<std::string> segments;std::set<std::string> seen;
+    auto node=id;
+    while(!node.empty()) {
+        require(seen.insert(node).second,"Navigation cycle");
+        const auto p=std::find_if(paths.begin(),paths.end(),[&](const auto& p){return p.id==node;});
+        require(p!=paths.end(),"Missing navigation room");
+        if(!p->parent.empty())segments.push_back(p->segment);
+        node=p->parent;
+    }
+    std::string result;
+    for(auto it=segments.rbegin();it!=segments.rend();++it)result+="/"+*it;
+    return result.empty()?"/":result;
+}
+void Document::setRoomPath(const std::string& id,const std::string& path) {
+    require(!path.empty() && path.front()=='/' && path.size()<=509,"Enter an absolute room path (509 bytes max)");
+    auto entry=std::find_if(paths.begin(),paths.end(),[&](const auto& p){return p.id==id;});
+    require(entry!=paths.end(),"Enable path navigation first");
+    if(path==roomPath(id))return;
+    require(!entry->parent.empty() && path!="/","The root address is fixed at /");
+    const auto slash=path.find_last_of('/');
+    const auto parentPath=slash==0?"/":path.substr(0,slash);
+    std::string parent;
+    for(const auto& p:paths)if(roomPath(p.id)==parentPath){parent=p.id;break;}
+    require(!parent.empty(),"Parent room path does not exist");
+    auto candidate=*this;
+    auto& changed=candidate.paths[static_cast<size_t>(entry-paths.begin())];
+    changed.parent=parent;changed.segment=path.substr(slash+1);
+    candidate.validate();*this=std::move(candidate);
+}
 void Document::erase(const std::string& id) {
     std::set<std::string> removed{id};
     bool changed;
-    do { changed=false; for (const auto& e : entities) if (removed.count(e.parent)) changed |= removed.insert(e.id).second; } while(changed);
+    do {
+        changed=false;
+        for(const auto& p:paths)if(removed.count(p.parent))changed|=removed.insert(p.id).second;
+        for(const auto& e:entities)if(removed.count(e.parent))changed|=removed.insert(e.id).second;
+    } while(changed);
+    paths.erase(std::remove_if(paths.begin(),paths.end(),[&](const auto& p){return removed.count(p.id);}),paths.end());
     entities.erase(std::remove_if(entities.begin(),entities.end(),[&](const auto& e){return removed.count(e.id);}),entities.end());
     layout.erase(std::remove_if(layout.begin(),layout.end(),[&](const auto& p){return removed.count(p.id);}),layout.end());
     for (const auto& p : passages) if (removed.count(p.from) || removed.count(p.to)) removed.insert(p.id);
@@ -86,6 +142,8 @@ void Document::erase(const std::string& id) {
     if (removed.count(spawn)) spawn = layout.empty() ? "" : layout.front().id;
 }
 void Document::validate() const {
+    require(!environmentId.empty() && environmentId.size()<=128 &&
+        std::all_of(environmentId.begin(),environmentId.end(),[](unsigned char c){return std::isalnum(c) || c=='-' || c=='_';}),"Invalid environment ID");
     require(!title.empty() && title.size() <= 256, "World title must contain 1-256 bytes");
     require(entities.size() <= 10000 && passages.size() <= 20000, "World is too large");
     require(nextId > 0 && nextId < 1000000000, "Invalid next ID");
@@ -109,6 +167,24 @@ void Document::validate() const {
         require(std::isfinite(p.x) && std::isfinite(p.y) && std::abs(p.x)<=1e6f && std::abs(p.y)<=1e6f, "Room position is out of range");
     }
     for(const auto& e:entities) if(e.kind=="room") require(positions.count(e.id)!=0, "Room has no layout");
+    if(!paths.empty()) {
+        require(objective.empty() && winConditions.empty() && failConditions.empty() && solution.empty(),"Path worlds store Goals and solutions separately");
+        require(passages.empty(),"Path worlds cannot contain compass passages");
+        std::set<std::string> pathIds,addresses;size_t roots=0;
+        for(const auto& p:paths) {
+            require(room(find(p.id)) && pathIds.insert(p.id).second,"Invalid or duplicate navigation room");
+            if(p.parent.empty()){++roots;require(p.segment.empty(),"Root segment must be empty");}
+            else {
+                require(room(find(p.parent)),"Missing navigation parent");
+                require(!p.segment.empty() && p.segment.size()<=80 && std::all_of(p.segment.begin(),p.segment.end(),[](unsigned char c){
+                    return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') || c=='_' || c=='-';
+                }),"Path segments use 1-80 ASCII letters, digits, underscores or hyphens");
+            }
+        }
+        require(roots==1,"Path navigation requires exactly one root");
+        require(pathIds.size()==positions.size(),"Every room needs a navigation entry");
+        for(const auto& p:paths){const auto address=roomPath(p.id);require(address.size()<=509 && addresses.insert(address).second,"Duplicate or oversized room path");}
+    }
     require(layout.empty() ? spawn.empty() : room(find(spawn)), "Player start must be a room");
     for(const auto& p:passages) {
         require(!p.id.empty() && p.id.size()<=128 && ids.insert(p.id).second, "Duplicate or invalid passage ID");
@@ -142,8 +218,13 @@ void Document::validateCondition(const Condition& c) const {
 }
 nlohmann::json Document::json() const {
     const bool legacy=!objective.empty() || !winConditions.empty() || !failConditions.empty() || !solution.empty();
-    nlohmann::json j={{"format","grim-world"},{"version",legacy?2:3},{"title",title},{"spawn",spawn},{"next_id",nextId},
+    nlohmann::json j={{"format","grim-world"},{"version",paths.empty()?(legacy?2:3):4},{"title",title},{"spawn",spawn},{"next_id",nextId},
         {"entities",nlohmann::json::array()},{"passages",nlohmann::json::array()},{"editor",{{"rooms",nlohmann::json::array()}}}};
+    j["environment_id"]=environmentId;
+    if(!paths.empty()) {
+        j["navigation"]={{"mode","path"},{"rooms",nlohmann::json::array()}};
+        for(const auto& p:paths)j["navigation"]["rooms"].push_back({{"id",p.id},{"parent",p.parent},{"segment",p.segment}});
+    }
     for(const auto& e:entities) j["entities"].push_back({{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}});
     for(const auto& p:passages) j["passages"].push_back({{"id",p.id},{"from",p.from},{"to",p.to},{"direction",p.direction},{"door_name",p.doorName},{"door_state",p.doorState},{"key",p.key}});
     for(const auto& p:layout) j["editor"]["rooms"].push_back({{"id",p.id},{"x",p.x},{"y",p.y}});
@@ -157,13 +238,14 @@ nlohmann::json Document::json() const {
 }
 nlohmann::json Document::gameJson() const {
     auto j=json();
-    for(const auto* field:{"editor","next_id","objective","solution","win_conditions","fail_conditions","title"})j.erase(field);
-    j["version"]=3;return j;
+    for(const auto* field:{"editor","next_id","objective","solution","win_conditions","fail_conditions","title","environment_id"})j.erase(field);
+    j["version"]=paths.empty()?3:4;return j;
 }
 Document Document::parse(const nlohmann::json& j) {
-    require(j.at("format")=="grim-world" && (j.at("version")==1 || j.at("version")==2 || j.at("version")==3), "Unsupported world file format/version");
+    require(j.at("format")=="grim-world" && (j.at("version")==1 || j.at("version")==2 || j.at("version")==3 || j.at("version")==4), "Unsupported world file format/version");
     Document d;
-    if(j.at("version")==3)for(const auto* field:{"objective","solution","win_conditions","fail_conditions"})
+    if(j.contains("environment_id"))d.environmentId=j.at("environment_id").get<std::string>();
+    if(j.at("version")==3 || j.at("version")==4)for(const auto* field:{"objective","solution","win_conditions","fail_conditions"})
         require(!j.contains(field),"Version-3 worlds cannot contain challenge metadata; import legacy version-2 data explicitly");
     d.title=j.at("title").get<std::string>(); d.spawn=j.at("spawn").get<std::string>();
     require(j.at("next_id").is_number_integer(),"Invalid next ID");
@@ -178,6 +260,11 @@ Document Document::parse(const nlohmann::json& j) {
         for(const auto& c:j.at("fail_conditions"))d.failConditions.push_back({c.at("predicate"),c.at("subject"),c.at("target")});
     }
     for(const auto& p:j.at("editor").at("rooms")) d.layout.push_back({p.at("id"),p.at("x"),p.at("y")});
+    if(j.at("version")==4) {
+        const auto& navigation=j.at("navigation");
+        require(navigation.at("mode")=="path" && navigation.at("rooms").is_array() && !navigation.at("rooms").empty(),"Invalid path navigation");
+        for(const auto& p:navigation.at("rooms"))d.paths.push_back({p.at("id"),p.at("parent"),p.at("segment")});
+    } else require(!j.contains("navigation"),"Path navigation requires world version 4");
     d.validate(); return d;
 }
 Document Document::initial() { Document d; auto id=d.addRoom(80,80); d.find(id)->name="Starting room"; return d; }
@@ -233,8 +320,11 @@ nlohmann::json loadJsonFile(const std::filesystem::path& path) {
     return j;
 }
 void Editor::load(const std::filesystem::path& path) {
-    auto candidate=Document::parse(loadJsonFile(path));
+    const auto source=loadJsonFile(path);
+    auto candidate=Document::parse(source);
     change([&](Document& d){d=candidate;}); saved_=candidate.json();
+    if(!source.contains("environment_id"))markUnsaved();
 }
 void Editor::newWorld() { change([](Document& d){d=Document::initial();}); saved_=nullptr; }
+void Editor::copyWorld() { change([](Document& d){d.environmentId=makeEnvironmentId();});markUnsaved(); }
 }

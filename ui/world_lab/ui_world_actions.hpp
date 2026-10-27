@@ -22,7 +22,7 @@ private:
     void layout(const PanelRect&);
     std::vector<Widget*> controls();
     const GRIM::WorldLab::Editor& editor_;
-    nlohmann::json snapshot_;
+    nlohmann::json snapshot_,catalog_;
     std::string selection_,message_;
     std::unique_ptr<UIDropdown> actions_;
     std::vector<std::unique_ptr<UIDropdown>> parameters_;

@@ -136,7 +136,7 @@ bool UIWorldCanvas::updateCanvasContent(const InputState& source,float) {
     }
     if(!input.mousePressed[0] || !containsScreenPoint(input.mousePos)) return false;
     const auto p=screenToWorld(input.mousePos);
-    for(auto it=editor_.document().layout.rbegin();it!=editor_.document().layout.rend();++it) {
+    for(auto it=editor_.document().layout.rbegin();editor_.document().paths.empty() && it!=editor_.document().layout.rend();++it) {
         for(const auto& dir:directions) if(distance(p,port(it->id,dir))*getZoom()<=10) {
             const auto id=it->id;
             if(select(id) && capturePointer()) {setFocused(true);drag_=id;direction_=dir;start_=pointer_=p;}
@@ -159,6 +159,7 @@ bool UIWorldCanvas::updateCanvasContent(const InputState& source,float) {
 void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
     using namespace UITheme::Colors;
     const auto& d=editor_.document();
+    for(const auto& p:d.paths)if(!p.parent.empty())drawWorldLine(r,port(p.parent,"south"),port(p.id,"north"),Primary,2.f);
     for(const auto& edge:d.passages) {
         const auto a=port(edge.from,edge.direction),b=port(edge.to,opposite(edge.direction));
         drawWorldLine(r,a,b,selected==edge.id?PrimaryLight:Primary,selected==edge.id?3.f:2.f);
@@ -173,7 +174,8 @@ void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
         drawWorldRect(r,{{at.x+1,at.y+1},{rect.size.x-2,rect.size.y-2}},CardSurface);
         r.pushClipRect(worldToScreen({at.x+8,at.y+2}),{(width-16)*getZoom(),(rect.size.y-4)*getZoom()});
         drawWorldText(r,{at.x+12,at.y+9},e->name,TextPrimary,15);
-        drawWorldText(r,{at.x+12,at.y+28},playRoom_==p.id?"PLAYTEST LOCATION":d.spawn==p.id?"PLAYER START":"ROOM",d.spawn==p.id || playRoom_==p.id?Success:TextMuted,10);
+        const auto label=playRoom_==p.id?"PLAYTEST LOCATION":d.spawn==p.id?"PLAYER START":"ROOM";
+        drawWorldText(r,{at.x+12,at.y+28},d.paths.empty()?label:d.roomPath(p.id)+"  "+label,d.spawn==p.id || playRoom_==p.id?Success:TextMuted,10);
         const auto children=rows(p.id);
         if(children.empty()) drawWorldText(r,{at.x+12,at.y+header},"Select room to add objects",TextMuted,12);
         for(size_t i=0;i<children.size();++i) {
@@ -184,7 +186,7 @@ void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
             drawWorldText(r,{at.x+12+indent,y},child->name,changed?Warning:TextSecondary,13);
         }
         r.popClipRect();
-        if(!selectionOnly)for(const auto& dir:directions) {
+        if(!selectionOnly && d.paths.empty())for(const auto& dir:directions) {
             const auto pt=port(p.id,dir);
             drawWorldRect(r,{{pt.x-5,pt.y-5},{10,10}},Primary);
             drawWorldText(r,{pt.x+8,pt.y-7},dir.substr(0,1),TextMuted,11);

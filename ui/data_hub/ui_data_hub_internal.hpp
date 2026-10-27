@@ -149,6 +149,7 @@ inline CurriculumTabLayout computeCurriculumTabLayout(const PanelRect& content) 
 
     float y = content.origin.y + 10.0f;
     constexpr float kToolbarRowH = 36.0f;
+    y += kToolbarRowH + 6.0f; // Course environment assignment row.
     y += kToolbarRowH + 6.0f;
     y += kToolbarRowH + 6.0f;
     y += kToolbarRowH + 6.0f;

@@ -1,4 +1,5 @@
 #include "ui_data_hub_internal.hpp"
+#include "ui/world_lab/environment_registry.hpp"
 
 using namespace UIDataHubDetail;
 
@@ -525,11 +526,30 @@ UIDataHubPanel::UIDataHubPanel()
             const auto& courses = datasetTarget_->getCourses();
             activeCourseId_ = idx > 0 && idx <= static_cast<int>(courses.size()) ? courses[idx - 1].id : "";
             cbCourseNameInput_->setText(datasetTarget_->getCourseById(activeCourseId_).name);
+            populateCourseEnvironments();
             cbFilterDirty_ = true;
         });
     cbCourseNameInput_ = std::make_shared<UIInputBox>();
     cbCourseNameInput_->setPlaceholder("Course name (New / Rename in Courses menu)");
+    cbCourseEnvironmentDropdown_ = std::make_shared<UIDropdown>(
+        "Environment", std::vector<std::string>{"No environment"}, 0,
+        [this](int index,const std::string&) {
+            try {
+                if(!datasetTarget_ || activeCourseId_.empty())throw std::runtime_error("Select a course first");
+                if(index<0 || index>=static_cast<int>(cbCourseEnvironmentIds_.size()))return;
+                auto course=datasetTarget_->getCourseById(activeCourseId_);
+                if(course.id.empty())throw std::runtime_error("Selected course no longer exists");
+                const auto id=cbCourseEnvironmentIds_[index];
+                if(!id.empty())GRIM::WorldLab::EnvironmentRegistry(std::filesystem::path(getResourcePath())/"models"/"games").resolve(id);
+                course.environment_id=id;
+                if(!datasetTarget_->saveCourse(course))throw std::runtime_error("Failed to save course environment assignment");
+                addLog(id.empty()?"Cleared course environment":"Assigned course environment: "+id,0);
+            }catch(const std::exception& error){addLog(error.what(),2);}
+            populateCourseEnvironments();
+        });
+    cbCourseEnvironmentDropdown_->setMaxVisibleItems(6);
     courseActionMenu_ = std::make_shared<UIActionMenu>("Courses");
+    courseActionMenu_->addItem("Refresh Environments", [this]() {populateCourseEnvironments(true);});
     courseActionMenu_->addItem("New Course", [this]() {
         if (!datasetTarget_) return;
         GRIM::Course course;
@@ -1004,7 +1024,7 @@ UIDataHubPanel::UIDataHubPanel()
     });
 
     curriculumWidgets_ = {
-        cbCourseDropdown_, cbCourseNameInput_, courseActionMenu_,
+        cbCourseDropdown_, cbCourseNameInput_, cbCourseEnvironmentDropdown_, courseActionMenu_,
         cbRandomizeCourseOrderToggle_, cbRandomizeConceptBlockOrderToggle_,
         cbModelDropdown_, cbCurriculumDropdown_, cbTrainingStageDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
@@ -1499,6 +1519,7 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                 const bool cbListTypeDropdownWasExpanded =
                     (cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded()) ||
                     (cbCourseDropdown_ && cbCourseDropdown_->isExpanded()) ||
+                    (cbCourseEnvironmentDropdown_ && cbCourseEnvironmentDropdown_->isExpanded()) ||
                     (courseActionMenu_ && courseActionMenu_->isExpanded());
 
             layoutCBListTypeDropdownInList(cbListX, cbListY, cbListW);
@@ -1684,6 +1705,8 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         cbTrainingStageDropdown_->drawExpandedList(renderer, position);
     if (cbCourseDropdown_ && cbCourseDropdown_->isExpanded())
         cbCourseDropdown_->drawExpandedList(renderer, position);
+    if (cbCourseEnvironmentDropdown_ && cbCourseEnvironmentDropdown_->isExpanded())
+        cbCourseEnvironmentDropdown_->drawExpandedList(renderer, position);
     if (courseActionMenu_ && courseActionMenu_->isExpanded())
         courseActionMenu_->drawExpandedList(renderer, position);
     if (curriculumActionMenu_ && curriculumActionMenu_->isExpanded())

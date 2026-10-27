@@ -13,6 +13,7 @@ std::string parameterLabel(const std::string& type) {
     if(type=="k")return "key";
     if(type=="f")return "food";
     if(type=="t")return "entity";
+    if(type=="r")return "room path";
     return type;
 }
 std::string actionLabel(const nlohmann::json& action) {
@@ -44,10 +45,11 @@ void UIWorldActions::select(const std::string& id){if(selection_!=id){hide();sel
 void UIWorldActions::refresh(){
     std::string previous;
     const auto old=actions_->getSelectedIndex();
-    if(old>=0 && old<static_cast<int>(indices_.size()))previous=actionCatalog()["actions"][indices_[old]]["id"];
+    if(old>=0 && old<static_cast<int>(indices_.size()))previous=catalog_["actions"][indices_[old]]["id"];
+    catalog_=actionCatalog(editor_.document());
     snapshot_=editor_.document().json();indices_.clear();std::vector<std::string> labels;
     int chosen=0;
-    for(size_t i=0;i<actionCatalog()["actions"].size();++i){const auto& a=actionCatalog()["actions"][i];
+    for(size_t i=0;i<catalog_["actions"].size();++i){const auto& a=catalog_["actions"][i];
         if(!actionRelevant(editor_.document(),a,selection_))continue;
         if(a["id"]==previous)chosen=static_cast<int>(indices_.size());
         indices_.push_back(i);labels.push_back(actionLabel(a));
@@ -58,7 +60,7 @@ void UIWorldActions::parameters(){
     for(auto& p:parameters_){p->collapse();p->cancelInput();}
     parameters_.clear();candidates_.clear();message_.clear();
     const auto index=actions_->getSelectedIndex();if(index<0 || index>=static_cast<int>(indices_.size()))return;
-    const auto& action=actionCatalog()["actions"][indices_[index]];
+    const auto& action=catalog_["actions"][indices_[index]];
     for(const auto& parameter:action["parameters"]){
         auto candidates=actionCandidates(editor_.document(),parameter["type"]);
         candidates.insert(candidates.begin(),"");std::vector<std::string> labels{"Choose "+parameterLabel(parameter["type"])};int selected=0;
@@ -72,7 +74,7 @@ std::string UIWorldActions::command() const {
     const auto index=actions_->getSelectedIndex();if(index<0 || index>=static_cast<int>(indices_.size()))throw std::runtime_error("Select an action");
     std::vector<std::string> bindings;
     for(size_t i=0;i<parameters_.size();++i){const int p=parameters_[i]->getSelectedIndex();bindings.push_back(p>=0 && p<static_cast<int>(candidates_[i].size())?candidates_[i][p]:"");}
-    return composeAction(editor_.document(),actionCatalog()["actions"][indices_[index]],bindings);
+    return composeAction(editor_.document(),catalog_["actions"][indices_[index]],bindings);
 }
 std::vector<Widget*> UIWorldActions::controls(){std::vector<Widget*> result{actions_.get()};for(auto& p:parameters_)result.push_back(p.get());if(onPrepare)result.push_back(prepare_.get());return result;}
 void UIWorldActions::layout(const PanelRect& a){
@@ -99,7 +101,7 @@ void UIWorldActions::draw(OverlayRenderer& r,const PanelRect& a,bool details){
         std::string text="Supported rules; live availability is checked in Play.\n";
         const auto index=actions_->getSelectedIndex();
         if(index>=0 && index<static_cast<int>(indices_.size())){
-            const auto& action=actionCatalog()["actions"][indices_[index]];
+            const auto& action=catalog_["actions"][indices_[index]];
             text+="Rule: "+action["id"].get<std::string>()+"\n";
             if(action["id"]=="lock/c" || action["id"]=="unlock/c")text+="Container key matching is not yet editable.\n";
             text+="Parameters: o=item, c=container, s=surface, d=door, k=key, f=food, t=thing.\n";

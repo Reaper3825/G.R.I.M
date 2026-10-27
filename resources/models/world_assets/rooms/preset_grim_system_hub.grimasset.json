@@ -1,0 +1,32 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "GRIM - System Hub",
+  "root": "hub",
+  "entities": [
+    {
+      "id": "hub",
+      "name": "System Hub",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in GRIM's system hub, an orientation space for its internal subsystems. A system map shows how the rooms relate, and a subsystem index explains their responsibilities. These panels describe the environment; they do not display live system status. Inspect either panel before choosing a subsystem to explore.",
+      "state": "open"
+    },
+    {
+      "id": "system_map",
+      "name": "system map",
+      "kind": "supporter",
+      "parent": "hub",
+      "description": "The map describes four subsystem rooms: perception, tools, computer, and memory. Perception supplies observations, tools exposes callable capabilities, computer represents the digital workspace and its controls, and memory stores and retrieves information. The intended layout places these rooms beneath the system hub. Actual room addresses and available routes are supplied by the assembled world.",
+      "state": "open"
+    },
+    {
+      "id": "subsystem_index",
+      "name": "subsystem index",
+      "kind": "supporter",
+      "parent": "hub",
+      "description": "Choose perception to understand what GRIM can observe and how observations reach context. Choose tools to understand command discovery, arguments, and results. Choose computer to understand displays, applications, keyboard input, and pointer control. Choose memory to understand retained information, retrieval, and session context. Visiting or examining a subsystem describes its role; execution requires a separately implemented action.",
+      "state": "open"
+    }
+  ]
+}

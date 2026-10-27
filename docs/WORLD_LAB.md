@@ -10,45 +10,87 @@ worker on demand. No model, inference service, or training process is started.
 Courses store an optional environment reference as `Course::environment_id`,
 persisted in each course entry in `curriculum_registry.json`. An empty string
 means no environment is assigned; older registries without the field load with
-that default. World Lab documents do not yet have persistent game IDs, and
-course-to-world resolution and an environment picker remain pending. Document
-entity IDs identify entities within a world; worker `environment-N` filenames are
-temporary session artifacts and must not be used as course environment IDs.
+that default. Saved worlds now persist an `environment_id`; the environment
+registry resolves it to a world file and checks that the file contains that ID.
+Document entity IDs identify entities within a world; worker `environment-N`
+filenames are temporary session artifacts and must not be used as course IDs.
+
+### Assign and resolve an environment
+
+1. Save a world in World Lab. Save registers its persistent ID and file location
+   in `models/games/environment_registry.json` under the configured resources root.
+2. In DataHub's Curriculum tab, select a course. Use **Courses → Refresh
+   Environments** to discover saved worlds, then choose its **Environment**.
+   Selection persists the ID immediately through the existing course registry.
+3. Choose **No environment** to clear the assignment. Multiple courses can select
+   the same environment.
+
+`EnvironmentRegistry::resolve(id)` returns a validated location, and `load(id)`
+loads the matching document. `UIWorldLabView::openEnvironment(id)` opens it in
+the editor. Course references use the same ID with these APIs; automatic
+course-to-episode assignment remains pending.
+
+New worlds receive independent IDs. Save, title changes, and file moves retain
+identity. **Save copy** creates an independent ID and an unused `-copy` filename;
+changing the path alone cannot register a second live file with the same ID.
+Editing world content preserves its ID but changes compilation/witness content
+compatibility. The ID is excluded from `gameJson()` and does not alter gameplay.
+
+If a registered file is renamed/moved within the games folder, refresh environments
+to update its location. For moves elsewhere, Open the new path in World Lab to
+relink it. Missing files, mismatched IDs, and duplicate live IDs produce errors
+and never fall back to another environment. Unresolved course assignments remain
+visible until repaired or explicitly reassigned. Corrupt registries are not
+silently replaced. Registry discovery validates as a batch before writing.
+
+Legacy world files without IDs load with a new ID and remain unsaved until an
+explicit Save persists it. Discovery skips those files; it does not migrate them.
+Recovery snapshots retain identity but are not registered as playable locations.
+World and registry saves are individually atomic. If a registry write fails
+after the world file saves, the editor retains its pre-save state and reports the
+partial save; open the saved file and retry Save after fixing the registry.
+No existing datasets are migrated.
 
 ## Course-driven Quest assignment (selected; integration pending)
 
-Courses will supply the environment reference and ConceptBlock membership used
-to assign episodes. The selected flow is:
+One course is one game session. Its ConceptBlock Goals are the assignments
+represented by native Quests within that session. The selected structure is:
 
 ```text
 Curriculum -> Course
                 |-> environment_id -> resolve reusable environment
-                |-> concept_block_ids -> select ConceptBlock -> frozen Goal
-                                                               |
-                                 bind Goal evidence to environment entities
-                                                               |
-                               native Quest / Events -> QuestProgression
-                                                               |
-                                      initial state + post-command facts
-                                                               |
-                                           episode success / failure
+                |-> concept_block_ids -> Goals -> native Quests
+                |                                  |
+                +-> one shared world state -> GameProgression
+                                                   |
+                                    per-Quest assignment progress
+                                                   |
+                                       overall course completion
 ```
 
-The course owns assignment: which environment to use and which ConceptBlocks
-belong to that course. Each selected ConceptBlock owns its Goal, including the
-success and constraint evidence supplied to native Quest progression. Each
-episode owns fresh interpreter state and fresh progression for that Goal.
-Course membership does not combine all member Goals into one Quest or make
-episode success mean that the entire course is complete.
+The course owns the environment reference, assignment membership, and overall
+session. Each ConceptBlock owns its Goal and executable evidence, supplying one
+native Quest. Completing an assignment contributes toward course completion;
+changing the selected assignment does not reset world state or erase completed
+assignments. Native GameProgression is the planned course-level aggregate above
+the individual QuestProgression objects. Assignment completion and course
+completion must be displayed separately.
 
-The downstream Goal binding, native evaluation, reset, and replay path is
-implemented through manual selection. Remaining work is persistent environment
-identity/resolution and course-driven ConceptBlock assignment into that same
-path. Switching between compatible Goals in a course should reuse the compiled
-environment and start fresh episode state. Missing Goals, unresolved environment
-references, and invalid evidence bindings need explicit assignment diagnostics;
-they must not silently become a verified challenge. An empty `environment_id`
-continues to mean no environment assignment.
+The next authoring feature is **Course -> Assignment -> Play selected** in World
+Lab. Selecting a course loads its registered environment and lists only its member
+ConceptBlock Goals. Selecting an assignment shows its requirements and binding
+diagnostics. Play selected uses the existing single-Goal manual playtest path.
+This explicit isolated test evaluates the chosen assignment only; it does not
+award course completion or establish a new session per assignment in a course run.
+An assignment that depends on earlier world changes may require manual setup
+through gameplay; isolated failure is not proof that the course is impossible.
+
+Environment identity, registry resolution, course environment assignment, and the
+manual Goal evaluator are implemented. Course-scoped assignment selection and
+the shared multi-Quest course runtime remain pending. Missing Goals, unresolved
+references, and invalid bindings need explicit diagnostics. An empty environment
+reference continues to mean no environment assignment. Selecting another row
+must not silently reset a running playtest; starting/resetting a test is explicit.
 
 Course orchestration does not require model-command routing; model-driven play
 and feedback insertion remain separate pending work. See the
@@ -138,8 +180,8 @@ candidate and checks binding without replacing live play. Compilation and new
 Goal startup preserve the previous session if candidate creation fails.
 
 The first binding implementation requires referenced entities to exist already.
-Quest-specific object insertion/setup, role-bound Goal templates, persistent
-environment/course resolution, model Answer routing, feedback insertion, and
+Quest-specific object insertion/setup, role-bound Goal templates, course-driven
+episode assignment, model Answer routing, feedback insertion, and
 training episode export remain future work. Evidence itself never performs setup.
 
 ## Goal selection, manual playtest, and solutions
@@ -345,7 +387,68 @@ base, then run the host and worker tests:
 
 The snapshot contains command parameters and logical preconditions/additions/
 removals, not a duplicate execution implementation. Custom actions, container
-key configuration, and non-compass traversal are not part of this first slice.
+key configuration are not part of this slice. Path traversal is a generic
+World Lab extension described below; the bundled default TextWorld catalog
+remains unchanged.
+
+## Path navigation primitive
+
+Select a room in Inspect and choose **Navigation (world-wide) → Path navigation**.
+The selected room becomes `/`. Remove existing compass passages first; the mode
+switch never silently discards them. Other rooms initially receive their stable
+IDs as child segments. New rooms are also added beneath the root. Edit **Room
+path** and apply to rename or reparent a room beneath an existing address. Display
+names and object containment are independent of navigation addresses. Renaming
+a parent updates descendant paths while preserving entity IDs. Deleting a room
+deletes its navigation subtree and contained objects; Undo restores it.
+
+Path worlds save as `grim-world` version 4, with a separate navigation tree:
+
+```json
+"navigation": {
+  "mode": "path",
+  "rooms": [
+    {"id": "r1", "parent": "", "segment": ""},
+    {"id": "r2", "parent": "r1", "segment": "section"}
+  ]
+}
+```
+
+Every room must occur exactly once; exactly one root has an empty segment.
+Nonroot segments contain 1–80 ASCII letters, digits, underscores or hyphens.
+Paths are case-sensitive, unique, and limited to 509 bytes (leaving room for
+`go ` in the command limit). Missing parents, cycles, and compass passages are
+rejected. Goals and episode recordings remain separate from version-4 worlds.
+Older version-1/2/3 compass files retain their existing semantics. Switching
+back to Compass removes address metadata in one undoable edit.
+
+Commands:
+
+- `enter section`: enter a direct child using its segment.
+- `go /section`: use an absolute address.
+- `go section`, `go ./section`: use a relative address.
+- `go ..` or `back`: move to the parent, rather than the previously visited room.
+- `go /`: return to the root when it is the directly connected parent.
+
+Each command crosses exactly one parent/child edge. Absolute paths do not
+teleport, and paths never refer to host filesystem locations. Unknown addresses,
+nonadjacent destinations, and traversal above `/` return errors without changing
+the session. `look` retains TextWorld inspection behavior. Observations add
+`location_path` and adjacent `available_rooms`; feedback prints the current path,
+and the live command picker offers path commands. The offline composer offers
+`go <room path>` and `back` instead of compass moves.
+
+`scripts/textworld/path_navigation.py` extends a private TextWorld knowledge base
+with `path_link` facts and a `go/path` action, and compiles matching Inform7
+movement. TextWorld updates its own `at(P, room)` fact and move count. Live play
+and witness replay use the same command resolver; the navigation tree and its
+semantics participate in environment identity. No subsystem bindings or specific
+environment content are part of this primitive. Room assets remain individual
+room/object trees, without external navigation links.
+
+Focused address validation: `python -m unittest discover -s tests -p test_path_navigation.py -v`.
+The existing worker suite also covers native path movement, branching, reset,
+Goal evidence and replay. Run the host UI suite for authoring integration.
 
 ## Reusable assets
 

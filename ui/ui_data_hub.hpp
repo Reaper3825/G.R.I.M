@@ -492,8 +492,11 @@ private:
     std::string activeCourseId_;
     std::shared_ptr<UIDropdown> cbCourseDropdown_;
     std::shared_ptr<UIInputBox> cbCourseNameInput_;
+    std::shared_ptr<UIDropdown> cbCourseEnvironmentDropdown_;
+    std::vector<std::string> cbCourseEnvironmentIds_;
     std::shared_ptr<UIActionMenu> courseActionMenu_;
     void populateCBCourseDropdown();
+    void populateCourseEnvironments(bool discover = false);
     /// Unsaved row pinned at list index 0; shows live name / question preview.
     bool   cbDraftPreviewActive_ = false;
 

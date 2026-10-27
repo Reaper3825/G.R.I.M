@@ -1,0 +1,11 @@
+{
+  "environments": [
+    {
+      "id": "env-4056413a539c4244b300030bbd119462",
+      "path": "D:\\G.R.I.M\\resources\\models\\games\\grim_internal.grimworld.json",
+      "title": "GRIM"
+    }
+  ],
+  "format": "grim-environments",
+  "version": 1
+}

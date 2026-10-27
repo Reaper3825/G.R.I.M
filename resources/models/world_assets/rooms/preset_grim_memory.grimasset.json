@@ -1,0 +1,56 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "GRIM - Memory",
+  "root": "memory",
+  "entities": [
+    {
+      "id": "memory",
+      "name": "memory",
+      "kind": "room",
+      "parent": "",
+      "description": "You are in the memory subsystem, where information is retained and retrieved for later use. The memory access console, memory store, memory routing panel, session context panel, and retrieval trace explain its responsibilities. The stations contain architectural reference material rather than personal records or live search results. Observation, retrieval, and durable recording are separate operations.",
+      "state": "open"
+    },
+    {
+      "id": "memory_access_console",
+      "name": "memory access console",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This console describes the memory facade used by orchestration consumers. It offers retrieval for a prompt, direct search, tag-based lookup, and recording operations. Prompt retrieval can combine ranked stored memories with a session-context snapshot and retrieval breadcrumbs. The facade is an access surface, not a claim that every memory consumer already uses the same route.",
+      "state": "open"
+    },
+    {
+      "id": "memory_store",
+      "name": "memory store",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This station describes the indexed storage of structured memory records. A record can carry content and metadata that help classify and retrieve it. Short-term and long-term placement are distinct, and persisting a record is different from merely including it in a current context. This reference holds no actual stored memories and does not write to storage.",
+      "state": "open"
+    },
+    {
+      "id": "memory_routing_panel",
+      "name": "memory routing panel",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This panel describes classifying information for memory placement. Recording an interaction can use the memory router to decide short-term or long-term placement, while the facade also exposes explicit recording operations. Routing a record determines how it is retained; it does not establish that its content is true or that it will be relevant to every future prompt.",
+      "state": "open"
+    },
+    {
+      "id": "session_context_panel",
+      "name": "session context panel",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This panel describes session-scoped interaction state supplied alongside memory retrieval. Context can include recent commands, intents, mood, and other interaction information. A context snapshot represents a particular session state rather than the entire durable memory store. Keeping context current and retaining information across sessions are different responsibilities.",
+      "state": "open"
+    },
+    {
+      "id": "retrieval_trace",
+      "name": "retrieval trace",
+      "kind": "supporter",
+      "parent": "memory",
+      "description": "This station describes the breadcrumbs returned with prompt-based memory retrieval. Breadcrumbs can identify the queries used and the number of results each produced, while ranked hits identify the retrieved records. An empty result means the search produced no relevant memory, not that an answer has been established. This panel contains no sample search results or fabricated retrieval history.",
+      "state": "open"
+    }
+  ]
+}
