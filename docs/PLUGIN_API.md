@@ -21,6 +21,18 @@
 
 ## Overview
 
+Current lifecycle integration: application teardown stops wake input and calls
+`PluginManager::unloadAll()` before destroying host services. Plugin cleanup uses
+the declared plugin name recorded at load, matching registration identity.
+The published API table layout is retained. The old `CommandRegistry` now only
+stages built-in metadata for startup import; runtime queries use MMO `ToolRegistry`.
+Automatic hot-reload polling and plugin timer dispatch are not currently wired
+into the application loop; the historical feature tables below are not proof of
+that integration.
+
+Focused host-only loader/shutdown and retained-registry regression tests:
+`powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1`.
+
 The GRIM Plugin API enables dynamic extension of GRIM's functionality through hot-reloadable DLL plugins. Plugins can:
 
 ✅ **Register custom commands**  

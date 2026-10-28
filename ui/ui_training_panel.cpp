@@ -3,6 +3,7 @@
 #include "observatory/ui_observatory_view.hpp"
 #include "world_lab/ui_world_lab_view.hpp"
 #include "world_lab/ui_world_assets_view.hpp"
+#include "training_panel/ui_training_tools_view.hpp"
 #include "resources.hpp"
 #include "ai/grim_text_server_manager.hpp"
 #include "ui_root.hpp"
@@ -34,6 +35,9 @@ UITrainingPanel::UITrainingPanel()
         setView(TrainingPanelTab::Home);
     });
     tabHomeBtn_->setSize(90.0f, 28.0f);
+    tabToolsBtn_ = std::make_shared<UIButton>("Tools", [this]() { setView(TrainingPanelTab::Tools); });
+    tabToolsBtn_->setSize(80.0f, 28.0f);
+    toolsView_ = std::make_unique<UITrainingToolsView>();
 
     tabKnowledgeGapsBtn_ = std::make_shared<UIButton>("Knowledge Gaps", [this]() {
         setView(TrainingPanelTab::KnowledgeGaps);
@@ -259,6 +263,7 @@ UITrainingPanel::~UITrainingPanel() = default;
 // ============================================================
 
 void UITrainingPanel::setView(TrainingPanelTab tab) {
+    if (toolsView_ && activeTab_ == TrainingPanelTab::Tools && tab != activeTab_) toolsView_->hide();
     if(worldAssets_ && activeTab_==TrainingPanelTab::Assets && tab!=activeTab_)worldAssets_->hide();
     if (worldLab_ && activeTab_ == TrainingPanelTab::WorldLab && tab != activeTab_) worldLab_->hide();
     if (observatory_ && tab != TrainingPanelTab::Observatory) observatory_->hide();
@@ -275,6 +280,7 @@ void UITrainingPanel::setView(TrainingPanelTab tab) {
 }
 
 void UITrainingPanel::setVisible(bool value) {
+    if (!value && toolsView_) toolsView_->hide();
     if(!value && worldAssets_)worldAssets_->hide();
     if (!value && worldLab_ && activeTab_ == TrainingPanelTab::WorldLab) worldLab_->hide();
     UIPanel::setVisible(value);
@@ -300,12 +306,14 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     if (!isVisible()) { if (observatory_) observatory_->hide(); return; }
     const bool wasMinimized = isMinimized();
     UIPanel::update(input, dt);
+    if (!wasMinimized && isMinimized() && toolsView_) toolsView_->hide();
     if (!wasMinimized && isMinimized() && worldAssets_)worldAssets_->hide();
     if (!wasMinimized && isMinimized() && activeTab_ == TrainingPanelTab::WorldLab && worldLab_) worldLab_->hide();
     if (!isVisible() || isMinimized()) { if (observatory_) observatory_->hide(); return; }
 
     // Tab buttons — always update
     tabHomeBtn_->update(input, dt);
+    tabToolsBtn_->update(input, dt);
     tabKnowledgeGapsBtn_->update(input, dt);
     tabToolGapsBtn_->update(input, dt);
     tabModelConfigBtn_->update(input, dt);
@@ -318,6 +326,13 @@ void UITrainingPanel::update(const InputState& input, float dt) {
 
     // Tab-specific updates
     switch (activeTab_) {
+        case TrainingPanelTab::Tools: {
+            PanelRect content = getContentRect();
+            content.origin.y += (kContentTopY - kTabBarY);
+            content.size.y -= (kContentTopY - kTabBarY);
+            toolsView_->update(input, dt, content, getPanelID());
+            break;
+        }
         case TrainingPanelTab::Assets: {
             PanelRect content=getContentRect();
             content.origin.y+=(kContentTopY-kTabBarY);content.size.y-=(kContentTopY-kTabBarY);
@@ -437,8 +452,10 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     tabObservatoryBtn_->setPosition(tabX + 530.0f, position.y + kTabBarY);
     tabWorldLabBtn_->setPosition(tabX + 650.0f, position.y + kTabBarY);
     tabAssetsBtn_->setPosition(tabX + 755.0f, position.y + kTabBarY);
+    tabToolsBtn_->setPosition(tabX + 840.0f, position.y + kTabBarY);
 
     tabHomeBtn_->drawOverlay(renderer, position);
+    tabToolsBtn_->drawOverlay(renderer, position);
     tabKnowledgeGapsBtn_->drawOverlay(renderer, position);
     tabToolGapsBtn_->drawOverlay(renderer, position);
     tabModelConfigBtn_->drawOverlay(renderer, position);
@@ -452,6 +469,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     float indicatorW = 90.0f;
     switch (activeTab_) {
         case TrainingPanelTab::Home:          indicatorX = tabX;           indicatorW = 90.0f;  break;
+        case TrainingPanelTab::Tools:         indicatorX = tabX + 840.0f; indicatorW = 80.0f; break;
         case TrainingPanelTab::KnowledgeGaps: indicatorX = tabX + 95.0f;  indicatorW = 120.0f; break;
         case TrainingPanelTab::ToolGaps:      indicatorX = tabX + 220.0f; indicatorW = 90.0f;  break;
         case TrainingPanelTab::ModelConfig:   indicatorX = tabX + 315.0f; indicatorW = 115.0f; break;
@@ -485,6 +503,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
 
     switch (activeTab_) {
         case TrainingPanelTab::Home:          drawHomeTab(renderer, content);          break;
+        case TrainingPanelTab::Tools:         toolsView_->draw(renderer, content);      break;
         case TrainingPanelTab::KnowledgeGaps: drawKnowledgeGapsTab(renderer, content); break;
         case TrainingPanelTab::ToolGaps:      drawToolGapsTab(renderer, content);      break;
         case TrainingPanelTab::ModelConfig:   drawModelConfigTab(renderer, content);   break;

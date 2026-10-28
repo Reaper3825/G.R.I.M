@@ -29,6 +29,7 @@
 #include "platform_clipboard.hpp"
 #include "platform_input.hpp"
 #include "window_manager.hpp"
+#include "plugin_manager.hpp"
 #include "grim_platform.h"
 #include "../helpers/mouse.hpp"
 
@@ -107,6 +108,12 @@ void shutdownApplication(
     LOG_PHASE("Shutting down subsystems", true);
 
     stopMMOIdleTick();
+    WakeKey::stop();
+    WakeVoice::stop();
+
+    // Plugins may stop workers and use host services during shutdown. Unload
+    // them before destroying memory, UI, voice, and orchestration services.
+    PluginManager::unloadAll();
 
     Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
     Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
@@ -147,8 +154,6 @@ void shutdownApplication(
 
     stopTrainingServer();
 
-    WakeKey::stop();
-    WakeVoice::stop();
     Voice::shutdownQueue();
     Voice::shutdownTTS();
     RL::shutdown();

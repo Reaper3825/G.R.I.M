@@ -28,7 +28,8 @@ void logError(const std::string&, const std::string&) {}
 void OverlayRenderer::drawRect(const Vec2&, const Vec2&, uint32_t) {}
 void OverlayRenderer::drawRoundedRect(const Vec2&, const Vec2&, uint32_t, float) {}
 void OverlayRenderer::drawRoundedBorder(const Vec2&, const Vec2&, uint32_t, float, float) {}
-void OverlayRenderer::drawText(const Vec2&, const std::string&, uint32_t, float) {}
+std::string renderedTestText;
+void OverlayRenderer::drawText(const Vec2&, const std::string& text, uint32_t, float) { renderedTestText += text + "\n"; }
 float OverlayRenderer::measureTextWidth(const std::string& text, float) const { return static_cast<float>(text.size()) * 8; }
 void OverlayRenderer::drawLine(const Vec2&, const Vec2&, uint32_t, float) {}
 void OverlayRenderer::pushClipRect(const Vec2&, const Vec2&) {}
@@ -57,6 +58,9 @@ static void begin(bool cancel = false) { router.beginFrame(cancel); router.curre
 static void end() { router.endFrame(); }
 
 void runCanvasTests();
+#ifdef GRIM_TOOLS_VIEW_TESTS
+void runTrainingToolsTests();
+#endif
 void runSplitPaneTests();
 #ifdef GRIM_WORLD_LAB_TESTS
 void runWorldLabTests();
@@ -66,6 +70,9 @@ void runWorldAssetTests();
 void runTextWorldClientTests();
 #endif
 int main() try {
+#ifdef GRIM_TOOLS_VIEW_TESTS
+    runTrainingToolsTests();
+#endif
 #ifdef GRIM_TEXTWORLD_INTEGRATION
     runTextWorldClientTests();
 #endif

@@ -1,4 +1,4 @@
-param([switch]$WorldLab, [switch]$TextWorld)
+param([switch]$WorldLab, [switch]$TextWorld, [switch]$Tools)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/ui-input-tests'
@@ -12,6 +12,10 @@ $sources = @('tests/ui_input_foundation_tests.cpp','ui/primitives/ui_inputbox.cp
 $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $sources += 'ui/primitives/ui_panel.cpp', 'ui/primitives/ui_split_pane.cpp', 'tests/ui_split_pane_tests.cpp'
 $sources += 'ui/primitives/ui_canvas.cpp', 'tests/ui_canvas_tests.cpp'
+if ($Tools) {
+    $sources += 'ui/training_panel/ui_training_tools_view.cpp', 'MMO/Core/ToolRegistry.cpp', 'tests/ui_training_tools_tests.cpp'
+    $arguments += '/DGRIM_TOOLS_VIEW_TESTS'
+}
 if ($WorldLab -or $TextWorld) {
     $sources += 'ui/world_lab/world_actions.cpp', 'ui/world_lab/ui_world_actions.cpp'
     $sources += 'ui/world_lab/world_asset.cpp', 'ui/world_lab/ui_world_assets_view.cpp', 'ui/world_lab/world_document.cpp', 'ui/world_lab/ui_world_canvas.cpp', 'ui/world_lab/ui_world_lab_view.cpp', 'ui/world_lab/ui_world_session.cpp', 'ui/world_lab/textworld_client.cpp', 'tests/world_lab_tests.cpp', 'tests/world_asset_tests.cpp'

@@ -3,8 +3,6 @@
 #include <unordered_map>
 #include <filesystem>
 #include "grim_platform.h"
-#include <vector>
-#include "commands_core.hpp"
 
 // ====================================================
 // Plugin Manager (manages DLL hot-reload plugins)
@@ -19,7 +17,7 @@ private:
     struct LoadedPlugin {
         void* handle;  // HMODULE on Windows, void* from dlopen on Unix
         std::filesystem::file_time_type lastWrite;
-        std::vector<std::string> commands;
+        std::string declaredName; // Same identity used by API registration/cleanup.
     };
 
     static inline std::filesystem::path pluginDir;

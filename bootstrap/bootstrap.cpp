@@ -26,6 +26,7 @@
 #include "../MMO/Backends/LlamaCppBackend.hpp"
 #include "../MMO/Backends/ExternalBackend.hpp"
 #include "../commands/command_registry.hpp"
+#include "../commands/commands_core.hpp"
 #include "../core/plugin_manager.hpp"
 #include "../location.hpp"
 #include "../perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
@@ -804,6 +805,9 @@ static void bootstrapMMOLayer() {
 
     // ToolRegistry — seed from CommandRegistry
     {
+        // Core commands otherwise register lazily on first dispatch, after this
+        // one-time snapshot, leaving built-ins absent from tool discovery.
+        ensureCorePluginsRegistered();
         auto& toolReg = GRIM::MMO::ToolRegistry::instance();
         auto legacyTools = GRIM::CommandRegistry::getAllTools();
         for (const auto& legacy : legacyTools) {

@@ -23,7 +23,7 @@
         cmd, desc, cmd, cat, isInfo, !isInfo, {}, {}, {} \
     });
 
-// One shared registration list used by both host and plugin builds.
+// Built into the host; dynamic plugins use core/plugin_api.hpp.
 static void register_all_commands() {
     LOG_DEBUG("Plugin", "Registering core commands...");
     
@@ -259,16 +259,8 @@ static void register_all_commands() {
     LOG_DEBUG("CommandRegistry", "Total registered tools: " + 
               std::to_string(GRIM::CommandRegistry::getToolCount()));
     
-    // (Add any additional core commands here; keep both paths in sync.)
+    // Add additional built-in commands here.
 }
-
-// --- Plugin DLL entry (only when building the DLL) ---
-#if defined(GRIM_BUILD_PLUGIN)
-extern "C" GRIM_PLUGIN_API void registerGrimPlugin() {
-    LOG_DEBUG("Plugin", "registerGrimPlugin() called (DLL mode)");
-    register_all_commands();
-}
-#endif
 
 // --- Built into host once (when compiling into GRIM exe) ---
 #if defined(GRIM_BUILD_HOST)

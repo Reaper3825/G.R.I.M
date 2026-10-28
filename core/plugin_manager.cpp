@@ -155,6 +155,7 @@ void PluginManager::loadPlugin(const std::filesystem::path& path) {
         LoadedPlugin lp;
         lp.handle = lib;
         lp.lastWrite = std::filesystem::last_write_time(path);
+        lp.declaredName = info->name;
         loadedPlugins[name] = lp;
 
         LOG_DEBUG("PluginManager", "Loaded plugin: " + std::string(info->name));
@@ -180,7 +181,7 @@ void PluginManager::unloadPlugin(const std::string& name) {
             shutdownFunc();
         }
 
-        PluginAPI::cleanupPluginContext(name);
+        PluginAPI::cleanupPluginContext(it->second.declaredName);
         unloadLib(it->second.handle);
     } catch (...) {
         LOG_ERROR("PluginManager", "Error while unloading " + name);

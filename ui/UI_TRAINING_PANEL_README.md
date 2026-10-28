@@ -19,6 +19,39 @@ same core-plus-tab layout as DataHub.
   See [World Lab](../docs/WORLD_LAB.md).
 - **Assets** — create, edit, save, and insert independent room/object templates.
   See the [feature reference and terminology index](../docs/WORLD_LAB_REFERENCE.md).
+- **Tools** — browse registered tools and inspect their metadata without execution.
+
+## Registered tools viewer
+
+Open **Tools** in Training Control to see the current MMO `ToolRegistry` snapshot.
+The list shows canonical tool IDs, categories, providers, and registration status.
+Search matches IDs, display names, descriptions, categories, providers, aliases,
+and capability tags, ignoring case. The count distinguishes matching entries from
+the total registry size. Scroll the list and select a row to inspect its details.
+
+The selectable, copyable detail pane shows documentation, usage, parameters,
+examples, provider/version, confirmation and permission metadata, context
+requirements, aliases, tags, and usage statistics. Missing fields display
+**Not documented**; an empty parameter list does not imply that no arguments are
+needed. Registration status does not verify that a tool is ready to execute.
+
+The viewer refreshes every two seconds while active and preserves selection by
+tool ID. Removed tools clear their stale details. This view displays the current
+registry coverage; legacy commands that bypass the registry are not added or
+inferred. It does not edit registrations, dispatch commands, or populate World
+Lab objects. The World Lab TextWorld Actions catalog remains separate.
+
+Built-in commands (including application, filesystem, memory, perception, and
+input controls) register before bootstrap copies their metadata into the MMO
+registry. They appear alongside plugin tools, with provider **builtin**. The
+`core_plugin.cpp` filename also contains the host's built-in registration list;
+it does not mean those commands require a separately loaded plugin.
+
+Focused host-only validation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -Tools
+```
 
 ## Tokenizer diagnostics
 

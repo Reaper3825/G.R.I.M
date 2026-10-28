@@ -2,12 +2,13 @@
 //======================================================//
 //  UITrainingPanel — Unified Model + Training Hub
 //
-//  Home | Knowledge Gaps | Tool Gaps | Model Config | Tokenizer | Observatory | World Lab
+//  Home | Knowledge Gaps | Tool Gaps | Model Config | Tokenizer | Observatory | World Lab | Assets | Tools
 //
 //  Merges the former ModelRegistry panel and Training panel
 //  into a single DataHub-style tabbed interface.
 //
 //  - Home:           model browser (registry status, resource bars)
+//  - Tools:          read-only registered tool browser and metadata inspector
 //  - Knowledge Gaps: gap queue (router misses → create model)
 //  - Tool Gaps:      tool-gap proposals (ToolGapPlanner)
 //  - Model Config:   edit a snapshot and compile a per-model .grimcfg
@@ -39,6 +40,7 @@ class OverlayRenderer;
 class UIObservatoryView;
 class UIWorldLabView;
 class UIWorldAssetsView;
+class UITrainingToolsView;
 struct InputState;
 
 // ─────────────────────────────────────────────────────────
@@ -63,7 +65,8 @@ enum class TrainingPanelTab : uint8_t {
     Tokenizer     = 4,
     Observatory   = 5,
     WorldLab      = 6,
-    Assets        = 7
+    Assets        = 7,
+    Tools         = 8
 };
 
 // ─────────────────────────────────────────────────────────
@@ -117,6 +120,8 @@ private:
     std::unique_ptr<UIWorldLabView> worldLab_;
     std::shared_ptr<UIButton> tabAssetsBtn_;
     std::unique_ptr<UIWorldAssetsView> worldAssets_;
+    std::shared_ptr<UIButton> tabToolsBtn_;
+    std::unique_ptr<UITrainingToolsView> toolsView_;
 
     // ═════════════════════════════════════════════════════
     //  Home tab — Model Browser

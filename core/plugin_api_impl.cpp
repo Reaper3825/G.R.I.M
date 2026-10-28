@@ -108,16 +108,6 @@ static const char* allocateString(const std::string& str) {
     return buffer;
 }
 
-static GrimLogLevel mapLogLevel(int level) {
-    switch (level) {
-        case 0: return GRIM_LOG_DEBUG;
-        case 1: return GRIM_LOG_INFO;
-        case 2: return GRIM_LOG_WARNING;
-        case 3: return GRIM_LOG_ERROR;
-        default: return GRIM_LOG_CRITICAL;
-    }
-}
-
 // ============================================================================
 // Logging Implementation
 // ============================================================================
