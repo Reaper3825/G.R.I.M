@@ -37,11 +37,15 @@ public:
                         const std::string& category, ToolHandler handler, bool is_informational = true);
     bool registerBatch(const std::string& plugin_name, const std::vector<ToolRegistration>& tools,
                        bool replace = false);
+    // Atomically replace one loaded generation, including removing vanished tools.
+    bool replaceProvider(const std::string& provider, const std::string& old_instance,
+                         const std::vector<ToolRegistration>& tools);
+    void unregisterInstance(const std::string& provider, const std::string& instance);
     // Update documentation/policy without losing the callable or execution stats.
     bool updateMetadata(const ToolDescriptor& descriptor);
     // Empty provider is for host callers; plugin callers must supply ownership.
     bool unregisterTool(const std::string& tool_id, const std::string& provider = {},
-                        ToolProviderType type = ToolProviderType::Plugin);
+                        ToolProviderType type = ToolProviderType::Plugin, const std::string& instance = {});
     void unregisterByProvider(const std::string& provider, ToolProviderType type = ToolProviderType::Plugin);
 
     // Explicit selected-tool execution. Does not infer intent or run policy gates.

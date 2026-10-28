@@ -70,10 +70,82 @@ bool ToolRegistry::registerBatch(const std::string& plugin_name,
     }
     for (const auto& [id, updated] : changes)
         for (auto* listener : listeners) {
-            if (updated) listener->onToolUpdated(id);
-            else listener->onToolRegistered(id);
+            try {
+                if (updated) listener->onToolUpdated(id);
+                else listener->onToolRegistered(id);
+            } catch (...) {} // Observers cannot veto an already committed mutation.
         }
     return true;
+}
+
+bool ToolRegistry::replaceProvider(const std::string& provider, const std::string& old_instance,
+                                   const std::vector<ToolRegistration>& registrations) {
+    if (provider.empty() || old_instance.empty()) return false;
+    std::vector<ToolRegistryListener*> listeners;
+    std::vector<std::pair<std::string, bool>> published;
+    std::vector<std::string> removed;
+    {
+        std::lock_guard lock(mutex_);
+        auto candidate = tools_;
+        for (auto it = candidate.begin(); it != candidate.end();) {
+            const auto& d = it->second->descriptor;
+            if (d.provider_type == ToolProviderType::Plugin && d.provider_name == provider &&
+                d.provider_instance == old_instance) {
+                removed.push_back(it->first);
+                it = candidate.erase(it);
+            } else ++it;
+        }
+        std::unordered_set<std::string> seen;
+        for (const auto& item : registrations) {
+            const auto& d = item.descriptor;
+            if (d.provider_name != provider || d.provider_type != ToolProviderType::Plugin ||
+                d.provider_instance.empty() || d.provider_instance == old_instance ||
+                d.tool_id.empty() || !item.handler || !seen.insert(d.tool_id).second ||
+                candidate.count(d.tool_id)) return false;
+            published.emplace_back(d.tool_id, tools_.count(d.tool_id) != 0);
+            candidate.emplace(d.tool_id, std::make_shared<Entry>(Entry{d, item.handler}));
+        }
+        Aliases aliases;
+        if (!buildAliases(candidate, aliases)) return false;
+        listeners = listeners_;
+        tools_.swap(candidate);
+        alias_index_.swap(aliases);
+        ++version_;
+        std::erase_if(removed, [&](const auto& id){ return seen.count(id) != 0; });
+    }
+    for (const auto& id : removed) for (auto* listener : listeners) {
+        try { listener->onToolUnregistered(id); } catch (...) {}
+    }
+    for (const auto& [id, updated] : published) for (auto* listener : listeners) {
+        try {
+            if (updated) listener->onToolUpdated(id);
+            else listener->onToolRegistered(id);
+        } catch (...) {}
+    }
+    return true;
+}
+void ToolRegistry::unregisterInstance(const std::string& provider, const std::string& instance) {
+    std::vector<ToolRegistryListener*> listeners;
+    std::vector<std::string> removed;
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& [id, item] : tools_) {
+            const auto& d = item->descriptor;
+            if (d.provider_type == ToolProviderType::Plugin && d.provider_name == provider &&
+                d.provider_instance == instance) removed.push_back(id);
+        }
+        if (removed.empty()) return;
+        listeners = listeners_;
+        for (const auto& id : removed) tools_.erase(id);
+        for (auto it = alias_index_.begin(); it != alias_index_.end();) {
+            if (!tools_.count(it->second)) it = alias_index_.erase(it);
+            else ++it;
+        }
+        ++version_;
+    }
+    for (const auto& id : removed) for (auto* listener : listeners) {
+        try { listener->onToolUnregistered(id); } catch (...) {}
+    }
 }
 
 bool ToolRegistry::registerSimple(const std::string& id, const std::string& description,
@@ -99,6 +171,8 @@ bool ToolRegistry::updateMetadata(const ToolDescriptor& descriptor) {
         auto updated = std::make_shared<Entry>(*it->second);
         const auto& previous = it->second->descriptor;
         updated->descriptor = descriptor;
+        updated->descriptor.provider_instance = previous.provider_instance;
+        updated->descriptor.provider_path = previous.provider_path;
         updated->descriptor.usage_count = previous.usage_count;
         updated->descriptor.success_count = previous.success_count;
         updated->descriptor.failure_count = previous.failure_count;
@@ -117,7 +191,7 @@ bool ToolRegistry::updateMetadata(const ToolDescriptor& descriptor) {
     return true;
 }
 
-bool ToolRegistry::unregisterTool(const std::string& id, const std::string& provider, ToolProviderType type) {
+bool ToolRegistry::unregisterTool(const std::string& id, const std::string& provider, ToolProviderType type, const std::string& instance) {
     std::vector<ToolRegistryListener*> listeners;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -125,6 +199,7 @@ bool ToolRegistry::unregisterTool(const std::string& id, const std::string& prov
         if (it == tools_.end()) return false;
         if (!provider.empty() && (it->second->descriptor.provider_name != provider ||
                                  it->second->descriptor.provider_type != type)) return false;
+        if (!instance.empty() && it->second->descriptor.provider_instance != instance) return false;
         listeners = listeners_;
         tools_.erase(it);
         for (auto alias = alias_index_.begin(); alias != alias_index_.end();) {
@@ -307,6 +382,8 @@ std::string ToolRegistry::generateFullPrompt() const {
         ss << "Description: " << desc.description << "\n";
         if (!desc.usage.empty()) ss << "Usage: " << desc.usage << "\n";
         ss << "Category: " << desc.category << "\n";
+        ss << "Argument format: " << desc.argument_format << "\n";
+        if (!desc.argument_schema_json.empty()) ss << "Argument schema: " << desc.argument_schema_json << "\n";
         ss << "Type: " << (desc.is_informational ? "information" : "action") << "\n";
 
         if (!desc.parameters.empty()) {

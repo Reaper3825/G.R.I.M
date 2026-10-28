@@ -52,6 +52,8 @@ struct ToolDescriptor {
     std::string           display_name;
     ToolProviderType      provider_type = ToolProviderType::Builtin;
     std::string           provider_name;    // plugin name or "builtin"
+    std::string           provider_instance; // host-owned loaded generation
+    std::string           provider_path;    // host-owned plugin source file
     std::string           version;          // semver or monotonic counter
 
     // Documentation
@@ -66,6 +68,8 @@ struct ToolDescriptor {
     bool                  is_informational   = true;
 
     // Arguments
+    std::string argument_format = "raw_text";
+    std::string argument_schema_json;
     std::vector<ToolParameter> parameters;
     std::vector<std::string>   preconditions;
 

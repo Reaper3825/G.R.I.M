@@ -2,8 +2,8 @@
 # GRIM Source File Collection
 # =========================================================
 
-file(GLOB COMMAND_SOURCES "commands/*.cpp")
-file(GLOB COMMAND_HEADERS "commands/*.hpp")
+file(GLOB COMMAND_SOURCES CONFIGURE_DEPENDS "commands/*.cpp")
+file(GLOB COMMAND_HEADERS CONFIGURE_DEPENDS "commands/*.hpp")
 file(GLOB POPUP_UI_SOURCES CONFIGURE_DEPENDS "popup_ui/*.cpp")
 file(GLOB POPUP_UI_HEADERS CONFIGURE_DEPENDS "popup_ui/*.hpp")
 file(GLOB POPUP_UI_OBJECTS_SOURCES CONFIGURE_DEPENDS "popup_ui/objects/*.cpp")

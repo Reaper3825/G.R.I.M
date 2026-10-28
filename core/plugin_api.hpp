@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v2.0
+// G.R.I.M Plugin API v3.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 2
+#define GRIM_API_VERSION_MAJOR 3
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -95,14 +95,64 @@ typedef struct {
     const char* voice_id; // Speaker ID for multi-voice TTS
 } GrimVoiceParams;
 
-// Command result
-typedef struct {
-    bool success;
-    const char* message;
-    const char* error_code;
-    const char* category;
-    uint32_t color_rgb;  // RGB color for UI feedback
-} GrimCommandResult;
+// All pointers are borrowed for the duration of the API call. The host copies
+// registration metadata and result data before returning. No STL crosses the ABI.
+struct GrimStringList { const char* const* items = nullptr; size_t count = 0; };
+struct GrimToolParameter {
+    uint32_t struct_size = sizeof(GrimToolParameter);
+    const char* name = nullptr;
+    const char* type = nullptr;
+    const char* description = nullptr;
+    uint32_t required = 0;
+};
+struct GrimToolDescriptor {
+    uint32_t struct_size = sizeof(GrimToolDescriptor);
+    const char* tool_id = nullptr;
+    const char* display_name = nullptr;
+    const char* version = nullptr;
+    const char* description = nullptr;
+    const char* usage = nullptr;
+    const char* category = nullptr;
+    // raw_text or json. JSON tools require an object-valued JSON Schema.
+    const char* argument_format = nullptr;
+    const char* argument_schema_json = nullptr;
+    const GrimToolParameter* parameters = nullptr;
+    size_t parameter_count = 0;
+    GrimStringList examples, aliases, keywords, capability_tags;
+    GrimStringList preconditions, context_requirements, affordance_tokens;
+    uint32_t required_permissions = 0;
+    uint32_t is_informational = 0;
+    uint32_t needs_confirmation = 0;
+};
+struct GrimToolCall {
+    uint32_t struct_size = sizeof(GrimToolCall);
+    const char* arguments = nullptr;
+    size_t arguments_size = 0;
+};
+struct GrimToolResult {
+    uint32_t struct_size = sizeof(GrimToolResult);
+    uint32_t success = 0;
+    const char* message = nullptr;
+    const char* error_code = nullptr;
+    const char* category = nullptr;
+    const char* voice = nullptr;
+    const char* structured_output_json = nullptr;
+    uint32_t color_rgb = 0;
+};
+// Complete exactly once, synchronously. complete() copies every field immediately.
+// The writer and call cannot be retained or used by background threads.
+struct GrimToolResultWriter {
+    uint32_t struct_size = sizeof(GrimToolResultWriter);
+    void* host_context = nullptr;
+    GrimResult (*complete)(GrimToolResultWriter*, const GrimToolResult*) = nullptr;
+};
+typedef GrimResult (*GrimToolHandler)(const GrimToolCall*, GrimToolResultWriter*, void* user_data);
+struct GrimToolRegistration {
+    uint32_t struct_size = sizeof(GrimToolRegistration);
+    GrimToolDescriptor descriptor;
+    GrimToolHandler handler = nullptr;
+    void* user_data = nullptr; // Plugin-owned until shutdown; not freed by the host.
+};
 
 // Intent structure (matches your Intent struct)
 typedef struct {
@@ -117,8 +167,7 @@ typedef struct {
 // Callback Function Types
 // ============================================================================
 
-// Command handler: (user_input, plugin_data) -> CommandResult
-typedef GrimCommandResult (*GrimCommandHandler)(const char* input, void* user_data);
+// Tool handlers and their results are defined above.
 
 // Event callback: (event_name, event_data, user_data)
 typedef void (*GrimEventCallback)(const char* event_name, const void* event_data, size_t data_size, void* user_data);
@@ -147,12 +196,13 @@ typedef struct GrimPluginAPI {
     // ========================================================================
     // Command Registration
     // ========================================================================
-    GrimResult (*register_command)(const GrimPluginAPI* self, const char* command_name, GrimCommandHandler handler, void* user_data);
+    // Initialization batches are staged until the loader commits a successful init.
+    GrimResult (*register_tools)(const GrimPluginAPI* self, const GrimToolRegistration* tools, size_t count);
     GrimResult (*unregister_command)(const GrimPluginAPI* self, const char* command_name);
     bool (*is_command_registered)(const GrimPluginAPI* self, const char* command_name);
     
     // Execute a command programmatically
-    GrimCommandResult (*execute_command)(const GrimPluginAPI* self, const char* command_text);
+    GrimResult (*execute_command)(const GrimPluginAPI* self, const char* command_text, GrimToolResultWriter* result);
     
     // ========================================================================
     // Event System
@@ -285,7 +335,8 @@ extern "C" {
     // Get plugin metadata
     PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info();
     
-    // Initialize plugin (called on load)
+    // Initialize plugin (called on load). Tools stay staged until successful return.
+    // Shutdown is also called after failed init; tolerate partial initialization.
     // Returns GRIM_OK on success
     PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api);
     
@@ -318,10 +369,10 @@ public:
     void error(const char* msg) { log(GRIM_LOG_ERROR, msg); }
     
     // Commands
-    GrimResult registerCommand(const char* name, GrimCommandHandler handler, void* data = nullptr) {
-        return m_api->register_command(m_api, name, handler, data);
+    GrimResult registerTools(const GrimToolRegistration* tools, size_t count) {
+        return m_api->register_tools(m_api, tools, count);
     }
-    
+
     GrimResult unregisterCommand(const char* name) {
         return m_api->unregister_command(m_api, name);
     }
@@ -365,62 +416,3 @@ public:
 
 } // namespace grim
 #endif // __cplusplus
-
-// ============================================================================
-// Example Plugin Implementation
-// ============================================================================
-/*
-
-// example_plugin.cpp
-#include "core/plugin_api.hpp"
-
-static const GrimPluginAPI* g_api = nullptr;
-
-// Command handler
-static GrimCommandResult my_command_handler(const char* input, void* user_data) {
-    g_api->log(g_api, GRIM_LOG_INFO, "My plugin command executed!");
-    
-    GrimCommandResult result;
-    result.success = true;
-    result.message = "Command executed successfully";
-    result.error_code = nullptr;
-    result.category = "custom";
-    result.color_rgb = 0x00FF00; // Green
-    return result;
-}
-
-// Plugin metadata
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static GrimPluginInfo info;
-    info.api_version = GRIM_API_VERSION;
-    info.name = "Example Plugin";
-    info.version = "1.0.0";
-    info.author = "Your Name";
-    info.description = "An example plugin demonstrating the API";
-    info.required_permissions = GRIM_PERM_UI | GRIM_PERM_FILESYSTEM;
-    return &info;
-}
-
-// Initialize
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
-    if ((api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION) {
-        return GRIM_ERROR_API_VERSION_MISMATCH;
-    }
-    
-    g_api = api;
-    g_api->log(g_api, GRIM_LOG_INFO, "Example plugin initializing...");
-    
-    // Register a command
-    g_api->register_command(g_api, "example", my_command_handler, nullptr);
-    
-    return GRIM_OK;
-}
-
-// Shutdown
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
-    if (g_api) {
-        g_api->log(g_api, GRIM_LOG_INFO, "Example plugin shutting down...");
-        g_api->unregister_command(g_api, "example");
-    }
-}
-*/

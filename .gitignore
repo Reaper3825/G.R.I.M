@@ -256,3 +256,28 @@ cache/geospatial/*.sqlite-wal
 *.grimckpt
 *.opt
 /resources/models/model_store/**/.checkpoint_*.partial
+
+# Standalone plugin build sources; deployed libraries stay ignored.
+!/plugins/
+/plugins/*
+!/plugins/CMakeLists.txt
+!/plugins/plugin_build.cmake
+!/plugins/plugin_logging.cpp
+!/plugins/plugin_logging.hpp
+!/plugins/README.md
+
+# Local OSINT tools, adapters, and generated data.
+/osint/
+/plugins/osint_plugin/
+/plugins/osint_plugin.cpp
+/plugins/**/osint_plugin.*
+/commands/commands_osint*.cpp
+/commands/commands_osint*.hpp
+/external_collector/osit*.cpp
+/external_collector/osit*.hpp
+/ui/ui_osint_results.cpp
+/ui/ui_osint_results.hpp
+/resources/python/osit_bridge.py
+/resources/python/sherlock_sensitive_scanner.py
+/resources/python/temp_sherlock_*.json
+/cache/osint/

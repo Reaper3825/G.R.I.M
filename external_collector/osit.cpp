@@ -1,5 +1,8 @@
 #include "osit.hpp"
 #include "logger.hpp"
+#ifdef GRIM_BUILD_PLUGIN
+#include "plugins/plugin_logging.hpp"
+#endif
 #include <filesystem>
 #include <fstream>
 #include <sstream>

@@ -1,65 +1,51 @@
 // plugins/osint_plugin.cpp - OSINT Self-Audit Plugin (NEW API)
 #include "pch.hpp"
-#include "commands/commands_core.hpp"
+#include "commands/command_result.hpp"
 #include "commands/commands_osint.hpp"
 #include "core/plugin_api.hpp"
-#include "logger.hpp"
+#include "plugin_logging.hpp"
+#include <cstring>
 
 // Store the API pointer globally for use in command handlers
 static const GrimPluginAPI* g_api = nullptr;
 
-// Convert CommandResult to GrimCommandResult
-static GrimCommandResult toGrimResult(const CommandResult& result) {
-    GrimCommandResult gr = {};
-    gr.success = result.success;
-    gr.message = result.message.c_str();
-    gr.error_code = result.errorCode.c_str();  // Fixed: errorCode not error_code
-    gr.category = result.category.c_str();
-    gr.color_rgb = result.color.toUInt();  // Fixed: convert Color to uint32_t
-    return gr;
+// The writer copies while the local CommandResult is still alive.
+static GrimResult deliver(GrimToolResultWriter* writer, const CommandResult& value) {
+    GrimToolResult result;
+    result.success = value.success;
+    result.message = value.message.c_str();
+    result.error_code = value.errorCode.c_str();
+    result.category = value.category.c_str();
+    result.voice = value.voice.c_str();
+    result.structured_output_json = value.structuredOutputJson.c_str();
+    result.color_rgb = (value.color.r << 16) | (value.color.g << 8) | value.color.b;
+    return writer->complete(writer, &result);
 }
-
-// New API command handlers
-static GrimCommandResult handleProfilePerson(const char* input, void* user_data) {
-    auto result = cmdProfilePerson(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleProfilePerson(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, cmdProfilePerson(std::string(call->arguments, call->arguments_size)));
 }
-
-static GrimCommandResult handleSherlockSweep(const char* input, void* user_data) {
-    auto result = cmdSherlockSweep(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleSherlockSweep(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, cmdSherlockSweep(std::string(call->arguments, call->arguments_size)));
 }
-
-static GrimCommandResult handleOsintReport(const char* input, void* user_data) {
-    auto result = cmdOsintReport(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleOsintReport(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, cmdOsintReport(std::string(call->arguments, call->arguments_size)));
 }
-
-static GrimCommandResult handleOsintStatus(const char* input, void* user_data) {
-    auto result = cmdOsintStatus(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleOsintStatus(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, cmdOsintStatus(std::string(call->arguments, call->arguments_size)));
 }
-
-static GrimCommandResult handleOsintClearCache(const char* input, void* user_data) {
-    auto result = cmdOsintClearCache(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleOsintClearCache(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, cmdOsintClearCache(std::string(call->arguments, call->arguments_size)));
 }
-
-static GrimCommandResult handleOsintScanSecrets(const char* input, void* user_data) {
-    auto result = cmdOsintScanSecrets(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleOsintScanSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, cmdOsintScanSecrets(std::string(call->arguments, call->arguments_size)));
 }
-
-static GrimCommandResult handleOsintShowSecrets(const char* input, void* user_data) {
-    auto result = cmdOsintShowSecrets(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleOsintShowSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, cmdOsintShowSecrets(std::string(call->arguments, call->arguments_size)));
 }
-
-static GrimCommandResult handleOsintShowUI(const char* input, void* user_data) {
-    auto result = cmdOsintShowUI(input ? input : "");
-    return toGrimResult(result);
+static GrimResult handleOsintShowUI(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    const auto command = std::string("ui.show_osint_results ") + std::string(call->arguments, call->arguments_size);
+    return g_api->execute_command(g_api, command.c_str(), writer);
 }
-
 // ============================================================================
 // NEW PLUGIN API IMPLEMENTATION
 // ============================================================================
@@ -85,32 +71,60 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
     g_api = api;
+    grim::plugin::setLoggingAPI(api);
     
     api->log(api, GRIM_LOG_INFO, "OSINT Self-Audit plugin v2.1.0 loading");
     
-    // Register all OSINT commands using new API
-    api->register_command(api, "profile_person", handleProfilePerson, nullptr);
-    api->register_command(api, "sherlock_sweep", handleSherlockSweep, nullptr);
-    api->register_command(api, "osint_report", handleOsintReport, nullptr);
-    api->register_command(api, "osint_status", handleOsintStatus, nullptr);
-    api->register_command(api, "osint_clear_cache", handleOsintClearCache, nullptr);
-    api->register_command(api, "osint_scan_secrets", handleOsintScanSecrets, nullptr);
-    api->register_command(api, "osint_show_secrets", handleOsintShowSecrets, nullptr);
-    api->register_command(api, "osint_show_ui", handleOsintShowUI, nullptr);
-    
-    // Register aliases
-    api->register_command(api, "osint", handleOsintReport, nullptr);
-    api->register_command(api, "sherlock", handleSherlockSweep, nullptr);
-    
-    api->log(api, GRIM_LOG_INFO, "OSINT commands registered (8 commands + 2 aliases)");
-    
-    return GRIM_OK;
+    struct Entry { const char* id; const char* description; const char* usage; GrimToolHandler handler; bool informational; bool required; };
+    const Entry entries[] = {
+        {"profile_person", "Profile a username across public sources", "profile_person <username> [--no-cache] [--verbose]", handleProfilePerson, false, true},
+        {"sherlock_sweep", "Search public sites for a username", "sherlock_sweep <username> [--async]", handleSherlockSweep, false, true},
+        {"osint_report", "Read a username report and optionally export it", "osint_report <username> [--export <file>]", handleOsintReport, false, true},
+        {"osint_status", "Read scan status and consume completed results", "osint_status [username]", handleOsintStatus, false, false},
+        {"osint_clear_cache", "Delete cached OSINT reports", "osint_clear_cache", handleOsintClearCache, false, false},
+        {"osint_scan_secrets", "Scan discovered URLs for exposed sensitive data", "osint_scan_secrets <username>", handleOsintScanSecrets, false, true},
+        {"osint_show_secrets", "Read discovered sensitive data for a username", "osint_show_secrets <username> [--severity <level>]", handleOsintShowSecrets, true, true},
+        {"osint_show_ui", "Show the OSINT results interface", "osint_show_ui <username>", handleOsintShowUI, false, true}
+    };
+    GrimToolRegistration tools[8];
+    GrimToolParameter arguments[8];
+    const char* reportAliases[] = {"osint"};
+    const char* sweepAliases[] = {"sherlock"};
+    for (size_t i = 0; i < 8; ++i) {
+        const auto& entry = entries[i];
+        tools[i].handler = entry.handler;
+        auto& d = tools[i].descriptor;
+        d.tool_id = d.display_name = entry.id;
+        d.description = entry.description;
+        d.usage = entry.usage;
+        d.version = "2.1.0";
+        d.category = "osint";
+        d.argument_format = "raw_text";
+        d.required_permissions = s_plugin_info.required_permissions;
+        d.is_informational = entry.informational;
+        d.needs_confirmation = !entry.informational;
+        const char* args = std::strchr(entry.usage, ' ');
+        if (args) {
+            arguments[i].name = "arguments";
+            arguments[i].type = "string";
+            arguments[i].description = args + 1;
+            arguments[i].required = entry.required;
+            d.parameters = &arguments[i];
+            d.parameter_count = 1;
+        }
+    }
+    tools[1].descriptor.aliases = {sweepAliases, 1};
+    tools[2].descriptor.aliases = {reportAliases, 1};
+    return api->register_tools(api, tools, 8);
+
 }
 
 PLUGIN_EXPORT void grim_plugin_shutdown() {
+    shutdownOsintScans();
     if (g_api) {
         g_api->log(g_api, GRIM_LOG_INFO, "OSINT plugin shutting down");
     }
+    grim::plugin::setLoggingAPI(nullptr);
     g_api = nullptr;
 }
 

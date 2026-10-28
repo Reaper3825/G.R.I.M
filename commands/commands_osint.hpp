@@ -15,3 +15,6 @@ CommandResult cmdOsintScanSecrets(const std::string& args);  // Scan for sensiti
 CommandResult cmdOsintShowSecrets(const std::string& args);  // View detailed findings
 CommandResult cmdOsintShowUI(const std::string& args);       // NEW: Show findings in UI panel
 
+
+// Join outstanding plugin-owned scans before unloading native code.
+void shutdownOsintScans();

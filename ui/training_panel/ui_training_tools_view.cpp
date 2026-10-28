@@ -37,11 +37,14 @@ std::string detailText(const ToolDescriptor& tool) {
         << "Category: " << documented(tool.category) << '\n'
         << "Provider: " << (tool.provider_type == ToolProviderType::Plugin ? "Plugin" : "Built-in")
         << " / " << documented(tool.provider_name) << '\n'
+        << "Source file: " << documented(tool.provider_path) << '\n'
         << "Version: " << documented(tool.version) << '\n'
         << "Status: " << status(tool.swap_state) << '\n'
         << "Type: " << (tool.is_informational ? "Informational" : "State-changing") << '\n'
         << "Confirmation required: " << (tool.needs_confirmation ? "Yes" : "No") << '\n'
         << "Permission bits: " << tool.permission_bits << "\n\n"
+        << "Argument format: " << documented(tool.argument_format) << '\n'
+        << "Argument schema: " << documented(tool.argument_schema_json) << "\n\n"
         << "Usage: " << documented(tool.usage) << "\n\nParameters:";
     if (tool.parameters.empty()) out << " Not documented\n";
     else for (const auto& p : tool.parameters)

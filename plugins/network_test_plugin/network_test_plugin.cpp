@@ -1,14 +1,14 @@
 
 
-#include "../core/plugin.hpp"
-#include "../core/plugin_api.hpp"
-#include "../commands/commands_core.hpp"
-#include "../logger.hpp"
+#include "core/plugin_api.hpp"
+#include "commands/command_result.hpp"
+#include "plugins/plugin_logging.hpp"
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <chrono>
 #include <vector>
 #include <sstream>
@@ -32,6 +32,8 @@ namespace NetworkTest {
 
     std::atomic<bool> testRunning{false};
     std::vector<std::thread> workers;
+    std::thread completionThread;
+    std::mutex commandMutex;
     std::atomic<uint64_t> requestsSent{0};
     std::atomic<uint64_t> requestsSucceeded{0};
     std::atomic<uint64_t> requestsFailed{0};
@@ -306,24 +308,13 @@ namespace NetworkTest {
     }
 
     void stopTest() {
-        if (!testRunning) {
-            return;
-        }
-        
-        LOG_DEBUG("NetworkTest", "Stopping network test...");
         testRunning = false;
-        
-        for (auto& worker : workers) {
-            if (worker.joinable()) {
-                worker.join();
-            }
-        }
-        
+        if (completionThread.joinable()) completionThread.join();
         workers.clear();
-        cleanupWinsock();
     }
 
     CommandResult cmdNetworkTest(const std::string& arg) {
+        std::lock_guard<std::mutex> lock(commandMutex);
         // Parse arguments with extended options
         std::istringstream iss(arg);
         TestConfig config;
@@ -425,9 +416,7 @@ namespace NetworkTest {
         }
         
         // Stop any existing test
-        if (testRunning) {
-            stopTest();
-        }
+        stopTest(); // Reap the coordinator even when the previous test finished.
         
         // Reset counters
         requestsSent = 0;
@@ -509,7 +498,7 @@ namespace NetworkTest {
         });
         
         // Wait for completion in background
-        std::thread completion([config, startTime, mon = std::move(monitor)]() mutable {
+        completionThread = std::thread([config, startTime, mon = std::move(monitor)]() mutable {
             for (auto& worker : workers) {
                 if (worker.joinable()) {
                     worker.join();
@@ -599,7 +588,7 @@ namespace NetworkTest {
             
             cleanupWinsock();
         });
-        completion.detach();
+
         
         return CommandResult{
             true,
@@ -610,6 +599,7 @@ namespace NetworkTest {
     }
 
     CommandResult cmdNetworkTestStop(const std::string& arg) {
+        std::lock_guard<std::mutex> lock(commandMutex);
         if (!testRunning) {
             return CommandResult{false, "No network test is currently running", "", "information"};
         }
@@ -635,31 +625,23 @@ namespace NetworkTest {
 
 static const GrimPluginAPI* g_api = nullptr;
 
-// Command handler wrappers for new API
-static GrimCommandResult networkTestHandler(const char* input, void* user_data) {
-    CommandResult result = GRIM::NetworkTest::cmdNetworkTest(input ? input : "");
-    
-    GrimCommandResult apiResult;
-    apiResult.success = result.success;
-    apiResult.message = result.message.c_str();
-    apiResult.error_code = result.errorCode.empty() ? nullptr : result.errorCode.c_str();
-    apiResult.category = result.category.c_str();
-    apiResult.color_rgb = (result.color.r << 16) | (result.color.g << 8) | result.color.b;
-    
-    return apiResult;
+// Deliver copied results before the local CommandResult is destroyed.
+static GrimResult deliver(GrimToolResultWriter* writer, const CommandResult& value) {
+    GrimToolResult result;
+    result.success = value.success;
+    result.message = value.message.c_str();
+    result.error_code = value.errorCode.c_str();
+    result.category = value.category.c_str();
+    result.voice = value.voice.c_str();
+    result.structured_output_json = value.structuredOutputJson.c_str();
+    result.color_rgb = (value.color.r << 16) | (value.color.g << 8) | value.color.b;
+    return writer->complete(writer, &result);
 }
-
-static GrimCommandResult networkTestStopHandler(const char* input, void* user_data) {
-    CommandResult result = GRIM::NetworkTest::cmdNetworkTestStop(input ? input : "");
-    
-    GrimCommandResult apiResult;
-    apiResult.success = result.success;
-    apiResult.message = result.message.c_str();
-    apiResult.error_code = result.errorCode.empty() ? nullptr : result.errorCode.c_str();
-    apiResult.category = result.category.c_str();
-    apiResult.color_rgb = (result.color.r << 16) | (result.color.g << 8) | result.color.b;
-    
-    return apiResult;
+static GrimResult networkTestHandler(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, GRIM::NetworkTest::cmdNetworkTest(std::string(call->arguments, call->arguments_size)));
+}
+static GrimResult networkTestStopHandler(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+    return deliver(writer, GRIM::NetworkTest::cmdNetworkTestStop(std::string(call->arguments, call->arguments_size)));
 }
 
 // Plugin metadata
@@ -685,24 +667,34 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     }
     
     g_api = api;
+    grim::plugin::setLoggingAPI(api);
     g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin initializing...");
     
-    // Register commands
-    GrimResult res = g_api->register_command(g_api, "networktest", networkTestHandler, nullptr);
-    if (res != GRIM_OK) {
-        g_api->log(g_api, GRIM_LOG_ERROR, "Failed to register 'networktest' command");
-        return res;
+    GrimToolRegistration tools[2];
+    tools[0].handler = networkTestHandler;
+    tools[1].handler = networkTestStopHandler;
+    const char* names[] = {"networktest", "networktest_stop"};
+    const char* descriptions[] = {"Start a network stress test", "Stop the current network stress test"};
+    const char* usages[] = {"networktest <IP|@file> <port> [options...]", "networktest_stop"};
+    for (size_t i = 0; i < 2; ++i) {
+        auto& d = tools[i].descriptor;
+        d.tool_id = d.display_name = names[i];
+        d.version = "1.0.0";
+        d.description = descriptions[i];
+        d.usage = usages[i];
+        d.category = "network";
+        d.argument_format = "raw_text";
+        d.required_permissions = GRIM_PERM_NETWORK;
+        d.needs_confirmation = 1;
     }
-    
-    res = g_api->register_command(g_api, "networktest_stop", networkTestStopHandler, nullptr);
-    if (res != GRIM_OK) {
-        g_api->log(g_api, GRIM_LOG_ERROR, "Failed to register 'networktest_stop' command");
-        g_api->unregister_command(g_api, "networktest");
-        return res;
-    }
-    
-    g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin loaded successfully");
-    return GRIM_OK;
+    GrimToolParameter args;
+    args.name = "arguments";
+    args.type = "string";
+    args.description = "Target IP or @target-file, port, and options; invoke without arguments for option help";
+    args.required = 1;
+    tools[0].descriptor.parameters = &args;
+    tools[0].descriptor.parameter_count = 1;
+    return api->register_tools(api, tools, 2);
 }
 
 // Shutdown plugin
@@ -714,5 +706,7 @@ extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
         g_api->unregister_command(g_api, "networktest");
         g_api->unregister_command(g_api, "networktest_stop");
         g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin unloaded");
+        grim::plugin::setLoggingAPI(nullptr);
+        g_api = nullptr;
     }
 }

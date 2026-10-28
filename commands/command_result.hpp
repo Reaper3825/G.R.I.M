@@ -13,6 +13,7 @@ struct CommandResult {
     std::string category;
     std::string voice;
     Color color = Colors::Default;
+    std::string structuredOutputJson;
 };
 
 // ====================================================

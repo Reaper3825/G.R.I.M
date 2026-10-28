@@ -25,7 +25,7 @@ void logError(const std::string&, const std::string& message) { errors.push_back
 namespace PluginAPI {
 struct TestAPI { std::string name; GrimPluginAPI api{}; };
 static std::unordered_map<std::string, std::unique_ptr<TestAPI>> apis;
-GrimPluginAPI* createPluginAPI(const std::string& name, const std::string&, uint32_t) {
+GrimPluginAPI* createPluginAPI(const std::string& name, const std::string&, uint32_t, bool, const GrimPluginAPI*) {
     check(active.insert(name).second, "Plugin loaded more than once");
     auto instance = std::make_unique<TestAPI>();
     instance->name = name;
@@ -36,7 +36,10 @@ GrimPluginAPI* createPluginAPI(const std::string& name, const std::string&, uint
     apis.emplace(name, std::move(instance));
     return result;
 }
-void cleanupPluginContext(const std::string& name) {
+bool commitPluginTools(const GrimPluginAPI*, const GrimPluginAPI*) { return true; }
+void beginPluginShutdown(const GrimPluginAPI*) {}
+void cleanupPluginContext(const GrimPluginAPI* api) {
+    const auto name = *static_cast<const std::string*>(api->host_context);
     check(active.erase(name) == 1, "Cleanup used DLL filename instead of declared plugin identity");
     check(name == "Declared-failed" || std::find(events.begin(), events.end(), "shutdown:" + name) != events.end(), "Cleanup ran before shutdown");
     events.push_back("cleanup:" + name);
@@ -58,10 +61,10 @@ int main(int argc, char** argv) try {
     check(errors.empty(), "Valid plugins reported load errors");
     PluginManager::initialize(argv[2]);
     check(active.empty() && PluginAPI::apis.empty(), "Failed init or incompatible ABI retained an API instance");
-    check(events.size() == 9 && events.back() == "cleanup:Declared-failed", "Failed init was not cleaned up");
+    check(events.size() == 10 && events.back() == "cleanup:Declared-failed", "Failed init was not cleaned up");
     check(errors.size() == 2, "Failed init and incompatible ABI were not both rejected");
     PluginManager::unloadAll();
-    check(events.size() == 9, "Rejected plugin retained a loaded handle");
+    check(events.size() == 10, "Rejected plugin retained a loaded handle");
 
     std::cout << "Plugin shutdown tests passed\n";
 } catch (const std::exception& error) {

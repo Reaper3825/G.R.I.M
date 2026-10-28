@@ -1,3 +1,4 @@
+param([string]$PluginDirectory = "")
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -22,14 +23,39 @@ foreach ($fixture in @('failed', 'legacy')) {
     else { $argsForFixture += '/DFIXTURE_API_VERSION=65536' }
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
 }
+foreach ($folder in @('integration', 'integration-rejected')) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $output $folder) | Out-Null
+}
+foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
+    $folder = if ($fixture -in @('failed', 'legacy')) { 'integration-rejected' } else { 'integration' }
+    $argsForFixture = $common + @('/LD','/DFIXTURE_TOOLS',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $folder + '/' + $fixture + '.dll'))
+    if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
+    if ($fixture -eq 'legacy') { $argsForFixture += '/DFIXTURE_API_VERSION=131072' }
+    Set-Content -LiteralPath (Join-Path $output ('integration-' + $fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
+}
+$variants = @{
+    old = @('/DFIXTURE_EXTRA', '/DFIXTURE_RESULT=\"old-result\"');
+    new = @('/DFIXTURE_RESULT=\"new-result\"');
+    failed = @('/DFIXTURE_FAIL_INIT', '/DFIXTURE_RESULT=\"failed-result\"');
+    collision = @('/DFIXTURE_COLLISION');
+    legacy = @('/DFIXTURE_API_VERSION=131072')
+}
+foreach ($variant in $variants.Keys) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $output ('replacement/' + $variant)) | Out-Null
+    $variantArgs = $common + @('/LD','/DFIXTURE_TOOLS','/DFIXTURE_NAME=\"Declared-alpha\"',$fixtureSource,('/Fe:replacement/' + $variant + '/alpha.dll')) + $variants[$variant]
+    Set-Content -LiteralPath (Join-Path $output ('replacement-' + $variant + '.rsp')) -Value $variantArgs -Encoding ascii
+}
 $testArgs = $common + '/DGRIM_BUILD_HOST'
 $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','core/plugin_api_impl.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib')
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
+$syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
+$syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/core_plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'
 $registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp','core/plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
@@ -41,8 +67,18 @@ $commands = @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul
     'cl @legacy.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @tests.rsp','if errorlevel 1 exit /b %errorlevel%',
     'plugin_shutdown_tests.exe fixtures rejected','if errorlevel 1 exit /b %errorlevel%',
+    'cl @integration-alpha.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @integration-beta.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @integration-failed.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @integration-legacy.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @replacement-old.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @replacement-new.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @replacement-failed.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @replacement-collision.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @replacement-legacy.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @api.rsp','if errorlevel 1 exit /b %errorlevel%',
-    'plugin_api_ownership_tests.exe','if errorlevel 1 exit /b %errorlevel%',
+    ('plugin_api_ownership_tests.exe integration integration-rejected replacement' + $(if ($PluginDirectory) { ' "' + (Resolve-Path -LiteralPath $PluginDirectory).Path + '"' } else { '' })),'if errorlevel 1 exit /b %errorlevel%',
+    'cl @plugin-syntax.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @registry.rsp','if errorlevel 1 exit /b %errorlevel%',
     'tool_registry_tests.exe','if errorlevel 1 exit /b %errorlevel%')
 Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii

@@ -22,14 +22,19 @@ namespace PluginAPI {
 GrimPluginAPI* createPluginAPI(
     const std::string& plugin_name,
     const std::string& plugin_path,
-    uint32_t permissions
+    uint32_t permissions,
+    bool staging = false,
+    const GrimPluginAPI* replacing = nullptr
 );
 
-/**
- * Clean up all resources associated with a plugin
- * Called when plugin is unloaded
- * @param plugin_name Name of the plugin to clean up
- */
+// Publish staged tools after successful plugin initialization.
+bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr);
+bool commitPluginTools(const std::string& plugin_name);
+// Host lifecycle thread only; never call from inside a plugin callback.
+void beginPluginShutdown(const GrimPluginAPI* api);
+void beginPluginShutdown(const std::string& plugin_name);
+// Remove API context, subscriptions, and timers after shutdown.
+void cleanupPluginContext(const GrimPluginAPI* api);
 void cleanupPluginContext(const std::string& plugin_name);
 
 /**

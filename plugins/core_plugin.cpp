@@ -12,7 +12,8 @@
 #include "commands_timers.hpp"
 #include "commands_voice.hpp"
 #include "commands_ui.hpp"
-#include "commands_grim.hpp"  // ? NEW: GRIM system commands
+#include "commands_osint.hpp"
+#include "commands_grim.hpp"
 #include "commands_perception.hpp"
 #include "commands_question.hpp"
 
@@ -128,6 +129,9 @@ static void register_all_commands() {
                   "ui", false);
 
     // System information
+    REGISTER_TOOL("ui.show_osint_results", cmdOsintShowUI,
+                  "Show the host-owned OSINT findings panel for a username", "ui", false);
+
     REGISTER_TOOL("system_info", cmdSystemInfo,
                   "Display system hardware and software information",
                   "information", true);

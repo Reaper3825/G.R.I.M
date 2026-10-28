@@ -1,13 +1,14 @@
 // commands/commands_osint.cpp - OSINT Self-Audit Commands
 #include "pch.hpp"
 #include "commands_osint.hpp"
-#include "commands_core.hpp"
+#include "command_result.hpp"
 #include "logger.hpp"
+#ifdef GRIM_BUILD_PLUGIN
+#include "plugins/plugin_logging.hpp"
+#endif
 #include "helpers/color.hpp"
 #include "../external_collector/osit.hpp"
 #include "../external_collector/osit_secrets.hpp"
-#include "../ui/ui_root.hpp"
-#include "../ui/ui_osint_results.hpp"
 #include <sstream>
 #include <vector>
 #include <string>
@@ -34,6 +35,19 @@ struct AsyncScan {
 
 static std::map<std::string, std::shared_ptr<AsyncScan>> g_activeScans;
 static std::mutex g_scanMutex;
+// Retain every job until it is actually ready, including overwritten/consumed
+// username entries, so shutdown can join all plugin-owned execution.
+static std::vector<std::shared_ptr<AsyncScan>> g_scanJobs;
+static void retainScan(const std::shared_ptr<AsyncScan>& scan) {
+    g_scanJobs.erase(std::remove_if(g_scanJobs.begin(), g_scanJobs.end(), [](const auto& job) {
+        if (!job->future.valid() || job->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return false;
+        // Consuming the future releases its callable's captured scan pointer.
+        try { job->future.get(); } catch (...) {}
+        return true;
+    }), g_scanJobs.end());
+    g_scanJobs.push_back(scan);
+}
 
 // Profile Person - Search for someone's digital footprint
 CommandResult cmdProfilePerson(const std::string& args) {
@@ -116,6 +130,7 @@ CommandResult cmdProfilePerson(const std::string& args) {
     
     {
         std::lock_guard<std::mutex> lock(g_scanMutex);
+        retainScan(scanPtr);
         g_activeScans[username] = scanPtr;
     }
     
@@ -180,6 +195,7 @@ CommandResult cmdSherlockSweep(const std::string& args) {
             return report;
         });
         
+        retainScan(scanPtr);
         g_activeScans[username] = scanPtr;
         
         oss << "Started background scan for: " << username << "\n";
@@ -622,46 +638,16 @@ CommandResult cmdOsintShowSecrets(const std::string& args) {
 }
 
 // Show findings in UI panel
-CommandResult cmdOsintShowUI(const std::string& args) {
-    LOG_DEBUG("OSINT", "Show UI command executed");
-    
-    std::ostringstream oss;
-    
-    if (args.empty()) {
-        oss << "Usage: osint_show_ui <username>\n";
-        oss << "Example: osint_show_ui john_doe\n\n";
-        oss << "Opens a UI panel displaying sensitive data findings in a table.\n";
-        
-        return CommandResult{true, oss.str(), "", "osint", "", Colors::Cyan};
+void shutdownOsintScans() {
+    std::vector<std::shared_ptr<AsyncScan>> scans;
+    {
+        std::lock_guard<std::mutex> lock(g_scanMutex);
+        scans.swap(g_scanJobs);
+        g_activeScans.clear();
     }
-    
-    std::string username = args;
-    
-    // Create and show the OSINT results panel
-    auto panel = std::make_shared<UIOsintResults>();
-    
-    if (!panel->loadFindings(username)) {
-        oss << "Failed to load findings for: " << username << "\n";
-        oss << "Run 'osint_scan_secrets " << username << "' first.\n";
-        return CommandResult{false, oss.str(), "no_findings", "osint", "", Colors::Yellow};
+    for (auto& scan : scans) {
+        if (scan->future.valid()) {
+            try { scan->future.get(); } catch (...) {}
+        }
     }
-    
-    // Add panel to UI root
-    auto& uiRoot = UIRoot::get();
-    uiRoot.addPanel(panel);
-    
-    // *** FIX: Use UIRoot::setVisible which updates Z-order internally ***
-    uiRoot.setVisible("OSINT Sensitive Findings", true);
-    
-    oss << "Opened OSINT results panel for: " << username << "\n";
-    oss << "Total findings: " << panel->getSummary().totalFindings << "\n";
-    oss << "  CRITICAL: " << panel->getSummary().criticalFindings << "\n";
-    oss << "  HIGH: " << panel->getSummary().highFindings << "\n";
-    oss << "  MEDIUM: " << panel->getSummary().mediumFindings << "\n";
-    oss << "  LOW: " << panel->getSummary().lowFindings << "\n";
-    oss << "\nPanel can be dragged and resized. Use mouse wheel to scroll.\n";
-    
-    return CommandResult{true, oss.str(), "", "osint",
-                        "OSINT panel opened for " + username,
-                        Colors::Cyan};
 }

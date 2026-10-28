@@ -1,4 +1,5 @@
 #include "system_tick.hpp"
+#include "plugin_manager.hpp"
 
 #include "../geospatial/geospatial_runtime.hpp"
 #include "../helpers/key.hpp"
@@ -52,6 +53,7 @@ void tickApplicationFrame(
     WakeKey::update();
 
     UI::processPanelShortcuts();
+    PluginManager::tick();
 
     Perception::Physical::TickPhysicalEnvironment();
     // Calibration is an exclusive raw-camera workflow. Do not schedule the

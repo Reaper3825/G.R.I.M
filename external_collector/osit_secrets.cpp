@@ -1,6 +1,9 @@
 #include "osit_secrets.hpp"
 #include "osit.hpp"
 #include "logger.hpp"
+#ifdef GRIM_BUILD_PLUGIN
+#include "plugins/plugin_logging.hpp"
+#endif
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -148,7 +151,7 @@ SensitiveFindingSummary parseSensitiveScanLog(const std::string& logPath) {
         
         report << "Affected Domains: " << summary.affectedDomains.size() << "\n";
         for (const auto& domain : summary.affectedDomains) {
-            report << "  • " << domain << "\n";
+            report << "  â€¢ " << domain << "\n";
         }
         
         if (!findingsByType.empty()) {
@@ -170,9 +173,9 @@ SensitiveFindingSummary parseSensitiveScanLog(const std::string& logPath) {
             report << "      ? Enable privacy settings on affected platforms\n";
         }
         if (summary.totalFindings > 0) {
-            report << "  • Review full log for details: " << logPath << "\n";
-            report << "  • Request account deletion/deactivation where appropriate\n";
-            report << "  • Monitor for data breaches (use HaveIBeenPwned)\n";
+            report << "  â€¢ Review full log for details: " << logPath << "\n";
+            report << "  â€¢ Request account deletion/deactivation where appropriate\n";
+            report << "  â€¢ Monitor for data breaches (use HaveIBeenPwned)\n";
         }
         
         summary.detailedReport = report.str();
