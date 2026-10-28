@@ -3,7 +3,7 @@
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
 #include "ai/ai.hpp"
-#include "core/plugin.hpp"
+#include <mutex>
 #include "error_manager.hpp"
 #include "helpers/color.hpp"
 #include "logger.hpp"
@@ -23,55 +23,11 @@ bool hasPendingFeedback() {
 }
 
 void ensureCorePluginsRegistered() {
-    static bool done = false;
-    if (done) {
-        return;
-    }
-
-    done = true;
-    LOG_DEBUG("Core", "Ensuring core plugins registered...");
-    registerCorePlugin();
-}
-
-// Internal execution boundary. Only an already-selected registered tool ID is
-// accepted here; unknown IDs fail closed without reinterpretation or learning.
-CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
-    ensureCorePluginsRegistered();
-
-    const auto it = commandMap.find(cmd);
-    if (it == commandMap.end()) {
-        LOG_DEBUG("Dispatch", "Rejected unknown tool ID: \"" + cmd + "\"");
-        return CommandResult{
-            false,
-            "Unknown command: " + cmd,
-            "ERR_UNKNOWN_CMD",
-            "",
-            "",
-            Colors::Red
-        };
-    }
-
-    LOG_DEBUG("Dispatch", "Running command \"" + cmd + "\" arg=\"" + arg + "\"");
-    try {
-        CommandResult result = it->second(arg);
-        if (result.success) {
-            GRIM::MMO::ToolRegistry::instance().recordSuccess(cmd);
-        } else {
-            GRIM::MMO::ToolRegistry::instance().recordFailure(cmd);
-        }
-        return result;
-    } catch (const std::exception& e) {
-        LOG_ERROR("Dispatch", "Exception in command \"" + cmd + "\": " + e.what());
-        GRIM::MMO::ToolRegistry::instance().recordFailure(cmd);
-        return CommandResult{
-            false,
-            "[Error] Exception while running command: " + cmd,
-            "ERR_CMD_EXCEPTION",
-            "",
-            "",
-            Colors::Red
-        };
-    }
+    static std::once_flag registered;
+    std::call_once(registered, [] {
+        LOG_DEBUG("Core", "Ensuring core plugins registered...");
+        registerCorePlugin();
+    });
 }
 
 // User-input boundary. Raw user text is never interpreted as an application

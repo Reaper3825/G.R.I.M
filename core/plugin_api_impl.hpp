@@ -16,7 +16,8 @@ namespace PluginAPI {
  * @param plugin_name Name of the plugin
  * @param plugin_path Full path to the plugin DLL
  * @param permissions Permission bitmask (GrimPermission flags)
- * @return Pointer to the API table (static, don't free)
+ * @return Distinct host-owned API table, valid through shutdown until cleanup.
+ * Every host call must pass this table as its first argument.
  */
 GrimPluginAPI* createPluginAPI(
     const std::string& plugin_name,

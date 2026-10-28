@@ -1,4 +1,5 @@
 #include "ui/training_panel/ui_training_tools_view.hpp"
+#include "commands/command_result.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "core/input_parser.hpp"
@@ -16,8 +17,8 @@ void runTrainingToolsTests() {
     tool.category = "information";
     tool.provider_name = "test_provider";
     tool.aliases = {"unique_alias"};
-    registry.registerTool(tool);
-    for (int i = 0; i < 20; ++i) registry.registerSimple("z_viewer_" + std::to_string(i), "Scrolling entry", "test");
+    registry.registerTool(tool, [](const std::string&) { return CommandResult{}; });
+    for (int i = 0; i < 20; ++i) registry.registerSimple("z_viewer_" + std::to_string(i), "Scrolling entry", "test", [](const std::string&) { return CommandResult{}; });
     UITrainingToolsView view;
     OverlayRenderer renderer;
     const PanelRect content{{0,0},{1000,400}};

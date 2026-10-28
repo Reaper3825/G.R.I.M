@@ -44,7 +44,7 @@ namespace GRIM::RL
     // Helpers (Internal)
     // =====================================================
 
-    // Build list of all live commands from commandMap
+    // Build list of all live commands from ToolRegistry
     std::vector<std::string> buildDynamicActionSpace();
 
     // Generate deterministic float embeddings for commands

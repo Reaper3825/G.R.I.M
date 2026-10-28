@@ -15,7 +15,7 @@ registry resolves it to a world file and checks that the file contains that ID.
 Document entity IDs identify entities within a world; worker `environment-N`
 filenames are temporary session artifacts and must not be used as course IDs.
 
-### Assign and resolve an environment
+grim_plugin_init### Assign and resolve an environment
 
 1. Save a world in World Lab. Save registers its persistent ID and file location
    in `models/games/environment_registry.json` under the configured resources root.

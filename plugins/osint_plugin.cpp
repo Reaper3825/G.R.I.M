@@ -80,39 +80,43 @@ PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 
 PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+    if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
+        api->api_version < GRIM_API_VERSION) {
+        return GRIM_ERROR_API_VERSION_MISMATCH;
+    }
     g_api = api;
     
-    api->log(GRIM_LOG_INFO, "OSINT Self-Audit plugin v2.1.0 loading");
+    api->log(api, GRIM_LOG_INFO, "OSINT Self-Audit plugin v2.1.0 loading");
     
     // Register all OSINT commands using new API
-    api->register_command("profile_person", handleProfilePerson, nullptr);
-    api->register_command("sherlock_sweep", handleSherlockSweep, nullptr);
-    api->register_command("osint_report", handleOsintReport, nullptr);
-    api->register_command("osint_status", handleOsintStatus, nullptr);
-    api->register_command("osint_clear_cache", handleOsintClearCache, nullptr);
-    api->register_command("osint_scan_secrets", handleOsintScanSecrets, nullptr);
-    api->register_command("osint_show_secrets", handleOsintShowSecrets, nullptr);
-    api->register_command("osint_show_ui", handleOsintShowUI, nullptr);
+    api->register_command(api, "profile_person", handleProfilePerson, nullptr);
+    api->register_command(api, "sherlock_sweep", handleSherlockSweep, nullptr);
+    api->register_command(api, "osint_report", handleOsintReport, nullptr);
+    api->register_command(api, "osint_status", handleOsintStatus, nullptr);
+    api->register_command(api, "osint_clear_cache", handleOsintClearCache, nullptr);
+    api->register_command(api, "osint_scan_secrets", handleOsintScanSecrets, nullptr);
+    api->register_command(api, "osint_show_secrets", handleOsintShowSecrets, nullptr);
+    api->register_command(api, "osint_show_ui", handleOsintShowUI, nullptr);
     
     // Register aliases
-    api->register_command("osint", handleOsintReport, nullptr);
-    api->register_command("sherlock", handleSherlockSweep, nullptr);
+    api->register_command(api, "osint", handleOsintReport, nullptr);
+    api->register_command(api, "sherlock", handleSherlockSweep, nullptr);
     
-    api->log(GRIM_LOG_INFO, "OSINT commands registered (8 commands + 2 aliases)");
+    api->log(api, GRIM_LOG_INFO, "OSINT commands registered (8 commands + 2 aliases)");
     
     return GRIM_OK;
 }
 
 PLUGIN_EXPORT void grim_plugin_shutdown() {
     if (g_api) {
-        g_api->log(GRIM_LOG_INFO, "OSINT plugin shutting down");
+        g_api->log(g_api, GRIM_LOG_INFO, "OSINT plugin shutting down");
     }
     g_api = nullptr;
 }
 
 PLUGIN_EXPORT void grim_plugin_reload() {
     if (g_api) {
-        g_api->log(GRIM_LOG_INFO, "OSINT plugin reloaded");
+        g_api->log(g_api, GRIM_LOG_INFO, "OSINT plugin reloaded");
     }
 }
 

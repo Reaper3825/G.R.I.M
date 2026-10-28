@@ -1,6 +1,7 @@
+#include "MMO/Core/ToolRegistry.hpp"
 #include "pch.hpp"
 #include "input_parser.hpp"
-#include "commands_core.hpp"     // for CommandResult / CommandFunc / commandMap
+#include "commands_core.hpp"     // for CommandResult / CommandFunc
 #include "synonyms.hpp"
 #include "settings/intervention_gate.hpp"
 #include "logger.hpp"
@@ -218,7 +219,7 @@ namespace GRIMInput
         std::string best = input;
         int bestDist = 2; // tolerate minor typos
 
-        for (const auto& [key, _] : commandMap)
+        for (const auto& key : GRIM::MMO::ToolRegistry::instance().getExecutableNames(true))
         {
             int dist = levenshteinDistance(input, key);
             if (dist < bestDist)

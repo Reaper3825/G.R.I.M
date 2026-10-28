@@ -1,3 +1,4 @@
+#include "MMO/Core/ToolRegistry.hpp"
 #include "commands_execution.hpp"
 #include "commands_core.hpp"
 #include "logger.hpp"
@@ -15,39 +16,9 @@
 extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 extern nlohmann::json longTermMemory;
 extern NLP g_nlp;
-extern std::unordered_map<std::string, CommandFunc> commandMap;
 
 namespace GRIM {
 namespace CommandExecution {
-
-// ====================================================
-// Global learned command map
-// ====================================================
-static std::unordered_map<std::string, std::string> g_learnedCommandMap;
-
-static CommandResult handleLearnedCommand(const std::string& arg)
-{
-    for (auto& pair : g_learnedCommandMap)
-    {
-        const std::string& phrase = pair.first;
-        const std::string& action = pair.second;
-
-        if (arg == phrase || arg.find(phrase) != std::string::npos)
-        {
-            LOG_DEBUG("LearnedCmd", "Executing learned command \"" + phrase + "\" → \"" + action + "\"");
-            return dispatchCommand(action, "");
-        }
-    }
-
-    return CommandResult{
-        false,                                            // success
-        "[Error] Unknown learned command route.",         // message
-        "ERR_NONE",                                       // errorCode
-        "",                                               // category
-        "",                                               // voice
-        Colors::Red                                       // color
-    };
-}
 
 CommandResult tryLearnedCommand(const std::string& cmd, const std::string& arg)
 {
@@ -99,9 +70,17 @@ void recordUnknownCommand(const std::string& cmd, const std::string& arg)
 void storeLearnedCommand(const std::string& phrase, const std::string& action, float confidence)
 {
     try {
+        if (phrase == action) throw std::invalid_argument("A learned tool cannot route to itself");
         g_memoryStorage.storeLearnedCommand(phrase, action, confidence);
-        g_learnedCommandMap[phrase] = action;
-        commandMap[phrase] = handleLearnedCommand;
+        GRIM::MMO::ToolDescriptor tool;
+        tool.tool_id = tool.display_name = tool.usage = phrase;
+        tool.provider_name = "learned";
+        tool.category = "action";
+        tool.description = "Learned route to " + action;
+        tool.is_informational = false;
+        if (!GRIM::MMO::ToolRegistry::instance().registerTool(tool,
+                [action](const std::string& args) { return dispatchCommand(action, args); }, true))
+            throw std::runtime_error("Learned command conflicts with an existing tool: " + phrase);
         
         LOG_DEBUG("LearnedCmd", "Stored learned command: \"" + phrase + "\" → \"" + action + "\" (confidence=" + std::to_string(confidence) + ")");
     } catch (const std::exception& e) {

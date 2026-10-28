@@ -97,10 +97,7 @@ void PluginManager::checkForHotReload() {
 }
 
 void PluginManager::unloadAll() {
-    for (auto it = loadedPlugins.begin(); it != loadedPlugins.end();) {
-        unloadPlugin(it->first);
-        it = loadedPlugins.erase(it);
-    }
+    while (!loadedPlugins.empty()) unloadPlugin(loadedPlugins.begin()->first);
 }
 
 void PluginManager::loadPlugin(const std::filesystem::path& path) {
@@ -123,6 +120,8 @@ void PluginManager::loadPlugin(const std::filesystem::path& path) {
         return;
     }
 
+    std::string declaredName;
+    bool contextCreated = false;
     try {
         const GrimPluginInfo* info = getInfoFunc();
         if (!info) {
@@ -131,11 +130,19 @@ void PluginManager::loadPlugin(const std::filesystem::path& path) {
             return;
         }
 
-        if (info->api_version > GRIM_API_VERSION) {
+        if ((info->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
+            info->api_version > GRIM_API_VERSION) {
             LOG_ERROR("PluginManager", "Plugin API version mismatch: " + name);
             unloadLib(lib);
             return;
         }
+
+        if (!info->name || !*info->name || !info->version) {
+            LOG_ERROR("PluginManager", "Invalid plugin metadata: " + name);
+            unloadLib(lib);
+            return;
+        }
+        declaredName = info->name;
 
         LOG_DEBUG("PluginManager", "Loading plugin: " + std::string(info->name) + " v" + info->version);
 
@@ -144,10 +151,12 @@ void PluginManager::loadPlugin(const std::filesystem::path& path) {
             path.string(),
             info->required_permissions
         );
+        contextCreated = true;
 
         GrimResult result = initFunc(api);
         if (result != GRIM_OK) {
             LOG_ERROR("PluginManager", "Plugin init failed: " + name);
+            PluginAPI::cleanupPluginContext(declaredName);
             unloadLib(lib);
             return;
         }
@@ -160,6 +169,7 @@ void PluginManager::loadPlugin(const std::filesystem::path& path) {
 
         LOG_DEBUG("PluginManager", "Loaded plugin: " + std::string(info->name));
     } catch (...) {
+        if (contextCreated) PluginAPI::cleanupPluginContext(declaredName);
         LOG_ERROR("PluginManager", "Exception loading " + name);
         unloadLib(lib);
     }
@@ -181,9 +191,10 @@ void PluginManager::unloadPlugin(const std::string& name) {
             shutdownFunc();
         }
 
-        PluginAPI::cleanupPluginContext(it->second.declaredName);
-        unloadLib(it->second.handle);
     } catch (...) {
         LOG_ERROR("PluginManager", "Error while unloading " + name);
     }
+    PluginAPI::cleanupPluginContext(it->second.declaredName);
+    unloadLib(it->second.handle);
+    loadedPlugins.erase(it);
 }

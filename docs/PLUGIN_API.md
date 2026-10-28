@@ -1,8 +1,11 @@
 # G.R.I.M Plugin API Documentation
 
-**Version**: 1.0.0  
-**Last Updated**: October 29, 2025  
-**API Version**: 1.0.0  
+**Version**: 2.0.0
+
+**Last Updated**: October 28, 2026
+
+**API Version**: 2.0.0
+
 **Implementation Status**: Beta (Core features functional, some advanced features stubbed)
 
 ---
@@ -21,17 +24,81 @@
 
 ## Overview
 
+### Explicit plugin ownership (API v2)
+
+There is no active/current plugin global. The loader creates one host-owned
+`GrimPluginAPI` table per loaded plugin. Its opaque `host_context` identifies
+that plugin's name, path, and permissions. Plugins retain the table received by
+`grim_plugin_init` and pass it as the first argument to every host function:
+
+```cpp
+api->register_command(api, "my_command", myCommandHandler, user_data);
+api->log(api, GRIM_LOG_INFO, "message");
+if (api->has_permission(api, GRIM_PERM_FILESYSTEM)) { /* ... */ }
+```
+
+A command, event, or timer callback uses its provider's retained API pointer;
+callbacks do not select or change any active plugin. The C++ `grim::PluginAPI`
+wrapper supplies that pointer automatically. Handler signatures and `user_data`
+remain unchanged. Tool execution still occurs through explicit command dispatch.
+`MMO::ToolRegistry` is the single store for both tool metadata and callable
+handlers. `commandMap`, the API's `s_commands`, and the old `CommandRegistry`
+staging store have been removed. Built-ins and plugin commands register directly;
+bootstrap can enrich metadata with `updateMetadata` without replacing handlers.
+
+The table remains valid through `grim_plugin_shutdown`; host cleanup then removes
+owned commands, subscriptions, timers, and the API instance. It must not be used
+after cleanup. Plugins must stop their own threads before shutdown returns. The
+API remains serialized by the caller; this change does not add thread safety or
+in-flight-call pinning for hot reload. Native libraries execute in the host
+process; permission checks on host API calls are not a process sandbox.
+
+Commands cannot replace existing command/registry names. Unregistering commands,
+unsubscribing events, and cancelling timers require the registering owner. Failed
+initialization removes owned API registrations before unloading the library.
+
+**ABI migration:** API v2 changes function signatures and table layout. The loader
+rejects v1 binaries and newer unsupported versions before initialization. Rebuild
+plugins against `core/plugin_api.hpp`, pass the API pointer at each host call,
+and check the API major version. No v1 compatibility shim uses ambient identity.
+Existing plugin DLLs on disk are not rebuilt automatically.
+
+
 Current lifecycle integration: application teardown stops wake input and calls
 `PluginManager::unloadAll()` before destroying host services. Plugin cleanup uses
 the declared plugin name recorded at load, matching registration identity.
-The published API table layout is retained. The old `CommandRegistry` now only
-stages built-in metadata for startup import; runtime queries use MMO `ToolRegistry`.
+The v2 API table intentionally breaks v1 binary compatibility. Registration,
+runtime queries, aliases, dispatch, usage statistics, and provider removal use
+MMO `ToolRegistry`. Legacy host registration exports are stateless adapters.
 Automatic hot-reload polling and plugin timer dispatch are not currently wired
 into the application loop; the historical feature tables below are not proof of
 that integration.
 
-Focused host-only loader/shutdown and retained-registry regression tests:
+Focused host-only loader, API ownership, and unified-registry regression tests:
 `powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1`.
+This also compiles the real API implementation with service sinks and checks
+identity, permissions, later registration, callbacks, ownership, and cleanup
+with two plugins present. The registry tests use the real command-dispatch path
+and cover aliases, duplicate rejection, batch rollback, metadata enrichment,
+execution status, statistics, and provider removal. No GRIM application is built
+or launched. The existing Tools viewer regression is available separately through
+`tests/run_ui_input_foundation.ps1 -Tools`.
+
+Host-side registration requires a `ToolDescriptor` and a `ToolHandler` in the same
+call. Descriptors live in `MMO/Core/ToolDescriptor.hpp`, independent of registry
+storage. Missing handlers/providers/IDs reject registration; duplicate names or
+aliases return false. Explicit replacement must retain provider identity and
+provider type. Batch validation commits all entries or none. Metadata updates
+preserve handlers and usage statistics. Aliases resolve to one canonical entry
+for both discovery and execution.
+
+`dispatchCommand` delegates to `ToolRegistry::invoke`, which runs the selected
+handler outside the registry mutex and records the result once. Unknown and
+unavailable tools fail without invoking a handler. Invocation does not infer
+intent or replace the caller's argument/policy validation. Registry entries are
+retained during execution, but this does not yet pin native DLL lifetime against
+concurrent loader shutdown. Full plugin-supplied metadata registration and result
+ownership remain separate API work.
 
 The GRIM Plugin API enables dynamic extension of GRIM's functionality through hot-reloadable DLL plugins. Plugins can:
 
@@ -47,7 +114,7 @@ The GRIM Plugin API enables dynamic extension of GRIM's functionality through ho
 - **Host-side**: `GRIM.exe` exposes functions via `GrimPluginAPI` table
 - **Plugin-side**: DLLs implement required entry points
 - **Hot-reload**: Plugins can be reloaded without restarting GRIM
-- **Permission-based**: Sandboxed access via permission flags
+- **Permission-based**: Host API access checks via permission flags
 
 ---
 
@@ -115,8 +182,8 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 
 // Command handler
 static GrimCommandResult myCommandHandler(const char* input, void* user_data) {
-    g_api->log(GRIM_LOG_INFO, "My command executed!");
-    g_api->speak("Hello from my plugin!");
+    g_api->log(g_api, GRIM_LOG_INFO, "My command executed!");
+    g_api->queue_tts(g_api, "Hello from my plugin!", nullptr);
     
     return {
         .success = true,
@@ -132,30 +199,30 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     g_api = api;
     
     // Check API version
-    if (api->api_version < GRIM_API_VERSION) {
+    if ((api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
     
   // Register command
-    GrimResult res = g_api->register_command("my_command", myCommandHandler, nullptr);
+    GrimResult res = g_api->register_command(g_api, "my_command", myCommandHandler, nullptr);
     if (res != GRIM_OK) {
-   g_api->log(GRIM_LOG_ERROR, "Failed to register command");
+   g_api->log(g_api, GRIM_LOG_ERROR, "Failed to register command");
       return res;
     }
     
-    g_api->log(GRIM_LOG_INFO, "My Plugin initialized successfully!");
+    g_api->log(g_api, GRIM_LOG_INFO, "My Plugin initialized successfully!");
     return GRIM_OK;
 }
 
 // Plugin shutdown
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
-    g_api->unregister_command("my_command");
-    g_api->log(GRIM_LOG_INFO, "My Plugin shut down");
+    g_api->unregister_command(g_api, "my_command");
+    g_api->log(g_api, GRIM_LOG_INFO, "My Plugin shut down");
 }
 
 // Optional: Hot-reload support
 extern "C" PLUGIN_EXPORT void grim_plugin_reload() {
-  g_api->log(GRIM_LOG_INFO, "My Plugin reloaded");
+  g_api->log(g_api, GRIM_LOG_INFO, "My Plugin reloaded");
 }
 ```
 
@@ -189,10 +256,10 @@ Place your `my_plugin.dll` in the `plugins/` directory. GRIM will auto-discover 
 
 ```cpp
 // Simple log message
-api->log(GRIM_LOG_INFO, "Plugin loaded");
+api->log(api, GRIM_LOG_INFO, "Plugin loaded");
 
 // Formatted log message
-api->log_fmt(GRIM_LOG_DEBUG, "Value: %d, String: %s", 42, "test");
+api->log_fmt(api, GRIM_LOG_DEBUG, "Value: %d, String: %s", 42, "test");
 ```
 
 **Log Levels**:
@@ -210,20 +277,20 @@ api->log_fmt(GRIM_LOG_DEBUG, "Value: %d, String: %s", 42, "test");
 
 ```cpp
 // Register a command
-GrimResult res = api->register_command("weather", weatherHandler, nullptr);
+GrimResult res = api->register_command(api, "weather", weatherHandler, nullptr);
 
 // Check if command exists
-if (api->is_command_registered("weather")) {
+if (api->is_command_registered(api, "weather")) {
     // Already registered
 }
 
 // Unregister
-api->unregister_command("weather");
+api->unregister_command(api, "weather");
 
 // Execute a command programmatically
-GrimCommandResult result = api->execute_command("help");
+GrimCommandResult result = api->execute_command(api, "help");
 if (result.success) {
-  api->log(GRIM_LOG_INFO, result.message);
+  api->log(api, GRIM_LOG_INFO, result.message);
 }
 ```
 
@@ -239,18 +306,18 @@ GrimCommandResult handler(const char* input, void* user_data);
 ```cpp
 // Event callback
 void onEvent(const char* event_name, const void* event_data, size_t data_size, void* user_data) {
-    api->log_fmt(GRIM_LOG_DEBUG, "Event: %s (size: %zu)", event_name, data_size);
+    api->log_fmt(api, GRIM_LOG_DEBUG, "Event: %s (size: %zu)", event_name, data_size);
 }
 
 // Subscribe to events
-GrimEventHandle handle = api->subscribe_event("command_executed", onEvent, nullptr);
+GrimEventHandle handle = api->subscribe_event(api, "command_executed", onEvent, nullptr);
 
 // Unsubscribe
-api->unsubscribe_event(handle);
+api->unsubscribe_event(api, handle);
 
 // Emit custom events
 const char* data = "custom payload";
-api->emit_event("my_plugin_event", data, strlen(data) + 1);
+api->emit_event(api, "my_plugin_event", data, strlen(data) + 1);
 ```
 
 ---
@@ -259,18 +326,18 @@ api->emit_event("my_plugin_event", data, strlen(data) + 1);
 
 ```cpp
 // Store context
-api->set_context("last_query", "weather in NYC");
+api->set_context(api, "last_query", "weather in NYC");
 
 // Retrieve context
-const char* query = api->get_context("last_query");
+const char* query = api->get_context(api, "last_query");
 
 // Check if exists
-if (api->has_context("last_query")) {
+if (api->has_context(api, "last_query")) {
     // Context exists
 }
 
 // Delete context
-api->delete_context("last_query");
+api->delete_context(api, "last_query");
 ```
 
 ---
@@ -279,13 +346,13 @@ api->delete_context("last_query");
 
 ```cpp
 // Store memory (not yet functional)
-api->store_memory("user_preference", "dark_mode", "settings");
+api->store_memory(api, "user_preference", "dark_mode", "settings");
 
 // Retrieve memory (not yet functional)
-const char* value = api->retrieve_memory("user_preference");
+const char* value = api->retrieve_memory(api, "user_preference");
 
 // Delete memory (not yet functional)
-api->delete_memory("user_preference");
+api->delete_memory(api, "user_preference");
 ```
 
 > **Status**: These functions are stubbed and return safe defaults. They log debug messages instead of performing actual operations.
@@ -296,16 +363,16 @@ api->delete_memory("user_preference");
 
 ```cpp
 // Classify user intent
-GrimIntent intent = api->classify_intent("open chrome");
+GrimIntent intent = api->classify_intent(api, "open chrome");
 if (intent.matched) {
-    api->log_fmt(GRIM_LOG_INFO, "Intent: %s (confidence: %.2f)", intent.name, intent.confidence);
+    api->log_fmt(api, GRIM_LOG_INFO, "Intent: %s (confidence: %.2f)", intent.name, intent.confidence);
 }
 
 // Resolve synonym
-const char* canonical = api->resolve_synonym("launch");  // Returns "open_app"
+const char* canonical = api->resolve_synonym(api, "launch");  // Returns "open_app"
 
 // Get conversation history
-const char* history = api->get_conversation_history(10);  // Last 10 messages
+const char* history = api->get_conversation_history(api, 10);  // Last 10 messages
 ```
 
 ---
@@ -314,7 +381,7 @@ const char* history = api->get_conversation_history(10);  // Last 10 messages
 
 ```cpp
 // Simple speech
-api->speak("Hello, world!");
+api->queue_tts(api, "Hello, world!", nullptr);
 
 // Advanced speech with parameters
 GrimVoiceParams params = {
@@ -323,15 +390,15 @@ GrimVoiceParams params = {
     .volume = 0.8f,
     .voice_id = "default"
 };
-api->speak_with_params("Custom voice output", &params);
+api->queue_tts(api, "Custom voice output", &params);
 
 // Check if speaking
-if (api->is_speaking()) {
-    api->log(GRIM_LOG_DEBUG, "TTS is active");
+if (api->is_speaking(api)) {
+    api->log(api, GRIM_LOG_DEBUG, "TTS is active");
 }
 
 // Stop audio (⚠️ Stubbed)
-api->stop_audio();  // Not yet functional
+api->stop_tts(api);  // Not yet functional
 ```
 
 ---
@@ -340,13 +407,13 @@ api->stop_audio();  // Not yet functional
 
 ```cpp
 // Send response to console
-api->send_response("Operation complete");
+api->send_response(api, "Operation complete");
 
 // Colored response
-api->send_response_colored("Success!", 0x00FF00);  // Green
+api->send_response_colored(api, "Success!", 0x00FF00);  // Green
 
 // Show notification
-api->show_notification("Alert", "Task finished!", GRIM_NOTIFY_INFO);
+api->show_notification(api, "Alert", "Task finished!");
 ```
 
 ---
@@ -355,16 +422,16 @@ api->show_notification("Alert", "Task finished!", GRIM_NOTIFY_INFO);
 
 ```cpp
 // Get OS name
-const char* os = api->get_system_info("os");  // e.g., "Windows"
+const char* os = api->get_system_info(api, "os");  // e.g., "Windows"
 
 // Get CPU info
-const char* cpu = api->get_system_info("cpu");  // e.g., "8 cores"
+const char* cpu = api->get_system_info(api, "cpu");  // e.g., "8 cores"
 
 // Get memory usage (bytes)
-uint64_t mem = api->get_memory_usage();
+uint64_t mem = api->get_memory_usage(api);
 
 // Get CPU usage (0-100%)
-float cpu_usage = api->get_cpu_usage();
+float cpu_usage = api->get_cpu_usage(api);
 ```
 
 ---
@@ -374,17 +441,17 @@ float cpu_usage = api->get_cpu_usage();
 ```cpp
 // Timer callback
 void onTimer(uint64_t timer_id, void* user_data) {
-    api->log_fmt(GRIM_LOG_DEBUG, "Timer %llu fired", timer_id);
+    api->log_fmt(api, GRIM_LOG_DEBUG, "Timer %llu fired", timer_id);
 }
 
 // Create one-shot timer (1 second)
-GrimTimerHandle timer = api->create_timer(1000, false, onTimer, nullptr);
+GrimTimerHandle timer = api->create_timer(api, 1000, false, onTimer, nullptr);
 
 // Create repeating timer (500ms)
-GrimTimerHandle repeating = api->create_timer(500, true, onTimer, nullptr);
+GrimTimerHandle repeating = api->create_timer(api, 500, true, onTimer, nullptr);
 
 // Cancel timer
-api->cancel_timer(timer);
+api->cancel_timer(api, timer);
 ```
 
 ---
@@ -393,21 +460,21 @@ api->cancel_timer(timer);
 
 ```cpp
 // Get current plugin name
-const char* name = api->get_plugin_name();
+const char* name = api->get_plugin_name(api);
 
 // Get plugin DLL path
-const char* path = api->get_plugin_path();
+const char* path = api->get_plugin_path(api);
 
 // Get permission bitmask
-uint32_t perms = api->get_permissions();
+uint32_t perms = api->get_permissions(api);
 
 // Check specific permission
-if (api->has_permission(GRIM_PERM_FILESYSTEM)) {
+if (api->has_permission(api, GRIM_PERM_FILESYSTEM)) {
     // Can access files
 }
 
 // Request hot-reload
-api->request_reload();
+api->request_reload(api);
 ```
 
 ---
@@ -442,7 +509,7 @@ static GrimPluginInfo info = {
 ### Checking Permissions
 
 ```cpp
-if (api->has_permission(GRIM_PERM_FILESYSTEM)) {
+if (api->has_permission(api, GRIM_PERM_FILESYSTEM)) {
     // Safe to call file operations
 } else {
     return GRIM_ERROR_PERMISSION_DENIED;
@@ -458,8 +525,8 @@ Always unregister commands and unsubscribe from events in `grim_plugin_shutdown(
 
 ```cpp
 PLUGIN_EXPORT void grim_plugin_shutdown() {
-    g_api->unregister_command("mycommand");
-    g_api->unsubscribe_event(my_event_handle);
+    g_api->unregister_command(g_api, "mycommand");
+    g_api->unsubscribe_event(g_api, my_event_handle);
     // Free any allocated resources
 }
 ```
@@ -471,9 +538,9 @@ The plugin API is **not** thread-safe. Only call API functions from:
 - Registered callbacks (command handlers, event handlers, timers)
 
 ### 3. Memory Management
-- Use `g_api->allocate_memory()` and `g_api->free_memory()` for cross-DLL allocations
+- Use `g_api->allocate_memory(g_api)` and `g_api->free_memory(g_api)` for cross-DLL allocations
 - GRIM owns strings returned by API functions - don't free them unless documented
-- Use `g_api->string_duplicate()` if you need to keep a string
+- Use `g_api->string_duplicate(g_api)` if you need to keep a string
 
 ### 4. Permission Requests
 Only request permissions you actually need. Users may deny plugins with excessive permissions.
@@ -496,7 +563,7 @@ Always check API version compatibility:
 
 ```cpp
 PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
-    if (api->api_version < GRIM_API_VERSION) {
+    if ((api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
     // ...
@@ -575,7 +642,7 @@ Leverage GRIM's synonym system for natural command variations:
 **Problem**: Changes to plugin not reflected after rebuild.
 
 **Solutions**:
-- Call `g_api->request_reload()` from plugin or reload via GRIM command
+- Call `g_api->request_reload(g_api)` from plugin or reload via GRIM command
 - Ensure DLL is not locked by debugger
 - Implement `grim_plugin_reload()` for custom reload logic
 

@@ -1,3 +1,4 @@
+#include "MMO/Core/ToolRegistry.hpp"
 #include "ai_rl.hpp"
 #include "logger.hpp"
 #include "bridge_manager.hpp"
@@ -28,9 +29,7 @@ static std::mutex g_batchMutex;
 std::vector<std::string> buildDynamicActionSpace()
 {
     std::vector<std::string> actions;
-    actions.reserve(commandMap.size());
-    for (const auto& [cmd, _] : commandMap)
-        actions.push_back(cmd);
+    actions = GRIM::MMO::ToolRegistry::instance().getExecutableNames();
     return actions;
 }
 

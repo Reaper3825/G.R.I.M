@@ -1,3 +1,4 @@
+#include "MMO/Core/ToolRegistry.hpp"
 #include "Reward_Learning/grim_rl.hpp"
 
 #include "ai/ai_rl.hpp"
@@ -25,7 +26,7 @@ std::optional<std::string> extractSuggestion(const nlohmann::json& response)
 
 bool isRegisteredCommand(const std::string& cmd)
 {
-    return commandMap.find(cmd) != commandMap.end();
+    return GRIM::MMO::ToolRegistry::instance().isExecutable(cmd);
 }
 
 } // namespace

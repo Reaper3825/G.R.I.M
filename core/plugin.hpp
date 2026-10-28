@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-// ---------- Stable ABI types ----------
+// ---------- Legacy host registration types ----------
 struct CommandResult;
 using PluginCommandFunc = CommandResult(*)(const std::string&);
 
@@ -17,7 +17,7 @@ using PluginCommandFunc = CommandResult(*)(const std::string&);
 #endif
 
 extern "C" {
-// Host API (plugins call these)
+// Legacy host adapters into ToolRegistry. Dynamic plugins use plugin_api.hpp.
 GRIM_HOST_API void grim_register_command(const char* name, PluginCommandFunc func);
 GRIM_HOST_API void grim_unregister_command(const char* name);
 }

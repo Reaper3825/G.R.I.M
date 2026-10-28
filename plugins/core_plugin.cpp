@@ -1,7 +1,7 @@
 // plugins/core_plugin.cpp
-#include "plugin.hpp"
 #include "logger.hpp"
-#include "command_registry.hpp"  // ✅ NEW: Command registry
+#include "MMO/Core/ToolRegistry.hpp"
+#include <stdexcept>
 
 #include "commands_interface.hpp"
 #include "commands_filesystem.hpp"
@@ -16,15 +16,25 @@
 #include "commands_perception.hpp"
 #include "commands_question.hpp"
 
-// Helper macro for registering with metadata
+// Built-ins publish metadata and execution together in the sole tool registry.
+static GRIM::MMO::ToolRegistration builtinTool(const char* id, GRIM::MMO::ToolHandler handler,
+                                const char* description, const char* category, bool informational) {
+    GRIM::MMO::ToolDescriptor tool;
+    tool.tool_id = tool.display_name = tool.usage = id;
+    tool.description = description;
+    tool.category = category;
+    tool.provider_name = "builtin";
+    tool.version = "1.0";
+    tool.is_informational = informational;
+    tool.needs_confirmation = !informational;
+    return {std::move(tool), std::move(handler)};
+}
 #define REGISTER_TOOL(cmd, handler, desc, cat, isInfo) \
-    grim_register_command(cmd, handler); \
-    GRIM::CommandRegistry::registerTool(cmd, { \
-        cmd, desc, cmd, cat, isInfo, !isInfo, {}, {}, {} \
-    });
+    tools.push_back(builtinTool(cmd, handler, desc, cat, isInfo))
 
 // Built into the host; dynamic plugins use core/plugin_api.hpp.
 static void register_all_commands() {
+    std::vector<GRIM::MMO::ToolRegistration> tools;
     LOG_DEBUG("Plugin", "Registering core commands...");
     
     // Core AI + NLP
@@ -255,9 +265,11 @@ static void register_all_commands() {
                   "Show or change active AI backend",
                   "system", false);
 
+    if (!GRIM::MMO::ToolRegistry::instance().registerBatch({}, tools))
+        throw std::runtime_error("Conflicting built-in tool registration");
     LOG_DEBUG("Plugin", "Core command registration complete");
-    LOG_DEBUG("CommandRegistry", "Total registered tools: " + 
-              std::to_string(GRIM::CommandRegistry::getToolCount()));
+    LOG_DEBUG("ToolRegistry", "Total registered tools: " +
+              std::to_string(GRIM::MMO::ToolRegistry::instance().toolCount()));
     
     // Add additional built-in commands here.
 }

@@ -680,28 +680,28 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         return GRIM_ERROR_INVALID_PARAM;
     }
     
-    if (api->api_version < GRIM_API_VERSION) {
+    if ((api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
     
     g_api = api;
-    g_api->log(GRIM_LOG_INFO, "Network Test Plugin initializing...");
+    g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin initializing...");
     
     // Register commands
-    GrimResult res = g_api->register_command("networktest", networkTestHandler, nullptr);
+    GrimResult res = g_api->register_command(g_api, "networktest", networkTestHandler, nullptr);
     if (res != GRIM_OK) {
-        g_api->log(GRIM_LOG_ERROR, "Failed to register 'networktest' command");
+        g_api->log(g_api, GRIM_LOG_ERROR, "Failed to register 'networktest' command");
         return res;
     }
     
-    res = g_api->register_command("networktest_stop", networkTestStopHandler, nullptr);
+    res = g_api->register_command(g_api, "networktest_stop", networkTestStopHandler, nullptr);
     if (res != GRIM_OK) {
-        g_api->log(GRIM_LOG_ERROR, "Failed to register 'networktest_stop' command");
-        g_api->unregister_command("networktest");
+        g_api->log(g_api, GRIM_LOG_ERROR, "Failed to register 'networktest_stop' command");
+        g_api->unregister_command(g_api, "networktest");
         return res;
     }
     
-    g_api->log(GRIM_LOG_INFO, "Network Test Plugin loaded successfully");
+    g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin loaded successfully");
     return GRIM_OK;
 }
 
@@ -711,8 +711,8 @@ extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
         // Stop any running test
         GRIM::NetworkTest::stopTest();
         
-        g_api->unregister_command("networktest");
-        g_api->unregister_command("networktest_stop");
-        g_api->log(GRIM_LOG_INFO, "Network Test Plugin unloaded");
+        g_api->unregister_command(g_api, "networktest");
+        g_api->unregister_command(g_api, "networktest_stop");
+        g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin unloaded");
     }
 }

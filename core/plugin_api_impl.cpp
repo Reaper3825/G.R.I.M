@@ -9,12 +9,9 @@
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
 #include "commands/commands_ai.hpp"
-#include "memory/unified_memory.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
-#include "console_history.hpp"
-#include "timer.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "helpers/grim_input.hpp"  // For GRIMInput::parseInput
 #include "synonyms.hpp"            // For normalizeWord() synonym resolution
@@ -26,6 +23,12 @@
 #include <algorithm>
 #include <filesystem>
 #include <thread>
+#include <memory>
+#include <stdexcept>
+#include <sstream>
+#include <cstdio>
+#include <cstdlib>
+#include <chrono>
 
 // Platform-specific includes
 #ifdef _WIN32
@@ -43,22 +46,13 @@
 #endif
 
 // External globals
-extern std::unordered_map<std::string, CommandFunc> commandMap;
-extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 extern GRIM::MMO::HardwareInventory g_hardwareInventory;
-extern std::vector<Timer> timers;
 
 namespace PluginAPI {
 
 // ============================================================================
 // Internal Data Structures
 // ============================================================================
-
-struct RegisteredCommand {
-    GrimCommandHandler handler;
-    void* user_data;
-    std::string plugin_name;
-};
 
 struct EventSubscription {
     std::string event_name;
@@ -75,30 +69,38 @@ struct PluginTimer {
     void* user_data;
     std::chrono::steady_clock::time_point next_fire;
     bool active;
+    std::string plugin_name;
 };
 
 struct PluginContext {
     std::string name;
     std::string path;
     uint32_t permissions;
+    GrimPluginAPI api{};
 };
 
 // Static storage
-static std::unordered_map<std::string, RegisteredCommand> s_commands;
 static std::unordered_map<uint64_t, EventSubscription> s_event_subscriptions;
 static uint64_t s_next_event_id = 1;
 static std::unordered_map<uint64_t, PluginTimer> s_timers;
 static uint64_t s_next_timer_id = 1;
 static std::unordered_map<std::string, std::string> s_context_storage;
 static std::unordered_map<void*, std::string> s_allocated_strings;
-static PluginContext s_current_plugin_context;
+static std::unordered_map<std::string, std::unique_ptr<PluginContext>> s_plugin_contexts;
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-static bool checkPermission(GrimPermission perm) {
-    return (s_current_plugin_context.permissions & perm) != 0;
+static const PluginContext& pluginContext(const GrimPluginAPI* self) {
+    if (!self || !self->host_context) {
+        throw std::invalid_argument("Plugin API requires its owning API object");
+    }
+    return *static_cast<const PluginContext*>(self->host_context);
+}
+
+static bool checkPermission(const GrimPluginAPI* self, GrimPermission perm) {
+    return (pluginContext(self).permissions & perm) == static_cast<uint32_t>(perm);
 }
 
 static const char* allocateString(const std::string& str) {
@@ -112,8 +114,8 @@ static const char* allocateString(const std::string& str) {
 // Logging Implementation
 // ============================================================================
 
-static void api_log(GrimLogLevel level, const char* message) {
-    std::string prefix = "[Plugin: " + s_current_plugin_context.name + "] ";
+static void api_log(const GrimPluginAPI* self, GrimLogLevel level, const char* message) {
+    std::string prefix = "[Plugin: " + pluginContext(self).name + "] ";
     std::string full_msg = prefix + message;
     
     switch (level) {
@@ -125,114 +127,68 @@ static void api_log(GrimLogLevel level, const char* message) {
     }
 }
 
-static void api_log_fmt(GrimLogLevel level, const char* format, ...) {
+static void api_log_fmt(const GrimPluginAPI* self, GrimLogLevel level, const char* format, ...) {
     char buffer[1024];
     va_list args;
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
-    api_log(level, buffer);
+    api_log(self, level, buffer);
 }
 
 // ============================================================================
 // Command Registration Implementation
 // ============================================================================
 
-static GrimResult api_register_command(const char* command_name, GrimCommandHandler handler, void* user_data) {
-    if (!command_name || !handler) {
+static GrimResult api_register_command(const GrimPluginAPI* self, const char* command_name, GrimCommandHandler handler, void* user_data) {
+    if (!command_name || !*command_name || !handler) {
         return GRIM_ERROR_INVALID_PARAM;
     }
     
     std::string cmd_name = command_name;
     
-    // Check if already registered
-    if (s_commands.find(cmd_name) != s_commands.end()) {
-        return GRIM_ERROR_ALREADY_EXISTS;
-    }
-    
-    // Register in our tracking
-    RegisteredCommand reg_cmd;
-    reg_cmd.handler = handler;
-    reg_cmd.user_data = user_data;
-    reg_cmd.plugin_name = s_current_plugin_context.name;
-    s_commands[cmd_name] = reg_cmd;
-    
-    // Register in GRIM's command system
-    commandMap[cmd_name] = [cmd_name](const std::string& input) -> CommandResult {
-        auto it = s_commands.find(cmd_name);
-        if (it == s_commands.end()) {
-            CommandResult result;
-            result.success = false;
-            result.message = "Command handler not found";
-            return result;
-        }
-        
-        GrimCommandResult grim_result = it->second.handler(input.c_str(), it->second.user_data);
-        
+    const auto& owner = pluginContext(self);
+    GRIM::MMO::ToolDescriptor desc;
+    desc.tool_id = desc.display_name = cmd_name;
+    desc.provider_type = GRIM::MMO::ToolProviderType::Plugin;
+    desc.provider_name = owner.name;
+    desc.description = "Plugin command: " + cmd_name;
+    desc.category = "plugin";
+    desc.permission_bits = owner.permissions;
+    desc.is_informational = false;
+    auto invoke = [handler, user_data](const std::string& input) -> CommandResult {
+        const auto returned = handler(input.c_str(), user_data);
         CommandResult result;
-        result.success = grim_result.success;
-        result.message = grim_result.message ? grim_result.message : "";
-        result.errorCode = grim_result.error_code ? grim_result.error_code : "";
-        result.category = grim_result.category ? grim_result.category : "";
-        
-        // Convert RGB to Color
-        uint32_t rgb = grim_result.color_rgb;
+        result.success = returned.success;
+        result.message = returned.message ? returned.message : "";
+        result.errorCode = returned.error_code ? returned.error_code : "";
+        result.category = returned.category ? returned.category : "";
+        const auto rgb = returned.color_rgb;
         result.color = Color{static_cast<uint8_t>((rgb >> 16) & 0xFF),
-                            static_cast<uint8_t>((rgb >> 8) & 0xFF),
-                            static_cast<uint8_t>(rgb & 0xFF)};
-        
+                             static_cast<uint8_t>((rgb >> 8) & 0xFF),
+                             static_cast<uint8_t>(rgb & 0xFF)};
         return result;
     };
-
-    // Phase 0.25: Sync plugin command into ToolRegistry
-    {
-        GRIM::MMO::ToolDescriptor desc;
-        desc.tool_id        = cmd_name;
-        desc.display_name   = cmd_name;
-        desc.provider_type  = GRIM::MMO::ToolProviderType::Plugin;
-        desc.provider_name  = s_current_plugin_context.name;
-        desc.description    = "Plugin command: " + cmd_name;
-        desc.category       = "plugin";
-        desc.permission_bits = s_current_plugin_context.permissions;
-        desc.is_informational = false;
-        GRIM::MMO::ToolRegistry::instance().registerTool(desc);
-    }
-    
-    LOG_DEBUG("PluginAPI", "Command registered: " + cmd_name);
-    return GRIM_OK;
+    return GRIM::MMO::ToolRegistry::instance().registerTool(desc, std::move(invoke))
+        ? GRIM_OK : GRIM_ERROR_ALREADY_EXISTS;
 }
 
-static GrimResult api_unregister_command(const char* command_name) {
-    if (!command_name) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    std::string cmd_name = command_name;
-    
-    auto it = s_commands.find(cmd_name);
-    if (it == s_commands.end()) {
-        return GRIM_ERROR_NOT_FOUND;
-    }
-    
-    // Remove from GRIM's command map
-    commandMap.erase(cmd_name);
-    
-    // Remove from our tracking
-    s_commands.erase(it);
-
-    // Phase 0.25: Remove from ToolRegistry
-    GRIM::MMO::ToolRegistry::instance().unregisterTool(cmd_name);
-    
-    LOG_DEBUG("PluginAPI", "Command unregistered: " + cmd_name);
-    return GRIM_OK;
+static GrimResult api_unregister_command(const GrimPluginAPI* self, const char* command_name) {
+    if (!command_name || !*command_name) return GRIM_ERROR_INVALID_PARAM;
+    auto& registry = GRIM::MMO::ToolRegistry::instance();
+    const auto tool = registry.getTool(command_name);
+    if (!tool || tool->tool_id != command_name) return GRIM_ERROR_NOT_FOUND;
+    const auto& owner = pluginContext(self);
+    if (tool->provider_type != GRIM::MMO::ToolProviderType::Plugin || tool->provider_name != owner.name)
+        return GRIM_ERROR_PERMISSION_DENIED;
+    return registry.unregisterTool(command_name, owner.name) ? GRIM_OK : GRIM_ERROR_NOT_FOUND;
 }
 
-static bool api_is_command_registered(const char* command_name) {
-    if (!command_name) return false;
-    return s_commands.find(command_name) != s_commands.end();
+static bool api_is_command_registered(const GrimPluginAPI* self, const char* command_name) {
+    return command_name && GRIM::MMO::ToolRegistry::instance().isRegistered(command_name);
 }
 
-static GrimCommandResult api_execute_command(const char* command_text) {
+static GrimCommandResult api_execute_command(const GrimPluginAPI* self, const char* command_text) {
     GrimCommandResult result;
     result.success = false;
     result.message = "Not implemented";
@@ -263,7 +219,7 @@ static GrimCommandResult api_execute_command(const char* command_text) {
 // Event System Implementation
 // ============================================================================
 
-static GrimEventHandle api_subscribe_event(const char* event_name, GrimEventCallback callback, void* user_data) {
+static GrimEventHandle api_subscribe_event(const GrimPluginAPI* self, const char* event_name, GrimEventCallback callback, void* user_data) {
     if (!event_name || !callback) {
         return nullptr;
     }
@@ -274,7 +230,7 @@ static GrimEventHandle api_subscribe_event(const char* event_name, GrimEventCall
     sub.event_name = event_name;
     sub.callback = callback;
     sub.user_data = user_data;
-    sub.plugin_name = s_current_plugin_context.name;
+    sub.plugin_name = pluginContext(self).name;
     
     s_event_subscriptions[handle] = sub;
     
@@ -282,7 +238,7 @@ static GrimEventHandle api_subscribe_event(const char* event_name, GrimEventCall
     return reinterpret_cast<GrimEventHandle>(handle);
 }
 
-static GrimResult api_unsubscribe_event(GrimEventHandle handle) {
+static GrimResult api_unsubscribe_event(const GrimPluginAPI* self, GrimEventHandle handle) {
     if (!handle) {
         return GRIM_ERROR_INVALID_PARAM;
     }
@@ -294,11 +250,14 @@ static GrimResult api_unsubscribe_event(GrimEventHandle handle) {
         return GRIM_ERROR_NOT_FOUND;
     }
     
+    if (it->second.plugin_name != pluginContext(self).name) {
+        return GRIM_ERROR_PERMISSION_DENIED;
+    }
     s_event_subscriptions.erase(it);
     return GRIM_OK;
 }
 
-static GrimResult api_emit_event(const char* event_name, const void* data, size_t data_size) {
+static GrimResult api_emit_event(const GrimPluginAPI* self, const char* event_name, const void* data, size_t data_size) {
     if (!event_name) {
         return GRIM_ERROR_INVALID_PARAM;
     }
@@ -319,7 +278,7 @@ static GrimResult api_emit_event(const char* event_name, const void* data, size_
 // Memory & Context Implementation
 // ============================================================================
 
-static const char* api_get_context(const char* key) {
+static const char* api_get_context(const GrimPluginAPI* self, const char* key) {
     if (!key) return nullptr;
     
     auto it = s_context_storage.find(key);
@@ -330,7 +289,7 @@ static const char* api_get_context(const char* key) {
     return allocateString(it->second);
 }
 
-static GrimResult api_set_context(const char* key, const char* value) {
+static GrimResult api_set_context(const GrimPluginAPI* self, const char* key, const char* value) {
     if (!key || !value) {
         return GRIM_ERROR_INVALID_PARAM;
     }
@@ -339,7 +298,7 @@ static GrimResult api_set_context(const char* key, const char* value) {
     return GRIM_OK;
 }
 
-static GrimResult api_delete_context(const char* key) {
+static GrimResult api_delete_context(const GrimPluginAPI* self, const char* key) {
     if (!key) {
         return GRIM_ERROR_INVALID_PARAM;
     }
@@ -353,13 +312,13 @@ static GrimResult api_delete_context(const char* key) {
     return GRIM_OK;
 }
 
-static bool api_has_context(const char* key) {
+static bool api_has_context(const GrimPluginAPI* self, const char* key) {
     if (!key) return false;
     return s_context_storage.find(key) != s_context_storage.end();
 }
 
-static GrimResult api_store_memory(const char* key, const char* value, const char* category) {
-    if (!checkPermission(GRIM_PERM_MEMORY)) {
+static GrimResult api_store_memory(const GrimPluginAPI* self, const char* key, const char* value, const char* category) {
+    if (!checkPermission(self, GRIM_PERM_MEMORY)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -374,8 +333,8 @@ static GrimResult api_store_memory(const char* key, const char* value, const cha
     return GRIM_OK;
 }
 
-static const char* api_retrieve_memory(const char* key) {
-    if (!checkPermission(GRIM_PERM_MEMORY)) {
+static const char* api_retrieve_memory(const GrimPluginAPI* self, const char* key) {
+    if (!checkPermission(self, GRIM_PERM_MEMORY)) {
         return nullptr;
     }
     
@@ -390,8 +349,8 @@ static const char* api_retrieve_memory(const char* key) {
     return nullptr;
 }
 
-static GrimResult api_delete_memory(const char* key) {
-    if (!checkPermission(GRIM_PERM_MEMORY)) {
+static GrimResult api_delete_memory(const GrimPluginAPI* self, const char* key) {
+    if (!checkPermission(self, GRIM_PERM_MEMORY)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -409,14 +368,14 @@ static GrimResult api_delete_memory(const char* key) {
 // NLP & AI Implementation
 // ============================================================================
 
-static GrimIntent api_classify_intent(const char* text) {
+static GrimIntent api_classify_intent(const GrimPluginAPI* self, const char* text) {
     (void)text;
     // ABI compatibility only. The application no longer classifies raw user
     // text into host-authored intents.
     return {};
 }
 
-static const char* api_resolve_synonym(const char* word) {
+static const char* api_resolve_synonym(const GrimPluginAPI* self, const char* word) {
     if (!word) return nullptr;
     
     // Use GRIM's existing synonym system (synonyms.hpp)
@@ -430,7 +389,7 @@ static const char* api_resolve_synonym(const char* word) {
     return allocateString(resolved);
 }
 
-static const char* api_get_conversation_history(int limit) {
+static const char* api_get_conversation_history(const GrimPluginAPI* self, int limit) {
     // Return JSON array of recent history
     // For now, return empty array
     return allocateString("[]");
@@ -440,8 +399,8 @@ static const char* api_get_conversation_history(int limit) {
 // Output & UI Implementation
 // ============================================================================
 
-static void api_send_response(const char* text) {
-    if (!checkPermission(GRIM_PERM_UI)) {
+static void api_send_response(const GrimPluginAPI* self, const char* text) {
+    if (!checkPermission(self, GRIM_PERM_UI)) {
         return;
     }
     
@@ -451,8 +410,8 @@ static void api_send_response(const char* text) {
     }
 }
 
-static void api_send_response_colored(const char* text, uint32_t rgb_color) {
-    if (!checkPermission(GRIM_PERM_UI)) {
+static void api_send_response_colored(const GrimPluginAPI* self, const char* text, uint32_t rgb_color) {
+    if (!checkPermission(self, GRIM_PERM_UI)) {
         return;
     }
     
@@ -467,8 +426,8 @@ static void api_send_response_colored(const char* text, uint32_t rgb_color) {
     }
 }
 
-static void api_show_notification(const char* title, const char* message) {
-    if (!checkPermission(GRIM_PERM_UI)) {
+static void api_show_notification(const GrimPluginAPI* self, const char* title, const char* message) {
+    if (!checkPermission(self, GRIM_PERM_UI)) {
         return;
     }
     
@@ -490,8 +449,8 @@ static void api_show_notification(const char* title, const char* message) {
 // Voice Implementation
 // ============================================================================
 
-static GrimResult api_queue_tts(const char* text, const GrimVoiceParams* params) {
-    if (!checkPermission(GRIM_PERM_VOICE)) {
+static GrimResult api_queue_tts(const GrimPluginAPI* self, const char* text, const GrimVoiceParams* params) {
+    if (!checkPermission(self, GRIM_PERM_VOICE)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -503,8 +462,8 @@ static GrimResult api_queue_tts(const char* text, const GrimVoiceParams* params)
     return GRIM_OK;
 }
 
-static GrimResult api_stop_tts() {
-    if (!checkPermission(GRIM_PERM_VOICE)) {
+static GrimResult api_stop_tts(const GrimPluginAPI* self) {
+    if (!checkPermission(self, GRIM_PERM_VOICE)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
   
@@ -514,8 +473,8 @@ static GrimResult api_stop_tts() {
     return GRIM_OK;
 }
 
-static bool api_is_speaking() {
-    if (!checkPermission(GRIM_PERM_VOICE)) {
+static bool api_is_speaking(const GrimPluginAPI* self) {
+    if (!checkPermission(self, GRIM_PERM_VOICE)) {
         return false;
     }
     
@@ -526,8 +485,8 @@ static bool api_is_speaking() {
 // File System Implementation
 // ============================================================================
 
-static GrimFileHandle api_open_file(const char* path, const char* mode) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static GrimFileHandle api_open_file(const GrimPluginAPI* self, const char* path, const char* mode) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return nullptr;
     }
     
@@ -539,8 +498,8 @@ static GrimFileHandle api_open_file(const char* path, const char* mode) {
     return reinterpret_cast<GrimFileHandle>(file);
 }
 
-static GrimResult api_close_file(GrimFileHandle handle) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static GrimResult api_close_file(const GrimPluginAPI* self, GrimFileHandle handle) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -553,8 +512,8 @@ static GrimResult api_close_file(GrimFileHandle handle) {
     return GRIM_OK;
 }
 
-static size_t api_read_file(GrimFileHandle handle, char* buffer, size_t size) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static size_t api_read_file(const GrimPluginAPI* self, GrimFileHandle handle, char* buffer, size_t size) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return 0;
     }
     
@@ -566,8 +525,8 @@ static size_t api_read_file(GrimFileHandle handle, char* buffer, size_t size) {
     return fread(buffer, 1, size, file);
 }
 
-static size_t api_write_file(GrimFileHandle handle, const char* data, size_t size) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static size_t api_write_file(const GrimPluginAPI* self, GrimFileHandle handle, const char* data, size_t size) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return 0;
     }
     
@@ -579,8 +538,8 @@ static size_t api_write_file(GrimFileHandle handle, const char* data, size_t siz
     return fwrite(data, 1, size, file);
 }
 
-static const char* api_read_file_text(const char* path) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static const char* api_read_file_text(const GrimPluginAPI* self, const char* path) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return nullptr;
     }
     
@@ -599,8 +558,8 @@ static const char* api_read_file_text(const char* path) {
     return allocateString(content);
 }
 
-static GrimResult api_write_file_text(const char* path, const char* content) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static GrimResult api_write_file_text(const GrimPluginAPI* self, const char* path, const char* content) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -617,8 +576,8 @@ static GrimResult api_write_file_text(const char* path, const char* content) {
     return GRIM_OK;
 }
 
-static bool api_file_exists(const char* path) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static bool api_file_exists(const GrimPluginAPI* self, const char* path) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return false;
     }
     
@@ -629,8 +588,8 @@ static bool api_file_exists(const char* path) {
     return std::filesystem::exists(path);
 }
 
-static GrimResult api_delete_file(const char* path) {
-    if (!checkPermission(GRIM_PERM_FILESYSTEM)) {
+static GrimResult api_delete_file(const GrimPluginAPI* self, const char* path) {
+    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -650,8 +609,8 @@ static GrimResult api_delete_file(const char* path) {
 // Process Management Implementation
 // ============================================================================
 
-static GrimResult api_launch_app(const char* app_name) {
-    if (!checkPermission(GRIM_PERM_PROCESS)) {
+static GrimResult api_launch_app(const GrimPluginAPI* self, const char* app_name) {
+    if (!checkPermission(self, GRIM_PERM_PROCESS)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -665,8 +624,8 @@ static GrimResult api_launch_app(const char* app_name) {
     return result.success ? GRIM_OK : GRIM_ERROR_UNKNOWN;
 }
 
-static GrimResult api_launch_process(const char* command, const char* args) {
-    if (!checkPermission(GRIM_PERM_PROCESS)) {
+static GrimResult api_launch_process(const GrimPluginAPI* self, const char* command, const char* args) {
+    if (!checkPermission(self, GRIM_PERM_PROCESS)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -733,8 +692,8 @@ static GrimResult api_launch_process(const char* command, const char* args) {
     #endif
 }
 
-static bool api_is_process_running(const char* process_name) {
-    if (!checkPermission(GRIM_PERM_PROCESS)) {
+static bool api_is_process_running(const GrimPluginAPI* self, const char* process_name) {
+    if (!checkPermission(self, GRIM_PERM_PROCESS)) {
         return false;
     }
     
@@ -811,8 +770,8 @@ static bool api_is_process_running(const char* process_name) {
     #endif
 }
 
-static GrimResult api_kill_process(const char* process_name) {
-    if (!checkPermission(GRIM_PERM_PROCESS)) {
+static GrimResult api_kill_process(const GrimPluginAPI* self, const char* process_name) {
+    if (!checkPermission(self, GRIM_PERM_PROCESS)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     
@@ -899,8 +858,8 @@ static GrimResult api_kill_process(const char* process_name) {
 // System Information Implementation
 // ============================================================================
 
-static const char* api_get_system_info(const char* key) {
-    if (!checkPermission(GRIM_PERM_SYSTEM)) {
+static const char* api_get_system_info(const GrimPluginAPI* self, const char* key) {
+    if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
         return nullptr;
     }
     
@@ -917,8 +876,8 @@ static const char* api_get_system_info(const char* key) {
 return nullptr;
 }
 
-static uint64_t api_get_memory_usage() {
-    if (!checkPermission(GRIM_PERM_SYSTEM)) {
+static uint64_t api_get_memory_usage(const GrimPluginAPI* self) {
+    if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
         return 0;
     }
     
@@ -946,15 +905,15 @@ static uint64_t api_get_memory_usage() {
     #endif
 }
 
-static float api_get_cpu_usage() {
-    if (!checkPermission(GRIM_PERM_SYSTEM)) {
+static float api_get_cpu_usage(const GrimPluginAPI* self) {
+    if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
         return 0.0f;
     }
     
     #ifdef _WIN32
     static ULARGE_INTEGER lastCPU, lastSysCPU, lastUserCPU;
     static int numProcessors = 0;
-    static HANDLE self = GetCurrentProcess();
+    static HANDLE process = GetCurrentProcess();
     static bool initialized = false;
     
     if (!initialized) {
@@ -966,7 +925,7 @@ static float api_get_cpu_usage() {
         GetSystemTimeAsFileTime(&ftime);
         memcpy(&lastCPU, &ftime, sizeof(FILETIME));
         
-        GetProcessTimes(self, &ftime, &ftime, &fsys, &fuser);
+        GetProcessTimes(process, &ftime, &ftime, &fsys, &fuser);
         memcpy(&lastSysCPU, &fsys, sizeof(FILETIME));
         memcpy(&lastUserCPU, &fuser, sizeof(FILETIME));
         
@@ -980,7 +939,7 @@ static float api_get_cpu_usage() {
     GetSystemTimeAsFileTime(&ftime);
     memcpy(&now, &ftime, sizeof(FILETIME));
     
-    GetProcessTimes(self, &ftime, &ftime, &fsys, &fuser);
+    GetProcessTimes(process, &ftime, &ftime, &fsys, &fuser);
     memcpy(&sys, &fsys, sizeof(FILETIME));
     memcpy(&user, &fuser, sizeof(FILETIME));
     
@@ -1062,7 +1021,7 @@ static float api_get_cpu_usage() {
 // Timer Implementation (Stub)
 // ============================================================================
 
-static GrimTimerHandle api_create_timer(uint64_t interval_ms, bool repeat, GrimTimerCallback callback, void* user_data) {
+static GrimTimerHandle api_create_timer(const GrimPluginAPI* self, uint64_t interval_ms, bool repeat, GrimTimerCallback callback, void* user_data) {
     if (!callback) {
         return nullptr;
     }
@@ -1077,13 +1036,14 @@ static GrimTimerHandle api_create_timer(uint64_t interval_ms, bool repeat, GrimT
     timer.user_data = user_data;
     timer.next_fire = std::chrono::steady_clock::now() + std::chrono::milliseconds(interval_ms);
     timer.active = true;
+    timer.plugin_name = pluginContext(self).name;
     
     s_timers[id] = timer;
     
     return reinterpret_cast<GrimTimerHandle>(id);
 }
 
-static GrimResult api_cancel_timer(GrimTimerHandle handle) {
+static GrimResult api_cancel_timer(const GrimPluginAPI* self, GrimTimerHandle handle) {
     if (!handle) {
         return GRIM_ERROR_INVALID_PARAM;
     }
@@ -1095,6 +1055,9 @@ static GrimResult api_cancel_timer(GrimTimerHandle handle) {
         return GRIM_ERROR_NOT_FOUND;
     }
     
+    if (it->second.plugin_name != pluginContext(self).name) {
+        return GRIM_ERROR_PERMISSION_DENIED;
+    }
     s_timers.erase(it);
     return GRIM_OK;
 }
@@ -1103,24 +1066,24 @@ static GrimResult api_cancel_timer(GrimTimerHandle handle) {
 // Plugin Lifecycle Implementation
 // ============================================================================
 
-static const char* api_get_plugin_name() {
-    return allocateString(s_current_plugin_context.name);
+static const char* api_get_plugin_name(const GrimPluginAPI* self) {
+    return allocateString(pluginContext(self).name);
 }
 
-static const char* api_get_plugin_path() {
-    return allocateString(s_current_plugin_context.path);
+static const char* api_get_plugin_path(const GrimPluginAPI* self) {
+    return allocateString(pluginContext(self).path);
 }
 
-static uint32_t api_get_permissions() {
-    return s_current_plugin_context.permissions;
+static uint32_t api_get_permissions(const GrimPluginAPI* self) {
+    return pluginContext(self).permissions;
 }
 
-static bool api_has_permission(GrimPermission perm) {
-    return checkPermission(perm);
+static bool api_has_permission(const GrimPluginAPI* self, GrimPermission perm) {
+    return checkPermission(self, perm);
 }
 
-static void api_request_reload() {
-    LOG_DEBUG("PluginAPI", "Plugin requested reload: " + s_current_plugin_context.name);
+static void api_request_reload(const GrimPluginAPI* self) {
+    LOG_DEBUG("PluginAPI", "Plugin requested reload: " + pluginContext(self).name);
     // TODO: Trigger reload
 }
 
@@ -1128,20 +1091,20 @@ static void api_request_reload() {
 // Utility Implementation
 // ============================================================================
 
-static void* api_allocate_memory(size_t size) {
+static void* api_allocate_memory(const GrimPluginAPI* self, size_t size) {
     return malloc(size);
 }
 
-static void api_free_memory(void* ptr) {
+static void api_free_memory(const GrimPluginAPI* self, void* ptr) {
     free(ptr);
 }
 
-static const char* api_string_duplicate(const char* str) {
+static const char* api_string_duplicate(const GrimPluginAPI* self, const char* str) {
     if (!str) return nullptr;
     return allocateString(str);
 }
 
-static void api_string_free(const char* str) {
+static void api_string_free(const GrimPluginAPI* self, const char* str) {
     if (!str) return;
     
     auto it = s_allocated_strings.find(const_cast<void*>(static_cast<const void*>(str)));
@@ -1156,12 +1119,15 @@ static void api_string_free(const char* str) {
 // ============================================================================
 
 GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string& plugin_path, uint32_t permissions) {
-    static GrimPluginAPI api = {};
-    
-    // Set current plugin context
-    s_current_plugin_context.name = plugin_name;
-    s_current_plugin_context.path = plugin_path;
-    s_current_plugin_context.permissions = permissions;
+    if (plugin_name.empty() || s_plugin_contexts.count(plugin_name)) {
+        throw std::invalid_argument("Empty or duplicate plugin identity: " + plugin_name);
+    }
+    auto context = std::make_unique<PluginContext>();
+    context->name = plugin_name;
+    context->path = plugin_path;
+    context->permissions = permissions;
+    auto& api = context->api;
+    api.host_context = context.get();
     
     // Fill in API table
     api.api_version = GRIM_API_VERSION;
@@ -1243,23 +1209,14 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.string_duplicate = api_string_duplicate;
     api.string_free = api_string_free;
     
-    return &api;
+    auto* result = &api;
+    s_plugin_contexts.emplace(plugin_name, std::move(context));
+    return result;
 }
 
 void cleanupPluginContext(const std::string& plugin_name) {
-    // Remove all commands registered by this plugin
-    for (auto it = s_commands.begin(); it != s_commands.end();) {
-        if (it->second.plugin_name == plugin_name) {
-            commandMap.erase(it->first);
-            it = s_commands.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    // Phase 0.25: Atomic ToolRegistry cleanup for this plugin
     GRIM::MMO::ToolRegistry::instance().unregisterByProvider(plugin_name);
-    
+
     // Remove all event subscriptions from this plugin
     for (auto it = s_event_subscriptions.begin(); it != s_event_subscriptions.end();) {
         if (it->second.plugin_name == plugin_name) {
@@ -1268,6 +1225,12 @@ void cleanupPluginContext(const std::string& plugin_name) {
             ++it;
         }
     }
+
+    for (auto it = s_timers.begin(); it != s_timers.end();) {
+        if (it->second.plugin_name == plugin_name) it = s_timers.erase(it);
+        else ++it;
+    }
+    s_plugin_contexts.erase(plugin_name);
 }
 
 void processTimers() {

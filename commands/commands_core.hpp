@@ -4,31 +4,8 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
-#include <optional>
 #include <filesystem>
-#include "helpers/color.hpp"
-
-// ====================================================
-// Command result structure
-// ====================================================
-struct CommandResult {
-    bool success = true;
-    std::string message;
-    std::string errorCode;
-    std::string category;
-    std::string voice;
-    Color color = Colors::Default;
-};
-
-// ====================================================
-// Command function type
-// ====================================================
-using CommandFunc = std::function<CommandResult(const std::string&)>;
-
-// ====================================================
-// Globals
-// ====================================================
-extern std::unordered_map<std::string, CommandFunc> commandMap;
+#include "command_result.hpp"
 
 // Correct type restored — matches old GRIM core
 extern std::filesystem::path g_currentDir;

@@ -25,7 +25,6 @@
 #include "../MMO/Backends/OllamaBackend.hpp"
 #include "../MMO/Backends/LlamaCppBackend.hpp"
 #include "../MMO/Backends/ExternalBackend.hpp"
-#include "../commands/command_registry.hpp"
 #include "../commands/commands_core.hpp"
 #include "../core/plugin_manager.hpp"
 #include "../location.hpp"
@@ -803,44 +802,10 @@ static void bootstrapMMOLayer() {
         s_idleTickThread.detach();
     }
 
-    // ToolRegistry — seed from CommandRegistry
-    {
-        // Core commands otherwise register lazily on first dispatch, after this
-        // one-time snapshot, leaving built-ins absent from tool discovery.
-        ensureCorePluginsRegistered();
-        auto& toolReg = GRIM::MMO::ToolRegistry::instance();
-        auto legacyTools = GRIM::CommandRegistry::getAllTools();
-        for (const auto& legacy : legacyTools) {
-            GRIM::MMO::ToolDescriptor desc;
-            desc.tool_id        = legacy.name;
-            desc.display_name   = legacy.name;
-            desc.provider_type  = legacy.fromPlugin
-                ? GRIM::MMO::ToolProviderType::Plugin
-                : GRIM::MMO::ToolProviderType::Builtin;
-            desc.provider_name  = legacy.fromPlugin ? legacy.pluginName : "builtin";
-            desc.description    = legacy.description;
-            desc.usage          = legacy.usage;
-            desc.category       = legacy.category;
-            desc.is_informational   = legacy.isInformational;
-            desc.needs_confirmation = legacy.needsConfirmation;
-            desc.aliases        = legacy.aliases;
-            desc.examples       = legacy.examples;
-            desc.keywords       = legacy.keywords;
-            for (const auto& p : legacy.parameters) {
-                GRIM::MMO::ToolParameter tp;
-                tp.name        = p.name;
-                tp.type        = p.type;
-                tp.description = p.description;
-                tp.required    = p.required;
-                desc.parameters.push_back(tp);
-            }
-            desc.usage_count   = legacy.usageCount;
-            desc.success_rate  = legacy.successRate;
-            toolReg.registerTool(desc);
-        }
-        LOG_PHASE("MMO ToolRegistry loaded (" +
-                  std::to_string(toolReg.toolCount()) + " tools)", true);
-    }
+    // Built-ins register metadata and handlers together, before model discovery.
+    ensureCorePluginsRegistered();
+    LOG_PHASE("MMO ToolRegistry loaded (" +
+              std::to_string(GRIM::MMO::ToolRegistry::instance().toolCount()) + " tools)", true);
 
     // ActionPolicyRegistry (Training Wheels gate)
     {
@@ -893,7 +858,8 @@ static void bootstrapMMOLayer() {
         };
         createSurface.capability_tags = {"ui", "create_surface", "display"};
         createSurface.keywords = {"panel", "popup", "modal", "toast", "window", "surface", "ui"};
-        toolReg.registerTool(createSurface);
+        if (!toolReg.updateMetadata(createSurface))
+            throw std::runtime_error("Missing or conflicting UI tool: " + createSurface.tool_id);
 
         GRIM::MMO::ToolDescriptor showSurface;
         showSurface.tool_id        = "ui.show_surface";
@@ -907,7 +873,8 @@ static void bootstrapMMOLayer() {
             {"surface_id", "string", "ID of the surface to show", true}
         };
         showSurface.capability_tags = {"ui", "show_surface"};
-        toolReg.registerTool(showSurface);
+        if (!toolReg.updateMetadata(showSurface))
+            throw std::runtime_error("Missing or conflicting UI tool: " + showSurface.tool_id);
 
         GRIM::MMO::ToolDescriptor hideSurface;
         hideSurface.tool_id        = "ui.hide_surface";
@@ -921,7 +888,8 @@ static void bootstrapMMOLayer() {
             {"surface_id", "string", "ID of the surface to hide", true}
         };
         hideSurface.capability_tags = {"ui", "hide_surface"};
-        toolReg.registerTool(hideSurface);
+        if (!toolReg.updateMetadata(hideSurface))
+            throw std::runtime_error("Missing or conflicting UI tool: " + hideSurface.tool_id);
 
         GRIM::MMO::ToolDescriptor destroySurface;
         destroySurface.tool_id        = "ui.destroy_surface";
@@ -936,7 +904,8 @@ static void bootstrapMMOLayer() {
             {"surface_id", "string", "ID of the surface to destroy", true}
         };
         destroySurface.capability_tags = {"ui", "destroy_surface"};
-        toolReg.registerTool(destroySurface);
+        if (!toolReg.updateMetadata(destroySurface))
+            throw std::runtime_error("Missing or conflicting UI tool: " + destroySurface.tool_id);
 
         LOG_PHASE("MMO UI tools registered (4 surface tools)", true);
     }

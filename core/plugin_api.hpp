@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v1.0
+// G.R.I.M Plugin API v2.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 1
+#define GRIM_API_VERSION_MAJOR 2
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -133,29 +133,33 @@ typedef void (*GrimTimerCallback)(uint64_t timer_id, void* user_data);
 typedef struct GrimPluginAPI {
     // API version info
     uint32_t api_version;
+
+    // Host-owned identity for this loaded plugin. Pass this API object as self
+    // on every call; valid until plugin shutdown and host cleanup complete.
+    const void* host_context;
     
     // ========================================================================
     // Logging Functions
     // ========================================================================
-    void (*log)(GrimLogLevel level, const char* message);
-    void (*log_fmt)(GrimLogLevel level, const char* format, ...);
+    void (*log)(const GrimPluginAPI* self, GrimLogLevel level, const char* message);
+    void (*log_fmt)(const GrimPluginAPI* self, GrimLogLevel level, const char* format, ...);
     
     // ========================================================================
     // Command Registration
     // ========================================================================
-    GrimResult (*register_command)(const char* command_name, GrimCommandHandler handler, void* user_data);
-    GrimResult (*unregister_command)(const char* command_name);
-    bool (*is_command_registered)(const char* command_name);
+    GrimResult (*register_command)(const GrimPluginAPI* self, const char* command_name, GrimCommandHandler handler, void* user_data);
+    GrimResult (*unregister_command)(const GrimPluginAPI* self, const char* command_name);
+    bool (*is_command_registered)(const GrimPluginAPI* self, const char* command_name);
     
     // Execute a command programmatically
-    GrimCommandResult (*execute_command)(const char* command_text);
+    GrimCommandResult (*execute_command)(const GrimPluginAPI* self, const char* command_text);
     
     // ========================================================================
     // Event System
     // ========================================================================
-    GrimEventHandle (*subscribe_event)(const char* event_name, GrimEventCallback callback, void* user_data);
-    GrimResult (*unsubscribe_event)(GrimEventHandle handle);
-    GrimResult (*emit_event)(const char* event_name, const void* data, size_t data_size);
+    GrimEventHandle (*subscribe_event)(const GrimPluginAPI* self, const char* event_name, GrimEventCallback callback, void* user_data);
+    GrimResult (*unsubscribe_event)(const GrimPluginAPI* self, GrimEventHandle handle);
+    GrimResult (*emit_event)(const GrimPluginAPI* self, const char* event_name, const void* data, size_t data_size);
     
     // Common events:
     // - "command_executed" - fired after any command runs
@@ -166,94 +170,94 @@ typedef struct GrimPluginAPI {
     // ========================================================================
     // Memory & Context API
     // ========================================================================
-    const char* (*get_context)(const char* key);
-    GrimResult (*set_context)(const char* key, const char* value);
-    GrimResult (*delete_context)(const char* key);
-    bool (*has_context)(const char* key);
+    const char* (*get_context)(const GrimPluginAPI* self, const char* key);
+    GrimResult (*set_context)(const GrimPluginAPI* self, const char* key, const char* value);
+    GrimResult (*delete_context)(const GrimPluginAPI* self, const char* key);
+    bool (*has_context)(const GrimPluginAPI* self, const char* key);
     
     // Long-term memory storage
-    GrimResult (*store_memory)(const char* key, const char* value, const char* category);
-    const char* (*retrieve_memory)(const char* key);
-    GrimResult (*delete_memory)(const char* key);
+    GrimResult (*store_memory)(const GrimPluginAPI* self, const char* key, const char* value, const char* category);
+    const char* (*retrieve_memory)(const GrimPluginAPI* self, const char* key);
+    GrimResult (*delete_memory)(const GrimPluginAPI* self, const char* key);
     
     // ========================================================================
     // Language & AI Functions
     // ========================================================================
     // Deprecated ABI slot: the host returns an unmatched result and performs
     // no local intent classification.
-    GrimIntent (*classify_intent)(const char* text);
-    const char* (*resolve_synonym)(const char* word);
+    GrimIntent (*classify_intent)(const GrimPluginAPI* self, const char* text);
+    const char* (*resolve_synonym)(const GrimPluginAPI* self, const char* word);
     
     // Get conversation history (returns JSON array)
-    const char* (*get_conversation_history)(int limit);
+    const char* (*get_conversation_history)(const GrimPluginAPI* self, int limit);
     
     // ========================================================================
     // Output & UI Functions
     // ========================================================================
-    void (*send_response)(const char* text);
-    void (*send_response_colored)(const char* text, uint32_t rgb_color);
-    void (*show_notification)(const char* title, const char* message);
+    void (*send_response)(const GrimPluginAPI* self, const char* text);
+    void (*send_response_colored)(const GrimPluginAPI* self, const char* text, uint32_t rgb_color);
+    void (*show_notification)(const GrimPluginAPI* self, const char* title, const char* message);
     
     // Voice synthesis (requires GRIM_PERM_VOICE)
-    GrimResult (*queue_tts)(const char* text, const GrimVoiceParams* params);
-    GrimResult (*stop_tts)();
-    bool (*is_speaking)();
+    GrimResult (*queue_tts)(const GrimPluginAPI* self, const char* text, const GrimVoiceParams* params);
+    GrimResult (*stop_tts)(const GrimPluginAPI* self);
+    bool (*is_speaking)(const GrimPluginAPI* self);
     
     // ========================================================================
     // File System API (requires GRIM_PERM_FILESYSTEM)
     // ========================================================================
-    GrimFileHandle (*open_file)(const char* path, const char* mode); // "r", "w", "a", etc.
-    GrimResult (*close_file)(GrimFileHandle handle);
-    size_t (*read_file)(GrimFileHandle handle, char* buffer, size_t size);
-    size_t (*write_file)(GrimFileHandle handle, const char* data, size_t size);
+    GrimFileHandle (*open_file)(const GrimPluginAPI* self, const char* path, const char* mode); // "r", "w", "a", etc.
+    GrimResult (*close_file)(const GrimPluginAPI* self, GrimFileHandle handle);
+    size_t (*read_file)(const GrimPluginAPI* self, GrimFileHandle handle, char* buffer, size_t size);
+    size_t (*write_file)(const GrimPluginAPI* self, GrimFileHandle handle, const char* data, size_t size);
     
     // High-level file operations
-    const char* (*read_file_text)(const char* path);  // Returns entire file as string
-    GrimResult (*write_file_text)(const char* path, const char* content);
-    bool (*file_exists)(const char* path);
-    GrimResult (*delete_file)(const char* path);
+    const char* (*read_file_text)(const GrimPluginAPI* self, const char* path);  // Returns entire file as string
+    GrimResult (*write_file_text)(const GrimPluginAPI* self, const char* path, const char* content);
+    bool (*file_exists)(const GrimPluginAPI* self, const char* path);
+    GrimResult (*delete_file)(const GrimPluginAPI* self, const char* path);
     
     // ========================================================================
     // Process Management (requires GRIM_PERM_PROCESS)
     // ========================================================================
-    GrimResult (*launch_app)(const char* app_name);
-    GrimResult (*launch_process)(const char* command, const char* args);
-    bool (*is_process_running)(const char* process_name);
-    GrimResult (*kill_process)(const char* process_name);
+    GrimResult (*launch_app)(const GrimPluginAPI* self, const char* app_name);
+    GrimResult (*launch_process)(const GrimPluginAPI* self, const char* command, const char* args);
+    bool (*is_process_running)(const GrimPluginAPI* self, const char* process_name);
+    GrimResult (*kill_process)(const GrimPluginAPI* self, const char* process_name);
     
     // ========================================================================
     // System Information (requires GRIM_PERM_SYSTEM)
     // ========================================================================
-    const char* (*get_system_info)(const char* key);  // "os", "cpu", "memory", "disk", etc.
-    uint64_t (*get_memory_usage)();  // Returns bytes
-    float (*get_cpu_usage)();        // Returns 0.0-100.0
+    const char* (*get_system_info)(const GrimPluginAPI* self, const char* key);  // "os", "cpu", "memory", "disk", etc.
+    uint64_t (*get_memory_usage)(const GrimPluginAPI* self);  // Returns bytes
+    float (*get_cpu_usage)(const GrimPluginAPI* self);        // Returns 0.0-100.0
     
     // ========================================================================
     // Timer & Scheduling
     // ========================================================================
-    GrimTimerHandle (*create_timer)(uint64_t interval_ms, bool repeat, GrimTimerCallback callback, void* user_data);
-    GrimResult (*cancel_timer)(GrimTimerHandle handle);
+    GrimTimerHandle (*create_timer)(const GrimPluginAPI* self, uint64_t interval_ms, bool repeat, GrimTimerCallback callback, void* user_data);
+    GrimResult (*cancel_timer)(const GrimPluginAPI* self, GrimTimerHandle handle);
     
     // ========================================================================
     // Plugin Lifecycle & Metadata
     // ========================================================================
-    const char* (*get_plugin_name)();
-    const char* (*get_plugin_path)();
-    uint32_t (*get_permissions)();  // Returns bitmask of GrimPermission
-    bool (*has_permission)(GrimPermission perm);
+    const char* (*get_plugin_name)(const GrimPluginAPI* self);
+    const char* (*get_plugin_path)(const GrimPluginAPI* self);
+    uint32_t (*get_permissions)(const GrimPluginAPI* self);  // Returns bitmask of GrimPermission
+    bool (*has_permission)(const GrimPluginAPI* self, GrimPermission perm);
     
     // Request plugin reload (useful for development)
-    void (*request_reload)();
+    void (*request_reload)(const GrimPluginAPI* self);
     
     // ========================================================================
     // Utility Functions
     // ========================================================================
-    void* (*allocate_memory)(size_t size);  // Use GRIM's allocator
-    void (*free_memory)(void* ptr);
+    void* (*allocate_memory)(const GrimPluginAPI* self, size_t size);  // Use GRIM's allocator
+    void (*free_memory)(const GrimPluginAPI* self, void* ptr);
     
     // String utilities (GRIM manages lifetime)
-    const char* (*string_duplicate)(const char* str);
-    void (*string_free)(const char* str);
+    const char* (*string_duplicate)(const GrimPluginAPI* self, const char* str);
+    void (*string_free)(const GrimPluginAPI* self, const char* str);
     
     // Reserved for future expansion
     void* reserved[32];
@@ -307,7 +311,7 @@ public:
     explicit PluginAPI(const GrimPluginAPI* api) : m_api(api) {}
     
     // Logging
-    void log(GrimLogLevel level, const char* message) { m_api->log(level, message); }
+    void log(GrimLogLevel level, const char* message) { m_api->log(m_api, level, message); }
     void debug(const char* msg) { log(GRIM_LOG_DEBUG, msg); }
     void info(const char* msg) { log(GRIM_LOG_INFO, msg); }
     void warning(const char* msg) { log(GRIM_LOG_WARNING, msg); }
@@ -315,45 +319,45 @@ public:
     
     // Commands
     GrimResult registerCommand(const char* name, GrimCommandHandler handler, void* data = nullptr) {
-        return m_api->register_command(name, handler, data);
+        return m_api->register_command(m_api, name, handler, data);
     }
     
     GrimResult unregisterCommand(const char* name) {
-        return m_api->unregister_command(name);
+        return m_api->unregister_command(m_api, name);
     }
     
     // Events
     GrimEventHandle subscribeEvent(const char* name, GrimEventCallback cb, void* data = nullptr) {
-        return m_api->subscribe_event(name, cb, data);
+        return m_api->subscribe_event(m_api, name, cb, data);
     }
     
     GrimResult emitEvent(const char* name, const void* data = nullptr, size_t size = 0) {
-        return m_api->emit_event(name, data, size);
+        return m_api->emit_event(m_api, name, data, size);
     }
     
     // Context
-    const char* getContext(const char* key) { return m_api->get_context(key); }
-    GrimResult setContext(const char* key, const char* value) { return m_api->set_context(key, value); }
+    const char* getContext(const char* key) { return m_api->get_context(m_api, key); }
+    GrimResult setContext(const char* key, const char* value) { return m_api->set_context(m_api, key, value); }
     
     // Output
-    void sendResponse(const char* text) { m_api->send_response(text); }
-    void showNotification(const char* title, const char* msg) { m_api->show_notification(title, msg); }
+    void sendResponse(const char* text) { m_api->send_response(m_api, text); }
+    void showNotification(const char* title, const char* msg) { m_api->show_notification(m_api, title, msg); }
     
     // Voice
     GrimResult queueTTS(const char* text, const GrimVoiceParams* params = nullptr) {
-        return m_api->queue_tts(text, params);
+        return m_api->queue_tts(m_api, text, params);
     }
     
     // File operations
-    const char* readFile(const char* path) { return m_api->read_file_text(path); }
-    GrimResult writeFile(const char* path, const char* content) { return m_api->write_file_text(path, content); }
-    bool fileExists(const char* path) { return m_api->file_exists(path); }
+    const char* readFile(const char* path) { return m_api->read_file_text(m_api, path); }
+    GrimResult writeFile(const char* path, const char* content) { return m_api->write_file_text(m_api, path, content); }
+    bool fileExists(const char* path) { return m_api->file_exists(m_api, path); }
     
     // System info
-    const char* getSystemInfo(const char* key) { return m_api->get_system_info(key); }
+    const char* getSystemInfo(const char* key) { return m_api->get_system_info(m_api, key); }
     
     // Permissions
-    bool hasPermission(GrimPermission perm) { return m_api->has_permission(perm); }
+    bool hasPermission(GrimPermission perm) { return m_api->has_permission(m_api, perm); }
     
     // Raw API access
     const GrimPluginAPI* raw() const { return m_api; }
@@ -374,7 +378,7 @@ static const GrimPluginAPI* g_api = nullptr;
 
 // Command handler
 static GrimCommandResult my_command_handler(const char* input, void* user_data) {
-    g_api->log(GRIM_LOG_INFO, "My plugin command executed!");
+    g_api->log(g_api, GRIM_LOG_INFO, "My plugin command executed!");
     
     GrimCommandResult result;
     result.success = true;
@@ -399,15 +403,15 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 
 // Initialize
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
-    if (api->api_version < GRIM_API_VERSION) {
+    if ((api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
     
     g_api = api;
-    g_api->log(GRIM_LOG_INFO, "Example plugin initializing...");
+    g_api->log(g_api, GRIM_LOG_INFO, "Example plugin initializing...");
     
     // Register a command
-    g_api->register_command("example", my_command_handler, nullptr);
+    g_api->register_command(g_api, "example", my_command_handler, nullptr);
     
     return GRIM_OK;
 }
@@ -415,8 +419,8 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
 // Shutdown
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     if (g_api) {
-        g_api->log(GRIM_LOG_INFO, "Example plugin shutting down...");
-        g_api->unregister_command("example");
+        g_api->log(g_api, GRIM_LOG_INFO, "Example plugin shutting down...");
+        g_api->unregister_command(g_api, "example");
     }
 }
 */
