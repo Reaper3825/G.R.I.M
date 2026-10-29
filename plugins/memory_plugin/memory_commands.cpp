@@ -1,12 +1,5 @@
-#include "commands_memory.hpp"
-#include "error_manager.hpp"
-#include "memory/unified_memory.hpp"
-#include "memory/memory_buffer_rotation.hpp"
-#include "logger.hpp"
-#include <string>
-
-// Externals
-extern GRIM::UnifiedMemoryStorage g_memoryStorage;
+#include "host_memory.hpp"
+#include "plugins/plugin_logging.hpp"
 
 // ====================================================
 // [Memory] Remember a fact or key/value pair
@@ -15,7 +8,7 @@ CommandResult cmdRemember(const std::string& arg) {
     if (arg.empty()) {
         return {
             false,                                                    // success
-            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_INPUT"), // message
+            hostMemory::errorMessage("ERR_MEMORY_MISSING_INPUT"), // message
             "ERR_MEMORY_MISSING_INPUT",                               // errorCode
             "error",                                                  // category
             "Missing memory input",                                   // voice
@@ -53,18 +46,7 @@ CommandResult cmdRemember(const std::string& arg) {
         }
     }
 
-    GRIM::UnifiedMemoryObject obj;
-    obj.id         = GRIM::UnifiedMemoryObject::generateID();
-    obj.timestamp  = static_cast<uint64_t>(std::time(nullptr));
-    obj.domain     = GRIM::MemoryDomain::USER;
-    obj.type       = GRIM::TypeTag::STRING;
-    obj.context    = GRIM::ContextType::CONVERSATION;
-    obj.confidence = 0.98f;
-    obj.raw        = fullText;
-    obj.normalized = "remember " + fullText;
-    obj.tags       = {"manual", "remember"};
-
-    GRIM::MemoryBufferRotation::instance().preprocess(obj);
+    hostMemory::stageManual(fullText);
 
     LOG_DEBUG("Memory", "Remembered: " + fullText);
 
@@ -85,7 +67,7 @@ CommandResult cmdRecall(const std::string& arg) {
     if (arg.empty()) {
         return {
             false,                                                  // success
-            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"), // message
+            hostMemory::errorMessage("ERR_MEMORY_MISSING_KEY"), // message
             "ERR_MEMORY_MISSING_KEY",                               // errorCode
             "error",                                                // category
             "Missing memory key",                                   // voice
@@ -93,7 +75,7 @@ CommandResult cmdRecall(const std::string& arg) {
         };
     }
 
-    auto results = g_memoryStorage.search(arg);
+    auto results = hostMemory::search(arg);
     if (!results.empty()) {
         const auto& obj = results.front();
         LOG_DEBUG("Memory", "Recalled: " + obj.raw);
@@ -109,7 +91,7 @@ CommandResult cmdRecall(const std::string& arg) {
     } else {
         return {
             false,                                                                     // success
-            ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,    // message
+            hostMemory::errorMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,    // message
             "ERR_MEMORY_KEY_NOT_FOUND",                                                // errorCode
             "error",                                                                   // category
             "Memory key not found",                                                    // voice
@@ -125,7 +107,7 @@ CommandResult cmdForget(const std::string& arg) {
     if (arg.empty()) {
         return {
             false,                                                  // success
-            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"), // message
+            hostMemory::errorMessage("ERR_MEMORY_MISSING_KEY"), // message
             "ERR_MEMORY_MISSING_KEY",                               // errorCode
             "error",                                                // category
             "Missing memory key",                                   // voice
@@ -133,13 +115,12 @@ CommandResult cmdForget(const std::string& arg) {
         };
     }
 
-    auto results = g_memoryStorage.search(arg);
+    auto results = hostMemory::search(arg);
     if (!results.empty()) {
         for (const auto& obj : results) {
-            auto found = g_memoryStorage.getById(obj.id);
+            bool found = hostMemory::flushIfPresent(obj.id);
             if (found) {
-                // remove from disk memory
-                g_memoryStorage.flush(); // optional: persist cleanup later
+                // Preserve the original check-and-flush behavior; no deletion.
                 LOG_DEBUG("Memory", "Forgotten: " + obj.raw);
             }
         }
@@ -156,7 +137,7 @@ CommandResult cmdForget(const std::string& arg) {
 
     return {
         false,                                                                     // success
-        ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,    // message
+        hostMemory::errorMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,    // message
         "ERR_MEMORY_KEY_NOT_FOUND",                                                // errorCode
         "error",                                                                   // category
         "Memory key not found",                                                    // voice

@@ -12,6 +12,9 @@
 #include "error_manager.hpp"
 #include "shell_open.hpp"
 #include "aliases.hpp"
+#include "commands/commands_timers.hpp"
+#include "memory/command_memory_services.hpp"
+#include "perception/perception_queries.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/HardwareInventoryJson.hpp"
@@ -198,7 +201,8 @@ static GrimResult completeResult(GrimToolResultWriter* writer, const GrimToolRes
         result.message = copyText(input->message, false, 16 * 1024 * 1024);
         result.errorCode = copyText(input->error_code);
         result.category = copyText(input->category);
-        result.voice = copyText(input->voice);
+        // Existing perception commands use the complete observation as voice.
+        result.voice = copyText(input->voice, false, 16 * 1024 * 1024);
         result.structuredOutputJson = copyText(input->structured_output_json);
         if (!result.structuredOutputJson.empty()) {
             const auto parsed = nlohmann::json::parse(result.structuredOutputJson);
@@ -740,6 +744,61 @@ static GrimResult api_delete_file(const GrimPluginAPI* self, const char* path) {
 // ============================================================================
 // Process Management Implementation
 // ============================================================================
+
+template<typename Callback>
+static const char* runtimeServiceResponse(const GrimPluginAPI* self, GrimPermission permission, Callback callback) noexcept {
+    try {
+        if (!checkPermission(self, permission)) return nullptr;
+        nlohmann::json response{{"format", "grim-runtime-service"}, {"version", 1}, {"value", nullptr}, {"error", nullptr}};
+        try { response["value"] = callback(); }
+        catch (const std::exception& error) { response["error"] = {{"kind", "exception"}, {"message", error.what()}}; }
+        catch (...) { response["error"] = {{"kind", "unknown"}, {"message", ""}}; }
+        return allocateString(response.dump());
+    } catch (...) { return nullptr; }
+}
+static const char* api_query_perception(const GrimPluginAPI* self, GrimPerceptionQuery query) noexcept {
+    if (query != GRIM_PERCEPTION_ANALYZE_SCREEN && query != GRIM_PERCEPTION_READ_TEXT &&
+        query != GRIM_PERCEPTION_DETECT_OBJECTS) return nullptr;
+    return runtimeServiceResponse(self, GRIM_PERM_SYSTEM, [&] {
+        const bool available = GRIM::Perception::isAvailable();
+        std::string text;
+        if (available) {
+            switch (query) {
+                case GRIM_PERCEPTION_ANALYZE_SCREEN: text = GRIM::Perception::analyzeScreen(); break;
+                case GRIM_PERCEPTION_READ_TEXT: text = GRIM::Perception::readText(); break;
+                case GRIM_PERCEPTION_DETECT_OBJECTS: text = GRIM::Perception::detectObjects(); break;
+            }
+        }
+        return nlohmann::json{{"available", available}, {"text", std::move(text)}};
+    });
+}
+static const char* api_schedule_user_timer(const GrimPluginAPI* self, int32_t seconds, const char* message) noexcept {
+    if (seconds <= 0 || !message) return nullptr;
+    return runtimeServiceResponse(self, GRIM_PERM_SYSTEM, [&] {
+        GRIM::UserTimers::schedule(seconds, message);
+        return nlohmann::json(nullptr);
+    });
+}
+static const char* api_stage_manual_memory(const GrimPluginAPI* self, const char* raw) noexcept {
+    if (!raw || !*raw) return nullptr;
+    return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
+        GRIM::CommandMemory::stageManual(raw);
+        return nlohmann::json(nullptr);
+    });
+}
+static const char* api_search_memory(const GrimPluginAPI* self, const char* query) noexcept {
+    if (!query) return nullptr;
+    return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
+        auto hits = nlohmann::json::array();
+        for (const auto& hit : GRIM::CommandMemory::search(query)) hits.push_back({{"id", hit.id}, {"raw", hit.raw}});
+        return hits;
+    });
+}
+static const char* api_flush_memory_record_if_present(const GrimPluginAPI* self, uint64_t id) noexcept {
+    return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
+        return nlohmann::json(GRIM::CommandMemory::flushIfPresent(id));
+    });
+}
 
 static const char* api_get_hardware_snapshot(const GrimPluginAPI* self) noexcept {
     try {
@@ -1442,6 +1501,11 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.get_alias_snapshot = api_get_alias_snapshot;
     api.refresh_aliases = api_refresh_aliases;
     api.get_hardware_snapshot = api_get_hardware_snapshot;
+    api.schedule_user_timer = api_schedule_user_timer;
+    api.stage_manual_memory = api_stage_manual_memory;
+    api.search_memory = api_search_memory;
+    api.flush_memory_record_if_present = api_flush_memory_record_if_present;
+    api.query_perception = api_query_perception;
     
     auto* result = &api;
     auto instance = context->instance;

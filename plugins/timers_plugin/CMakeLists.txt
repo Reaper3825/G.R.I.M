@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22)
+project(timers_plugin LANGUAGES CXX)
+include("${CMAKE_CURRENT_LIST_DIR}/../plugin_build.cmake")
+find_package(nlohmann_json CONFIG REQUIRED HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
+add_library(timers_plugin SHARED timers_plugin.cpp)
+grim_configure_plugin(timers_plugin)
+target_link_libraries(timers_plugin PRIVATE nlohmann_json::nlohmann_json)

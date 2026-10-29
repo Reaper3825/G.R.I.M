@@ -3,10 +3,8 @@
 #include "MMO/Core/ToolRegistry.hpp"
 #include <stdexcept>
 
-#include "commands_memory.hpp"
 #include "commands_ai.hpp"
 #include "commands_system.hpp"
-#include "commands_timers.hpp"
 #include "commands_voice.hpp"
 #include "commands_ui.hpp"
 #include "commands_osint.hpp"
@@ -52,17 +50,7 @@ static void register_all_commands() {
 
     // Alias commands are supplied by aliases_plugin; the host owns alias state.
 
-    // Memory commands
-    LOG_DEBUG("Plugin", "Registering memory commands");
-    REGISTER_TOOL("remember", cmdRemember,
-                  "Store information in long-term memory",
-                  "action", false);
-    REGISTER_TOOL("recall", cmdRecall,
-                  "Retrieve information from memory",
-                  "information", true);
-    REGISTER_TOOL("forget", cmdForget,
-                  "Remove information from memory",
-                  "action", false);
+    // Manual memory commands are supplied by memory_plugin.
 
     // UI Controls
     LOG_DEBUG("Plugin", "Registering UI commands");
@@ -153,17 +141,7 @@ static void register_all_commands() {
                   "Reset TTS cache and regenerate common phrases",
                   "system", false);
 
-    // ✅ NEW: Perception/Vision commands
-    LOG_DEBUG("Plugin", "Registering perception commands");
-    REGISTER_TOOL("perception_what_see", cmdPerceptionWhat,
-                  "Describe what's visible on screen",
-                  "information", true);
-    REGISTER_TOOL("perception_read_text", cmdPerceptionRead,
-                  "Read text from screen using OCR",
-                  "information", true);
-    REGISTER_TOOL("perception_detect_objects", cmdPerceptionDetect,
-                  "Detect and locate objects on screen",
-                  "information", true);
+    // Observation commands are supplied by perception_plugin; input stays here.
 
     // ✅ NEW: Input Control commands
     LOG_DEBUG("Plugin", "Registering input control commands");
@@ -183,11 +161,7 @@ static void register_all_commands() {
                   "Click on detected screen element",
                   "action", false);
 
-    // ✅ NEW: Timer commands
-    LOG_DEBUG("Plugin", "Registering timer commands");
-    REGISTER_TOOL("set_timer", cmdSetTimer,
-                  "Set a countdown timer",
-                  "action", false);
+    // User timer commands are supplied by timers_plugin.
 
     // ✅ NEW: Question handler
     LOG_DEBUG("Plugin", "Registering question handler");

@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.4.0**. Updated October 29, 2026.
+API version: **3.6.0**. Updated October 29, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -97,7 +97,8 @@ validation failures are remembered even when a handler ignores the error.
 Exceptions from handlers become registry command failures.
 
 Result messages support up to 16 MiB as of v3.2 so complete catalog listings can
-cross the plugin boundary. Other result strings retain the 65,536-byte limit.
+cross the plugin boundary. As of v3.6 voice text also supports 16 MiB to preserve
+complete perception observations. Other result strings retain the 65,536-byte limit.
 Optional JSON output must
 be valid JSON and is preserved as CommandResult::structuredOutputJson.
 
@@ -488,3 +489,95 @@ per command, independence from startup state, GPU/no-GPU/unknown-GPU formatting,
 both exception paths, and folder removal. It performs no actual hardware probe
 or application/model execution. See the
 [plugin instructions](../plugins/README.md#system-information-plugin).
+
+### User timer and manual memory migration (v3.5)
+
+`timers_plugin` owns `set_timer`; `memory_plugin` owns `remember`, `recall`, and
+`forget`. The host no longer registers these commands. Four v3.5 services consume
+reserved slots without changing table size or earlier offsets. Existing v3.0-v3.4
+binaries remain supported. The new plugins require v3.5.
+
+Each service returns a host-owned JSON string, released with `string_free`:
+
+```json
+{"format":"grim-runtime-service","version":1,"value":null,"error":null}
+```
+
+Null pointers indicate invalid input, denied permission, or API failure. Host
+standard exceptions are represented by `error:{kind:"exception",message:"..."}`;
+nonstandard exceptions use `kind:"unknown"`. Plugins preserve the corresponding
+original dispatch error responses.
+
+| Service | Permission | Existing host operation |
+|---|---|---|
+| `schedule_user_timer(self, seconds, message)` | SYSTEM | Positive seconds; appends a native Timer to the host queue with steady-clock expiry. |
+| `stage_manual_memory(self, raw)` | MEMORY | Generates ID/time and stages the original USER/STRING/CONVERSATION record in MemoryBufferRotation, with confidence 0.98, original raw text, `remember ` normalized prefix, and manual/remember tags. |
+| `search_memory(self, query)` | MEMORY | Calls the existing storage search with its default result limit/order; returns an array of `{id,raw}` hits. |
+| `flush_memory_record_if_present(self, id)` | MEMORY | Checks `getById`, flushes if present, and returns a presence boolean. It does not delete records. |
+
+Command parsing and result behavior remain unchanged. Timers retain `std::stoi`
+integer-prefix acceptance and the original invalid/nonpositive errors. Manual
+remember parsing still stages the original full text, not a new key/value store.
+Recall selects the first existing search hit. Forget preserves its original
+search/check/flush loop and success text; metadata now explicitly describes the
+absence of deletion. The old `store_memory`/`retrieve_memory`/`delete_memory`
+API slots remain stubs and are not used by these commands.
+
+Timer state, expiry result construction, memory rotation, storage, and persistence
+remain in the host. DLL unload removes registrations without cancelling pending
+user timers or discarding memory. No plugin timer callback or memory worker is
+introduced. The separate plugin-callback timer API remains unchanged.
+
+Two existing limitations are retained: `forget` does not erase records, and no
+current source caller invokes `checkExpiredTimers()`. The migration does not wire
+an expiry scheduler or claim timers are automatically delivered. Direct calls to
+the existing expiry checker still produce and consume the original results.
+
+The focused suite accepts `-TimersPluginDirectory` and `-MemoryPluginDirectory`.
+It uses the real host timer queue, expiry checker, MemoryBufferRotation,
+UnifiedMemoryStorage, and persistence code. Records are written only to a private
+temporary database. Coverage includes permissions, validation/results, staging
+metadata, delayed storage visibility, search ordering, prefix parsing, unload
+survival, exact-once expiry checks, non-deleting forget, and disk reload.
+See [timer and memory build instructions](../plugins/README.md#timers-and-memory-plugins).
+
+### Perception observation migration (v3.6)
+
+`perception_plugin` supplies `perception_what_see`, `perception_read_text`, and
+`perception_detect_objects`. Input-control commands remain built-in. Capture,
+OCR, object detection, model/context handling, and subsystem lifetime stay in
+the host; the plugin introduces no capture thread, context cache, OpenCV object,
+model initialization, or external C++ symbol dependency.
+
+API v3.6 consumes one reserved slot, keeping table size and earlier offsets.
+Existing v3.0-v3.5 plugin binaries remain supported. The new plugin requires
+v3.6 before accessing `query_perception(self, query)`.
+
+This service requires SYSTEM permission and accepts the typed query values
+`GRIM_PERCEPTION_ANALYZE_SCREEN`, `GRIM_PERCEPTION_READ_TEXT`, and
+`GRIM_PERCEPTION_DETECT_OBJECTS`. Each call checks the existing host
+`Perception::isAvailable()` once. If available, it invokes the corresponding
+existing host operation once; OCR uses its original default region arguments
+(-1 for x/y/width/height). It returns the version-1 runtime-service envelope
+with `value:{available:bool,text:string}`. Host-owned strings are released with
+`string_free`. Invalid queries, permission denial, or API failure return null;
+standard and unknown host exceptions use the existing runtime-service error
+envelope and retain their original dispatch error responses.
+
+All three commands continue to ignore arguments. Unavailable perception yields
+the original `ERR_PERCEPTION_NOT_INITIALIZED` result. Available observations
+retain their exact text in both message and voice, with `success:true`,
+`ERR_NONE`, routine category, and Cyan color, even if text is empty or looks like
+an error. The migration does not reinterpret returned prose as readiness or
+completion evidence. To preserve large observations, the result writer now
+accepts voice text up to 16 MiB, matching its message limit; other bounds remain
+unchanged. No output is silently truncated.
+
+The optional `-PerceptionPluginDirectory` test argument exercises the real DLL,
+API, registry, and result writer against controlled host observation services.
+It checks permissions, initialization/availability transitions, exact routing and
+OCR defaults, ignored arguments, literal/empty/error results, 70-KB text and voice,
+exception paths, and DLL removal without changing host state. No screen capture,
+OCR engine, object model, or model server runs during validation. The remaining
+host input-command source receives a syntax check using existing OpenCV headers.
+See [plugin build instructions](../plugins/README.md#perception-plugin).

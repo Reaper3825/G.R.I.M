@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.4
+// G.R.I.M Plugin API v3.6
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 4
+#define GRIM_API_VERSION_MINOR 6
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -152,6 +152,12 @@ struct GrimToolRegistration {
     GrimToolDescriptor descriptor;
     GrimToolHandler handler = nullptr;
     void* user_data = nullptr; // Plugin-owned until shutdown; not freed by the host.
+};
+
+enum GrimPerceptionQuery : uint32_t {
+    GRIM_PERCEPTION_ANALYZE_SCREEN = 0,
+    GRIM_PERCEPTION_READ_TEXT = 1,
+    GRIM_PERCEPTION_DETECT_OBJECTS = 2
 };
 
 // Intent structure (matches your Intent struct)
@@ -335,7 +341,22 @@ typedef struct GrimPluginAPI {
     // error:null|{kind,message}}. Release with string_free. Null = API failure
     // or denied permission. The cached startup inventory is not modified.
     const char* (*get_hardware_snapshot)(const GrimPluginAPI* self);
-    void* reserved[26];
+    // v3.5: host-owned user timer queue (SYSTEM) and manual memory services
+    // (MEMORY). JSON envelope: {format:"grim-runtime-service",version:1,
+    // value:...,error:null|{kind,message}}; release with string_free.
+    // Null = invalid input, denied permission, or API failure. No command dispatch.
+    const char* (*schedule_user_timer)(const GrimPluginAPI* self, int32_t seconds, const char* message);
+    const char* (*stage_manual_memory)(const GrimPluginAPI* self, const char* raw);
+    // value is an ordered array of {id,raw}; uses the existing search defaults.
+    const char* (*search_memory)(const GrimPluginAPI* self, const char* query);
+    // value is presence bool. Retains legacy forget's check+flush, not deletion.
+    const char* (*flush_memory_record_if_present)(const GrimPluginAPI* self, uint64_t id);
+    // v3.6: SYSTEM permission. Checks current host availability, then invokes
+    // the selected existing observation service. Runtime-service JSON envelope;
+    // value is {available:bool,text:string}. Release with string_free.
+    // Null = invalid query, denied permission, or API failure. No input control.
+    const char* (*query_perception)(const GrimPluginAPI* self, GrimPerceptionQuery query);
+    void* reserved[21];
     
 } GrimPluginAPI;
 

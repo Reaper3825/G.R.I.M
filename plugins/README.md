@@ -167,6 +167,68 @@ geometry, audio/network/voice fields, timestamps, detection errors, fresh reads,
 and startup-cache isolation. They also test exact command results and DLL removal,
 without probing actual hardware or starting the application.
 
+## Timers and memory plugins
+
+`timers_plugin` supplies `set_timer`; `memory_plugin` supplies `remember`,
+`recall`, and `forget`. Both use API v3.5 host services; neither imports host C++
+symbols or owns timer/storage state. Rebuild the host separately to expose v3.5
+and remove the former registrations. Older v3.x plugin binaries remain supported.
+
+    cmake -S plugins/timers_plugin -B .codex-build/timers-plugin -G "Visual Studio 17 2022" -A x64
+    cmake --build .codex-build/timers-plugin --config Release --target timers_plugin --parallel 2
+    cmake -S plugins/memory_plugin -B .codex-build/memory-plugin -G "Visual Studio 17 2022" -A x64
+    cmake --build .codex-build/memory-plugin --config Release --target memory_plugin --parallel 2
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -TimersPluginDirectory .codex-build/timers-plugin/plugins -MemoryPluginDirectory .codex-build/memory-plugin/plugins
+
+Deploy each DLL from its build's `plugins/` directory into GRIM's `plugins/` folder.
+Timers require SYSTEM permission; memory commands require MEMORY. Recall remains
+informational; set_timer, remember, and forget retain confirmation metadata.
+
+Timers preserve integer-prefix parsing and enqueue native host timers. Memory
+preserves manual-record fields, rotation staging, search defaults, first-hit
+recall, error messages, voice, colors, and the legacy forget loop. Remember does
+not bypass rotation for immediate durable storage. Pending timers and memory
+survive DLL unload. The new services do not use the old stub memory API slots.
+
+**Existing limitations are unchanged:** forget checks and flushes but does not
+delete records. The current source has no caller for `checkExpiredTimers()`, so
+automatic timer delivery is not introduced by this migration. The tests invoke
+the host expiry checker directly without waiting for a real timer.
+
+The focused suite links the real rotation and storage engine, uses a private
+temporary database, and checks persistence by reloading it. It does not touch the
+user's memory store. The existing generated memory header is copied into the
+test include directory; no schema regeneration or dependency installation occurs.
+
+## Perception plugin
+
+`perception_plugin` supplies `perception_what_see`, `perception_read_text`, and
+`perception_detect_objects` through API v3.6's SYSTEM-permission observation
+service. The existing host retains capture, OCR, detection, live context, model
+and subsystem ownership. Mouse/keyboard commands remain in the host for their
+separate migration. The plugin depends only on the API, shared result helper,
+and installed nlohmann_json; it imports no host C++ or OpenCV symbols.
+
+    cmake -S plugins/perception_plugin -B .codex-build/perception-plugin -G "Visual Studio 17 2022" -A x64
+    cmake --build .codex-build/perception-plugin --config Release --target perception_plugin --parallel 2
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -PerceptionPluginDirectory .codex-build/perception-plugin/plugins
+
+Deploy `.codex-build/perception-plugin/plugins/perception_plugin.dll` into GRIM's
+`plugins/` folder. Rebuild the host separately for API v3.6 and removal of the
+old registrations. Earlier v3.x plugins remain supported by the new host.
+
+Commands preserve their original availability/error responses, ignored arguments,
+OCR defaults, and literal message/voice text. Empty text and error-looking host
+text still use the old success result. They remain informational with no
+confirmation requirement. Loading/unloading performs no capture or perception
+initialization and leaves host context intact.
+
+Tests use controlled host services, including 70-KB text/voice results and both
+exception paths; no real capture, OCR, object detection, or model server runs.
+Existing OpenCV headers are used only for a syntax check of the remaining host
+input-command source. API v3.6 expands the voice result limit to 16 MiB to match
+messages; it does not truncate observations.
+
 ### Remaining host tools
 
 These groups stay in the host until the plugin API can preserve their existing
@@ -175,9 +237,7 @@ change behavior.
 
 | Group | Missing boundary for a behavior-preserving migration |
 |---|---|
-| Memory | The existing memory store/rotation pipeline; API memory operations are stubs. |
-| Timers | Host-owned pending timers and expiry delivery; plugin timers are not scheduled by the frame loop. |
 | Voice | Active voice configuration, engine/session state, cache and audio services; `list_voices` also reads Coqui configuration. |
-| Perception/input | Live perception context and its input-control interfaces. |
+| Input control | Live perception context and its mouse/keyboard interfaces. |
 | UI | Host-owned panels and surface registry lifetime. |
 | AI/NLP/settings | Shared configuration, conversation history, grammar state, and model routing. |

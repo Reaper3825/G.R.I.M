@@ -295,6 +295,21 @@ cache/geospatial/*.sqlite-wal
 !/plugins/system_info_plugin/system_info_plugin.cpp
 !/plugins/system_info_plugin/system_info_command.cpp
 !/plugins/system_info_plugin/host_hardware.hpp
+!/plugins/runtime_service_client.hpp
+!/plugins/timers_plugin/
+/plugins/timers_plugin/*
+!/plugins/timers_plugin/CMakeLists.txt
+!/plugins/timers_plugin/timers_plugin.cpp
+!/plugins/memory_plugin/
+/plugins/memory_plugin/*
+!/plugins/memory_plugin/CMakeLists.txt
+!/plugins/memory_plugin/memory_plugin.cpp
+!/plugins/memory_plugin/memory_commands.cpp
+!/plugins/memory_plugin/host_memory.hpp
+!/plugins/perception_plugin/
+/plugins/perception_plugin/*
+!/plugins/perception_plugin/CMakeLists.txt
+!/plugins/perception_plugin/perception_plugin.cpp
 
 # Local OSINT tools, adapters, and generated data.
 /osint/

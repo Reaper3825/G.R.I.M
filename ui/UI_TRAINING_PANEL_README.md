@@ -41,7 +41,7 @@ registry coverage; legacy commands that bypass the registry are not added or
 inferred. It does not edit registrations, dispatch commands, or populate World
 Lab objects. The World Lab TextWorld Actions catalog remains separate.
 
-Built-in commands (including memory, perception, and input controls)
+Built-in commands (including input controls)
 publish handlers and metadata into the MMO registry. They appear alongside plugin
 tools, with provider **builtin**. Filesystem commands (`pwd`, `cd`, `ls`, `mkdir`,
 and `rm`) are supplied by the separately deployed **Filesystem Plugin**. The
@@ -53,7 +53,12 @@ using API v3.2 read-only metadata snapshots. `alias list`, `alias info`, and
 `alias refresh` come from the **Aliases Plugin**, using API v3.3 to access the
 host's existing application-alias store and refresh service. `system_info` comes
 from the **System Information Plugin**, using API v3.4 for fresh host hardware
-snapshots. The `core_plugin.cpp` filename
+snapshots. `set_timer` comes from the **Timers Plugin**; `remember`, `recall`, and
+`forget` come from the **Memory Plugin**, using API v3.5 host queue/rotation/storage
+services. Existing timer-delivery and non-deleting-forget limitations remain
+documented in the plugin README. The three `perception_*` observation commands
+come from the **Perception Plugin**, using API v3.6 and existing host perception
+services. Input control remains in the host. The `core_plugin.cpp` filename
 contains the host's built-in registration list; it does not mean those commands
 require a separately loaded plugin.
 

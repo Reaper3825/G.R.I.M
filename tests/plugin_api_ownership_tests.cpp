@@ -15,8 +15,9 @@
 
 GRIM::MMO::HardwareInventory g_hardwareInventory;
 static std::vector<std::string> logs;
-void logDebug(const std::string&, const std::string& message) { logs.push_back(message); }
-void logError(const std::string&, const std::string& message) { logs.push_back(message); }
+static std::mutex logsMutex;
+void logDebug(const std::string&, const std::string& message) { std::lock_guard lock(logsMutex); logs.push_back(message); }
+void logError(const std::string&, const std::string& message) { std::lock_guard lock(logsMutex); logs.push_back(message); }
 void notifyPopupActivity() {}
 void showPopup() {}
 namespace Voice {
@@ -108,6 +109,8 @@ void runApplicationPluginTests(const std::filesystem::path&);
 void runToolInspectionPluginTests(const std::filesystem::path&);
 void runAliasesPluginTests(const std::filesystem::path&);
 void runSystemInfoPluginTests(const std::filesystem::path&);
+void runRuntimePluginTests(const std::filesystem::path&, const std::filesystem::path&);
+void runPerceptionPluginTests(const std::filesystem::path&);
 
 int main(int argc, char** argv) try {
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY);
@@ -258,6 +261,8 @@ int main(int argc, char** argv) try {
     if (argc > 8 && *argv[8]) runToolInspectionPluginTests(argv[8]);
     if (argc > 9 && *argv[9]) runAliasesPluginTests(argv[9]);
     if (argc > 10 && *argv[10]) runSystemInfoPluginTests(argv[10]);
+    if ((argc > 11 && *argv[11]) || (argc > 12 && *argv[12])) runRuntimePluginTests(argc > 11 ? argv[11] : "", argc > 12 ? argv[12] : "");
+    if (argc > 13 && *argv[13]) runPerceptionPluginTests(argv[13]);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

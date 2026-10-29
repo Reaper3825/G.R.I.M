@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "")
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "")
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -6,6 +6,9 @@ $fixtures = Join-Path $output 'fixtures'
 New-Item -ItemType Directory -Force -Path $fixtures | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $output 'rejected') | Out-Null
 Set-Content -LiteralPath (Join-Path $output '.gitignore') -Value '*' -Encoding ascii
+$memoryGenerated = Join-Path $output 'generated/grim_memory'
+New-Item -ItemType Directory -Force -Path $memoryGenerated | Out-Null
+Copy-Item -LiteralPath (Join-Path $workspace 'memory/unified_memory_generated.h') -Destination (Join-Path $memoryGenerated 'unified_memory_generated.h')
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
@@ -50,18 +53,28 @@ $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | Fo
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/aliases_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
-$apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib')
+$apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/aliases_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
 $syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/core_plugin.cpp','core/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+if ($PerceptionPluginDirectory) {
+    $perceptionOpenCvInclude = Join-Path $workspace 'vcpkg_installed/x64-windows/include/opencv4'
+    if (-not (Test-Path -LiteralPath (Join-Path $perceptionOpenCvInclude 'opencv2/core.hpp'))) {
+        $perceptionOpenCvInclude = Join-Path $workspace 'vcpkg_installed/x64-windows/include'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $perceptionOpenCvInclude 'opencv2/core.hpp'))) { throw 'Existing OpenCV headers are required for the host perception syntax check.' }
+    $syntaxArgs += '/I"' + $perceptionOpenCvInclude + '"'
+    $syntaxArgs += '"' + (Join-Path $workspace 'commands/commands_perception.cpp') + '"'
+}
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'
 $registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp','core/plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
 $pluginTestCommand = 'plugin_api_ownership_tests.exe integration integration-rejected replacement'
-foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $AliasesPluginDirectory, $SystemInfoPluginDirectory)) {
+foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $AliasesPluginDirectory, $SystemInfoPluginDirectory, $TimersPluginDirectory, $MemoryPluginDirectory, $PerceptionPluginDirectory)) {
     $resolvedTestDirectory = if ($testDirectory) { (Resolve-Path -LiteralPath $testDirectory).Path } else { '' }
     $pluginTestCommand += ' "' + $resolvedTestDirectory + '"'
 }
