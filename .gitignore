@@ -310,6 +310,13 @@ cache/geospatial/*.sqlite-wal
 /plugins/perception_plugin/*
 !/plugins/perception_plugin/CMakeLists.txt
 !/plugins/perception_plugin/perception_plugin.cpp
+!/plugins/voice_plugin/
+/plugins/voice_plugin/*
+!/plugins/voice_plugin/CMakeLists.txt
+!/plugins/voice_plugin/voice_plugin.cpp
+!/plugins/voice_plugin/voice_commands.cpp
+!/plugins/voice_plugin/cache_commands.cpp
+!/plugins/voice_plugin/host_voice.hpp
 
 # Local OSINT tools, adapters, and generated data.
 /osint/

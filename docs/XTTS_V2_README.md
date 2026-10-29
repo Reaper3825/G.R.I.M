@@ -76,7 +76,8 @@ if (Voice::isXTTSv2Enabled()) {
 - `resources/python/coqui_bridge.py` - Upgraded to XTTS v2
 - `voice/voice_speak.cpp` - Added language support
 - `voice/voice_speak.hpp` - New API functions
-- `commands/commands_voice.cpp` - Updated commands
+- `plugins/voice_plugin/voice_commands.cpp` - Voice commands (migrated to API v3.7)
+- `voice/voice_command_services.cpp` - Host voice/configuration/streaming services
 - `voice/tts_cache.cpp` - Enhanced caching
 
 ### New Files

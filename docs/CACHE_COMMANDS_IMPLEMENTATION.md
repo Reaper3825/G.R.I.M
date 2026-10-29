@@ -1,5 +1,11 @@
 # TTS Cache Management Commands - Implementation Summary
 
+Current implementation (October 29, 2026): cache commands now live in
+`plugins/voice_plugin/cache_commands.cpp` and register as `clear_tts_cache` and
+`reset_tts_cache` through `voice_plugin`. The host retains cache lifecycle and
+precaching via API v3.7. The file/registration details below are historical;
+see [current build, behavior, and test instructions](../plugins/README.md#voice-plugin).
+
 ## Issue Fixed
 The "Yes?" audio file was playing twice because the actual WAV file contained the phrase spoken twice during recording. This was a data issue, not a code bug.
 

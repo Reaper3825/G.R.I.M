@@ -1,9 +1,8 @@
-#include "commands_grim.hpp"
-#include "logger.hpp"
-#include "voice/tts_cache.hpp"
-#include "voice/voice_speak.hpp"  // ? ADD: For preCacheCommonPhrases()
-#include "helpers/color.hpp"
-#include <filesystem>
+#include "host_voice.hpp"
+#include "plugins/plugin_logging.hpp"
+#include <iostream>
+#include <sstream>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -18,14 +17,14 @@ CommandResult cmdClearCache(const std::string& arg) {
     try {
         int totalRemoved = 0;
         
-        fs::path tempDir = "D:/G.R.I.M/resources/tts_out/temp";
-        fs::path cacheDir = "D:/G.R.I.M/resources/tts_out/cache";
+        fs::path tempDir = hostVoice::paths().at("temp").get<std::string>();
+        fs::path cacheDir = hostVoice::paths().at("cache").get<std::string>();
         
         // Shutdown cache system
-        Voice::TTSCache::shutdown();
+        hostVoice::TTSCache::shutdown();
         
         // Delete cache index
-        fs::path cacheIndex = "D:/G.R.I.M/resources/tts_out/cache_index.json";
+        fs::path cacheIndex = hostVoice::paths().at("cache_index").get<std::string>();
         if (fs::exists(cacheIndex)) {
             fs::remove(cacheIndex);
             LOG_DEBUG("Cache", "Deleted cache index");
@@ -54,7 +53,7 @@ CommandResult cmdClearCache(const std::string& arg) {
         }
         
         // Reinitialize empty cache
-        Voice::TTSCache::init();
+        hostVoice::TTSCache::init();
         
         std::string resp = "TTS cache cleared. Removed " + std::to_string(totalRemoved) + 
                           " cached audio files. Cache will rebuild as needed.";
@@ -96,14 +95,14 @@ CommandResult cmdResetCache(const std::string& arg) {
     try {
         int totalRemoved = 0;
         
-        fs::path tempDir = "D:/G.R.I.M/resources/tts_out/temp";
-        fs::path cacheDir = "D:/G.R.I.M/resources/tts_out/cache";
+        fs::path tempDir = hostVoice::paths().at("temp").get<std::string>();
+        fs::path cacheDir = hostVoice::paths().at("cache").get<std::string>();
         
         // Shutdown cache system
-        Voice::TTSCache::shutdown();
+        hostVoice::TTSCache::shutdown();
         
         // Delete cache index
-        fs::path cacheIndex = "D:/G.R.I.M/resources/tts_out/cache_index.json";
+        fs::path cacheIndex = hostVoice::paths().at("cache_index").get<std::string>();
         if (fs::exists(cacheIndex)) {
             fs::remove(cacheIndex);
             LOG_DEBUG("Cache", "Deleted cache index");
@@ -132,12 +131,12 @@ CommandResult cmdResetCache(const std::string& arg) {
         }
         
         // Reinitialize clean cache
-        Voice::TTSCache::init();
+        hostVoice::TTSCache::init();
         
         LOG_DEBUG("Cache", "Cache wiped. Regenerating common phrases...");
         
         // ? NEW: Regenerate common phrases immediately
-        Voice::preCacheCommonPhrases();
+        hostVoice::preCacheCommonPhrases();
         
         std::string resp = "TTS cache reset complete. Removed " + std::to_string(totalRemoved) + 
                           " old files and regenerated common phrases.";

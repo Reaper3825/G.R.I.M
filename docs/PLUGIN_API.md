@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.6.0**. Updated October 29, 2026.
+API version: **3.7.0**. Updated October 29, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -581,3 +581,67 @@ exception paths, and DLL removal without changing host state. No screen capture,
 OCR engine, object model, or model server runs during validation. The remaining
 host input-command source receives a syntax check using existing OpenCV headers.
 See [plugin build instructions](../plugins/README.md#perception-plugin).
+
+### Voice and TTS cache migration (v3.7)
+
+`voice_plugin` supplies eleven former built-ins: `voice`, `voice_stream`,
+`test_tts`, `list_voices`, `test_sapi`, `tts_device`, `nevermind`,
+`create_embedding`, `list_embeddings`, `clear_tts_cache`, and `reset_tts_cache`.
+Command parsing, formatting, result fields, and informational/confirmation policy
+remain in the plugin. The host owns capture, synthesis, playback, live voice
+configuration, default-session history, Whisper context, streaming state, and
+cache lifecycle. The plugin imports no host C++ or native SAPI symbols.
+
+API v3.7 consumes one reserved slot without changing table size or earlier
+offsets. Existing v3.0-v3.6 binaries remain supported. The new plugin checks v3.7
+before accessing `voice_service(self, operation, arguments_json)`.
+
+`GrimVoiceOperation` defines typed domain operations; this service does not
+dispatch commands. All operations require VOICE permission. Cache shutdown,
+initialization, and common-phrase precaching additionally require FILESYSTEM.
+Arguments are an optional JSON object (null means `{}`); unknown operations,
+malformed/nonobject JSON, permission denial, and API failure return null. Responses
+use the existing version-1 `grim-runtime-service` envelope, with standard and
+unknown host exceptions preserved. Host-owned strings use `string_free`.
+
+| Operation group | Request/result and existing host behavior |
+|---|---|
+| CAPTURE | Calls `captureAndTranscribeSpeech(aiConfig)` with the live mutable configuration; returns transcript text. |
+| HAS_STREAM_CONTEXT / START_STREAM | Reads the existing context; starts the existing stream with the default session history and original timer/memory references. |
+| XTTS_ENABLED / LANGUAGE / CONFIG | Reads existing live voice state. CONFIG uses the original `aiConfig["voice"]` access semantics. |
+| SYNTHESIZE_COQUI | `{text,speaker,speed}` returns a WAV path; retains the original default pitch. |
+| PLAY_AUDIO / PLAY_WAV | `{path}` calls the original playback function; PLAY_WAV returns its success boolean. |
+| LIST_SAPI / SAPI_DEVICE | Native host COM/SAPI queries return status/description data for the plugin's original formatting. |
+| IS_SPEAKING | Reads current host speaking status; does not stop playback. |
+| CACHE_SHUTDOWN / CACHE_INIT / PRECACHE_COMMON | Calls the existing cache/voice lifecycle functions, in the order selected by the command. |
+| PATHS | Returns the original test-WAV, embedding, temporary/cache, and index paths; no relocation/configuration redesign. |
+
+The command behavior is intentionally retained: `voice` returns the transcript
+without invoking reasoning or speaking it again; `test_tts` keeps its original
+default phrase and empty category/error-code/voice fields. SAPI COM/enumeration
+failures, output-token failures, and successful empty device descriptions retain
+their original results. Non-Windows unsupported responses remain unchanged.
+`test_sapi` still plays the existing test WAV rather than synthesizing SAPI speech.
+
+Cache commands retain their original direct-directory `.wav` removal rules,
+index handling, shutdown/init order, exception responses, and reset precaching.
+The original absolute `D:/G.R.I.M/resources/...` cache/embedding paths and relative
+`resources/test.wav` path are preserved. Native plugin filesystem operations are
+covered by tool permission metadata; this does not introduce sandboxing.
+
+Existing placeholders are not upgraded by migration: `nevermind` acknowledges
+cancellation and checks speaking status but does not stop playback/streaming.
+`create_embedding` returns its queued acknowledgment without submitting a bridge
+request. Its existing missing-path `substr(npos)` exception behavior is retained.
+Metadata identifies these placeholders. DLL load/unload performs no capture,
+playback, stream stop, model startup, or cache shutdown.
+
+The optional `-VoicePluginDirectory` test argument uses the real DLL, host service
+dispatcher, session context/history, registry, and result writer with controlled
+capture/audio/cache/native-query endpoints. Cache and embedding file operations
+run only in a private temporary directory. Tests cover all eleven tools, exact
+results, shared stream references, live configuration, SAPI status branches,
+placeholders, large transcripts, permissions, exception behavior, cache ordering,
+and unload survival. Native COM/SAPI code receives a syntax check. Validation
+does not record audio, play sound, start a model/server, or modify the real cache.
+See [build and deployment instructions](../plugins/README.md#voice-plugin).

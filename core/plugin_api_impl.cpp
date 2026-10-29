@@ -15,6 +15,7 @@
 #include "commands/commands_timers.hpp"
 #include "memory/command_memory_services.hpp"
 #include "perception/perception_queries.hpp"
+#include "voice/voice_command_services.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/HardwareInventoryJson.hpp"
@@ -754,6 +755,16 @@ static const char* runtimeServiceResponse(const GrimPluginAPI* self, GrimPermiss
         catch (const std::exception& error) { response["error"] = {{"kind", "exception"}, {"message", error.what()}}; }
         catch (...) { response["error"] = {{"kind", "unknown"}, {"message", ""}}; }
         return allocateString(response.dump());
+    } catch (...) { return nullptr; }
+}
+static const char* api_voice_service(const GrimPluginAPI* self, GrimVoiceOperation operation, const char* arguments_json) noexcept {
+    if (operation > GRIM_VOICE_PATHS) return nullptr;
+    try {
+        const auto request = arguments_json ? nlohmann::json::parse(arguments_json) : nlohmann::json::object();
+        if (!request.is_object()) return nullptr;
+        const bool cache = operation == GRIM_VOICE_CACHE_SHUTDOWN || operation == GRIM_VOICE_CACHE_INIT || operation == GRIM_VOICE_PRECACHE_COMMON;
+        const auto permission = static_cast<GrimPermission>(GRIM_PERM_VOICE | (cache ? GRIM_PERM_FILESYSTEM : 0));
+        return runtimeServiceResponse(self, permission, [&] { return GRIM::VoiceCommandServices::execute(operation, request); });
     } catch (...) { return nullptr; }
 }
 static const char* api_query_perception(const GrimPluginAPI* self, GrimPerceptionQuery query) noexcept {
@@ -1506,6 +1517,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.search_memory = api_search_memory;
     api.flush_memory_record_if_present = api_flush_memory_record_if_present;
     api.query_perception = api_query_perception;
+    api.voice_service = api_voice_service;
     
     auto* result = &api;
     auto instance = context->instance;

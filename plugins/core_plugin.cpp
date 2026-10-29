@@ -5,10 +5,8 @@
 
 #include "commands_ai.hpp"
 #include "commands_system.hpp"
-#include "commands_voice.hpp"
 #include "commands_ui.hpp"
 #include "commands_osint.hpp"
-#include "commands_grim.hpp"
 #include "commands_perception.hpp"
 #include "commands_question.hpp"
 
@@ -91,26 +89,7 @@ static void register_all_commands() {
                   "Test NLP grammar parsing",
                   "system", true);
 
-    // Voice commands
-    LOG_DEBUG("Plugin", "Registering voice commands");
-    REGISTER_TOOL("test_tts", cmd_testTTS,
-                  "Test text-to-speech output",
-                  "system", false);
-    REGISTER_TOOL("list_voices", cmd_listVoices,
-                  "List available TTS voices",
-                  "information", true);
-    REGISTER_TOOL("nevermind", cmdNevermind,
-                  "Cancel the last command or action",
-                  "action", false);
-    
-    // ? NEW: Speaker embedding commands (XTTS v2)
-    LOG_DEBUG("Plugin", "Registering speaker embedding commands");
-    REGISTER_TOOL("create_embedding", cmd_createEmbedding,
-                  "Create voice embedding for TTS",
-                  "system", false);
-    REGISTER_TOOL("list_embeddings", cmd_listEmbeddings,
-                  "List available voice embeddings",
-                  "information", true);
+    // Voice, speaker embedding, cancellation, and cache commands use voice_plugin.
 
     // NLP management commands
     LOG_DEBUG("Plugin", "Registering NLP management commands");
@@ -131,15 +110,6 @@ static void register_all_commands() {
     REGISTER_TOOL("settings", cmdSettings,
                   "Show current settings and configuration",
                   "information", true);
-
-    // ? NEW: GRIM system management commands
-    LOG_DEBUG("Plugin", "Registering GRIM system commands");
-    REGISTER_TOOL("clear_tts_cache", cmdClearCache,
-                  "Clear TTS audio cache",
-                  "system", false);
-    REGISTER_TOOL("reset_tts_cache", cmdResetCache,
-                  "Reset TTS cache and regenerate common phrases",
-                  "system", false);
 
     // Observation commands are supplied by perception_plugin; input stays here.
 
@@ -169,21 +139,6 @@ static void register_all_commands() {
                   "Ask GRIM a question (searches memory and external sources)",
                   "information", true);
 
-    // ✅ NEW: Additional voice commands (advanced TTS)
-    LOG_DEBUG("Plugin", "Registering additional voice commands");
-    REGISTER_TOOL("voice", cmdVoice,
-                  "General voice command handler",
-                  "system", false);
-    REGISTER_TOOL("voice_stream", cmdVoiceStream,
-                  "Stream voice output",
-                  "system", false);
-    REGISTER_TOOL("test_sapi", cmd_testSAPI,
-                  "Test SAPI TTS backend",
-                  "system", false);
-    REGISTER_TOOL("tts_device", cmd_ttsDevice,
-                  "Configure TTS output device",
-                  "system", false);
-
     // ✅ NEW: AI backend management
     LOG_DEBUG("Plugin", "Registering AI backend command");
     REGISTER_TOOL("ai_backend", cmdAiBackend,
@@ -208,5 +163,3 @@ void registerCorePlugin() {
     register_all_commands();
 }
 #endif
-
-

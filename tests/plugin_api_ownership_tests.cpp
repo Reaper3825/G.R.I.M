@@ -22,7 +22,6 @@ void notifyPopupActivity() {}
 void showPopup() {}
 namespace Voice {
 void speak(const std::string&, const std::string&) {}
-bool isSpeaking() { return false; }
 }
 std::string normalizeWord(const std::string& word) { return word; }
 namespace GRIMInput {
@@ -111,6 +110,7 @@ void runAliasesPluginTests(const std::filesystem::path&);
 void runSystemInfoPluginTests(const std::filesystem::path&);
 void runRuntimePluginTests(const std::filesystem::path&, const std::filesystem::path&);
 void runPerceptionPluginTests(const std::filesystem::path&);
+void runVoicePluginTests(const std::filesystem::path&);
 
 int main(int argc, char** argv) try {
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY);
@@ -263,6 +263,7 @@ int main(int argc, char** argv) try {
     if (argc > 10 && *argv[10]) runSystemInfoPluginTests(argv[10]);
     if ((argc > 11 && *argv[11]) || (argc > 12 && *argv[12])) runRuntimePluginTests(argc > 11 ? argv[11] : "", argc > 12 ? argv[12] : "");
     if (argc > 13 && *argv[13]) runPerceptionPluginTests(argv[13]);
+    if (argc > 14 && *argv[14]) runVoicePluginTests(argv[14]);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

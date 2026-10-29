@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.6
+// G.R.I.M Plugin API v3.7
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 6
+#define GRIM_API_VERSION_MINOR 7
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -158,6 +158,15 @@ enum GrimPerceptionQuery : uint32_t {
     GRIM_PERCEPTION_ANALYZE_SCREEN = 0,
     GRIM_PERCEPTION_READ_TEXT = 1,
     GRIM_PERCEPTION_DETECT_OBJECTS = 2
+};
+
+enum GrimVoiceOperation : uint32_t {
+    GRIM_VOICE_CAPTURE = 0, GRIM_VOICE_HAS_STREAM_CONTEXT = 1, GRIM_VOICE_START_STREAM = 2,
+    GRIM_VOICE_XTTS_ENABLED = 3, GRIM_VOICE_LANGUAGE = 4, GRIM_VOICE_SYNTHESIZE_COQUI = 5,
+    GRIM_VOICE_PLAY_AUDIO = 6, GRIM_VOICE_CONFIG = 7, GRIM_VOICE_LIST_SAPI = 8,
+    GRIM_VOICE_SAPI_DEVICE = 9, GRIM_VOICE_PLAY_WAV = 10, GRIM_VOICE_IS_SPEAKING = 11,
+    GRIM_VOICE_CACHE_SHUTDOWN = 12, GRIM_VOICE_CACHE_INIT = 13,
+    GRIM_VOICE_PRECACHE_COMMON = 14, GRIM_VOICE_PATHS = 15
 };
 
 // Intent structure (matches your Intent struct)
@@ -356,7 +365,11 @@ typedef struct GrimPluginAPI {
     // value is {available:bool,text:string}. Release with string_free.
     // Null = invalid query, denied permission, or API failure. No input control.
     const char* (*query_perception)(const GrimPluginAPI* self, GrimPerceptionQuery query);
-    void* reserved[21];
+    // v3.7: VOICE permission; cache lifecycle/precache also require FILESYSTEM.
+    // Optional object-valued JSON arguments; runtime-service JSON response.
+    // Host owns audio/configuration/stream/cache state. No command dispatch.
+    const char* (*voice_service)(const GrimPluginAPI* self, GrimVoiceOperation operation, const char* arguments_json);
+    void* reserved[20];
     
 } GrimPluginAPI;
 

@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "")
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "")
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -54,11 +54,12 @@ $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
 $apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/aliases_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/aliases_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','tests/voice_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
 $syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/core_plugin.cpp','core/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+if ($VoicePluginDirectory) { $syntaxArgs += '"' + (Join-Path $workspace 'voice/voice_platform_queries.cpp') + '"' }
 if ($PerceptionPluginDirectory) {
     $perceptionOpenCvInclude = Join-Path $workspace 'vcpkg_installed/x64-windows/include/opencv4'
     if (-not (Test-Path -LiteralPath (Join-Path $perceptionOpenCvInclude 'opencv2/core.hpp'))) {
@@ -74,7 +75,7 @@ $registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
 $pluginTestCommand = 'plugin_api_ownership_tests.exe integration integration-rejected replacement'
-foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $AliasesPluginDirectory, $SystemInfoPluginDirectory, $TimersPluginDirectory, $MemoryPluginDirectory, $PerceptionPluginDirectory)) {
+foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $AliasesPluginDirectory, $SystemInfoPluginDirectory, $TimersPluginDirectory, $MemoryPluginDirectory, $PerceptionPluginDirectory, $VoicePluginDirectory)) {
     $resolvedTestDirectory = if ($testDirectory) { (Resolve-Path -LiteralPath $testDirectory).Path } else { '' }
     $pluginTestCommand += ' "' + $resolvedTestDirectory + '"'
 }

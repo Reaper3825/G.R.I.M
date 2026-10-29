@@ -229,6 +229,42 @@ Existing OpenCV headers are used only for a syntax check of the remaining host
 input-command source. API v3.6 expands the voice result limit to 16 MiB to match
 messages; it does not truncate observations.
 
+## Voice plugin
+
+`voice_plugin` supplies `voice`, `voice_stream`, `test_tts`, `list_voices`,
+`test_sapi`, `tts_device`, `nevermind`, `create_embedding`, `list_embeddings`,
+`clear_tts_cache`, and `reset_tts_cache` through API v3.7.
+
+    cmake -S plugins/voice_plugin -B .codex-build/voice-plugin -G "Visual Studio 17 2022" -A x64
+    cmake --build .codex-build/voice-plugin --config Release --target voice_plugin --parallel 2
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -VoicePluginDirectory .codex-build/voice-plugin/plugins
+
+Deploy `.codex-build/voice-plugin/plugins/voice_plugin.dll` into GRIM's `plugins/`
+folder. Rebuild the host separately for API v3.7 and removal of its old voice/cache
+registrations. Earlier v3.x plugins remain supported by the new host.
+
+The host retains microphone/Whisper context, streaming and its shared default
+session state, voice configuration, synthesis/playback, SAPI queries, and cache
+lifecycle. The plugin retains command results, parsing, file listing/removal, and
+existing confirmation policy. It imports no host C++ or SAPI symbols. All tools
+declare VOICE permission; file-based commands also declare FILESYSTEM. Host cache
+lifecycle operations check both permissions.
+
+Original behavior remains: voice capture returns an unspoken transcript; TTS test
+defaults and status fields are unchanged; device queries and platform errors keep
+their previous results. Cache clear/reset keeps the existing paths and direct
+`.wav` removal rules. Only reset requests common-phrase regeneration.
+
+**Existing placeholders remain:** `nevermind` does not stop playback, and
+`create_embedding` does not send the bridge request. Missing embedding paths can
+still produce the existing dispatch exception. Metadata describes these limits.
+Loading/unloading the DLL does not start/stop host audio, streaming, or cache state.
+
+Tests cover all eleven commands using controlled capture/audio/native-query/cache
+endpoints and private temporary files. They do not record audio, play sound, start
+models, or touch the real voice cache. The production native SAPI helpers receive
+a separate syntax check using the installed Windows SDK.
+
 ### Remaining host tools
 
 These groups stay in the host until the plugin API can preserve their existing
@@ -237,7 +273,6 @@ change behavior.
 
 | Group | Missing boundary for a behavior-preserving migration |
 |---|---|
-| Voice | Active voice configuration, engine/session state, cache and audio services; `list_voices` also reads Coqui configuration. |
 | Input control | Live perception context and its mouse/keyboard interfaces. |
 | UI | Host-owned panels and surface registry lifetime. |
 | AI/NLP/settings | Shared configuration, conversation history, grammar state, and model routing. |

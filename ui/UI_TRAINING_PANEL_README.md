@@ -58,7 +58,10 @@ snapshots. `set_timer` comes from the **Timers Plugin**; `remember`, `recall`, a
 services. Existing timer-delivery and non-deleting-forget limitations remain
 documented in the plugin README. The three `perception_*` observation commands
 come from the **Perception Plugin**, using API v3.6 and existing host perception
-services. Input control remains in the host. The `core_plugin.cpp` filename
+services. The eleven voice/TTS-cache tools come from the **Voice Plugin** using
+API v3.7, with capture, streaming, playback, configuration, and cache lifecycle
+remaining in the host. Existing cancellation/embedding placeholders are documented
+in the plugin README. Input control remains in the host. The `core_plugin.cpp` filename
 contains the host's built-in registration list; it does not mean those commands
 require a separately loaded plugin.
 
