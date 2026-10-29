@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.3
+// G.R.I.M Plugin API v3.4
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 3
+#define GRIM_API_VERSION_MINOR 4
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -330,7 +330,12 @@ typedef struct GrimPluginAPI {
     // Requires FILESYSTEM. Calls the existing synchronous host refresh. The JSON
     // records normal return vs exception; legacy commands ignore returned status.
     const char* (*refresh_aliases)(const GrimPluginAPI* self);
-    void* reserved[27];
+    // v3.4: SYSTEM permission; invokes the existing detector on each call.
+    // Host-owned JSON {format:"grim-hardware-snapshot",version:1,hardware:...,
+    // error:null|{kind,message}}. Release with string_free. Null = API failure
+    // or denied permission. The cached startup inventory is not modified.
+    const char* (*get_hardware_snapshot)(const GrimPluginAPI* self);
+    void* reserved[26];
     
 } GrimPluginAPI;
 

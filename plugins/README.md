@@ -143,6 +143,30 @@ failure result. Tests exercise these behaviors using a controlled host fixture,
 without scanning actual application folders or writing the real alias database.
 Unloading the DLL removes its commands and leaves host alias state intact.
 
+## System information plugin
+
+`system_info_plugin` supplies `system_info` using API v3.4. It formats a full
+snapshot from the existing host hardware detector. As before, each invocation
+detects fresh hardware; it does not substitute or overwrite the startup cache.
+Output text, ignored arguments, result fields, backend reporting, and error
+behavior are preserved. No host C++ symbols are imported by the plugin.
+
+    cmake -S plugins/system_info_plugin -B .codex-build/system-info-plugin -G "Visual Studio 17 2022" -A x64
+    cmake --build .codex-build/system-info-plugin --config Release --target system_info_plugin --parallel 2
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -SystemInfoPluginDirectory .codex-build/system-info-plugin/plugins
+
+Deploy `.codex-build/system-info-plugin/plugins/system_info_plugin.dll` into
+GRIM's `plugins/` folder. Rebuild the host separately for API v3.4 and removal
+of the old registration. Earlier v3.x binaries remain supported by the new host.
+The tool requires system-information permission, is informational, and does not
+require confirmation. The shared snapshot codec is
+`MMO/Core/HardwareInventoryJson.hpp`.
+
+Tests use controlled hardware fixtures, including GPU backend flags, monitor
+geometry, audio/network/voice fields, timestamps, detection errors, fresh reads,
+and startup-cache isolation. They also test exact command results and DLL removal,
+without probing actual hardware or starting the application.
+
 ### Remaining host tools
 
 These groups stay in the host until the plugin API can preserve their existing
@@ -157,4 +181,3 @@ change behavior.
 | Perception/input | Live perception context and its input-control interfaces. |
 | UI | Host-owned panels and surface registry lifetime. |
 | AI/NLP/settings | Shared configuration, conversation history, grammar state, and model routing. |
-| System information | Full hardware detection; existing API queries expose only OS and CPU text. |

@@ -107,6 +107,7 @@ void runUtilityPluginTests(const std::filesystem::path&);
 void runApplicationPluginTests(const std::filesystem::path&);
 void runToolInspectionPluginTests(const std::filesystem::path&);
 void runAliasesPluginTests(const std::filesystem::path&);
+void runSystemInfoPluginTests(const std::filesystem::path&);
 
 int main(int argc, char** argv) try {
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY);
@@ -256,6 +257,7 @@ int main(int argc, char** argv) try {
     if (argc > 7 && *argv[7]) runApplicationPluginTests(argv[7]);
     if (argc > 8 && *argv[8]) runToolInspectionPluginTests(argv[8]);
     if (argc > 9 && *argv[9]) runAliasesPluginTests(argv[9]);
+    if (argc > 10 && *argv[10]) runSystemInfoPluginTests(argv[10]);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

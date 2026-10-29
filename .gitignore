@@ -289,6 +289,12 @@ cache/geospatial/*.sqlite-wal
 !/plugins/aliases_plugin/aliases_plugin.cpp
 !/plugins/aliases_plugin/alias_commands.cpp
 !/plugins/aliases_plugin/host_aliases.hpp
+!/plugins/system_info_plugin/
+/plugins/system_info_plugin/*
+!/plugins/system_info_plugin/CMakeLists.txt
+!/plugins/system_info_plugin/system_info_plugin.cpp
+!/plugins/system_info_plugin/system_info_command.cpp
+!/plugins/system_info_plugin/host_hardware.hpp
 
 # Local OSINT tools, adapters, and generated data.
 /osint/

@@ -91,9 +91,7 @@ static void register_all_commands() {
     REGISTER_TOOL("ui.show_osint_results", cmdOsintShowUI,
                   "Show the host-owned OSINT findings panel for a username", "ui", false);
 
-    REGISTER_TOOL("system_info", cmdSystemInfo,
-                  "Display system hardware and software information",
-                  "information", true);
+    // System information is supplied by system_info_plugin.
 
     // Test commands (defined in commands_system.cpp)
     LOG_DEBUG("Plugin", "Registering 'test_intent' command");

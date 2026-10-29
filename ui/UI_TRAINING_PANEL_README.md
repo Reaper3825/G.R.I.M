@@ -51,7 +51,9 @@ using the host's API v3.1 error catalog and OS opener.
 `list_tools`, `tool_info`, and `tool_stats` come from the **Tool Inspection Plugin**
 using API v3.2 read-only metadata snapshots. `alias list`, `alias info`, and
 `alias refresh` come from the **Aliases Plugin**, using API v3.3 to access the
-host's existing application-alias store and refresh service. The `core_plugin.cpp` filename
+host's existing application-alias store and refresh service. `system_info` comes
+from the **System Information Plugin**, using API v3.4 for fresh host hardware
+snapshots. The `core_plugin.cpp` filename
 contains the host's built-in registration list; it does not mean those commands
 require a separately loaded plugin.
 

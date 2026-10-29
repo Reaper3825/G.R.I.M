@@ -2,9 +2,6 @@
 #include <string>
 #include "commands_core.hpp"
 
-// System commands
-CommandResult cmdSystemInfo(const std::string& arg);
-
 // Test commands
 CommandResult cmdTestIntent(const std::string& arg);
 CommandResult cmdTestNlp(const std::string& arg);

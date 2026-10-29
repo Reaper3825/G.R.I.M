@@ -14,6 +14,7 @@
 #include "aliases.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
+#include "../MMO/Core/HardwareInventoryJson.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
 #include "../MMO/Core/ToolDescriptorJson.hpp"
 #include "popup_ui/popup_ui.hpp"
@@ -740,6 +741,22 @@ static GrimResult api_delete_file(const GrimPluginAPI* self, const char* path) {
 // Process Management Implementation
 // ============================================================================
 
+static const char* api_get_hardware_snapshot(const GrimPluginAPI* self) noexcept {
+    try {
+        if (!checkPermission(self, GRIM_PERM_SYSTEM)) return nullptr;
+        nlohmann::json response{{"format", "grim-hardware-snapshot"}, {"version", 1},
+            {"hardware", nullptr}, {"error", nullptr}};
+        try {
+            response["hardware"] = GRIM::MMO::hardwareInventoryJson(GRIM::MMO::detectHardware());
+        } catch (const std::exception& error) {
+            response["error"] = {{"kind", "exception"}, {"message", error.what()}};
+        } catch (...) {
+            response["error"] = {{"kind", "unknown"}, {"message", ""}};
+        }
+        return allocateString(response.dump());
+    } catch (...) { return nullptr; }
+}
+
 static const char* api_get_alias_snapshot(const GrimPluginAPI* self, const char* key) noexcept {
     try {
         (void)pluginContext(self);
@@ -1424,6 +1441,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.get_tool_snapshot = api_get_tool_snapshot;
     api.get_alias_snapshot = api_get_alias_snapshot;
     api.refresh_aliases = api_refresh_aliases;
+    api.get_hardware_snapshot = api_get_hardware_snapshot;
     
     auto* result = &api;
     auto instance = context->instance;

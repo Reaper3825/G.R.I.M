@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.3.0**. Updated October 29, 2026.
+API version: **3.4.0**. Updated October 29, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -444,3 +444,47 @@ iteration order and live data, lookup argument handling, permissions, refresh
 normal/busy/failed/exception outcomes, large listings, and removal without clearing
 host aliases. No live application-directory scan or alias database write occurs.
 See [build and deployment instructions](../plugins/README.md#aliases-plugin).
+
+### System information migration (v3.4)
+
+`system_info_plugin` supplies `system_info`, retaining its original output,
+ignored arguments, result/error fields, voice, color, GPU fallback behavior,
+and CUDA/Metal/ROCm reporting. The host no longer registers the command.
+
+API v3.4 consumes one reserved slot without changing table size or earlier
+service offsets. Existing v3.0-v3.3 plugin binaries remain supported. New
+plugins must check v3.4 before reading `get_hardware_snapshot(self)`.
+
+This service requires `GRIM_PERM_SYSTEM` and calls the existing `detectHardware()`
+on each request, matching the former command rather than substituting the cached
+startup inventory. Loading/unloading the plugin performs no detection; requesting
+a fresh snapshot does not replace `g_hardwareInventory`. Existing `get_system_info`
+behavior remains unchanged.
+
+The service returns host-owned JSON, released with `string_free`:
+
+```json
+{"format":"grim-hardware-snapshot","version":1,"hardware":{},"error":null}
+```
+
+The `hardware` object carries all HardwareInventory data: OS/architecture,
+CPU/RAM, GPU records/count and backend flags, monitor records/count and virtual
+desktop geometry, audio devices, Wi-Fi state, voice backend flags, suggested
+Whisper model, and `capture_time_ns`. The timestamp is monotonic nanoseconds in
+the host steady clock's local epoch, not a calendar timestamp. The codec lives in
+`MMO/Core/HardwareInventoryJson.hpp`; no C++ object or detector symbol crosses
+the ABI.
+
+Permission denial or API failure returns null. A detector exception produces
+`hardware:null` and `error:{kind:"exception",message:"..."}`; a nonstandard
+exception uses `kind:"unknown"`. The plugin preserves the original dispatch
+exception response, including standard exception text and the unknown-error
+fallback.
+
+The optional `-SystemInfoPluginDirectory` test argument exercises the real DLL,
+API, registry, and result writer against a controlled hardware detector. Coverage
+includes permissions, complete topology and clock round trips, fresh detection
+per command, independence from startup state, GPU/no-GPU/unknown-GPU formatting,
+both exception paths, and folder removal. It performs no actual hardware probe
+or application/model execution. See the
+[plugin instructions](../plugins/README.md#system-information-plugin).
