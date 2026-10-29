@@ -11,9 +11,11 @@
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
 #include "shell_open.hpp"
+#include "aliases.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
+#include "../MMO/Core/ToolDescriptorJson.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "helpers/grim_input.hpp"  // For GRIMInput::parseInput
 #include "synonyms.hpp"            // For normalizeWord() synonym resolution
@@ -164,14 +166,14 @@ static void api_log_fmt(const GrimPluginAPI* self, GrimLogLevel level, const cha
 // ============================================================================
 
 // Registration/lifecycle calls are serialized by the host. Tool calls may overlap.
-static std::string copyText(const char* text, bool required = false) {
+static std::string copyText(const char* text, bool required = false, size_t maxBytes = 65536) {
     if (!text) {
         if (required) throw std::invalid_argument("Missing required text");
         return {};
     }
     size_t size = 0;
-    while (size <= 65536 && text[size]) ++size;
-    if (size > 65536 || (required && size == 0)) throw std::invalid_argument("Invalid text size");
+    while (size <= maxBytes && text[size]) ++size;
+    if (size > maxBytes || (required && size == 0)) throw std::invalid_argument("Invalid text size");
     return {text, size};
 }
 static std::vector<std::string> copyList(const GrimStringList& list) {
@@ -191,7 +193,8 @@ static GrimResult completeResult(GrimToolResultWriter* writer, const GrimToolRes
             throw std::invalid_argument("Invalid or repeated result");
         CommandResult result;
         result.success = input->success != 0;
-        result.message = copyText(input->message);
+        // Catalog listings can legitimately exceed an individual metadata field.
+        result.message = copyText(input->message, false, 16 * 1024 * 1024);
         result.errorCode = copyText(input->error_code);
         result.category = copyText(input->category);
         result.voice = copyText(input->voice);
@@ -736,6 +739,51 @@ static GrimResult api_delete_file(const GrimPluginAPI* self, const char* path) {
 // ============================================================================
 // Process Management Implementation
 // ============================================================================
+
+static const char* api_get_alias_snapshot(const GrimPluginAPI* self, const char* key) noexcept {
+    try {
+        (void)pluginContext(self);
+        auto entries = nlohmann::json::array();
+        std::string info;
+        if (key) info = aliases::info(key);
+        else for (const auto& [name, target] : aliases::getAll())
+            entries.push_back({{"name", name}, {"target", target}});
+        return allocateString(nlohmann::json{{"format", "grim-alias-snapshot"}, {"version", 1},
+            {"entries", std::move(entries)}, {"info", info}}.dump());
+    } catch (...) { return nullptr; }
+}
+
+static const char* api_refresh_aliases(const GrimPluginAPI* self) noexcept {
+    try {
+        (void)pluginContext(self);
+        nlohmann::json result{{"format", "grim-alias-refresh"}, {"version", 1},
+            {"completed", false}, {"error", ""}};
+        if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
+            result["error"] = "Filesystem permission denied";
+        } else {
+            try {
+                (void)aliases::refreshNow(); // Preserve the old wrapper's ignored status.
+                result["completed"] = true;
+            } catch (const std::exception& error) { result["error"] = error.what(); }
+        }
+        return allocateString(result.dump());
+    } catch (...) { return nullptr; }
+}
+
+static const char* api_get_tool_snapshot(const GrimPluginAPI* self, const char* tool_id) noexcept {
+    try {
+        (void)pluginContext(self);
+        auto& registry = GRIM::MMO::ToolRegistry::instance();
+        auto tools = nlohmann::json::array();
+        if (tool_id) {
+            if (const auto tool = registry.getTool(tool_id)) tools.push_back(*tool);
+        } else {
+            for (const auto& tool : registry.getAllTools()) tools.push_back(tool);
+        }
+        return allocateString(nlohmann::json{{"format", "grim-tool-snapshot"},
+            {"version", 1}, {"tools", std::move(tools)}}.dump());
+    } catch (...) { return nullptr; }
+}
 
 static const char* api_get_user_error_message(const GrimPluginAPI*, const char* code) noexcept {
     if (!code) return nullptr;
@@ -1373,6 +1421,9 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.string_free = api_string_free;
     api.get_user_error_message = api_get_user_error_message;
     api.open_target = api_open_target;
+    api.get_tool_snapshot = api_get_tool_snapshot;
+    api.get_alias_snapshot = api_get_alias_snapshot;
+    api.refresh_aliases = api_refresh_aliases;
     
     auto* result = &api;
     auto instance = context->instance;

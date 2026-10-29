@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.1.0**. Updated October 28, 2026.
+API version: **3.3.0**. Updated October 29, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -96,7 +96,9 @@ structures, or a non-OK handler return produce ERR_PLUGIN_RESULT. Writer
 validation failures are remembered even when a handler ignores the error.
 Exceptions from handlers become registry command failures.
 
-All result strings have the same 65,536-byte limit. Optional JSON output must
+Result messages support up to 16 MiB as of v3.2 so complete catalog listings can
+cross the plugin boundary. Other result strings retain the 65,536-byte limit.
+Optional JSON output must
 be valid JSON and is preserved as CommandResult::structuredOutputJson.
 
 The call, writer, and their pointers must not escape the callback or be used
@@ -353,3 +355,92 @@ current host error messages, permissions, and DLL removal. The OS primitive is
 replaced with a test sink; no applications or browsers are opened. The production
 OS implementation receives a separate syntax check. See the
 [build and deployment instructions](../plugins/README.md#application-plugin).
+
+### Tool inspection migration (v3.2)
+
+`tool_inspection_plugin` supplies `list_tools`, `tool_info`, and `tool_stats`.
+The host no longer registers these tools. The original command bodies retain
+their formatting, category filtering, alias/display-name lookup, statistics,
+integer-prefix parsing, error codes, voice, and colors. `tool_stats` still
+defaults to 20 rows, accepts zero/negative limits as an empty listing, and lets
+invalid/out-of-range integer arguments become `ERR_CMD_EXCEPTION` at dispatch.
+No new trimming, sorting, or validation policy is introduced.
+
+API v3.2 consumes one additional reserved slot, preserving table size and earlier
+service offsets. Existing v3.0/v3.1 plugins remain supported. New plugins must
+check v3.2 before accessing `get_tool_snapshot(self, tool_id)`.
+
+This service returns a host-owned JSON string, released with `string_free`:
+
+```json
+{"format":"grim-tool-snapshot","version":1,"tools":[]}
+```
+
+- A null `tool_id` selects all registered metadata in category/ID order. Each
+  call copies the registry's current entries under its existing mutex.
+- A supplied string uses the registry's existing canonical-ID, display-name, and
+  alias lookup. Missing tools yield an empty `tools` array; a null return means
+  API failure. Unavailable registrations remain inspectable.
+- Each entry includes every field of `ToolDescriptor`: identity and provider
+  generation/source, documentation, arguments/schema/parameters, policy,
+  prerequisites/context/affordances, aliases/keywords/tags, lifecycle, and stats.
+  `provider_type` is numeric (0 built-in, 1 plugin); `swap_state` is numeric
+  (0 loaded, 1 loading, 2 unloading, 3 unavailable). The version-1 codec lives in
+  `MMO/Core/ToolDescriptorJson.hpp`.
+- Snapshots carry no handlers and do not execute tools or change counters.
+  Calling an inspection command still records that command's own usage after
+  its handler completes, as before. Snapshot strings remain independent of
+  later registrations, metadata changes, and removals.
+- Snapshot strings are not restricted to an individual field's 64-KiB limit.
+  Command result messages support 16 MiB; other result and registration field
+  limits remain unchanged. Oversized command results fail explicitly rather
+  than being silently truncated.
+
+The snapshot API provides read-only data for future World Lab catalog population;
+this migration does not bind or modify world objects. The optional
+`-ToolInspectionPluginDirectory` test argument exercises the real DLL, including
+rich snapshots, alias lookup, preserved results, statistics parsing, 70-KB
+entries, metadata updates/removals, and DLL removal. See the
+[plugin instructions](../plugins/README.md#tool-inspection-plugin).
+
+### Application alias migration (v3.3)
+
+`aliases_plugin` supplies the existing canonical command IDs `alias list`,
+`alias info`, and `alias refresh`. These application aliases are separate from
+ToolRegistry command aliases. The host keeps ownership of `aliases.cpp`, loaded
+user/auto data, persistence, normalization, lookup, scanning, and refresh lifecycle.
+The plugin owns command formatting, metadata, and results. Loading or unloading
+the plugin does not initialize, clear, scan, or otherwise change the host store.
+
+API v3.3 consumes two more reserved slots while retaining table size and earlier
+service offsets. Existing v3.0/v3.1/v3.2 binaries remain supported. The alias
+plugin requires v3.3 before reading either new function pointer.
+
+- `get_alias_snapshot(self, key)` returns host-owned version-1 JSON:
+  `{"format":"grim-alias-snapshot","version":1,"entries":[],"info":""}`.
+  A null key copies `aliases::getAll()` into ordered `{name,target}` entries,
+  preserving the host map's current iteration/merge behavior. A supplied key
+  returns `aliases::info(key)` text without plugin-side trimming or normalization.
+  Returned strings must be released with `string_free`; null means API failure.
+- `refresh_aliases(self)` requires `GRIM_PERM_FILESYSTEM` and calls the existing
+  synchronous `aliases::refreshNow()`. It returns host-owned JSON:
+  `{"format":"grim-alias-refresh","version":1,"completed":true,"error":""}`.
+  `completed` means the host function returned normally, not that a scan happened
+  or its returned CommandResult indicated success. A denied permission or caught
+  standard exception produces `completed:false` with error text. Null means API
+  failure. No registered command is dispatched by this service.
+
+The old command wrappers' behavior is intentionally retained: list/refresh ignore
+arguments; an empty info argument fails; a missing name normally succeeds with
+the host's nonempty "not found in aliases" text. Only empty host info uses the
+configured `ERR_ALIAS_NOT_FOUND` message. Refresh reports its original fixed
+success result whenever the host function returns, including its busy or failed
+status returns, and preserves the original failure response on standard exceptions.
+The service does not repair or replace the existing host refresh implementation.
+
+The optional `-AliasesPluginDirectory` test argument loads the real DLL against
+a controlled alias-store/scanner fixture. It checks every result field, host
+iteration order and live data, lookup argument handling, permissions, refresh
+normal/busy/failed/exception outcomes, large listings, and removal without clearing
+host aliases. No live application-directory scan or alias database write occurs.
+See [build and deployment instructions](../plugins/README.md#aliases-plugin).

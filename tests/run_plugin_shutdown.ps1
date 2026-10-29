@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "")
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "")
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -50,7 +50,7 @@ $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | Fo
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/aliases_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib')
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
@@ -61,7 +61,7 @@ $registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
 $pluginTestCommand = 'plugin_api_ownership_tests.exe integration integration-rejected replacement'
-foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory)) {
+foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $AliasesPluginDirectory)) {
     $resolvedTestDirectory = if ($testDirectory) { (Resolve-Path -LiteralPath $testDirectory).Path } else { '' }
     $pluginTestCommand += ' "' + $resolvedTestDirectory + '"'
 }

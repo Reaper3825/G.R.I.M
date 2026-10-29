@@ -47,9 +47,13 @@ tools, with provider **builtin**. Filesystem commands (`pwd`, `cd`, `ls`, `mkdir
 and `rm`) are supplied by the separately deployed **Filesystem Plugin**. The
 `clean` and `help` commands are supplied by the **Utility Plugin**, retaining
 their original responses. `open` and `search` come from the **Application Plugin**
-using the host's API v3.1 error catalog and OS opener. The `core_plugin.cpp` filename also contains the host's
-built-in registration list;
-it does not mean those commands require a separately loaded plugin.
+using the host's API v3.1 error catalog and OS opener.
+`list_tools`, `tool_info`, and `tool_stats` come from the **Tool Inspection Plugin**
+using API v3.2 read-only metadata snapshots. `alias list`, `alias info`, and
+`alias refresh` come from the **Aliases Plugin**, using API v3.3 to access the
+host's existing application-alias store and refresh service. The `core_plugin.cpp` filename
+contains the host's built-in registration list; it does not mean those commands
+require a separately loaded plugin.
 
 Focused host-only validation:
 

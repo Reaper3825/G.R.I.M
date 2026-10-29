@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.1
+// G.R.I.M Plugin API v3.3
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 1
+#define GRIM_API_VERSION_MINOR 3
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -316,7 +316,21 @@ typedef struct GrimPluginAPI {
     // native_status > 32 means success. GRIM_OK means a native status was obtained.
     // Other platforms return GRIM_ERROR_UNSUPPORTED. No command dispatch occurs.
     GrimResult (*open_target)(const GrimPluginAPI* self, const char* target, int64_t* native_status);
-    void* reserved[30];
+    // v3.2: host-owned JSON metadata snapshot, released with string_free.
+    // Null tool_id returns all tools in registry order; otherwise resolves the
+    // canonical ID, display name, or alias. Missing tools produce an empty array.
+    // Envelope: {"format":"grim-tool-snapshot","version":1,"tools":[...]}
+    // Null return means API failure. Read-only; does not dispatch or change stats.
+    const char* (*get_tool_snapshot)(const GrimPluginAPI* self, const char* tool_id);
+    // v3.3: application aliases (separate from ToolRegistry command aliases).
+    // Host-owned version-1 JSON; release with string_free. Null return = API failure.
+    // Null key lists entries in the host's existing iteration order; otherwise
+    // returns the host's alias-info text, including existing missing-name behavior.
+    const char* (*get_alias_snapshot)(const GrimPluginAPI* self, const char* key);
+    // Requires FILESYSTEM. Calls the existing synchronous host refresh. The JSON
+    // records normal return vs exception; legacy commands ignore returned status.
+    const char* (*refresh_aliases)(const GrimPluginAPI* self);
+    void* reserved[27];
     
 } GrimPluginAPI;
 

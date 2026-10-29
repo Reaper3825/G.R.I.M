@@ -277,6 +277,18 @@ cache/geospatial/*.sqlite-wal
 /plugins/application_plugin/*
 !/plugins/application_plugin/CMakeLists.txt
 !/plugins/application_plugin/application_plugin.cpp
+!/plugins/tool_inspection_plugin/
+/plugins/tool_inspection_plugin/*
+!/plugins/tool_inspection_plugin/CMakeLists.txt
+!/plugins/tool_inspection_plugin/tool_inspection_plugin.cpp
+!/plugins/tool_inspection_plugin/inspection_commands.cpp
+!/plugins/tool_inspection_plugin/snapshot_registry.hpp
+!/plugins/aliases_plugin/
+/plugins/aliases_plugin/*
+!/plugins/aliases_plugin/CMakeLists.txt
+!/plugins/aliases_plugin/aliases_plugin.cpp
+!/plugins/aliases_plugin/alias_commands.cpp
+!/plugins/aliases_plugin/host_aliases.hpp
 
 # Local OSINT tools, adapters, and generated data.
 /osint/

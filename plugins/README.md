@@ -93,6 +93,56 @@ its old `clean`/`help` registrations. An older host rejects the colliding batch
 without losing its working commands. The compatibility test checks exact results,
 policy metadata, old-host collisions, and removal through folder reconciliation.
 
+## Tool inspection plugin
+
+`tool_inspection_plugin` supplies `list_tools`, `tool_info`, and `tool_stats` using
+API v3.2's read-only registry snapshots. The original formatting and argument
+behavior are preserved, including exact category matching, alias/display-name
+lookup, and the existing statistics integer-prefix parsing. The plugin registers
+usage, parameter, and example metadata and requires no permissions or confirmation.
+
+    cmake -S plugins/tool_inspection_plugin -B .codex-build/tool-inspection-plugin -G "Visual Studio 17 2022" -A x64
+    cmake --build .codex-build/tool-inspection-plugin --config Release --target tool_inspection_plugin --parallel 2
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -ToolInspectionPluginDirectory .codex-build/tool-inspection-plugin/plugins
+
+Deploy `.codex-build/tool-inspection-plugin/plugins/tool_inspection_plugin.dll`
+into GRIM's `plugins/` folder. Rebuild the host separately for API v3.2 and removal
+of its old registrations. The new host still supports v3.0/v3.1 plugin binaries.
+The plugin imports no host C++ symbols; snapshots contain metadata, not handlers.
+The snapshot codec is shared as `MMO/Core/ToolDescriptorJson.hpp`.
+
+Tests cover complete metadata, alias/display-name lookup, unchanged result fields,
+statistics limits and errors, large entries/results, copy isolation, lifecycle
+metadata, and folder removal. API v3.2 permits result messages up to 16 MiB so
+catalog listings can exceed 64 KiB; other result field limits stay unchanged.
+World Lab object population remains a separate integration step.
+
+## Aliases plugin
+
+`aliases_plugin` supplies `alias list`, `alias info`, and `alias refresh` using
+API v3.3. It accesses the existing host application-alias store; it does not
+create a second store, scanner, persistence layer, or background refresh thread.
+These aliases are separate from ToolRegistry's command aliases.
+
+    cmake -S plugins/aliases_plugin -B .codex-build/aliases-plugin -G "Visual Studio 17 2022" -A x64
+    cmake --build .codex-build/aliases-plugin --config Release --target aliases_plugin --parallel 2
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -AliasesPluginDirectory .codex-build/aliases-plugin/plugins
+
+Deploy `.codex-build/aliases-plugin/plugins/aliases_plugin.dll` into GRIM's
+`plugins/` folder. Rebuild the host separately for API v3.3 and removal of the
+old command registrations. Earlier v3.x plugin binaries remain supported by the
+new host. The plugin imports no host C++ symbols and only refresh requires
+filesystem permission and confirmation metadata.
+
+Original messages, error codes, categories, voice, colors, and argument behavior
+remain unchanged. In particular, unknown alias info normally succeeds with a
+"not found in aliases" message. Refresh retains the existing wrapper's fixed
+success response when the host refresh function returns normally, even for busy
+or failed returned statuses; thrown standard exceptions produce the original
+failure result. Tests exercise these behaviors using a controlled host fixture,
+without scanning actual application folders or writing the real alias database.
+Unloading the DLL removes its commands and leaves host alias state intact.
+
 ### Remaining host tools
 
 These groups stay in the host until the plugin API can preserve their existing
@@ -101,7 +151,6 @@ change behavior.
 
 | Group | Missing boundary for a behavior-preserving migration |
 |---|---|
-| Aliases | Shared loaded alias data, metadata, and refresh lifecycle. |
 | Memory | The existing memory store/rotation pipeline; API memory operations are stubs. |
 | Timers | Host-owned pending timers and expiry delivery; plugin timers are not scheduled by the frame loop. |
 | Voice | Active voice configuration, engine/session state, cache and audio services; `list_voices` also reads Coqui configuration. |
@@ -109,4 +158,3 @@ change behavior.
 | UI | Host-owned panels and surface registry lifetime. |
 | AI/NLP/settings | Shared configuration, conversation history, grammar state, and model routing. |
 | System information | Full hardware detection; existing API queries expose only OS and CPU text. |
-| Tool inspection | Complete registry metadata and statistics discovery through the plugin ABI. |

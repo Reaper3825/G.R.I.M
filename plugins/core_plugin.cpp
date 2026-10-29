@@ -3,7 +3,6 @@
 #include "MMO/Core/ToolRegistry.hpp"
 #include <stdexcept>
 
-#include "commands_aliases.hpp"
 #include "commands_memory.hpp"
 #include "commands_ai.hpp"
 #include "commands_system.hpp"
@@ -51,16 +50,7 @@ static void register_all_commands() {
 
     // Filesystem and utility tools are supplied by plugins discovered from disk.
 
-    // Aliases
-    REGISTER_TOOL("alias list", cmdAliasList,
-                  "List all defined command aliases",
-                  "information", true);
-    REGISTER_TOOL("alias info", cmdAliasInfo,
-                  "Show information about a specific alias",
-                  "information", true);
-    REGISTER_TOOL("alias refresh", cmdAliasRefresh,
-                  "Refresh and reload aliases from disk",
-                  "system", false);
+    // Alias commands are supplied by aliases_plugin; the host owns alias state.
 
     // Memory commands
     LOG_DEBUG("Plugin", "Registering memory commands");
@@ -148,17 +138,7 @@ static void register_all_commands() {
                   "Save learned NLP patterns",
                   "system", false);
     
-    // ✅ NEW: Command registry management
-    LOG_DEBUG("Plugin", "Registering command registry commands");
-    REGISTER_TOOL("list_tools", cmdListTools,
-                  "List all registered commands/tools",
-                  "information", true);
-    REGISTER_TOOL("tool_info", cmdToolInfo,
-                  "Show detailed information about a tool",
-                  "information", true);
-    REGISTER_TOOL("tool_stats", cmdToolStats,
-                  "Show tool usage statistics",
-                  "information", true);
+    // Tool inspection is supplied by tool_inspection_plugin.
 
     // Settings info command (renamed to avoid conflict)
     LOG_DEBUG("Plugin", "Registering settings info command");

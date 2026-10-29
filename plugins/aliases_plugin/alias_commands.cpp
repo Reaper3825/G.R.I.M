@@ -1,14 +1,11 @@
-#include "commands_aliases.hpp"
-#include "aliases.hpp"
-#include "console_history.hpp"
-#include "error_manager.hpp"
+#include "host_aliases.hpp"
 #include <sstream>
 
 // ====================================================
 // alias list → dump aliases by section
 // ====================================================
 CommandResult cmdAliasList(const std::string& /*arg*/) {
-    const auto all = aliases::getAll();
+    const auto all = hostAliases::getAll();
 
     if (all.empty()) {
         return {
@@ -53,11 +50,11 @@ CommandResult cmdAliasInfo(const std::string& arg) {
         };
     }
 
-    std::string meta = aliases::info(arg);
+    std::string meta = hostAliases::info(arg);
     if (meta.empty()) {
         return {
             false,                                                                  // success
-            ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,      // message
+            hostAliases::errorMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,      // message
             "ERR_ALIAS_NOT_FOUND",                                                  // errorCode
             "error",                                                                // category
             "Alias not found",                                                      // voice
@@ -80,7 +77,7 @@ CommandResult cmdAliasInfo(const std::string& arg) {
 // ====================================================
 CommandResult cmdAliasRefresh(const std::string& /*arg*/) {
     try {
-        aliases::refreshNow();
+        hostAliases::refreshNow();
         return {
             true,                                       // success
             "[Alias] Manual refresh complete.",         // message
@@ -100,3 +97,4 @@ CommandResult cmdAliasRefresh(const std::string& /*arg*/) {
         };
     }
 }
+
