@@ -6,10 +6,6 @@
 #include "ai/ai.hpp"
 #include "logger.hpp"
 
-#ifdef _WIN32
-  #include <shellapi.h>
-#endif
-
 extern nlohmann::json aiConfig;
 extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
@@ -93,108 +89,4 @@ CommandResult cmdGrimAi(const std::string& arg) {
     }
 
     return result;
-}
-
-CommandResult cmdOpenApp(const std::string& arg) {
-    LOG_DEBUG("cmdOpenApp", "Received arg=\"" + arg + "\"");
-
-    std::string appPath = arg;
-    if (appPath.empty()) {
-        LOG_DEBUG("cmdOpenApp", "Empty argument");
-        return {
-            false,                                                  // success
-            ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),    // message
-            "ERR_APP_NO_ARGUMENT",                                  // errorCode
-            "error",                                                // category
-            "Missing application name",                             // voice
-            Colors::Red                                             // color
-        };
-    }
-
-#ifdef _WIN32
-    HINSTANCE result = ShellExecuteA(nullptr, "open", appPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-
-    if ((intptr_t)result <= 32) {
-        LOG_ERROR("cmdOpenApp", "ShellExecuteA failed (" + std::to_string((intptr_t)result) + ") for: " + appPath);
-        return {
-            false,                                                                         // success
-            ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + appPath,       // message
-            "ERR_APP_LAUNCH_FAILED",                                                       // errorCode
-            "error",                                                                       // category
-            "Failed to open " + appPath,                                                   // voice
-            Colors::Red                                                                    // color
-        };
-    }
-
-    LOG_DEBUG("cmdOpenApp", "Successfully launched: " + appPath);
-    return {
-        true,                               // success
-        "[App] Launched: " + appPath,       // message
-        "ERR_NONE",                         // errorCode
-        "routine",                          // category
-        "Opening " + appPath,               // voice
-        Colors::Green                       // color
-    };
-#else
-    LOG_DEBUG("cmdOpenApp", "(Stub) Would open: " + appPath);
-    return {
-        true,                                           // success
-        "[App] (Stub) Would open: " + appPath,          // message
-        "ERR_NONE",                                     // errorCode
-        "routine",                                      // category
-        "Opening " + appPath,                           // voice
-        Colors::Green                                   // color
-    };
-#endif
-}
-
-CommandResult cmdSearchWeb(const std::string& arg) {
-    std::string query = trim(arg);
-
-    if (query.empty()) {
-        LOG_DEBUG("Web", "No search query provided");
-        return {
-            false,                                                  // success
-            ErrorManager::getUserMessage("ERR_WEB_NO_ARGUMENT"),    // message
-            "ERR_WEB_NO_ARGUMENT",                                  // errorCode
-            "error",                                                // category
-            "No search query",                                      // voice
-            Colors::Red                                             // color
-        };
-    }
-
-    std::string url = "https://www.google.com/search?q=" + query;
-    LOG_DEBUG("Web", "Searching web for: " + query);
-
-#ifdef _WIN32
-    HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    if ((intptr_t)result <= 32) {
-        LOG_ERROR("Web", "Failed to open browser for query: " + query);
-        return {
-            false,                                                                     // success
-            ErrorManager::getUserMessage("ERR_WEB_OPEN_FAILED") + ": " + query,       // message
-            "ERR_WEB_OPEN_FAILED",                                                     // errorCode
-            "error",                                                                   // category
-            "Web search failed",                                                       // voice
-            Colors::Red                                                                // color
-        };
-    }
-    return {
-        true,                                   // success
-        "[Web] Searching: " + query,            // message
-        "ERR_NONE",                             // errorCode
-        "routine",                              // category
-        "Searching web for " + query,           // voice
-        Colors::Cyan                            // color
-    };
-#else
-    return {
-        true,                                           // success
-        "[Web] (Stub) Would search for: " + query,      // message
-        "ERR_NONE",                                     // errorCode
-        "routine",                                      // category
-        "Searching web for " + query,                   // voice
-        Colors::Cyan                                    // color
-    };
-#endif
 }

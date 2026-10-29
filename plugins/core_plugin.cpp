@@ -3,8 +3,6 @@
 #include "MMO/Core/ToolRegistry.hpp"
 #include <stdexcept>
 
-#include "commands_interface.hpp"
-#include "commands_filesystem.hpp"
 #include "commands_aliases.hpp"
 #include "commands_memory.hpp"
 #include "commands_ai.hpp"
@@ -49,38 +47,9 @@ static void register_all_commands() {
                   "Send a direct query to the AI backend", 
                   "information", true);
     
-    // Application control
-    LOG_DEBUG("Plugin", "Registering 'open' command");
-    REGISTER_TOOL("open", cmdOpenApp,
-                  "Open an application or file",
-                  "action", false);
-    LOG_DEBUG("Plugin", "Registering 'search' command");
-    REGISTER_TOOL("search", cmdSearchWeb,
-                  "Search the web for information",
-                  "information", true);
+    // Application/browser commands are supplied by application_plugin.
 
-    // Filesystem / terminal-like
-    REGISTER_TOOL("pwd", cmdShowPwd,
-                  "Show current working directory",
-                  "information", true);
-    REGISTER_TOOL("cd", cmdChangeDir,
-                  "Change current directory",
-                  "action", false);
-    REGISTER_TOOL("ls", cmdListDir,
-                  "List directory contents",
-                  "information", true);
-    REGISTER_TOOL("mkdir", cmdMakeDir,
-                  "Create a new directory",
-                  "action", false);
-    REGISTER_TOOL("rm", cmdRemoveFile,
-                  "Remove a file or directory",
-                  "action", false);
-    REGISTER_TOOL("clean", cmdClean,
-                  "Clean console history",
-                  "system", false);
-    REGISTER_TOOL("help", cmdShowHelp,
-                  "Show available commands",
-                  "information", true);
+    // Filesystem and utility tools are supplied by plugins discovered from disk.
 
     // Aliases
     REGISTER_TOOL("alias list", cmdAliasList,

@@ -9,7 +9,8 @@
 #include "plugin_manager.hpp"
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
-#include "commands/commands_ai.hpp"
+#include "error_manager.hpp"
+#include "shell_open.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
@@ -736,6 +737,26 @@ static GrimResult api_delete_file(const GrimPluginAPI* self, const char* path) {
 // Process Management Implementation
 // ============================================================================
 
+static const char* api_get_user_error_message(const GrimPluginAPI*, const char* code) noexcept {
+    if (!code) return nullptr;
+    try { return allocateString(ErrorManager::getUserMessage(code)); }
+    catch (...) { return nullptr; }
+}
+
+static GrimResult api_open_target(const GrimPluginAPI* self, const char* target, int64_t* native_status) noexcept {
+    if (native_status) *native_status = 0;
+    try {
+        if (!checkPermission(self, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+        if (!target || !native_status) return GRIM_ERROR_INVALID_PARAM;
+#ifdef _WIN32
+        *native_status = shellOpenTarget(target);
+        return GRIM_OK;
+#else
+        return GRIM_ERROR_UNSUPPORTED;
+#endif
+    } catch (...) { return GRIM_ERROR_UNKNOWN; }
+}
+
 static GrimResult api_launch_app(const GrimPluginAPI* self, const char* app_name) {
     if (!checkPermission(self, GRIM_PERM_PROCESS)) {
         return GRIM_ERROR_PERMISSION_DENIED;
@@ -745,10 +766,15 @@ static GrimResult api_launch_app(const GrimPluginAPI* self, const char* app_name
         return GRIM_ERROR_INVALID_PARAM;
     }
     
-    // Use GRIM's existing command system
-    CommandResult result = cmdOpenApp(app_name);
-    
-    return result.success ? GRIM_OK : GRIM_ERROR_UNKNOWN;
+    // Preserve the previous status-only service without depending on a tool.
+    if (!*app_name) return GRIM_ERROR_UNKNOWN;
+#ifdef _WIN32
+    int64_t nativeStatus = 0;
+    const auto status = api_open_target(self, app_name, &nativeStatus);
+    return status == GRIM_OK && nativeStatus > 32 ? GRIM_OK : GRIM_ERROR_UNKNOWN;
+#else
+    return GRIM_OK; // Preserve the original non-Windows command stub.
+#endif
 }
 
 static GrimResult api_launch_process(const GrimPluginAPI* self, const char* command, const char* args) {
@@ -1345,6 +1371,8 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.free_memory = api_free_memory;
     api.string_duplicate = api_string_duplicate;
     api.string_free = api_string_free;
+    api.get_user_error_message = api_get_user_error_message;
+    api.open_target = api_open_target;
     
     auto* result = &api;
     auto instance = context->instance;

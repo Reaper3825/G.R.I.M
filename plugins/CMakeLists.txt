@@ -3,3 +3,6 @@ project(grim_plugins LANGUAGES CXX)
 # This entry point deliberately does not configure the GRIM application.
 add_subdirectory(osint_plugin)
 add_subdirectory(network_test_plugin)
+add_subdirectory(filesystem_plugin)
+add_subdirectory(utility_plugin)
+add_subdirectory(application_plugin)

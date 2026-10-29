@@ -37,23 +37,3 @@ CommandResult cmdClearContext(const std::string& arg);
  *   grim_ai <prompt>
  */
 CommandResult cmdGrimAi(const std::string& arg);
-
-// =============================================================
-// App / Web commands
-// =============================================================
-
-/**
- * @brief Open a local application using an alias.
- * 
- * Usage:
- *   open_app <application>
- */
-CommandResult cmdOpenApp(const std::string& arg);
-
-/**
- * @brief Search the web with the default browser.
- * 
- * Usage:
- *   search_web <query>
- */
-CommandResult cmdSearchWeb(const std::string& arg);

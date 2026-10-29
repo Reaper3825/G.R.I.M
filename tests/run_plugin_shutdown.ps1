@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "")
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "")
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -50,16 +50,21 @@ $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | Fo
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib')
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
-$syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/core_plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/core_plugin.cpp','core/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'
 $registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp','core/plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
+$pluginTestCommand = 'plugin_api_ownership_tests.exe integration integration-rejected replacement'
+foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory)) {
+    $resolvedTestDirectory = if ($testDirectory) { (Resolve-Path -LiteralPath $testDirectory).Path } else { '' }
+    $pluginTestCommand += ' "' + $resolvedTestDirectory + '"'
+}
 $commands = @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'),'if errorlevel 1 exit /b %errorlevel%',
     'cl @alpha.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @beta.rsp','if errorlevel 1 exit /b %errorlevel%',
@@ -77,7 +82,7 @@ $commands = @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul
     'cl @replacement-collision.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @replacement-legacy.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @api.rsp','if errorlevel 1 exit /b %errorlevel%',
-    ('plugin_api_ownership_tests.exe integration integration-rejected replacement' + $(if ($PluginDirectory) { ' "' + (Resolve-Path -LiteralPath $PluginDirectory).Path + '"' } else { '' })),'if errorlevel 1 exit /b %errorlevel%',
+    $pluginTestCommand,'if errorlevel 1 exit /b %errorlevel%',
     'cl @plugin-syntax.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @registry.rsp','if errorlevel 1 exit /b %errorlevel%',
     'tool_registry_tests.exe','if errorlevel 1 exit /b %errorlevel%')

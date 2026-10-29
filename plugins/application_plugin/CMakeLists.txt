@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22)
+project(application_plugin LANGUAGES CXX)
+include("${CMAKE_CURRENT_LIST_DIR}/../plugin_build.cmake")
+add_library(application_plugin SHARED application_plugin.cpp)
+grim_configure_plugin(application_plugin)

@@ -41,10 +41,14 @@ registry coverage; legacy commands that bypass the registry are not added or
 inferred. It does not edit registrations, dispatch commands, or populate World
 Lab objects. The World Lab TextWorld Actions catalog remains separate.
 
-Built-in commands (including application, filesystem, memory, perception, and
-input controls) register before bootstrap copies their metadata into the MMO
-registry. They appear alongside plugin tools, with provider **builtin**. The
-`core_plugin.cpp` filename also contains the host's built-in registration list;
+Built-in commands (including memory, perception, and input controls)
+publish handlers and metadata into the MMO registry. They appear alongside plugin
+tools, with provider **builtin**. Filesystem commands (`pwd`, `cd`, `ls`, `mkdir`,
+and `rm`) are supplied by the separately deployed **Filesystem Plugin**. The
+`clean` and `help` commands are supplied by the **Utility Plugin**, retaining
+their original responses. `open` and `search` come from the **Application Plugin**
+using the host's API v3.1 error catalog and OS opener. The `core_plugin.cpp` filename also contains the host's
+built-in registration list;
 it does not mean those commands require a separately loaded plugin.
 
 Focused host-only validation:

@@ -31,7 +31,6 @@ std::pair<std::string, std::string> parseInput(const std::string& text) {
 }
 }
 void ensureCorePluginsRegistered() {}
-CommandResult cmdOpenApp(const std::string&) { return CommandResult{}; }
 
 namespace {
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -103,6 +102,9 @@ void checkName(const GrimPluginAPI* api, const char* expected) {
 }
 
 void runPluginReconcileTests(const std::filesystem::path&, const std::filesystem::path&);
+void runFilesystemPluginTests(const std::filesystem::path&);
+void runUtilityPluginTests(const std::filesystem::path&);
+void runApplicationPluginTests(const std::filesystem::path&);
 
 int main(int argc, char** argv) try {
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY);
@@ -247,6 +249,9 @@ int main(int argc, char** argv) try {
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count, "Rejected DLL left registrations");
     PluginManager::unloadAll();
     runPluginReconcileTests(argv[3], argc > 4 ? argv[4] : "");
+    if (argc > 5 && *argv[5]) runFilesystemPluginTests(argv[5]);
+    if (argc > 6 && *argv[6]) runUtilityPluginTests(argv[6]);
+    if (argc > 7 && *argv[7]) runApplicationPluginTests(argv[7]);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

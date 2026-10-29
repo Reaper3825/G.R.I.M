@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-#include "commands_interface.hpp"
+#include "commands_core.hpp"
 
 // System commands
 CommandResult cmdSystemInfo(const std::string& arg);

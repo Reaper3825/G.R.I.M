@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.0
+// G.R.I.M Plugin API v3.1
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 0
+#define GRIM_API_VERSION_MINOR 1
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -309,8 +309,14 @@ typedef struct GrimPluginAPI {
     const char* (*string_duplicate)(const GrimPluginAPI* self, const char* str);
     void (*string_free)(const GrimPluginAPI* self, const char* str);
     
-    // Reserved for future expansion
-    void* reserved[32];
+    // v3.1: consumes two reserved slots; earlier fields and table size unchanged.
+    // Returns a host-owned string; release with string_free. Null on failure.
+    const char* (*get_user_error_message)(const GrimPluginAPI* self, const char* code);
+    // Requires PROCESS. On Windows, returns the ShellExecute status unchanged;
+    // native_status > 32 means success. GRIM_OK means a native status was obtained.
+    // Other platforms return GRIM_ERROR_UNSUPPORTED. No command dispatch occurs.
+    GrimResult (*open_target)(const GrimPluginAPI* self, const char* target, int64_t* native_status);
+    void* reserved[30];
     
 } GrimPluginAPI;
 

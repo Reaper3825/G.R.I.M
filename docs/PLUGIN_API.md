@@ -1,12 +1,17 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.0.0**. Updated October 28, 2026.
+API version: **3.1.0**. Updated October 28, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
 grim_plugin_init, and grim_plugin_shutdown.
 The loader rejects incompatible major versions and newer unsupported versions.
 Existing v1/v2 binaries must be rebuilt and migrated; they are not adapted.
+
+Version 3.1 consumes two of the function table's reserved pointer slots, retaining
+the table size and existing v3.0 service-field offsets. Existing v3.0 plugins remain supported
+by the new host. A plugin using the new services declares v3.1 and is rejected by
+an older host rather than reading unavailable function pointers.
 
 ## Tool registration
 
@@ -237,7 +242,7 @@ This phase wires plugin reconciliation, not a new general timer scheduler.
 
 ## Independent plugin builds
 
-Both plugins build without linking GRIM, importing host C++ symbols, or
+The native plugins build without linking GRIM, importing host C++ symbols, or
 configuring the application. Use the standalone CMake entry point and existing
 installed dependencies:
 
@@ -282,3 +287,69 @@ The Tools viewer uses the same descriptors, including argument format/schema
 and plugin source path. Its focused host UI regression is:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -Tools
+
+### Filesystem migration
+
+`filesystem_plugin` owns the former built-in `pwd`, `cd`, `ls`, `mkdir`, and `rm`
+tools. It registers one atomic batch with path parameters, examples, usage,
+filesystem permissions, and informational/confirmation metadata. It uses no
+host globals or imported host symbols. `clean` and `help` are provided by the
+separate `utility_plugin`.
+
+The plugin's working directory starts at the process working directory on each
+load; `cd` changes only plugin-local state. Reload resets it. The registry is
+populated solely by discovering and initializing the plugin file. Removing that
+file removes the five registrations. Older hosts that still register these IDs
+reject the plugin batch rather than replacing the built-ins.
+
+See [plugin build and deployment instructions](../plugins/README.md#filesystem-plugin).
+The optional `-FilesystemPluginDirectory` argument to `tests/run_plugin_shutdown.ps1`
+exercises the built DLL in a private temporary folder, including metadata,
+absolute/relative navigation, paths with spaces, failed operations, nonrecursive
+removal, and removal of the deployed plugin file. No application or model runs.
+
+### Utility migration and compatibility boundary
+
+`utility_plugin` supplies `clean` and `help` with their previous complete result
+payloads and registration policy. Both still ignore arguments. This is a migration
+of the existing response-only `clean` and static `help` handlers, not a redesign
+of console clearing or help discovery. There are no host-state dependencies.
+
+The optional `-UtilityPluginDirectory` argument to `tests/run_plugin_shutdown.ps1`
+tests exact result compatibility through the real DLL/API/registry, old-host
+registration collisions, and removal of the deployed DLL. See the
+[utility plugin instructions and remaining host boundaries](../plugins/README.md#utility-plugin).
+Tools requiring live host state remain built-in until the API can preserve their
+full behavior; stub or partial services are not used as migration substitutes.
+
+### Application/browser migration (v3.1)
+
+`application_plugin` owns `open` and `search`. The plugin preserves the former
+handlers' argument handling, Google URL construction, success/failure messages,
+error codes, categories, voice, colors, and informational/confirmation flags.
+`open` keeps raw arguments; `search` trims surrounding whitespace. Non-Windows
+stub behavior remains unchanged. The host no longer registers either tool.
+
+Two v3.1 host services provide the required shared boundary:
+
+- `get_user_error_message(self, code)` reads the current host ErrorManager. The
+  returned string is copied by the host and must be released with `string_free`.
+  Null arguments or lookup/allocation errors return null.
+- `open_target(self, target, native_status)` requires `GRIM_PERM_PROCESS`. On
+  Windows it uses the same `ShellExecuteA(..., "open", ..., SW_SHOWNORMAL)` call
+  as the original handlers, returning its unmodified native status. `GRIM_OK`
+  means a status was obtained; a status above 32 means launch success. Other
+  platforms return `GRIM_ERROR_UNSUPPORTED`. This service does not dispatch a
+  registered command, so it cannot recurse into `open` or `search`.
+
+The existing status-only `launch_app` service retains its success/failure and
+permission behavior, using the same native primitive without depending on the
+removed `cmdOpenApp` handler. Neither service confirms that an application has
+finished opening or that a web search completed.
+
+The focused suite's `-ApplicationPluginDirectory` option loads the real DLL and
+checks exact result compatibility, raw/trimmed arguments, native status 32/33,
+current host error messages, permissions, and DLL removal. The OS primitive is
+replaced with a test sink; no applications or browsers are opened. The production
+OS implementation receives a separate syntax check. See the
+[build and deployment instructions](../plugins/README.md#application-plugin).
