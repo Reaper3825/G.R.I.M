@@ -47,7 +47,7 @@ namespace {
 }
 
 UIGeoSpatialPanel::UIGeoSpatialPanel()
-    : UIPanel("GeoSpatial", true)
+    : UIPanel("GeoSpatial", true, "geospatial")
 {
     position = { 260.0f, 220.0f };
     size = { 1180.0f, 920.0f };

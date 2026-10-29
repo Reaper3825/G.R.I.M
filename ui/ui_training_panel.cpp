@@ -18,7 +18,7 @@ using namespace UITrainingPanelDetail;
 // ============================================================
 
 UITrainingPanel::UITrainingPanel()
-    : UIPanel("GRIM-text Training Control", true)
+    : UIPanel("GRIM-text Training Control", true, "training_control")
 {
     position = { 200, 80 };
     size     = { 1100, 800 };

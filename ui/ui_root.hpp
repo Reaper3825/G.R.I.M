@@ -8,6 +8,8 @@
 #include <shared_mutex>
 #include <thread>
 #include <atomic>
+#include <future>
+#include <optional>
 #include "overlay_renderer.hpp"
 #include "primitives/ui_panel.hpp"
 #include "logger.hpp"
@@ -17,6 +19,20 @@
 #include "core/plugin.hpp"
 
 struct InputState; // Forward declaration
+
+struct UIPanelInfo {
+    std::string key, title;
+    uint64_t runtimeId = 0;
+    bool visible = false, minimized = false, maximized = false;
+    Vec2 position, size;
+    int zOrder = 0;
+};
+enum class UIPanelOperation { Inspect, Show, Hide, BringToFront };
+struct UIPanelOperationResult {
+    bool success = false;
+    std::string error; // not_found, invalid_operation, or empty on completion
+    std::optional<UIPanelInfo> panel;
+};
 
 class GRIM_HOST_API UIRoot {
 public:
@@ -35,9 +51,18 @@ public:
     void addPanel(const std::shared_ptr<UIPanel>& panel);
     void removePanel(const std::string& name);
     std::shared_ptr<UIPanel> getPanel(const std::string& name);
+    // Exact stable-key lookup, never falls back to a display title.
+    std::shared_ptr<UIPanel> getPanelByKey(const std::string& key);
+    // Thread-safe request submission. Futures complete on the UI thread;
+    // callers must not block that thread waiting for queued work.
+    std::future<std::vector<UIPanelInfo>> requestPanelList();
+    std::future<UIPanelOperationResult> requestPanelOperation(
+        const std::string& key, UIPanelOperation operation);
     void setVisible(const std::string& name, bool visible);
     void bringToFront(const std::string& name);  // Move panel to top of z-order
     void postTask(std::function<void()> task);
+    // UI lifecycle pump; must only be called by the owning UI thread.
+    void processPendingTasks();
 
     // Check if a screen position should receive input (is over visible UI)
     bool shouldReceiveInputAt(float x, float y) const;
@@ -78,7 +103,6 @@ public:
 
 private:
     UIRoot() = default;
-    void processPendingTasks();
     std::vector<std::shared_ptr<UIPanel>> snapshotPanels() const;
     bool isUIThread() const { return std::this_thread::get_id() == m_uiThreadId; }
     void updateWindowZOrder();  // Helper to adjust window position based on visibility
@@ -87,14 +111,14 @@ private:
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     std::vector<std::shared_ptr<UIPanel>> m_panels;
-    std::unordered_map<std::string, std::shared_ptr<UIPanel>> m_panelMap;
+    std::unordered_map<std::string, std::shared_ptr<UIPanel>> m_panelKeyMap;
     OverlayRenderer m_renderer;  // Changed from UIRenderer to OverlayRenderer
     static constexpr int m_activePanelIndex = -1;  // Active panel always has zOrder = -1
     
     std::string m_pendingTextInput; // Buffer for WM_CHAR input
     bool m_inputConsumed = false;   // Track if UI consumed input this frame
 
-    std::thread::id m_uiThreadId;
+    std::thread::id m_uiThreadId = std::this_thread::get_id();
     mutable std::shared_mutex m_panelMutex;
     std::mutex m_taskMutex;
     std::vector<std::function<void()>> m_pendingTasks;

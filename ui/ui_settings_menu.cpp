@@ -15,7 +15,7 @@ static constexpr float kTabBarY     = 35.0f;
 static constexpr float kContentTopY = 68.0f;
 
 UISettingsMenu::UISettingsMenu()
-    : UIPanel("Settings", true), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
+    : UIPanel("Settings", true, "settings"), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
 {
     position = { 200, 250 };
     size = { 620, 700 };

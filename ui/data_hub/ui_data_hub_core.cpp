@@ -27,7 +27,7 @@ void UIDataHubPanel::importWorldGoal(const nlohmann::json& selection) {
 }
 
 UIDataHubPanel::UIDataHubPanel()
-    : UIPanel("DataHub", true)
+    : UIPanel("DataHub", true, "data_hub")
 {
     position = {200, 500};
     size     = {1400, 750};

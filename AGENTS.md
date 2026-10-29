@@ -8,6 +8,13 @@
 - Keep builds scoped to the explicitly requested target; do not build unrelated training or runtime targets as a side effect.
 - Do not perform package installation or dependency mutation unless the user explicitly requests it. Existing toolchains and installed dependencies may be used for permitted builds.
 
+## Retired agent tools
+
+- `reload_nlp`, `clear_context`, `grim_ai`, `test_intent`, `test_nlp`, `nlp_stats`, `nlp_learn`, `nlp_save`, `settings`, `question`, and `ai_backend` are retired from agent tool registration. Do not re-register them, migrate them into tool plugins, or advertise them as available agent tools unless the user explicitly requests their reintroduction.
+- Preserve their underlying handler logic and host services for potential host/developer use. Retirement of these tool registrations does not authorize deleting conversation handling, model routing, grammar support, or session administration.
+- Read [retained-handler documentation](docs/RETIRED_AGENT_TOOLS.md) before changing or reusing these handlers. Keep that document current when their behavior or retention purpose changes.
+- The remaining fixed built-in tool migration sets are input control and UI; the retired AI/NLP/settings wrappers are not pending migrations.
+
 ## Reasoning data contract
 
 - Before creating, transforming, or reviewing GRIM ConceptBlock reasoning examples, read `docs/GRIM_REASONING_DATA_CONTRACT.md`.

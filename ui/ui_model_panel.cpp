@@ -67,7 +67,7 @@ static const std::vector<std::string> kBackendOptions = {
 // =========================================================
 
 UIModelPanel::UIModelPanel()
-    : UIPanel("Model Registry", true)
+    : UIPanel("Model Registry", true, "model_registry")
 {
     setVisible(false);
     setBackground(0xF0202020);  // [GLASS_PHASE4] Opaque dark card

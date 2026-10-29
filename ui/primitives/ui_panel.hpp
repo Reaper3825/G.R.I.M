@@ -31,7 +31,8 @@ struct PanelRect {
 
 class GRIM_HOST_API UIPanel : public Widget {
 public:
-    UIPanel(const std::string& title = "", bool draggable = true);
+    UIPanel(const std::string& title = "", bool draggable = true,
+            const std::string& panelKey = "");
     ~UIPanel() override;
     void setVisible(bool value) override;
     
@@ -40,6 +41,8 @@ public:
     // Focus management
     uint64_t getPanelID() const { return panelID; }
     void setPanelID(uint64_t id) { panelID = id; }
+    // Immutable semantic identity. Empty keys are allowed for legacy/unaddressable panels.
+    const std::string& getPanelKey() const { return panelKey_; }
 
     void addChild(std::shared_ptr<Widget> w);
     void removeChild(Widget* w);
@@ -121,4 +124,6 @@ protected:
     void toggleMaximize();
     // slot 0 = close (rightmost), 1 = maximize, 2 = minimize (leftmost)
     Vec2 chromeButtonOrigin(int slot) const;
+private:
+    const std::string panelKey_;
 };

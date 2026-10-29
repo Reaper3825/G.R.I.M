@@ -65,6 +65,21 @@ in the plugin README. Input control remains in the host. The `core_plugin.cpp` f
 contains the host's built-in registration list; it does not mean those commands
 require a separately loaded plugin.
 
+The eleven legacy AI/NLP/settings command wrappers are no longer registered
+agent tools. Their implementations remain in the host source; see
+[retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md). The remaining
+fixed built-in migration sets are input control and UI.
+
+Generic panel discovery/inspection/visibility operations now come from the
+**UI Plugin** through API v3.8, with explicit request IDs and `ui.poll` completion.
+Console/Settings toggles and surface-only show/hide registrations are replaced
+by these stable-key operations. Surface create/destroy and OSINT remain in the host.
+
+Application panels now have stable keys and a host foundation for generic
+discovery, inspection, visibility, and bring-to-front operations. See
+[UI panel operations](../docs/UI_PANEL_OPERATIONS.md) for the keys, completion
+semantics, and remaining plugin migration boundary.
+
 Focused host-only validation:
 
 ```powershell

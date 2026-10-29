@@ -93,5 +93,6 @@ private:
 
 } // namespace GRIM
 
-// Command function for question handling
+// Retained legacy question pipeline; not a registered agent tool.
+// See docs/RETIRED_AGENT_TOOLS.md before reusing this entry point.
 CommandResult cmdQuestion(const std::string& question);

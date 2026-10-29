@@ -317,6 +317,10 @@ cache/geospatial/*.sqlite-wal
 !/plugins/voice_plugin/voice_commands.cpp
 !/plugins/voice_plugin/cache_commands.cpp
 !/plugins/voice_plugin/host_voice.hpp
+!/plugins/ui_plugin/
+/plugins/ui_plugin/*
+!/plugins/ui_plugin/CMakeLists.txt
+!/plugins/ui_plugin/ui_plugin.cpp
 
 # Local OSINT tools, adapters, and generated data.
 /osint/

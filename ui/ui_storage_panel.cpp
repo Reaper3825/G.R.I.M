@@ -17,7 +17,7 @@ namespace {
 // ─── Construction ────────────────────────────────────────
 
 UIStoragePanel::UIStoragePanel()
-    : UIPanel("Shared Storage", true)
+    : UIPanel("Shared Storage", true, "storage")
 {
     position = {250, 500};
     size     = {900, 550};

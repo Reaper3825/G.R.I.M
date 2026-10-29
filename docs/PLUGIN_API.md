@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.7.0**. Updated October 29, 2026.
+API version: **3.8.0**. Updated October 29, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -14,6 +14,11 @@ by the new host. A plugin using the new services declares v3.1 and is rejected b
 an older host rather than reading unavailable function pointers.
 
 ## Tool registration
+
+Version 3.8 adds nonblocking stable-key panel operations for the UI Plugin.
+It consumes one reserved function pointer slot, preserving the table size and
+existing service offsets. Earlier v3.x plugin binaries remain supported.
+See [generic UI operations](#generic-ui-operations-v38).
 
 MMO::ToolRegistry is the authoritative store for metadata and executable
 handlers. Plugins call api->register_tools(api, tools, count) with a batch
@@ -243,6 +248,52 @@ Plugin timers are still not scheduled by the application frame loop; timer
 dispatch is available through PluginAPI::processTimers for controlled callers.
 This phase wires plugin reconciliation, not a new general timer scheduler.
 
+## Generic UI operations (v3.8)
+
+`ui_panel_service(self, operation, panel_key, request_id)` requires `GRIM_PERM_UI`
+and a published, accepting plugin instance. Initialization cannot submit UI work.
+The service never dispatches another command and never blocks on the UI thread.
+
+- Submit `GRIM_UI_LIST` with a null key and request ID zero.
+- Submit `GRIM_UI_INSPECT`, `GRIM_UI_SHOW`, `GRIM_UI_HIDE`, or
+  `GRIM_UI_BRING_TO_FRONT` with a nonempty stable key (up to 256 bytes) and ID zero.
+- Poll using `GRIM_UI_POLL`, a null key, and the returned positive request ID.
+
+Returned strings are host-owned JSON released with `string_free`:
+
+```json
+{"format":"grim-ui-panel-response","version":1,"request_id":1,"status":"pending"}
+```
+
+Every accepted submission queues host-owned work and returns `pending`.
+`completed` includes `result`, with `success` and either panel metadata, a panel
+list, or an error such as `not_found`. A pending response confirms acceptance,
+not execution. Panels are addressed by semantic keys, never display titles.
+Completion reports the UI state at execution, not a guarantee of future state.
+
+Polling is nonblocking. A completed poll consumes the result; unknown, consumed,
+or foreign request IDs return `status:error` with `error:request_not_found`.
+Each plugin instance can retain at most 64 requests, including unconsumed
+completed results. Further submissions return `too_many_requests`. Null returns
+mean invalid arguments, denied permission, a nonpublished/stopping provider, or
+an API failure. Host execution exceptions become failed completed results.
+
+Queued work contains copied host data and cancellation flags, not plugin code,
+callback pointers, or API contexts. Shutdown/replacement cancels unprocessed
+requests and discards results belonging to the retired instance. Already
+executed operations are not rolled back. Requests need an initialized UI and
+active frame processing; polling cannot advance the frame loop. No background
+UI thread or automatic timeout is introduced. As with existing plugin services,
+callers must honor the documented lifecycle/service serialization requirements.
+
+`ui_plugin` registers `ui.list`, `ui.inspect`, `ui.show`, `ui.hide`,
+`ui.bring_to_front`, and `ui.poll`, with JSON arguments and complete metadata.
+Mutations carry confirmation metadata; direct registry invocation does not
+enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, and
+`ui.hide_surface` registrations are removed. `ui.create_surface` and
+`ui.destroy_surface` remain host-owned lifecycle tools, and OSINT is unchanged.
+See [UI panel operations](UI_PANEL_OPERATIONS.md) for stable keys and examples.
+
 ## Independent plugin builds
 
 The native plugins build without linking GRIM, importing host C++ symbols, or
@@ -317,6 +368,11 @@ removal, and removal of the deployed plugin file. No application or model runs.
 payloads and registration policy. Both still ignore arguments. This is a migration
 of the existing response-only `clean` and static `help` handlers, not a redesign
 of console clearing or help discovery. There are no host-state dependencies.
+
+The later retirement of AI/NLP/admin agent registrations removes `ai_backend`
+and the historical `reloadnlp` entry from static help. The eleven retained
+handlers and their possible host uses are documented in
+[Retired agent tools](RETIRED_AGENT_TOOLS.md); they are not pending plugin migrations.
 
 The optional `-UtilityPluginDirectory` argument to `tests/run_plugin_shutdown.ps1`
 tests exact result compatibility through the real DLL/API/registry, old-host

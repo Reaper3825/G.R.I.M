@@ -50,7 +50,7 @@ std::uint64_t SteadyNowNs() {
 } // namespace
 
 UIDigitalEnvironmentPanel::UIDigitalEnvironmentPanel()
-    : UIPanel("Digital Environment", true) {
+    : UIPanel("Digital Environment", true, "digital_environment") {
     position = {180.0f, 140.0f};
     size = {1100.0f, 720.0f};
     setBackground(UITheme::Colors::PanelBg);

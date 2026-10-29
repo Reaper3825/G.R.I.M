@@ -7,7 +7,7 @@
 using namespace GRIM::MMO;
 
 DynamicSurfacePanel::DynamicSurfacePanel(const UISurfaceSpec& spec)
-    : UIPanel(spec.title, /*draggable=*/true)
+    : UIPanel(spec.title, /*draggable=*/true, spec.surface_id)
     , surface_id_(spec.surface_id)
     , spec_(spec)
 {

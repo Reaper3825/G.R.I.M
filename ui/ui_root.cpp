@@ -48,7 +48,8 @@ void UIRoot::shutdown()
     
     // Clear all panels
     m_panels.clear();
-    m_panelMap.clear();
+    m_panelKeyMap.clear();
+    { std::lock_guard lock(m_taskMutex); m_pendingTasks.clear(); }
     
     // Shutdown renderer
     m_renderer.shutdown();
@@ -226,81 +227,6 @@ void UIRoot::draw()
     m_drawGuard.clear(std::memory_order_release);
 }
 
-void UIRoot::addPanel(const std::shared_ptr<UIPanel>& panel)
-{
-    auto task = [this, panel]() {
-        if (!panel)
-        {
-            LOG_ERROR("UIRoot", "Attempted to add null panel");
-            return;
-        }
-
-        std::unique_lock lock(m_panelMutex);
-        m_panels.push_back(panel);
-
-        std::string panelName = panel->getTitle();
-        if (panelName.empty())
-        {
-            panelName = "panel_" + std::to_string(m_panels.size());
-        }
-
-        m_panelMap[panelName] = panel;
-        LOG_DEBUG("UIRoot", "Added panel: " + panelName);
-    };
-
-    if (!isUIThread())
-    {
-        postTask(task);
-    }
-    else
-    {
-        task();
-    }
-}
-
-void UIRoot::removePanel(const std::string& name)
-{
-    auto task = [this, name]() {
-        std::unique_lock lock(m_panelMutex);
-        auto mapIt = m_panelMap.find(name);
-        if (mapIt == m_panelMap.end()) return;
-
-        auto panel = mapIt->second;
-        GRIM::UI::InputRouter::get().forgetPanel(panel->getPanelID());
-        m_panelMap.erase(mapIt);
-
-        for (auto it = m_panels.begin(); it != m_panels.end(); ++it) {
-            if (*it == panel) {
-                m_panels.erase(it);
-                break;
-            }
-        }
-
-        LOG_DEBUG("UIRoot", "Removed panel: " + name);
-        lock.unlock();
-        updateWindowZOrder();
-    };
-
-    if (!isUIThread()) {
-        postTask(task);
-    } else {
-        task();
-    }
-}
-
-std::shared_ptr<UIPanel> UIRoot::getPanel(const std::string& name)
-{
-    std::shared_lock lock(m_panelMutex);
-    auto it = m_panelMap.find(name);
-    if (it != m_panelMap.end())
-    {
-        return it->second;
-    }
-    
-    LOG_DEBUG("UIRoot", "Panel not found: " + name);
-    return nullptr;
-}
-
 void UIRoot::updateWindowZOrder()
 {
     if (!m_hwnd)
@@ -322,75 +248,6 @@ void UIRoot::updateWindowZOrder()
 #else
     PlatformWindow::setWindowVisible(m_hwnd, hasVisiblePanels());
 #endif
-}
-
-void UIRoot::setVisible(const std::string& name, bool visible)
-{
-    auto task = [this, name, visible]() {
-        auto panel = getPanel(name);
-        if (panel)
-        {
-            panel->setVisible(visible);
-            LOG_DEBUG("UIRoot", "Set panel '" + name + "' visibility to " + (visible ? "true" : "false"));
-            
-            // Bring newly visible panels to front
-            if (visible)
-            {
-                bringToFront(name);
-            }
-            
-            updateWindowZOrder();
-        }
-    };
-
-    if (!isUIThread())
-    {
-        postTask(std::move(task));
-    }
-    else
-    {
-        task();
-    }
-}
-
-void UIRoot::bringToFront(const std::string& name)
-{
-    std::unique_lock lock(m_panelMutex);
-    
-    // Find panel in vector
-    for (size_t i = 0; i < m_panels.size(); ++i)
-    {
-        if (m_panels[i] && m_panels[i]->getTitle() == name)
-        {
-            // Already at front
-            if (i == m_panels.size() - 1)
-            {
-                return;
-            }
-            
-            // Move to end (drawn last = on top)
-            auto panel = m_panels[i];
-            
-            // Increment z-order of all visible panels except this one
-            for (auto& p : m_panels)
-            {
-                if (p && p->isVisible() && p != panel)
-                {
-                    p->setZOrder(p->getZOrder() + 1);
-                }
-            }
-            
-            // Set this panel to z-order -1 (active/top panel)
-            panel->setZOrder(-1);
-            
-            m_panels.erase(m_panels.begin() + i);
-            m_panels.push_back(panel);
-            
-            LOG_DEBUG("UIRoot", "Brought panel '" + name + "' to front (active z-order: -1, array index: " + 
-                      std::to_string(m_panels.size() - 1) + ")");
-            return;
-        }
-    }
 }
 
 bool UIRoot::shouldReceiveInputAt(float x, float y) const
@@ -551,31 +408,4 @@ UIRoot::MonitorRect UIRoot::getMonitorRectAt(const Vec2& point) const
     rect.size.x = static_cast<float>(chosen->width);
     rect.size.y = static_cast<float>(chosen->height);
     return rect;
-}
-
-void UIRoot::postTask(std::function<void()> task)
-{
-    if (!task) return;
-    std::lock_guard lock(m_taskMutex);
-    m_pendingTasks.push_back(std::move(task));
-}
-
-void UIRoot::processPendingTasks()
-{
-    std::vector<std::function<void()>> tasks;
-    {
-        std::lock_guard lock(m_taskMutex);
-        tasks.swap(m_pendingTasks);
-    }
-
-    for (auto& task : tasks)
-    {
-        if (task) task();
-    }
-}
-
-std::vector<std::shared_ptr<UIPanel>> UIRoot::snapshotPanels() const
-{
-    std::shared_lock lock(m_panelMutex);
-    return m_panels;
 }

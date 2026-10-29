@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.7
+// G.R.I.M Plugin API v3.8
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 7
+#define GRIM_API_VERSION_MINOR 8
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -167,6 +167,11 @@ enum GrimVoiceOperation : uint32_t {
     GRIM_VOICE_SAPI_DEVICE = 9, GRIM_VOICE_PLAY_WAV = 10, GRIM_VOICE_IS_SPEAKING = 11,
     GRIM_VOICE_CACHE_SHUTDOWN = 12, GRIM_VOICE_CACHE_INIT = 13,
     GRIM_VOICE_PRECACHE_COMMON = 14, GRIM_VOICE_PATHS = 15
+};
+
+enum GrimUIPanelOperation : uint32_t {
+    GRIM_UI_LIST = 0, GRIM_UI_INSPECT = 1, GRIM_UI_SHOW = 2,
+    GRIM_UI_HIDE = 3, GRIM_UI_BRING_TO_FRONT = 4, GRIM_UI_POLL = 5
 };
 
 // Intent structure (matches your Intent struct)
@@ -369,7 +374,14 @@ typedef struct GrimPluginAPI {
     // Optional object-valued JSON arguments; runtime-service JSON response.
     // Host owns audio/configuration/stream/cache state. No command dispatch.
     const char* (*voice_service)(const GrimPluginAPI* self, GrimVoiceOperation operation, const char* arguments_json);
-    void* reserved[20];
+    // v3.8: UI permission. Submits copied, stable-key panel requests or polls an
+    // owned request. Always nonblocking. Host-owned grim-ui-panel-response v1
+    // JSON; free with string_free. Null = invalid input, denied access, or failure.
+    // Submit: request_id=0; panel_key=null for LIST, required for other operations.
+    // Poll: panel_key=null, request_id>0. A completed poll consumes its result.
+    const char* (*ui_panel_service)(const GrimPluginAPI* self, GrimUIPanelOperation operation,
+                                    const char* panel_key, uint64_t request_id);
+    void* reserved[19];
     
 } GrimPluginAPI;
 

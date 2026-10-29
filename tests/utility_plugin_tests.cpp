@@ -48,9 +48,9 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
               tool->is_informational == isHelp && tool->needs_confirmation != isHelp &&
               tool->category == (isHelp ? "information" : "system"), "Utility metadata changed policy or provider");
     }
-    const std::string oldHelp = "[Help] Available commands:\n"
-        "- remember <key> <value>\n- recall <key>\n- forget <key>\n- ai_backend <name>\n"
-        "- reloadnlp\n- pwd\n- cd <dir>\n- ls\n- mkdir <dir>\n- rm <file>\n"
+    const std::string expectedHelp = "[Help] Available commands:\n"
+        "- remember <key> <value>\n- recall <key>\n- forget <key>\n"
+        "- pwd\n- cd <dir>\n- ls\n- mkdir <dir>\n- rm <file>\n"
         "- set_timer <seconds>\n- sysinfo\n- clean\n- help\n- voice\n- voice_stream\n";
     // Both original handlers ignore arguments. Compare every result field,
     // including voice/category/color, rather than only visible message text.
@@ -61,10 +61,10 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
               clean.color.toUInt() == Colors::Green.toUInt() && clean.structuredOutputJson.empty(),
               "clean result differs from original host handler");
         const auto help = registry.invoke("help", args);
-        check(help.success && help.message == oldHelp && help.errorCode == "ERR_NONE" &&
+        check(help.success && help.message == expectedHelp && help.errorCode == "ERR_NONE" &&
               help.category == "summary" && help.voice == "Help shown" &&
               help.color.toUInt() == Colors::Cyan.toUInt() && help.structuredOutputJson.empty(),
-              "help result differs from original host handler");
+              "help result differs from static help with retired entries removed");
     }
     fs::remove(folder / "utility_plugin.dll");
     PluginManager::checkForHotReload();

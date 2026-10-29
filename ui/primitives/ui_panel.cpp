@@ -12,8 +12,8 @@
 
 Vec2 UIPanel::s_canvasSize{1920.0f, 1080.0f};
 
-UIPanel::UIPanel(const std::string& t, bool drag)
-    : title(t), draggable(drag) 
+UIPanel::UIPanel(const std::string& t, bool drag, const std::string& panelKey)
+    : title(t), draggable(drag), panelKey_(panelKey)
 {
     // Generate unique panel ID
     panelID = UIFocusManager::getInstance().generateUniqueID();

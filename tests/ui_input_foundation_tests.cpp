@@ -22,6 +22,7 @@
 bool PlatformClipboard::copyText(const std::string&) { return true; }
 float PlatformWindow::getMenuBarHeight() { return 0; }
 UIRoot::MonitorRect UIRoot::getMonitorRectAt(const Vec2&) const { return {{0,0},{1920,1080}}; }
+void UIRoot::updateWindowZOrder() {} // Native window effects are outside these host-only tests.
 void OverlayRenderer::drawGlassPanel(const Vec2&, const Vec2&, float, uint32_t, uint32_t, uint32_t, int, float, uintptr_t, bool) {}
 void logDebug(const std::string&, const std::string&) {}
 void logError(const std::string&, const std::string&) {}
@@ -58,6 +59,7 @@ static void begin(bool cancel = false) { router.beginFrame(cancel); router.curre
 static void end() { router.endFrame(); }
 
 void runCanvasTests();
+void runPanelOperationsTests();
 #ifdef GRIM_TOOLS_VIEW_TESTS
 void runTrainingToolsTests();
 #endif
@@ -70,6 +72,7 @@ void runWorldAssetTests();
 void runTextWorldClientTests();
 #endif
 int main() try {
+    runPanelOperationsTests();
 #ifdef GRIM_TOOLS_VIEW_TESTS
     runTrainingToolsTests();
 #endif

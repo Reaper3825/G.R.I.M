@@ -3,12 +3,9 @@
 #include "MMO/Core/ToolRegistry.hpp"
 #include <stdexcept>
 
-#include "commands_ai.hpp"
-#include "commands_system.hpp"
 #include "commands_ui.hpp"
 #include "commands_osint.hpp"
 #include "commands_perception.hpp"
-#include "commands_question.hpp"
 
 // Built-ins publish metadata and execution together in the sole tool registry.
 static GRIM::MMO::ToolRegistration builtinTool(const char* id, GRIM::MMO::ToolHandler handler,
@@ -31,17 +28,9 @@ static void register_all_commands() {
     std::vector<GRIM::MMO::ToolRegistration> tools;
     LOG_DEBUG("Plugin", "Registering core commands...");
     
-    // Core AI + NLP
-    REGISTER_TOOL("reload_nlp", cmdReloadNlp, 
-                  "Reload NLP grammar rules from disk", 
-                  "system", true);
-    REGISTER_TOOL("clear_context", cmdClearContext, 
-                  "Clear conversation context and history", 
-                  "system", false);
-    REGISTER_TOOL("grim_ai", cmdGrimAi, 
-                  "Send a direct query to the AI backend", 
-                  "information", true);
-    
+    // Retired AI/NLP/admin handlers remain in commands/ for host use.
+    // See docs/RETIRED_AGENT_TOOLS.md; they are not registered as agent tools.
+
     // Application/browser commands are supplied by application_plugin.
 
     // Filesystem and utility tools are supplied by plugins discovered from disk.
@@ -50,24 +39,12 @@ static void register_all_commands() {
 
     // Manual memory commands are supplied by memory_plugin.
 
-    // UI Controls
-    LOG_DEBUG("Plugin", "Registering UI commands");
-    REGISTER_TOOL("console", cmdToggleOverlayConsole,
-                  "Toggle overlay console visibility",
-                  "ui", false);
-    REGISTER_TOOL("toggle_settings", cmdToggleSettings,
-                  "Toggle settings panel visibility",
-                  "ui", false);
+    // Generic panel operations are supplied by ui_plugin.
+    // The old Console/Settings toggles and surface visibility wrappers are retired.
 
     // MMO UI surface tools
     REGISTER_TOOL("ui.create_surface", cmdCreateSurface,
                   "Create a new UI surface (panel, popup, modal, toast, tool window, inspector)",
-                  "ui", false);
-    REGISTER_TOOL("ui.show_surface", cmdShowSurface,
-                  "Show a previously created UI surface",
-                  "ui", false);
-    REGISTER_TOOL("ui.hide_surface", cmdHideSurface,
-                  "Hide a visible UI surface without destroying it",
                   "ui", false);
     REGISTER_TOOL("ui.destroy_surface", cmdDestroySurface,
                   "Permanently remove a UI surface",
@@ -79,37 +56,7 @@ static void register_all_commands() {
 
     // System information is supplied by system_info_plugin.
 
-    // Test commands (defined in commands_system.cpp)
-    LOG_DEBUG("Plugin", "Registering 'test_intent' command");
-    REGISTER_TOOL("test_intent", cmdTestIntent,
-                  "Test intent classification on input",
-                  "system", true);
-    LOG_DEBUG("Plugin", "Registering 'test_nlp' command");
-    REGISTER_TOOL("test_nlp", cmdTestNlp,
-                  "Test NLP grammar parsing",
-                  "system", true);
-
-    // Voice, speaker embedding, cancellation, and cache commands use voice_plugin.
-
-    // NLP management commands
-    LOG_DEBUG("Plugin", "Registering NLP management commands");
-    REGISTER_TOOL("nlp_stats", cmdNlpStats,
-                  "Show NLP grammar statistics",
-                  "information", true);
-    REGISTER_TOOL("nlp_learn", cmdNlpLearn,
-                  "Teach NLP a new pattern",
-                  "system", false);
-    REGISTER_TOOL("nlp_save", cmdNlpSave,
-                  "Save learned NLP patterns",
-                  "system", false);
-    
-    // Tool inspection is supplied by tool_inspection_plugin.
-
-    // Settings info command (renamed to avoid conflict)
-    LOG_DEBUG("Plugin", "Registering settings info command");
-    REGISTER_TOOL("settings", cmdSettings,
-                  "Show current settings and configuration",
-                  "information", true);
+    // Voice and tool inspection commands are supplied by native plugins.
 
     // Observation commands are supplied by perception_plugin; input stays here.
 
@@ -132,18 +79,6 @@ static void register_all_commands() {
                   "action", false);
 
     // User timer commands are supplied by timers_plugin.
-
-    // ✅ NEW: Question handler
-    LOG_DEBUG("Plugin", "Registering question handler");
-    REGISTER_TOOL("question", cmdQuestion,
-                  "Ask GRIM a question (searches memory and external sources)",
-                  "information", true);
-
-    // ✅ NEW: AI backend management
-    LOG_DEBUG("Plugin", "Registering AI backend command");
-    REGISTER_TOOL("ai_backend", cmdAiBackend,
-                  "Show or change active AI backend",
-                  "system", false);
 
     if (!GRIM::MMO::ToolRegistry::instance().registerBatch({}, tools))
         throw std::runtime_error("Conflicting built-in tool registration");

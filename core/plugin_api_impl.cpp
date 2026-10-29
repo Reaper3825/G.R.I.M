@@ -16,6 +16,7 @@
 #include "memory/command_memory_services.hpp"
 #include "perception/perception_queries.hpp"
 #include "voice/voice_command_services.hpp"
+#include "ui/ui_panel_service.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/HardwareInventoryJson.hpp"
@@ -105,6 +106,8 @@ struct PluginContext {
     bool staging = false;
     bool registration_failed = false;
     std::vector<GRIM::MMO::ToolRegistration> pending;
+    std::mutex panelRequestsMutex;
+    std::unordered_map<uint64_t, GRIM::UI::PanelServiceRequest> panelRequests;
 };
 
 // Static storage
@@ -116,6 +119,7 @@ static std::unordered_map<std::string, std::string> s_context_storage;
 static std::unordered_map<void*, std::string> s_allocated_strings;
 static std::unordered_map<std::string, std::unique_ptr<PluginContext>> s_plugin_contexts;
 static uint64_t s_next_instance = 1;
+static std::atomic<uint64_t> s_next_panel_request = 1;
 static std::mutex s_resourceMutex;
 
 // ============================================================================
@@ -1409,6 +1413,50 @@ static void api_string_free(const GrimPluginAPI* self, const char* str) {
 // API Table Construction
 // ============================================================================
 
+static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOperation operation,
+                                      const char* panel_key, uint64_t request_id) noexcept {
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        ActiveCall active(owner.gate, true);
+        if (!active.entered || !checkPermission(self, GRIM_PERM_UI)) return nullptr;
+        if (operation > GRIM_UI_POLL) return nullptr;
+        if (operation == GRIM_UI_POLL) {
+            if (panel_key || !request_id) return nullptr;
+        } else if (request_id || (operation == GRIM_UI_LIST ? panel_key != nullptr : !panel_key || !*panel_key)) {
+            return nullptr;
+        }
+        const auto key = copyText(panel_key, false, 256);
+        std::lock_guard lock(owner.panelRequestsMutex);
+        nlohmann::json response = {{"format", "grim-ui-panel-response"}, {"version", 1},
+                                  {"request_id", request_id}, {"status", "pending"}};
+        if (operation == GRIM_UI_POLL) {
+            const auto found = owner.panelRequests.find(request_id);
+            if (found == owner.panelRequests.end()) {
+                response["status"] = "error"; response["error"] = "request_not_found";
+                return allocateString(response.dump());
+            }
+            if (found->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                return allocateString(response.dump());
+            response["status"] = "completed";
+            try { response["result"] = found->second.result.get(); }
+            catch (const std::exception& error) {
+                response["result"] = {{"success", false}, {"error", "host_exception"}, {"message", error.what()}};
+            } catch (...) { response["result"] = {{"success", false}, {"error", "host_exception"}}; }
+            owner.panelRequests.erase(found);
+            return allocateString(response.dump());
+        }
+        if (owner.panelRequests.size() >= 64) {
+            response["status"] = "error"; response["error"] = "too_many_requests";
+            return allocateString(response.dump());
+        }
+        const auto id = s_next_panel_request.fetch_add(1);
+        response["request_id"] = id;
+        auto request = GRIM::UI::submitPanelRequest(operation, key);
+        owner.panelRequests.emplace(id, std::move(request));
+        return allocateString(response.dump());
+    } catch (...) { return nullptr; }
+}
+
 GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string& plugin_path, uint32_t permissions, bool staging, const GrimPluginAPI* replacing) {
     if (plugin_name.empty()) throw std::invalid_argument("Empty plugin identity");
     for (const auto& [id, context] : s_plugin_contexts) {
@@ -1518,6 +1566,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.flush_memory_record_if_present = api_flush_memory_record_if_present;
     api.query_perception = api_query_perception;
     api.voice_service = api_voice_service;
+    api.ui_panel_service = api_ui_panel_service;
     
     auto* result = &api;
     auto instance = context->instance;
@@ -1564,7 +1613,7 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
 }
 bool commitPluginTools(const std::string& name) { return commitPluginTools(uniquePlugin(name), nullptr); }
 void beginPluginShutdown(const GrimPluginAPI* api) {
-    const auto& owner = pluginContext(api);
+    auto& owner = const_cast<PluginContext&>(pluginContext(api));
     {
         std::lock_guard lock(owner.gate->mutex);
         owner.gate->accepting = false;
@@ -1572,6 +1621,11 @@ void beginPluginShutdown(const GrimPluginAPI* api) {
     GRIM::MMO::ToolRegistry::instance().unregisterInstance(owner.name, owner.instance);
     std::unique_lock lock(owner.gate->mutex);
     owner.gate->idle.wait(lock, [&]{ return owner.gate->active == 0; });
+    lock.unlock();
+    std::lock_guard requestsLock(owner.panelRequestsMutex);
+    for (auto& [id, request] : owner.panelRequests)
+        request.cancelled->store(true);
+    owner.panelRequests.clear();
 }
 void beginPluginShutdown(const std::string& name) { beginPluginShutdown(uniquePlugin(name)); }
 void cleanupPluginContext(const GrimPluginAPI* api) {

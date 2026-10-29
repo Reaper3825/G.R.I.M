@@ -1,4 +1,6 @@
 #pragma once
+// Retained host/legacy handlers, not registered agent tools.
+// Behavior and possible future uses: docs/RETIRED_AGENT_TOOLS.md.
 #include <string>
 #include "commands_core.hpp"
 

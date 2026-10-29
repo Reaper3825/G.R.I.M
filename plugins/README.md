@@ -78,8 +78,8 @@ native launch sink and does not open applications or browsers.
 
 `utility_plugin` supplies `clean` and `help`. Their original complete result
 payloads are preserved: message, success/error code, category, voice, and color.
-Both still ignore arguments. `help` retains its existing static command list,
-including historical command names; use `list_tools` for current registrations.
+Both still ignore arguments. `help` retains a static command list, with retired
+`ai_backend` and `reloadnlp` entries removed; use `list_tools` for current registrations.
 `clean` retains the original response-only handler; this migration adds no UI
 clearing operation. Neither tool requires access to host state or permissions.
 
@@ -265,6 +265,48 @@ endpoints and private temporary files. They do not record audio, play sound, sta
 models, or touch the real voice cache. The production native SAPI helpers receive
 a separate syntax check using the installed Windows SDK.
 
+## UI plugin
+
+`ui_plugin` exposes generic operations against the host's existing stable panel
+keys using API v3.8. It owns tool metadata, JSON argument validation, and result
+formatting; panel lifetime, discovery, and UI-thread execution remain in the host.
+
+| Tool | JSON arguments |
+|---|---|
+| `ui.list` | `{}` |
+| `ui.inspect` | `{"panel_id":"settings"}` |
+| `ui.show` | `{"panel_id":"settings"}` |
+| `ui.hide` | `{"panel_id":"settings"}` |
+| `ui.bring_to_front` | `{"panel_id":"console"}` |
+| `ui.poll` | `{"request_id":1}` |
+
+The first five tools queue requests and return a positive request ID. Use
+`ui.poll` after frame processing until `status` is `completed`, then inspect
+`result.success`. Pending tool success means accepted, not completed. The
+completed poll consumes its result. IDs belong to a single loaded plugin
+instance; unloading/replacing that instance cancels its unprocessed operations.
+
+Build and validate only this plugin with installed dependencies:
+
+```powershell
+cmake -S plugins/ui_plugin -B .codex-build/ui-plugin -G "Visual Studio 17 2022" -A x64
+cmake --build .codex-build/ui-plugin --config Release --target ui_plugin --parallel 2
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -UIPluginDirectory .codex-build/ui-plugin/plugins
+```
+
+Deploy the completed `.codex-build/ui-plugin/plugins/ui_plugin.dll` into the
+application's `plugins/` folder after separately rebuilding the host for v3.8.
+This plugin requires v3.8; older v3.x binaries remain compatible with the new
+host. The new host no longer registers `console`, `toggle_settings`,
+`ui.show_surface`, or `ui.hide_surface`. Existing handler functions are retained.
+Surface creation/destruction and OSINT remain host tools.
+
+Tests load the real DLL against a controlled host UI queue and check metadata,
+validation, permissions, pending/completed/failure results, ownership, request
+limits, and cancellation on unload. The separate UI foundation suite exercises
+the production host adapter against real panel management without native UI.
+No model, renderer, training, package installation, or application startup occurs.
+
 ### Remaining host tools
 
 These groups stay in the host until the plugin API can preserve their existing
@@ -274,5 +316,9 @@ change behavior.
 | Group | Missing boundary for a behavior-preserving migration |
 |---|---|
 | Input control | Live perception context and its mouse/keyboard interfaces. |
-| UI | Host-owned panels and surface registry lifetime. |
-| AI/NLP/settings | Shared configuration, conversation history, grammar state, and model routing. |
+| UI surface lifecycle | `ui.create_surface` and `ui.destroy_surface` still use the host surface registry; OSINT panel handling remains outside this migration. |
+
+The eleven former AI/NLP/settings tools are retired from agent registration,
+with their handler logic retained for possible host/developer use. They are no
+longer a pending plugin migration set. See
+[retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md).

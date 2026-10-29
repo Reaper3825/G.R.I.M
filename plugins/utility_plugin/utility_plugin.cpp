@@ -1,4 +1,4 @@
-// Fixed-response utility commands, migrated without changing their result payloads.
+// Fixed-response utility commands.
 #include "core/plugin_api.hpp"
 
 namespace {
@@ -14,7 +14,7 @@ GrimResult clean(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
 }
 
 GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
-    // Preserve the existing static help verbatim, including historical names.
+    // Static legacy help excludes retired agent/admin commands.
     // Dynamic registry help is available separately through list_tools/tool_info.
     GrimToolResult result;
     result.success = 1;
@@ -23,8 +23,6 @@ GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
         "- remember <key> <value>\n"
         "- recall <key>\n"
         "- forget <key>\n"
-        "- ai_backend <name>\n"
-        "- reloadnlp\n"
         "- pwd\n"
         "- cd <dir>\n"
         "- ls\n"

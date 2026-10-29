@@ -167,7 +167,7 @@ constexpr float kEditorWorkspacePad = 12.0f;
 // ============================================================================
 
 UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
-    : UIPanel("Physical Environment", true)
+    : UIPanel("Physical Environment", true, "physical_environment")
 {
     position = { 200, 500 };
     size     = { 880, 680 };

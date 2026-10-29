@@ -861,36 +861,6 @@ static void bootstrapMMOLayer() {
         if (!toolReg.updateMetadata(createSurface))
             throw std::runtime_error("Missing or conflicting UI tool: " + createSurface.tool_id);
 
-        GRIM::MMO::ToolDescriptor showSurface;
-        showSurface.tool_id        = "ui.show_surface";
-        showSurface.display_name   = "Show UI Surface";
-        showSurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
-        showSurface.provider_name  = "builtin";
-        showSurface.description    = "Show a previously created UI surface";
-        showSurface.category       = "ui";
-        showSurface.is_informational = false;
-        showSurface.parameters = {
-            {"surface_id", "string", "ID of the surface to show", true}
-        };
-        showSurface.capability_tags = {"ui", "show_surface"};
-        if (!toolReg.updateMetadata(showSurface))
-            throw std::runtime_error("Missing or conflicting UI tool: " + showSurface.tool_id);
-
-        GRIM::MMO::ToolDescriptor hideSurface;
-        hideSurface.tool_id        = "ui.hide_surface";
-        hideSurface.display_name   = "Hide UI Surface";
-        hideSurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
-        hideSurface.provider_name  = "builtin";
-        hideSurface.description    = "Hide a visible UI surface without destroying it";
-        hideSurface.category       = "ui";
-        hideSurface.is_informational = false;
-        hideSurface.parameters = {
-            {"surface_id", "string", "ID of the surface to hide", true}
-        };
-        hideSurface.capability_tags = {"ui", "hide_surface"};
-        if (!toolReg.updateMetadata(hideSurface))
-            throw std::runtime_error("Missing or conflicting UI tool: " + hideSurface.tool_id);
-
         GRIM::MMO::ToolDescriptor destroySurface;
         destroySurface.tool_id        = "ui.destroy_surface";
         destroySurface.display_name   = "Destroy UI Surface";
@@ -907,7 +877,7 @@ static void bootstrapMMOLayer() {
         if (!toolReg.updateMetadata(destroySurface))
             throw std::runtime_error("Missing or conflicting UI tool: " + destroySurface.tool_id);
 
-        LOG_PHASE("MMO UI tools registered (4 surface tools)", true);
+        LOG_PHASE("MMO UI tools registered (2 surface lifecycle tools)", true);
     }
 }
 
