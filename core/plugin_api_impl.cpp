@@ -17,6 +17,7 @@
 #include "perception/perception_queries.hpp"
 #include "voice/voice_command_services.hpp"
 #include "ui/ui_panel_service.hpp"
+#include "perception/input_command_service.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/HardwareInventoryJson.hpp"
@@ -1457,6 +1458,31 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
     } catch (...) { return nullptr; }
 }
 
+static const char* api_input_service(const GrimPluginAPI* self, GrimInputOperation operation,
+                                     const char* arguments, size_t size) noexcept {
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        ActiveCall active(owner.gate, true);
+        if (!active.entered || !checkPermission(self, GRIM_PERM_INPUT) || operation > GRIM_INPUT_CLICK_ON ||
+            (operation == GRIM_INPUT_CLICK_ON && !checkPermission(self, GRIM_PERM_SYSTEM)) ||
+            size > 65536 || (size && !arguments)) return nullptr;
+        const std::string copied = size ? std::string(arguments, size) : std::string{};
+        CommandResult result;
+        try { result = GRIM::Perception::ExecuteInputCommandService(operation, copied); }
+        catch (const std::exception& error) {
+            return allocateString(nlohmann::json{{"format", "grim-input-result"}, {"version", 1},
+                {"exception", error.what()}}.dump());
+        } catch (...) {
+            return allocateString(nlohmann::json{{"format", "grim-input-result"}, {"version", 1},
+                {"exception", nullptr}}.dump());
+        }
+        return allocateString(nlohmann::json{{"format", "grim-input-result"}, {"version", 1},
+            {"result", {{"success", result.success}, {"message", result.message}, {"error_code", result.errorCode},
+                {"category", result.category}, {"voice", result.voice}, {"structured_output_json", result.structuredOutputJson},
+                {"color_rgb", (uint32_t(result.color.r) << 16) | (uint32_t(result.color.g) << 8) | result.color.b}}}}.dump());
+    } catch (...) { return nullptr; }
+}
+
 GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string& plugin_path, uint32_t permissions, bool staging, const GrimPluginAPI* replacing) {
     if (plugin_name.empty()) throw std::invalid_argument("Empty plugin identity");
     for (const auto& [id, context] : s_plugin_contexts) {
@@ -1567,6 +1593,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.query_perception = api_query_perception;
     api.voice_service = api_voice_service;
     api.ui_panel_service = api_ui_panel_service;
+    api.input_service = api_input_service;
     
     auto* result = &api;
     auto instance = context->instance;

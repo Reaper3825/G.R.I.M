@@ -41,7 +41,7 @@ registry coverage; legacy commands that bypass the registry are not added or
 inferred. It does not edit registrations, dispatch commands, or populate World
 Lab objects. The World Lab TextWorld Actions catalog remains separate.
 
-Built-in commands (including input controls)
+Remaining built-in commands (surface lifecycle and OSINT panel handling)
 publish handlers and metadata into the MMO registry. They appear alongside plugin
 tools, with provider **builtin**. Filesystem commands (`pwd`, `cd`, `ls`, `mkdir`,
 and `rm`) are supplied by the separately deployed **Filesystem Plugin**. The
@@ -61,14 +61,17 @@ come from the **Perception Plugin**, using API v3.6 and existing host perception
 services. The eleven voice/TTS-cache tools come from the **Voice Plugin** using
 API v3.7, with capture, streaming, playback, configuration, and cache lifecycle
 remaining in the host. Existing cancellation/embedding placeholders are documented
-in the plugin README. Input control remains in the host. The `core_plugin.cpp` filename
+in the plugin README. The five input tools come from the **Input Plugin** using
+API v3.9; live capture, targeting, and mouse/keyboard services remain in the host.
+The `core_plugin.cpp` filename
 contains the host's built-in registration list; it does not mean those commands
 require a separately loaded plugin.
 
 The eleven legacy AI/NLP/settings command wrappers are no longer registered
 agent tools. Their implementations remain in the host source; see
 [retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md). The remaining
-fixed built-in migration sets are input control and UI.
+fixed built-in migration scope is UI surface creation/destruction, with OSINT
+handling outside the current migration.
 
 Generic panel discovery/inspection/visibility operations now come from the
 **UI Plugin** through API v3.8, with explicit request IDs and `ui.poll` completion.

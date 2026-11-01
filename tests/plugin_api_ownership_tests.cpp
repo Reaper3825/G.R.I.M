@@ -112,6 +112,7 @@ void runRuntimePluginTests(const std::filesystem::path&, const std::filesystem::
 void runPerceptionPluginTests(const std::filesystem::path&);
 void runVoicePluginTests(const std::filesystem::path&);
 void runUIPluginTests(const std::filesystem::path&);
+void runInputPluginTests(const std::filesystem::path&);
 
 int main(int argc, char** argv) try {
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY);
@@ -266,6 +267,7 @@ int main(int argc, char** argv) try {
     if (argc > 13 && *argv[13]) runPerceptionPluginTests(argv[13]);
     if (argc > 14 && *argv[14]) runVoicePluginTests(argv[14]);
     runUIPluginTests(argc > 15 ? argv[15] : "");
+    runInputPluginTests(argc > 16 ? argv[16] : "");
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

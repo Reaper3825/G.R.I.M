@@ -1,4 +1,5 @@
 #include "InputController.hpp"
+#include "checked_click.hpp"
 
 #ifdef _WIN32
 #include <thread>
@@ -30,6 +31,29 @@ void InputController::click(MouseButton button) {
     sendMouseEvent(downFlag);
     std::this_thread::sleep_for(std::chrono::milliseconds(50 + rand() % 50));
     sendMouseEvent(upFlag);
+}
+
+bool InputController::clickAtChecked(int x, int y, MouseButton button) {
+    DWORD down = 0, up = 0;
+    switch (button) {
+    case MouseButton::Left: down = MOUSEEVENTF_LEFTDOWN; up = MOUSEEVENTF_LEFTUP; break;
+    case MouseButton::Right: down = MOUSEEVENTF_RIGHTDOWN; up = MOUSEEVENTF_RIGHTUP; break;
+    case MouseButton::Middle: down = MOUSEEVENTF_MIDDLEDOWN; up = MOUSEEVENTF_MIDDLEUP; break;
+    default: return false;
+    }
+    INPUT events[2]{};
+    events[0].type = events[1].type = INPUT_MOUSE;
+    events[0].mi.dwFlags = down;
+    events[1].mi.dwFlags = up;
+    return Input::SendCheckedClick(x, y, {
+        [](int px, int py) { return SetCursorPos(px, py) != FALSE; },
+        [](int px, int py) {
+            POINT actual{};
+            return GetCursorPos(&actual) && actual.x == px && actual.y == py;
+        },
+        [&] { return SendInput(2, events, sizeof(INPUT)); },
+        [&] { SendInput(1, &events[1], sizeof(INPUT)); } // Best-effort release after partial delivery.
+    });
 }
 
 void InputController::doubleClick(MouseButton button) {
@@ -102,6 +126,7 @@ namespace GRIM {
 
 void InputController::moveMouse(int, int) {}
 void InputController::click(MouseButton) {}
+bool InputController::clickAtChecked(int, int, MouseButton) { return false; }
 void InputController::doubleClick(MouseButton) {}
 void InputController::scroll(int) {}
 void InputController::keyEvent(WORD, KeyAction) {}

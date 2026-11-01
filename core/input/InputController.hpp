@@ -21,6 +21,9 @@ class InputController {
 public:
     static void moveMouse(int x, int y);
     static void click(MouseButton button);
+    // Checked position + button delivery. False includes partial/unsupported input.
+    // Success reports OS acceptance, not application-level completion.
+    static bool clickAtChecked(int x, int y, MouseButton button);
     static void doubleClick(MouseButton button);
     static void scroll(int delta);
     static void typeText(const std::string& text, int delayMs = 10);

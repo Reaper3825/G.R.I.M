@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.8
+// G.R.I.M Plugin API v3.9
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 8
+#define GRIM_API_VERSION_MINOR 9
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -84,6 +84,7 @@ typedef enum {
     GRIM_PERM_VOICE = (1 << 4),         // Can use TTS/STT
     GRIM_PERM_UI = (1 << 5),            // Can show UI elements
     GRIM_PERM_SYSTEM = (1 << 6),        // Can query system info
+    GRIM_PERM_INPUT = (1 << 7),         // Can send mouse/keyboard input through host services
     GRIM_PERM_ALL = 0xFFFFFFFF
 } GrimPermission;
 
@@ -172,6 +173,11 @@ enum GrimVoiceOperation : uint32_t {
 enum GrimUIPanelOperation : uint32_t {
     GRIM_UI_LIST = 0, GRIM_UI_INSPECT = 1, GRIM_UI_SHOW = 2,
     GRIM_UI_HIDE = 3, GRIM_UI_BRING_TO_FRONT = 4, GRIM_UI_POLL = 5
+};
+
+enum GrimInputOperation : uint32_t {
+    GRIM_INPUT_MOVE_MOUSE = 0, GRIM_INPUT_CLICK = 1, GRIM_INPUT_TYPE = 2,
+    GRIM_INPUT_KEY = 3, GRIM_INPUT_CLICK_ON = 4
 };
 
 // Intent structure (matches your Intent struct)
@@ -381,7 +387,14 @@ typedef struct GrimPluginAPI {
     // Poll: panel_key=null, request_id>0. A completed poll consumes its result.
     const char* (*ui_panel_service)(const GrimPluginAPI* self, GrimUIPanelOperation operation,
                                     const char* panel_key, uint64_t request_id);
-    void* reserved[19];
+    // v3.9: INPUT permission, plus SYSTEM for CLICK_ON perception/targeting.
+    // Synchronous host execution of the existing raw-argument input operation;
+    // no registry dispatch. Arguments are borrowed only for this call (max 64 KiB).
+    // Returns host-owned grim-input-result v1 JSON; release with string_free.
+    // Null = invalid input, denied access, unpublished/stopping provider, or API failure.
+    const char* (*input_service)(const GrimPluginAPI* self, GrimInputOperation operation,
+                                const char* arguments, size_t arguments_size);
+    void* reserved[18];
     
 } GrimPluginAPI;
 

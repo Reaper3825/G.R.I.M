@@ -28,6 +28,7 @@
 #include <thread>
 #include <atomic>
 #include <opencv2/core.hpp>
+#include "click_target.hpp"
 
 namespace GRIM {
 namespace Perception {
@@ -212,8 +213,9 @@ public:
     
     // High-level actions (perception + input)
     void clickAt(int x, int y, const std::string& button = "left");
-    void clickOnText(const std::string& text, const std::string& button = "left");
-    void clickOnObject(const std::string& objectLabel, const std::string& button = "left");
+    ClickTargetResult clickOnText(const std::string& text, const std::string& button = "left");
+    // Native UI control name, automation ID, or role; not a visual object classifier.
+    ClickTargetResult clickOnObject(const std::string& objectLabel, const std::string& button = "left");
 
 private:
     struct Impl;

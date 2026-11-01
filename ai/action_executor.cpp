@@ -120,19 +120,12 @@ CommandResult executeAction(const std::string& action) {
     
     try {
         if (params.type == "click") {
-            // Intelligent clicking - try to find target on screen
-            auto ctx = Perception::g_contextManager->getCurrentContext(true);
-            
-            if (!ctx.isValid) {
-                return {false, "[Action] Cannot see screen", "ERR_ACTION_NO_VISION",
-                        "error", "I can't see the screen", Colors::Red};
-            }
-            
-            // Try to click on the target text or object
-            Perception::g_contextManager->clickOnText(params.target);
-            
-            return {true, "Clicked on: " + params.target, "ERR_NONE",
-                    "action", "Clicked on " + params.target, Colors::Green};
+            const auto result = Perception::g_contextManager->clickOnText(params.target);
+            return {result.success, "[Action] " + result.message,
+                    result.success ? "ERR_NONE" : result.error,
+                    result.success ? "action" : "error",
+                    result.success ? "Click input sent" : "Click target failed",
+                    result.success ? Colors::Green : Colors::Red};
         }
         else if (params.type == "type") {
             Perception::g_contextManager->typeText(params.target, 15);
@@ -188,9 +181,14 @@ CommandResult executeAction(const std::string& action) {
                 
                 for (const auto& text : submitTexts) {
                     if (ctx.screenText.find(text) != std::string::npos) {
-                        Perception::g_contextManager->clickOnText(text);
-                        return {true, "Submitted by clicking: " + text, "ERR_NONE",
-                                "action", "Submitted", Colors::Green};
+                        const auto result = Perception::g_contextManager->clickOnText(text);
+                        // A rejected/partially delivered targeted click must not
+                        // become success or fall through to a second input action.
+                        return {result.success, "[Action] " + result.message,
+                                result.success ? "ERR_NONE" : result.error,
+                                result.success ? "action" : "error",
+                                result.success ? "Click input sent" : "Click target failed",
+                                result.success ? Colors::Green : Colors::Red};
                     }
                 }
             }

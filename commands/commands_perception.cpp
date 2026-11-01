@@ -97,34 +97,3 @@ CommandResult cmdInputKey(const std::string& arg) {
         return {true, "Pressed key: " + arg, "ERR_NONE", "routine", "Key pressed", Colors::Green};
     }
 }
-
-CommandResult cmdInputClickOn(const std::string& arg) {
-    // Expected format: "text Button Name" or "object button"
-    LOG_TRACE("Input", "cmdInputClickOn called with arg=\"" + arg + "\"");
-    
-    if (!GRIM::Perception::g_contextManager) {
-        return {false, "[Input] Perception system not initialized", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
-    }
-    
-    if (arg.empty()) {
-        return {false, "[Input] No target provided. Use: click on text Submit or click on object button", "ERR_INVALID_ARGS", "error", "No target specified", Colors::Red};
-    }
-    
-    // Parse: "text ..." or "object ..."
-    std::string lower = arg;
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-    
-    if (lower.find("text ") == 0) {
-        std::string target = arg.substr(5); // Remove "text "
-        GRIM::Perception::g_contextManager->clickOnText(target);
-        return {true, "Attempting to click on text: " + target, "ERR_NONE", "routine", "Clicking on text", Colors::Green};
-    } else if (lower.find("object ") == 0) {
-        std::string target = arg.substr(7); // Remove "object "
-        GRIM::Perception::g_contextManager->clickOnObject(target);
-        return {true, "Attempting to click on object: " + target, "ERR_NONE", "routine", "Clicking on object", Colors::Green};
-    } else {
-        // Try as text by default
-        GRIM::Perception::g_contextManager->clickOnText(arg);
-        return {true, "Attempting to click on: " + arg, "ERR_NONE", "routine", "Clicking", Colors::Green};
-    }
-}

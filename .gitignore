@@ -321,6 +321,10 @@ cache/geospatial/*.sqlite-wal
 /plugins/ui_plugin/*
 !/plugins/ui_plugin/CMakeLists.txt
 !/plugins/ui_plugin/ui_plugin.cpp
+!/plugins/input_plugin/
+/plugins/input_plugin/*
+!/plugins/input_plugin/CMakeLists.txt
+!/plugins/input_plugin/input_plugin.cpp
 
 # Local OSINT tools, adapters, and generated data.
 /osint/

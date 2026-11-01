@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.8.0**. Updated October 29, 2026.
+API version: **3.9.0**. Updated October 29, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -293,6 +293,56 @@ enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, an
 `ui.hide_surface` registrations are removed. `ui.create_surface` and
 `ui.destroy_surface` remain host-owned lifecycle tools, and OSINT is unchanged.
 See [UI panel operations](UI_PANEL_OPERATIONS.md) for stable keys and examples.
+
+## Input tool migration (v3.9)
+
+`input_plugin` supplies `move_mouse`, `click`, `type`, `key`, and `click_on`.
+They are no longer registered by the host. The host retains the command handlers
+and their live perception/input services; the plugin owns discovery metadata,
+registered callbacks, and copying complete results into the plugin result writer.
+
+API v3.9 consumes one reserved pointer slot, retaining table size and previous
+field offsets. Earlier v3.x binaries remain compatible with the new host. The
+input plugin requires v3.9 before accessing `input_service`.
+
+`input_service(self, operation, arguments, arguments_size)` requires the new
+`GRIM_PERM_INPUT` permission (bit 7). `GRIM_INPUT_CLICK_ON` additionally requires
+`GRIM_PERM_SYSTEM` for capture/targeting. UI permission alone does not authorize
+input. The host requires a published, accepting provider; initialization cannot
+execute input. It copies up to 65,536 argument bytes before calling its existing
+host operation. A null argument pointer is valid only for zero bytes.
+
+The service calls `ExecuteInputCommandService` directly, not the registry or
+command dispatcher, so a plugin registration cannot recurse into itself.
+Execution remains synchronous, including existing typing/key delays and fresh
+`click_on` observation. No background scheduler, job IDs, or UI-style polling is
+added in this behavior-preserving migration. Active-call gates keep the API and
+plugin loaded until an in-flight call finishes.
+
+The returned host-owned string, released with `string_free`, is versioned JSON:
+
+```json
+{"format":"grim-input-result","version":1,"result":{"success":true,"message":"...","error_code":"ERR_NONE","category":"routine","voice":"...","structured_output_json":"","color_rgb":65535}}
+```
+
+The plugin preserves every result field, including `click_on`'s structured
+coordinates and `application_response_verified:false`. Standard/unknown host
+exceptions are encoded in an `exception` field and rethrown on the plugin side,
+preserving the registry's `ERR_CMD_EXCEPTION` policy. Null denotes invalid API
+arguments, denied permissions, a nonpublished/stopping provider, or API failure;
+the plugin reports `ERR_INPUT_SERVICE` in that case.
+
+Raw argument behavior is unchanged: coordinate commas/integer-prefix parsing,
+default mouse button, verbatim typing with a 15 ms delay, and plus-separated key
+handling. The four direct input commands retain their existing void host input
+interfaces and success reporting; this migration does not add OS-delivery checks
+to them, validate all key/button names, or change platform stubs. `click_on`
+retains its separately implemented checked targeting/delivery contract. See
+[click targeting](CLICK_ON_TARGETING.md).
+
+All five tools are state-changing and carry confirmation metadata. As elsewhere,
+direct registry calls do not enforce that metadata, and native plugin code is
+not sandboxed. The permission controls access to this host service.
 
 ## Independent plugin builds
 

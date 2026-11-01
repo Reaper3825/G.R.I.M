@@ -5,7 +5,6 @@
 
 #include "commands_ui.hpp"
 #include "commands_osint.hpp"
-#include "commands_perception.hpp"
 
 // Built-ins publish metadata and execution together in the sole tool registry.
 static GRIM::MMO::ToolRegistration builtinTool(const char* id, GRIM::MMO::ToolHandler handler,
@@ -58,25 +57,7 @@ static void register_all_commands() {
 
     // Voice and tool inspection commands are supplied by native plugins.
 
-    // Observation commands are supplied by perception_plugin; input stays here.
-
-    // ✅ NEW: Input Control commands
-    LOG_DEBUG("Plugin", "Registering input control commands");
-    REGISTER_TOOL("move_mouse", cmdInputMoveMouse,
-                  "Move mouse cursor to position",
-                  "action", false);
-    REGISTER_TOOL("click", cmdInputClick,
-                  "Perform mouse click",
-                  "action", false);
-    REGISTER_TOOL("type", cmdInputType,
-                  "Type text at current position",
-                  "action", false);
-    REGISTER_TOOL("key", cmdInputKey,
-                  "Press keyboard key or combination",
-                  "action", false);
-    REGISTER_TOOL("click_on", cmdInputClickOn,
-                  "Click on detected screen element",
-                  "action", false);
+    // Observation and input tools are supplied by perception_plugin and input_plugin.
 
     // User timer commands are supplied by timers_plugin.
 

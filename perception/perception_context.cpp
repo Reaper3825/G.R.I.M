@@ -1722,55 +1722,5 @@ void PerceptionContextManager::clickAt(int x, int y, const std::string& button) 
     clickMouse(button);
 }
 
-void PerceptionContextManager::clickOnText(const std::string& text, const std::string& button) {
-    // Get current context and find text
-    auto ctx = getCurrentContext(true); // Force refresh
-    
-    if (!ctx.isValid || !ctx.hasText) {
-        logError("Input", "Cannot click on text - no OCR data available");
-        return;
-    }
-    
-    // Simple text search - in a real implementation, you'd want to get bounding boxes from OCR
-    // This is a simplified version that clicks in the center of the screen where text was found
-    if (ctx.screenText.find(text) != std::string::npos) {
-        // Click in center of screen as a fallback
-        // TODO: Use actual OCR bounding box data for precise clicking
-        int centerX = ctx.screenWidth / 2;
-        int centerY = ctx.screenHeight / 2;
-        
-        logDebug("Input", "Clicking on text '" + text + "' at estimated position");
-        clickAt(centerX, centerY, button);
-    } else {
-        logError("Input", "Text '" + text + "' not found on screen");
-    }
-}
-
-void PerceptionContextManager::clickOnObject(const std::string& objectLabel, const std::string& button) {
-    // Get current context and find object
-    auto ctx = getCurrentContext(true); // Force refresh
-    
-    if (!ctx.isValid || ctx.detectedObjects.empty()) {
-        logError("Input", "Cannot click on object - no object detection data available");
-        return;
-    }
-    
-    // Find matching object
-    for (const auto& obj : ctx.detectedObjects) {
-        if (obj.label.find(objectLabel) != std::string::npos) {
-            // Click in center of detected object
-            int centerX = obj.x + obj.width / 2;
-            int centerY = obj.y + obj.height / 2;
-            
-            logDebug("Input", "Clicking on object '" + objectLabel + "' at (" + 
-                       std::to_string(centerX) + ", " + std::to_string(centerY) + ")");
-            clickAt(centerX, centerY, button);
-            return;
-        }
-    }
-    
-    logError("Input", "Object '" + objectLabel + "' not found on screen");
-}
-
 } // namespace Perception
 } // namespace GRIM

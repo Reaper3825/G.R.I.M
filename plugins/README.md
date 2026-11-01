@@ -205,8 +205,9 @@ test include directory; no schema regeneration or dependency installation occurs
 `perception_plugin` supplies `perception_what_see`, `perception_read_text`, and
 `perception_detect_objects` through API v3.6's SYSTEM-permission observation
 service. The existing host retains capture, OCR, detection, live context, model
-and subsystem ownership. Mouse/keyboard commands remain in the host for their
-separate migration. The plugin depends only on the API, shared result helper,
+and subsystem ownership. Mouse/keyboard tool registrations now come from the
+Input Plugin; their live execution services remain host-owned. The perception
+plugin depends only on the API, shared result helper,
 and installed nlohmann_json; it imports no host C++ or OpenCV symbols.
 
     cmake -S plugins/perception_plugin -B .codex-build/perception-plugin -G "Visual Studio 17 2022" -A x64
@@ -307,6 +308,52 @@ limits, and cancellation on unload. The separate UI foundation suite exercises
 the production host adapter against real panel management without native UI.
 No model, renderer, training, package installation, or application startup occurs.
 
+## Input plugin
+
+`input_plugin` registers the five existing canonical input tool IDs through API
+v3.9. The plugin depends only on the API, JSON codec, and standard library; it
+imports no host C++ symbols and owns no capture, perception manager, or input
+device. The host retains existing command parsing/execution behind a typed,
+permission-checked input service.
+
+| Tool | Raw arguments |
+|---|---|
+| `move_mouse` | `<x> <y>` or `<x>,<y>`, including negative coordinates |
+| `click` | Optional button name; empty means left |
+| `type` | Verbatim text, including surrounding whitespace |
+| `key` | A host key name or plus-separated combination |
+| `click_on` | `[text|object] <exact label>` |
+
+All tools require INPUT permission and confirmation metadata. `click_on` also
+requires SYSTEM for perception/targeting. Complete host results pass through,
+including voice/colors, failures, exceptions, and structured targeting output.
+The four direct tools retain legacy key/button interpretation and void-input
+success semantics. `click_on` retains checked bounds, ambiguity, freshness, and
+OS-delivery handling. Calls remain synchronous; no input worker or polling is
+introduced. The application response still requires subsequent observation.
+
+```powershell
+cmake -S plugins/input_plugin -B .codex-build/input-plugin -G "Visual Studio 17 2022" -A x64
+cmake --build .codex-build/input-plugin --config Release --target input_plugin --parallel 2
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -InputPluginDirectory .codex-build/input-plugin/plugins
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_click_target.ps1
+```
+
+Deploy `.codex-build/input-plugin/plugins/input_plugin.dll` into the application's
+`plugins/` folder after separately rebuilding the host for API v3.9 and removal
+of the five old registrations. The new host supports earlier v3.x binaries;
+the input plugin rejects older APIs. Loading/unloading the DLL does not initialize
+or destroy host perception/input state. Unload waits for active handlers and
+removes all five tools; source-file deletion is reconciled normally.
+
+The focused suites load the real DLL/API/registry against an input sink and
+exercise the real host service/handlers with a simulated context manager. They
+cover metadata, permissions, exact arguments/results, failure/exception handling,
+active-call draining, and folder removal. No real pointer/key events, desktop
+capture, model execution, application build, or package installation occurs.
+See [API details](../docs/PLUGIN_API.md#input-tool-migration-v39) and
+[grounded targeting](../docs/CLICK_ON_TARGETING.md).
+
 ### Remaining host tools
 
 These groups stay in the host until the plugin API can preserve their existing
@@ -315,7 +362,6 @@ change behavior.
 
 | Group | Missing boundary for a behavior-preserving migration |
 |---|---|
-| Input control | Live perception context and its mouse/keyboard interfaces. |
 | UI surface lifecycle | `ui.create_surface` and `ui.destroy_surface` still use the host surface registry; OSINT panel handling remains outside this migration. |
 
 The eleven former AI/NLP/settings tools are retired from agent registration,
