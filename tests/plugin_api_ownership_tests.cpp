@@ -185,18 +185,44 @@ int main(int argc, char** argv) try {
     complete.descriptor.aliases = {alias, 1};
     complete.descriptor.parameters = &parameter;
     complete.descriptor.parameter_count = 1;
+    complete.usage_type = GRIM_TOOL_USAGE_SYSTEM;
     check(staged->register_tools(staged, &complete, 1) == GRIM_OK, "Staging failed");
     description.assign(200, 'x');
     schema.assign(200, 'x');
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("staged_tool"), "Uncommitted tool leaked");
     check(PluginAPI::commitPluginTools("staged"), "Commit failed");
     auto snapshot = GRIM::MMO::ToolRegistry::instance().getTool("staged_alias");
-    check(snapshot && snapshot->description == "copied metadata" && snapshot->version == "1.2.3" &&
+    check(snapshot && snapshot->usage_type == GRIM::MMO::ToolUsage::System &&
+          snapshot->description == "copied metadata" && snapshot->version == "1.2.3" &&
           snapshot->parameters[0].required && snapshot->provider_name == "staged" &&
           snapshot->provider_path == "staged.dll" && snapshot->argument_format == "json" &&
           snapshot->argument_schema_json.find("properties") != std::string::npos &&
           snapshot->examples == std::vector<std::string>{"test example"}, "Descriptor copy lost fields");
     PluginAPI::cleanupPluginContext("staged");
+
+    // Old v3.x batches have a shorter stride. Keep both records and defaults.
+    struct LegacyRegistration {
+        uint32_t struct_size = sizeof(LegacyRegistration);
+        GrimToolDescriptor descriptor;
+        GrimToolHandler handler = nullptr;
+        void* user_data = nullptr;
+    };
+    static_assert(sizeof(LegacyRegistration) == offsetof(GrimToolRegistration, usage_type));
+    LegacyRegistration legacy[2];
+    for (size_t i = 0; i < 2; ++i) {
+        const auto source = definition(i ? "legacy_second" : "legacy_first");
+        legacy[i].descriptor = source.descriptor;
+        legacy[i].handler = source.handler;
+    }
+    check(beta->register_tools(beta, reinterpret_cast<const GrimToolRegistration*>(legacy), 2) == GRIM_OK &&
+          GRIM::MMO::ToolRegistry::instance().getTool("legacy_first")->usage_type == GRIM::MMO::ToolUsage::Model &&
+          GRIM::MMO::ToolRegistry::instance().getTool("legacy_second")->usage_type == GRIM::MMO::ToolUsage::Model,
+          "Legacy batch stride or default usage broken");
+    beta->unregister_command(beta, "legacy_first"); beta->unregister_command(beta, "legacy_second");
+    GrimToolRegistration invalidUsage[] = {definition("usage_valid"), definition("usage_invalid")};
+    invalidUsage[1].usage_type = static_cast<GrimToolUsage>(99);
+    check(beta->register_tools(beta, invalidUsage, 2) == GRIM_ERROR_INVALID_PARAM &&
+          !GRIM::MMO::ToolRegistry::instance().isRegistered("usage_valid"), "Invalid usage published partial batch");
 
     staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
     GrimToolRegistration collision[] = {definition("new_tool"), definition("builtin")};

@@ -8,6 +8,27 @@
 
 namespace GRIM::MMO {
 
+// Intended consumer, independent of effects, permissions, and provider.
+enum class ToolUsage : uint32_t {
+    Debug = 0,  // Developer diagnostics and manual inspection.
+    Model = 1,  // Capabilities exposed to the model.
+    System = 2, // Host-controlled operations.
+    Ignore = 3  // Retained registration excluded from model discovery.
+};
+constexpr bool validToolUsage(ToolUsage usage) {
+    return usage == ToolUsage::Debug || usage == ToolUsage::Model ||
+           usage == ToolUsage::System || usage == ToolUsage::Ignore;
+}
+constexpr const char* toolUsageName(ToolUsage usage) {
+    switch (usage) {
+        case ToolUsage::Debug: return "Debug";
+        case ToolUsage::Model: return "Model";
+        case ToolUsage::System: return "System";
+        case ToolUsage::Ignore: return "Ignore";
+    }
+    return "Unknown";
+}
+
 // =========================================================
 // ToolProviderType — who provides this tool
 // =========================================================
@@ -58,11 +79,12 @@ struct ToolDescriptor {
 
     // Documentation
     std::string           description;
-    std::string           usage;
+    std::string           usage; // Command syntax, independent of usage_type.
     std::vector<std::string> examples;
     std::string           category;         // "action", "information", "system", "ui"
 
     // Policy
+    ToolUsage             usage_type = ToolUsage::Model;
     uint32_t              permission_bits = 0;  // GrimPermission flags
     bool                  needs_confirmation = false;
     bool                  is_informational   = true;

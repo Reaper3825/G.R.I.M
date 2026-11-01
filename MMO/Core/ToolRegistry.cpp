@@ -51,6 +51,7 @@ bool ToolRegistry::registerBatch(const std::string& plugin_name,
             const auto& desc = registration.descriptor;
             if (desc.tool_id.empty() || !registration.handler || desc.provider_name.empty())
                 throw std::invalid_argument("Tool registration requires an ID, provider, and handler");
+            if (!validToolUsage(desc.usage_type)) throw std::invalid_argument("Invalid tool usage type");
             if (!plugin_name.empty() && (desc.provider_name != plugin_name || desc.provider_type != ToolProviderType::Plugin))
                 throw std::invalid_argument("Tool batch provider mismatch");
             if (!seen.insert(desc.tool_id).second) return false;
@@ -101,7 +102,7 @@ bool ToolRegistry::replaceProvider(const std::string& provider, const std::strin
             if (d.provider_name != provider || d.provider_type != ToolProviderType::Plugin ||
                 d.provider_instance.empty() || d.provider_instance == old_instance ||
                 d.tool_id.empty() || !item.handler || !seen.insert(d.tool_id).second ||
-                candidate.count(d.tool_id)) return false;
+                candidate.count(d.tool_id) || !validToolUsage(d.usage_type)) return false;
             published.emplace_back(d.tool_id, tools_.count(d.tool_id) != 0);
             candidate.emplace(d.tool_id, std::make_shared<Entry>(Entry{d, item.handler}));
         }
@@ -162,6 +163,7 @@ bool ToolRegistry::registerSimple(const std::string& id, const std::string& desc
 }
 
 bool ToolRegistry::updateMetadata(const ToolDescriptor& descriptor) {
+    if (!validToolUsage(descriptor.usage_type)) return false;
     std::vector<ToolRegistryListener*> listeners;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -281,6 +283,13 @@ std::vector<ToolDescriptor> ToolRegistry::getAllTools() const {
     return result;
 }
 
+std::vector<ToolDescriptor> ToolRegistry::getModelTools() const {
+    auto result = getAllTools();
+    std::erase_if(result, [](const auto& tool) {
+        return tool.usage_type != ToolUsage::Model || tool.swap_state != ToolSwapState::Loaded;
+    });
+    return result;
+}
 std::vector<ToolDescriptor> ToolRegistry::getByCategory(const std::string& category) const {
     auto result = getAllTools();
     std::erase_if(result, [&](const auto& tool) { return tool.category != category; });
@@ -341,7 +350,7 @@ std::string ToolRegistry::generateCompactPrompt() const {
     std::ostringstream ss;
     ss << "Available tools:\n";
 
-    const auto tools = getAllTools();
+    const auto tools = getModelTools();
     // Sort by category for readability
     std::vector<const ToolDescriptor*> sorted;
     sorted.reserve(tools.size());
@@ -373,7 +382,7 @@ std::string ToolRegistry::generateCompactPrompt() const {
 std::string ToolRegistry::generateFullPrompt() const {
     std::ostringstream ss;
     ss << "Available tools (detailed):\n";
-    const auto tools = getAllTools();
+    const auto tools = getModelTools();
 
     for (const auto& desc : tools) {
         if (desc.swap_state != ToolSwapState::Loaded) continue;

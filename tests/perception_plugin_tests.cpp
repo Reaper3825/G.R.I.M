@@ -65,6 +65,7 @@ void runPerceptionPluginTests(const std::filesystem::path& pluginDirectory) {
     for (const auto* id : ids) {
         const auto d = registry.getTool(id);
         check(d && d->provider_name == "Perception Plugin" && d->provider_type == ToolProviderType::Plugin &&
+              d->usage_type == ToolUsage::Debug &&
               d->permission_bits == GRIM_PERM_SYSTEM && d->is_informational && !d->needs_confirmation &&
               d->parameters.empty() && d->examples.size() == 1 && d->preconditions.size() == 1,
               "Perception metadata/provider/policy incorrect");

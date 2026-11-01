@@ -1,4 +1,6 @@
 #include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/ToolDescriptorJson.hpp"
+#include "MMO/Core/ToolGapPlanner.hpp"
 #include "commands/commands_core.hpp"
 #include "core/plugin.hpp"
 #include <algorithm>
@@ -115,6 +117,53 @@ int main() try {
     check(!registry.isRegistered("legacy_host"), "Host adapter removal retained registry tool");
     check(observer.changes > 0, "No registry notifications");
     registry.removeListener(&observer);
+    // Classification controls model discovery, not explicit host invocation.
+    check(ToolDescriptor{}.usage_type == ToolUsage::Model, "Default usage changed");
+    ToolGapPlanner planner(registry);
+    for (auto usage : {ToolUsage::Debug, ToolUsage::Model, ToolUsage::System, ToolUsage::Ignore}) {
+        auto tool = descriptor(std::string("usage_") + toolUsageName(usage));
+        tool.usage_type = usage;
+        tool.aliases = {tool.tool_id + "_alias"};
+        tool.capability_tags = {tool.tool_id + "_capability"};
+        tool.keywords = {tool.tool_id};
+        registry.registerTool(tool, echo);
+        check(registry.invoke(tool.tool_id, "host").message == "host", "Usage blocked host execution");
+        const auto json = nlohmann::json(tool);
+        check(json.get<ToolDescriptor>().usage_type == usage, "Usage JSON roundtrip failed");
+        auto legacy = json; legacy.erase("usage_type");
+        check(legacy.get<ToolDescriptor>().usage_type == ToolUsage::Model, "Legacy snapshot default changed");
+        for (const auto& value : nlohmann::json::array({99, -1, 1.5, "Model", 4294967297ULL})) {
+            auto bad = json; bad["usage_type"] = value;
+            bool rejected = false;
+            try { bad.get<ToolDescriptor>(); } catch (const std::exception&) { rejected = true; }
+            check(rejected, "Invalid snapshot usage accepted");
+        }
+        const bool model = usage == ToolUsage::Model;
+        check((registry.generateCompactPrompt().find(tool.tool_id) != std::string::npos) == model &&
+              (registry.generateFullPrompt().find(tool.tool_id) != std::string::npos) == model,
+              "Non-model tool leaked into prompts");
+        check(planner.evaluate(tool.tool_id, "usage-test").has_value() != model &&
+              planner.evaluate(tool.aliases[0], "usage-test").has_value() != model &&
+              planner.evaluate(tool.capability_tags[0], "usage-test").has_value() != model,
+              "Capability discovery ignored usage");
+    }
+    check(registry.getAllTools().size() == 4 && registry.getModelTools().size() == 1,
+          "Model filtering lost developer metadata");
+    auto model = *registry.getTool("usage_Model");
+    model.swap_state = ToolSwapState::Unavailable;
+    check(registry.updateMetadata(model) && registry.getModelTools().empty() &&
+          planner.evaluate(model.aliases[0], "usage-test").has_value() &&
+          planner.evaluate(model.capability_tags[0], "usage-test").has_value(), "Unavailable Model tool remained discoverable");
+    model.swap_state = ToolSwapState::Loaded;
+    model.usage_type = ToolUsage::System;
+    check(registry.updateMetadata(model) && registry.getModelTools().empty() &&
+          registry.getTool(model.tool_id)->usage_count == 1, "Reclassification lost stats or model visibility");
+    model.usage_type = static_cast<ToolUsage>(99);
+    check(!registry.updateMetadata(model), "Invalid usage update accepted");
+    invalid = false;
+    try { registry.registerTool(model, echo); } catch (const std::invalid_argument&) { invalid = true; }
+    check(invalid, "Invalid usage registration accepted");
+    registry.unregisterByProvider("tests");
     std::cout << "Unified tool registry tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

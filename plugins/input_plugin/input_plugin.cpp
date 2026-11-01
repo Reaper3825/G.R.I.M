@@ -72,6 +72,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* tags[] = {"input", "computer_control"};
     GrimToolParameter parameters[5];
     for (size_t i = 0; i < 5; ++i) {
+        tools[i].usage_type = GRIM_TOOL_USAGE_DEBUG;
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0"; d.description = descriptions[i];
         d.usage = usages[i]; d.category = "action"; d.argument_format = "raw_text";

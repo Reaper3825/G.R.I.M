@@ -71,7 +71,7 @@ if ($PerceptionPluginDirectory) {
 }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'
-$registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','commands/command_dispatch.cpp','core/plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/ToolGapPlanner.cpp','commands/command_dispatch.cpp','core/plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
 $pluginTestCommand = 'plugin_api_ownership_tests.exe integration integration-rejected replacement'

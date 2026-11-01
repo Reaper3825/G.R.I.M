@@ -1,5 +1,13 @@
 # Native GRIM tool plugins
 
+API v3.10 adds per-tool usage classification. Set
+`registration.usage_type` to `GRIM_TOOL_USAGE_DEBUG`, `GRIM_TOOL_USAGE_MODEL`,
+`GRIM_TOOL_USAGE_SYSTEM`, or `GRIM_TOOL_USAGE_IGNORE`; omitted values default to
+Model. Perception wrappers are Debug, and no voice-plugin tool is Model-facing.
+See [classification and compatibility](../docs/PLUGIN_API.md#tool-usage-classification-v310).
+These source classifications take effect after rebuilding the affected plugins
+and a host supporting API v3.10.
+
 Use the standalone build to produce API v3 plugin libraries without configuring
 or building GRIM:
 
@@ -11,7 +19,21 @@ The output folder is .codex-build/plugins-standalone/plugins by default.
 GRIM_PLUGIN_OUTPUT_DIR can override it. Each plugin subdirectory is also a
 standalone CMake project.
 
-Deploy a completed native library into the application's plugins folder.
+Normal host builds (including `cmake --build --preset release -j 100`) automatically
+deploy completed plugin libraries into the source tree's `plugins/` folder.
+Building just the `GRIM` target also builds and deploys its plugins. Deployment
+checks run even when linking is up to date, repairing missing/stale live files.
+Identical DLLs are left untouched to avoid unnecessary hot reloads. Changed
+libraries are staged under a `.pending` filename and published by rename after
+linking completes; failure to publish fails the build.
+
+Standalone builds default to **no deployment**, keeping test builds isolated.
+Opt in at configure time with `-DGRIM_DEPLOY_PLUGINS=ON`; set
+`-DGRIM_PLUGIN_DEPLOY_DIR=<folder>` to change the destination. Disable deployment
+for a host build with `-DGRIM_DEPLOY_PLUGINS=OFF`. A standalone targeted build
+uses `--target deploy_voice_plugin` (substitute the plugin target name) to build
+and deploy; its default all-target build also includes enabled deployment targets.
+Alternatively deploy a completed native library manually.
 The host reconciles this folder about once a second, including removals.
 A replacement that fails initialization or registry validation leaves the
 working plugin loaded. Replacements must retain the provider name.
@@ -23,6 +45,9 @@ the scanned top-level folder.
 
 See ../docs/PLUGIN_API.md for API ownership, reload behavior, limitations, and
 focused verification. The bundled core_plugin.cpp remains part of the host.
+
+Deployment regression checks: `python -m unittest discover -s tests -p test_plugin_deployment.py -v`.
+They build a tiny synthetic plugin/host dependency fixture, never the GRIM application.
 
 ## Filesystem plugin
 

@@ -677,6 +677,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* descriptions[] = {"Start a network stress test", "Stop the current network stress test"};
     const char* usages[] = {"networktest <IP|@file> <port> [options...]", "networktest_stop"};
     for (size_t i = 0; i < 2; ++i) {
+        tools[i].usage_type = GRIM_TOOL_USAGE_IGNORE;
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = names[i];
         d.version = "1.0.0";

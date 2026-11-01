@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.9.0**. Updated October 29, 2026.
+API version: **3.10.0**. Updated November 1, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -24,6 +24,49 @@ MMO::ToolRegistry is the authoritative store for metadata and executable
 handlers. Plugins call api->register_tools(api, tools, count) with a batch
 of GrimToolRegistration values. Each contains a descriptor, handler, and
 plugin-owned user_data.
+
+### Tool usage classification (v3.10)
+
+Each tool has a `ToolUsage usage_type` in the canonical descriptor. Plugin
+registrations set `GrimToolRegistration::usage_type` using `GrimToolUsage`:
+
+| Value | Canonical / plugin enum | Intended consumer |
+|---|---|---|
+| 0 | `Debug` / `GRIM_TOOL_USAGE_DEBUG` | Developer diagnostics and inspection |
+| 1 | `Model` / `GRIM_TOOL_USAGE_MODEL` | Model-selectable capability |
+| 2 | `System` / `GRIM_TOOL_USAGE_SYSTEM` | Host-controlled operation |
+| 3 | `Ignore` / `GRIM_TOOL_USAGE_IGNORE` | Retained but excluded from model discovery |
+
+The default is **Model**, preserving existing exposure. This field is independent
+of the existing `usage` syntax string, category, informational/action flags,
+permissions, and confirmation policy. Only loaded Model entries appear in
+`getModelTools()`, registry model prompts, the RL action list, and capability-gap
+matching. Developer inspection, full snapshots, host command discovery, and
+explicit dispatch continue to include all classifications. Classification is
+discovery metadata, not a new authorization or execution gate.
+
+The perception plugin's three command wrappers are Debug. Voice capture and
+streaming are System; voice diagnostics/cache operations are Debug; the
+unimplemented cancellation and embedding-submission placeholders are Ignore.
+Host perception and speech pipelines keep their existing ownership and behavior.
+All OSINT and network-test plugin tools, plus the host OSINT results-panel tool,
+are Ignore.
+All alias and filesystem plugin tools are System.
+All input plugin tools are Debug.
+
+The function table and embedded `GrimToolDescriptor` layout are unchanged.
+v3.10 appends usage classification to `GrimToolRegistration`; plugins using it
+must declare v3.10. The host also accepts the exact v3.0-v3.9 registration prefix,
+walking batches by each record's declared size and defaulting legacy tools to
+Model. New plugins are rejected by older hosts through version negotiation.
+Invalid usage enum values reject the whole registration batch.
+
+Version-1 `grim-tool-snapshot` entries add numeric `usage_type` with the values
+above. The shared codec accepts older snapshots without it as Model, while
+rejecting invalid values. Existing snapshot fields retain their validation.
+The Tools inspector and `tool_info` display the classification.
+
+### Descriptor metadata
 
 Descriptors require a canonical tool ID, display name, tool version,
 description, usage, category, and argument format. They can additionally supply:
@@ -54,7 +97,8 @@ can register metadata from stack-local storage. The host retains the user_data
 pointer; the plugin must keep its pointee alive until shutdown after active
 calls have drained.
 
-Structures have struct_size; API v3 currently requires the exact size.
+Structures have struct_size; API v3 requires exact sizes except for the explicitly
+supported legacy `GrimToolRegistration` prefix described above.
 Flags use uint32_t with values 0 or 1. Each batch, list, or parameter array is
 limited to 256 entries. Strings are NUL-terminated, limited to 65,536 bytes,
 and required text must be nonempty. Empty optional lists use {nullptr, 0}.
@@ -359,9 +403,20 @@ Nothing downloads or installs packages. Each plugin subdirectory can also be
 configured independently with its own build directory.
 
 Libraries are emitted under the build directory's plugins folder. Set
-GRIM_PLUGIN_OUTPUT_DIR to an explicit destination if needed. Build outputs are
-not automatically deployed into the application's live plugins folder.
-Copy a completed library there to install/update it; remove it to unload it.
+GRIM_PLUGIN_OUTPUT_DIR to an explicit destination if needed. Host builds default
+`GRIM_DEPLOY_PLUGINS` to ON and publish completed outputs into
+`GRIM_PLUGIN_DEPLOY_DIR` (the source tree's `plugins/` folder by default).
+Deployment is a dependency of the GRIM target and is included in default builds.
+It checks content even without relinking, leaves identical files untouched, and
+uses a temporary `.pending` file plus rename so hot reload sees completed files.
+Publication failure fails the build. Only the plugin library is published;
+import libraries, PDBs, and dependency DLLs are not copied into the watched folder.
+
+Standalone builds default to OFF. Opt in with `-DGRIM_DEPLOY_PLUGINS=ON` and build
+the default target or `deploy_<plugin-target>`; building only the library target
+does not deploy it. Set OFF explicitly to disable deployment for a host build.
+Manual installation remains possible by copying a completed library; remove the
+deployed file to unload it. See [build instructions](../plugins/README.md).
 
 Logging passes through the plugin API using a private per-library bridge.
 The OSINT findings panel stays in the host as ui.show_osint_results; the
@@ -388,7 +443,9 @@ without invoking scans or network tests:
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -PluginDirectory .codex-build/plugins-standalone/plugins
 
 The Tools viewer uses the same descriptors, including argument format/schema
-and plugin source path. Its focused host UI regression is:
+and plugin source path. Its Usage type and Plugin dropdowns combine with search;
+plugin choices are derived from current registry providers, including built-ins,
+and refresh on plugin registration/removal. Its focused host UI regression is:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -Tools
 

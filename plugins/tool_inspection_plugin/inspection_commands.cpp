@@ -111,6 +111,7 @@ CommandResult cmdToolInfo(const std::string& arg) {
     output << "[Tool: " << tool.tool_id << "]\n\n";
     output << "Description: " << tool.description << "\n";
     output << "Category   : " << tool.category << "\n";
+    output << "Usage type : " << GRIM::MMO::toolUsageName(tool.usage_type) << "\n";
     output << "Type       : " << (tool.is_informational ? "Information" : "Action") << "\n";
     output << "Usage      : " << tool.usage << "\n";
     

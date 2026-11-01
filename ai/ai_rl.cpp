@@ -29,7 +29,8 @@ static std::mutex g_batchMutex;
 std::vector<std::string> buildDynamicActionSpace()
 {
     std::vector<std::string> actions;
-    actions = GRIM::MMO::ToolRegistry::instance().getExecutableNames();
+    for (const auto& tool : GRIM::MMO::ToolRegistry::instance().getModelTools())
+        actions.push_back(tool.tool_id);
     return actions;
 }
 

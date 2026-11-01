@@ -73,6 +73,7 @@ scripts/README_ANVIL_RUN.md
 # ==============================
 # Build directories
 # ==============================
+/.codex-build/
 /build/
 /whisper.cpp/build/
 /cpr/build/
@@ -262,6 +263,7 @@ cache/geospatial/*.sqlite-wal
 /plugins/*
 !/plugins/CMakeLists.txt
 !/plugins/plugin_build.cmake
+!/plugins/deploy_plugin.cmake
 !/plugins/plugin_logging.cpp
 !/plugins/plugin_logging.hpp
 !/plugins/README.md

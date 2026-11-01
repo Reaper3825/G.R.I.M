@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.9
+// G.R.I.M Plugin API v3.10
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 9
+#define GRIM_API_VERSION_MINOR 10
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -148,11 +148,20 @@ struct GrimToolResultWriter {
     GrimResult (*complete)(GrimToolResultWriter*, const GrimToolResult*) = nullptr;
 };
 typedef GrimResult (*GrimToolHandler)(const GrimToolCall*, GrimToolResultWriter*, void* user_data);
+enum GrimToolUsage : uint32_t {
+    GRIM_TOOL_USAGE_DEBUG = 0,
+    GRIM_TOOL_USAGE_MODEL = 1,
+    GRIM_TOOL_USAGE_SYSTEM = 2,
+    GRIM_TOOL_USAGE_IGNORE = 3
+};
 struct GrimToolRegistration {
     uint32_t struct_size = sizeof(GrimToolRegistration);
     GrimToolDescriptor descriptor;
     GrimToolHandler handler = nullptr;
     void* user_data = nullptr; // Plugin-owned until shutdown; not freed by the host.
+    // v3.10 extension; legacy registration prefixes default to Model.
+    // Kept outside the embedded descriptor to preserve its ABI and offsets.
+    GrimToolUsage usage_type = GRIM_TOOL_USAGE_MODEL;
 };
 
 enum GrimPerceptionQuery : uint32_t {

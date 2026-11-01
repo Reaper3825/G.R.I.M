@@ -109,7 +109,10 @@ void runVoicePluginTests(const std::filesystem::path& pluginDirectory) {
     for (const auto* id : ids) {
         const auto d = registry.getTool(id); const std::string name = id;
         const bool informational = name == "list_voices" || name == "list_embeddings";
+        const auto usage = name == "voice" || name == "voice_stream" ? ToolUsage::System :
+            (name == "nevermind" || name == "create_embedding" ? ToolUsage::Ignore : ToolUsage::Debug);
         check(d && d->provider_name == "Voice Plugin" && d->provider_type == ToolProviderType::Plugin &&
+              d->usage_type == usage &&
               (d->permission_bits & GRIM_PERM_VOICE) && d->is_informational == informational && d->needs_confirmation != informational,
               "Voice metadata/provider/policy incorrect");
     }

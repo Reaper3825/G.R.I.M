@@ -52,6 +52,7 @@ static void register_all_commands() {
     // System information
     REGISTER_TOOL("ui.show_osint_results", cmdOsintShowUI,
                   "Show the host-owned OSINT findings panel for a username", "ui", false);
+    tools.back().descriptor.usage_type = GRIM::MMO::ToolUsage::Ignore;
 
     // System information is supplied by system_info_plugin.
 

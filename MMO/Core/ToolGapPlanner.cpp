@@ -3,6 +3,7 @@
 #include "ToolGapPlanner.hpp"
 
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <stdexcept>
 #include <sstream>
 
@@ -26,31 +27,27 @@ std::optional<ToolGapProposal> ToolGapPlanner::evaluate(
     if (capability.empty())
         throw std::runtime_error("ToolGapPlanner::evaluate: capability is empty");
 
-    // Direct tool_id match
-    if (registry_.isRegistered(capability)) {
-        auto tool = registry_.getTool(capability);
-        if (tool && tool->swap_state == ToolSwapState::Loaded) {
+    // Resolve canonical IDs, display names, and aliases in one snapshot.
+    if (const auto tool = registry_.getTool(capability)) {
+        if (tool->swap_state == ToolSwapState::Loaded && tool->usage_type == ToolUsage::Model) {
             return std::nullopt;  // tool exists and is available
         }
-        // Tool exists but is not loaded
+        // A registered tool may be unavailable to the model.
         ToolGapProposal proposal;
         proposal.missing_capability = capability;
         proposal.reason = ToolGapReason::CapabilityMismatch;
-        proposal.closest_tool_id = capability;
-        proposal.closest_tool_mismatch = "Tool exists but swap_state is not Loaded";
-        proposal.rationale = "The tool '" + capability + "' is registered but currently unavailable.";
+        proposal.closest_tool_id = tool->tool_id;
+        proposal.closest_tool_mismatch = "Tool is unavailable or not classified for model use";
+        proposal.rationale = "The tool '" + capability + "' is registered but unavailable for model use.";
         proposal.original_request_id = request_id;
         return proposal;
     }
 
-    // Alias resolution
-    auto resolved = registry_.resolveAlias(capability);
-    if (resolved) {
-        return std::nullopt;  // alias points to a valid tool
-    }
-
     // Capability tag search
     auto by_tag = registry_.getByCapabilityTag(capability);
+    std::erase_if(by_tag, [](const auto& tool) {
+        return tool.usage_type != ToolUsage::Model || tool.swap_state != ToolSwapState::Loaded;
+    });
     if (!by_tag.empty()) {
         return std::nullopt;  // existing tool covers this capability
     }
@@ -80,7 +77,7 @@ std::optional<ToolGapProposal> ToolGapPlanner::evaluate(
 std::optional<ToolDescriptor> ToolGapPlanner::findClosestTool(
     const std::string& capability) const {
 
-    auto all_tools = registry_.getAllTools();
+    auto all_tools = registry_.getModelTools();
     if (all_tools.empty()) return std::nullopt;
 
     // Simple substring match on keywords and capability_tags.

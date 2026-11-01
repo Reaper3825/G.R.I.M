@@ -91,6 +91,7 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* reportAliases[] = {"osint"};
     const char* sweepAliases[] = {"sherlock"};
     for (size_t i = 0; i < 8; ++i) {
+        tools[i].usage_type = GRIM_TOOL_USAGE_IGNORE;
         const auto& entry = entries[i];
         tools[i].handler = entry.handler;
         auto& d = tools[i].descriptor;

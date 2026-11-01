@@ -34,6 +34,8 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     embeddingArguments.name = "arguments"; embeddingArguments.type = "string"; embeddingArguments.required = 1;
     embeddingArguments.description = "Speaker ID followed by reference audio path; preserves the existing placeholder and parsing behavior";
     for (size_t i = 0; i < 11; ++i) {
+        tools[i].usage_type = i < 2 ? GRIM_TOOL_USAGE_SYSTEM :
+            (i == 6 || i == 7 ? GRIM_TOOL_USAGE_IGNORE : GRIM_TOOL_USAGE_DEBUG);
         tools[i].handler = handlers[i]; auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0"; d.description = descriptions[i]; d.usage = usages[i];
         const bool informational = i == 3 || i == 8;

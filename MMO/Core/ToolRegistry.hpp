@@ -56,6 +56,8 @@ public:
 
     std::optional<ToolDescriptor> getTool(const std::string& tool_id) const;
     std::vector<ToolDescriptor> getAllTools() const;
+    // Loaded tools explicitly classified for model use. Host discovery is unfiltered.
+    std::vector<ToolDescriptor> getModelTools() const;
     std::vector<ToolDescriptor> getByCategory(const std::string& category) const;
     std::vector<ToolDescriptor> getByCapabilityTag(const std::string& tag) const;
     std::vector<ToolDescriptor> getActionTools() const;

@@ -93,14 +93,15 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     int fixtureCalls = 0;
     registry.registerTool(rich, [&](const std::string&) { ++fixtureCalls; return CommandResult{}; });
     const auto encoded = snapshot("fixture_alias");
-    check(encoded.size() == 1 && encoded[0].size() == 28 && encoded[0].at("provider_instance") == "fixture-generation" &&
+    check(encoded.size() == 1 && encoded[0].size() == 29 && encoded[0].at("usage_type") == 1 &&
+          encoded[0].at("provider_instance") == "fixture-generation" &&
           encoded[0].at("argument_schema_json") == rich.argument_schema_json && encoded[0].at("success_count") == 75 &&
           encoded[0].at("context_requirements")[0] == "context" && encoded[0].at("parameters")[0].at("required") == true,
           "Snapshot omitted rich metadata");
     check(snapshot("Fixture Display") == encoded && snapshot("inspection_fixture") == encoded &&
           registry.getTool(rich.tool_id)->usage_count == 100 && fixtureCalls == 0, "Snapshot lookup mutated or invoked tool");
     const std::string info = "[Tool: inspection_fixture]\n\nDescription: Fixture description\nCategory   : fixture\n"
-        "Type       : Action\nUsage      : inspection_fixture <value>\nAliases    : fixture_alias\nKeywords   : first, second\n"
+        "Usage type : Model\nType       : Action\nUsage      : inspection_fixture <value>\nAliases    : fixture_alias\nKeywords   : first, second\n"
         "\nParameters:\n  value (string) [required]\n    Value description\n  optional (number)\n    Optional value\n"
         "\nExamples:\n  - inspection_fixture demo\n\nUsage Stats:\n  Total uses  : 100\n  Success rate: 75%\n";
     matches(invoke("tool_info", "fixture_alias"), true, info, "ERR_NONE", "Tool information displayed");

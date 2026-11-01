@@ -37,6 +37,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     name.description = "Alias name passed unchanged to host lookup; host handles case normalization";
     name.required = 1;
     for (size_t i = 0; i < 3; ++i) {
+        tools[i].usage_type = GRIM_TOOL_USAGE_SYSTEM;
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = ids[i];
         d.version = "1.0.0";

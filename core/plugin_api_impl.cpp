@@ -283,6 +283,8 @@ static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& 
     out.permission_bits = in.required_permissions;
     out.is_informational = in.is_informational != 0;
     out.needs_confirmation = in.needs_confirmation != 0;
+    out.usage_type = static_cast<ToolUsage>(source.usage_type);
+    if (!validToolUsage(out.usage_type)) throw std::invalid_argument("Invalid tool usage type");
     auto gate = owner.gate;
     auto handler = source.handler;
     auto data = source.user_data;
@@ -309,7 +311,21 @@ static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRe
         }
         if (!tools || !count || count > 256) throw std::invalid_argument("Invalid batch");
         std::vector<GRIM::MMO::ToolRegistration> copied;
-        for (size_t i = 0; i < count; ++i) copied.push_back(copyRegistration(tools[i], *owner));
+        // v3.0-v3.9 registrations end at user_data. Read each record's declared
+        // stride, never the new stride, so legacy multi-tool batches stay valid.
+        constexpr size_t legacySize = offsetof(GrimToolRegistration, usage_type);
+        auto* record = reinterpret_cast<const unsigned char*>(tools);
+        for (size_t i = 0; i < count; ++i) {
+            uint32_t size = 0;
+            std::memcpy(&size, record, sizeof(size));
+            if (size != legacySize && size != sizeof(GrimToolRegistration))
+                throw std::invalid_argument("Invalid tool registration size");
+            GrimToolRegistration normalized;
+            std::memcpy(&normalized, record, size);
+            normalized.struct_size = sizeof(normalized);
+            copied.push_back(copyRegistration(normalized, *owner));
+            record += size;
+        }
         if (owner->staging) {
             owner->pending.insert(owner->pending.end(), copied.begin(), copied.end());
             return GRIM_OK;

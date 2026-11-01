@@ -29,6 +29,13 @@ Search matches IDs, display names, descriptions, categories, providers, aliases,
 and capability tags, ignoring case. The count distinguishes matching entries from
 the total registry size. Scroll the list and select a row to inspect its details.
 
+The **Usage type** dropdown selects All usage types, Debug, Model, System, or
+Ignore. The **Plugin** dropdown is populated from the current registry's detected
+plugin provider names, with All plugins and a separate Built-in (host) option.
+Both filters combine with search. Provider choices refresh with the registry;
+the selected provider is preserved by identity, and a removed provider resets
+the dropdown to All plugins. Filtering out a selected tool clears its details.
+
 The selectable, copyable detail pane shows documentation, usage, parameters,
 examples, provider/version, confirmation and permission metadata, context
 requirements, aliases, tags, and usage statistics. Missing fields display
@@ -36,7 +43,7 @@ requirements, aliases, tags, and usage statistics. Missing fields display
 needed. Registration status does not verify that a tool is ready to execute.
 
 The viewer refreshes every two seconds while active and preserves selection by
-tool ID. Removed tools clear their stale details. This view displays the current
+tool ID when it still matches the filters. Removed tools clear their stale details. This view displays the current
 registry coverage; legacy commands that bypass the registry are not added or
 inferred. It does not edit registrations, dispatch commands, or populate World
 Lab objects. The World Lab TextWorld Actions catalog remains separate.

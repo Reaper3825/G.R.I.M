@@ -100,6 +100,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         GrimToolRegistration tools[5];
         GrimToolParameter paths[5];
         for (size_t i = 0; i < 5; ++i) {
+            tools[i].usage_type = GRIM_TOOL_USAGE_SYSTEM;
             tools[i].handler = execute;
             tools[i].user_data = &operations[i];
             auto& d = tools[i].descriptor;
