@@ -1,5 +1,12 @@
 # Native GRIM tool plugins
 
+API v3.11 adds optional world binding labels. Supply `GrimToolBinding` entries
+through `registration.bindings` and `registration.binding_count`; the host copies
+them into `ToolDescriptor::bindings`. For `open {t}`, use `{"t", "t"}`.
+Model-facing usage uses shared world placeholders; binding maps stay system-facing.
+These labels do not change argument parsing or execution. Older registration
+prefixes retain empty bindings. See [binding labels](../docs/PLUGIN_API.md#world-binding-labels-v311).
+
 API v3.10 adds per-tool usage classification. Set
 `registration.usage_type` to `GRIM_TOOL_USAGE_DEBUG`, `GRIM_TOOL_USAGE_MODEL`,
 `GRIM_TOOL_USAGE_SYSTEM`, or `GRIM_TOOL_USAGE_IGNORE`; omitted values default to

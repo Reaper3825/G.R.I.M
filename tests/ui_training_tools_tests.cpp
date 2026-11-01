@@ -14,6 +14,8 @@ void runTrainingToolsTests() {
     ToolDescriptor tool;
     tool.tool_id = "viewer_test";
     tool.description = "Inspect metadata";
+    tool.usage = "viewer_test {target}";
+    tool.bindings = {{"target", "t"}};
     tool.category = "information";
     tool.usage_type = ToolUsage::Debug;
     tool.provider_name = "test_provider";
@@ -42,6 +44,16 @@ void runTrainingToolsTests() {
     check(renderedTestText.find("Inspect metadata") != std::string::npos, "Tool row did not select metadata");
     check(renderedTestText.find("Usage type: Debug") != std::string::npos, "Tool usage classification missing");
     check(renderedTestText.find("Not documented") != std::string::npos, "Missing metadata was not identified");
+    // Binding metadata is below the initial viewport; inspect it through scrolling.
+    bool sawBindings = false;
+    for (int i = 0; i < 20 && !sawBindings; ++i) {
+        InputState detailsWheel; detailsWheel.mousePos = {750,250}; detailsWheel.mouseWheelDelta = -120;
+        frame(detailsWheel);
+        sawBindings = renderedTestText.find("{target} -> t") != std::string::npos;
+    }
+    check(sawBindings, "Tool binding labels missing");
+    InputState restoreDetails; restoreDetails.mousePos = {750,250}; restoreDetails.mouseWheelDelta = 2400;
+    frame(restoreDetails);
     InputState wheel; wheel.mousePos = {50,200}; wheel.mouseWheelDelta = -1200;
     frame(wheel);
     click(30,159);

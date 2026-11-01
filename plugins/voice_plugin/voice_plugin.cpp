@@ -27,7 +27,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         call<cmd_testSAPI>, call<cmd_ttsDevice>, call<cmdNevermind>, call<cmd_createEmbedding>, call<cmd_listEmbeddings>,
         call<cmdClearCache>, call<cmdResetCache>};
     const char* usages[] = {"voice", "voice_stream", "test_tts [text]", "list_voices", "test_sapi", "tts_device", "nevermind",
-        "create_embedding <speaker_id> <audio_file_path>", "list_embeddings", "clear_tts_cache", "reset_tts_cache"};
+        "create_embedding {t} {o}", "list_embeddings", "clear_tts_cache", "reset_tts_cache"};
+    const GrimToolBinding embeddingBindings[] = {{"t", "t"}, {"o", "o"}};
+    tools[7].bindings = embeddingBindings; tools[7].binding_count = 2;
     GrimToolParameter text;
     text.name = "text"; text.type = "string"; text.description = "Test text; omitted uses the existing Coqui test phrase";
     GrimToolParameter embeddingArguments;

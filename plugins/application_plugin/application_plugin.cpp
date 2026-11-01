@@ -80,7 +80,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     tools[1].handler = searchWeb;
     const char* ids[] = {"open", "search"};
     const char* descriptions[] = {"Open an application or file", "Search the web for information"};
-    const char* usages[] = {"open <application-or-file>", "search <query>"};
+    const char* usages[] = {"open {t}", "search <query>"};
+    const GrimToolBinding openBindings[] = {{"t", "t"}};
+    tools[0].bindings = openBindings; tools[0].binding_count = 1;
     const char* examples[] = {"open notepad", "search weather tomorrow"};
     GrimToolParameter parameters[2];
     for (size_t i = 0; i < 2; ++i) {

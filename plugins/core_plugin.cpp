@@ -45,14 +45,20 @@ static void register_all_commands() {
     REGISTER_TOOL("ui.create_surface", cmdCreateSurface,
                   "Create a new UI surface (panel, popup, modal, toast, tool window, inspector)",
                   "ui", false);
+    tools.back().descriptor.usage = "ui.create_surface {t} <kind> <title>";
+    tools.back().descriptor.bindings = {{"t", "t"}};
     REGISTER_TOOL("ui.destroy_surface", cmdDestroySurface,
                   "Permanently remove a UI surface",
                   "ui", false);
+    tools.back().descriptor.usage = "ui.destroy_surface {t}";
+    tools.back().descriptor.bindings = {{"t", "t"}};
 
     // System information
     REGISTER_TOOL("ui.show_osint_results", cmdOsintShowUI,
                   "Show the host-owned OSINT findings panel for a username", "ui", false);
     tools.back().descriptor.usage_type = GRIM::MMO::ToolUsage::Ignore;
+    tools.back().descriptor.usage = "ui.show_osint_results {t}";
+    tools.back().descriptor.bindings = {{"t", "t"}};
 
     // System information is supplied by system_info_plugin.
 

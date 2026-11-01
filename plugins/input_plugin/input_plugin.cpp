@@ -59,7 +59,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Tap a key or plus-separated key combination using the existing host input interface",
         "Send checked click input to a unique exact OCR label or native UI control in the active window"};
     const char* usages[] = {"move_mouse <x> <y>", "click [left|right|middle]", "type <text>",
-        "key <key|key+key>", "click_on [text|object] <exact label>"};
+        "key <key|key+key>", "click_on {t}"};
+    const GrimToolBinding targetBindings[] = {{"t", "t"}};
+    tools[4].bindings = targetBindings; tools[4].binding_count = 1;
     const char* examples[] = {"move_mouse -1200 300", "click left", "type Hello world", "key ctrl+c", "click_on text Submit"};
     const char* names[] = {"coordinates", "button", "text", "keys", "target"};
     const char* parameterDescriptions[] = {"Two signed integers, comma- or whitespace-separated; uses existing integer-prefix parsing",

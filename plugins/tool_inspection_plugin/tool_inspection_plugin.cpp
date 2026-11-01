@@ -31,7 +31,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     tools[2].handler = call<cmdToolStats>;
     const char* ids[] = {"list_tools", "tool_info", "tool_stats"};
     const char* descriptions[] = {"List all registered commands/tools", "Show detailed information about a tool", "Show tool usage statistics"};
-    const char* usages[] = {"list_tools [category]", "tool_info <command_name>", "tool_stats [limit]"};
+    const char* usages[] = {"list_tools [category]", "tool_info {t}", "tool_stats [limit]"};
+    const GrimToolBinding toolBindings[] = {{"t", "t"}};
+    tools[1].bindings = toolBindings; tools[1].binding_count = 1;
     const char* examples[] = {"list_tools information", "tool_info list_tools", "tool_stats 10"};
     const char* names[] = {"category", "command_name", "limit"};
     const char* parameterDescriptions[] = {"Exact category; omitted lists all tools", "Canonical tool ID, display name, or registered alias", "Maximum rows; defaults to 20; retains existing integer-prefix parsing"};

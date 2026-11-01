@@ -46,7 +46,11 @@ std::string detailText(const ToolDescriptor& tool) {
         << "Permission bits: " << tool.permission_bits << "\n\n"
         << "Argument format: " << documented(tool.argument_format) << '\n'
         << "Argument schema: " << documented(tool.argument_schema_json) << "\n\n"
-        << "Usage: " << documented(tool.usage) << "\n\nParameters:";
+        << "Usage: " << documented(tool.usage) << "\n\nBindings:";
+    if (tool.bindings.empty()) out << " None\n";
+    else for (const auto& [placeholder, type] : tool.bindings)
+        out << "\n  {" << placeholder << "} -> " << type << '\n';
+    out << "\nParameters:";
     if (tool.parameters.empty()) out << " Not documented\n";
     else for (const auto& p : tool.parameters)
         out << "\n  " << p.name << " (" << documented(p.type) << ", "

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -79,7 +80,10 @@ struct ToolDescriptor {
 
     // Documentation
     std::string           description;
-    std::string           usage; // Command syntax, independent of usage_type.
+    std::string           usage; // Model-facing action label/template, independent of usage_type.
+    // Usage placeholder -> existing world type (t, o, c, s, r, d, k, f).
+    // Labels only: no entity resolution, argument conversion, or dispatch.
+    std::map<std::string, std::string> bindings;
     std::vector<std::string> examples;
     std::string           category;         // "action", "information", "system", "ui"
 
@@ -111,5 +115,18 @@ struct ToolDescriptor {
     int                   failure_count = 0;
     float                 success_rate  = 1.0f;
 };
+
+inline bool validToolBindings(const ToolDescriptor& tool) {
+    if (tool.bindings.size() > 256) return false;
+    for (const auto& [placeholder, type] : tool.bindings) {
+        if (placeholder.empty() || placeholder.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != std::string::npos)
+            return false;
+        if (type != "t" && type != "o" && type != "c" && type != "s" &&
+            type != "r" && type != "d" && type != "k" && type != "f") return false;
+        if (tool.usage.find("{" + placeholder + "}") == std::string::npos) return false;
+    }
+    return true;
+}
 
 } // namespace GRIM::MMO

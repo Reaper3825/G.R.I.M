@@ -252,7 +252,15 @@ static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& 
     out.version = copyText(in.version, true);
     out.description = copyText(in.description, true);
     out.usage = copyText(in.usage, true);
+    if (source.binding_count > 256 || (source.binding_count && !source.bindings))
+        throw std::invalid_argument("Invalid tool bindings");
+    for (size_t i = 0; i < source.binding_count; ++i) {
+        const auto& binding = source.bindings[i];
+        if (!out.bindings.emplace(copyText(binding.placeholder, true), copyText(binding.type, true)).second)
+            throw std::invalid_argument("Duplicate tool binding");
+    }
     out.category = copyText(in.category, true);
+    if (!validToolBindings(out)) throw std::invalid_argument("Invalid tool bindings");
     out.argument_format = copyText(in.argument_format, true);
     out.argument_schema_json = copyText(in.argument_schema_json);
     if (out.argument_format != "raw_text" && out.argument_format != "json")
@@ -311,14 +319,15 @@ static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRe
         }
         if (!tools || !count || count > 256) throw std::invalid_argument("Invalid batch");
         std::vector<GRIM::MMO::ToolRegistration> copied;
-        // v3.0-v3.9 registrations end at user_data. Read each record's declared
-        // stride, never the new stride, so legacy multi-tool batches stay valid.
+        // v3.0-v3.9 end at user_data; v3.10 adds usage_type. Walk each declared
+        // stride so legacy multi-tool batches retain default empty bindings.
         constexpr size_t legacySize = offsetof(GrimToolRegistration, usage_type);
+        constexpr size_t v310Size = offsetof(GrimToolRegistration, bindings);
         auto* record = reinterpret_cast<const unsigned char*>(tools);
         for (size_t i = 0; i < count; ++i) {
             uint32_t size = 0;
             std::memcpy(&size, record, sizeof(size));
-            if (size != legacySize && size != sizeof(GrimToolRegistration))
+            if (size != legacySize && size != v310Size && size != sizeof(GrimToolRegistration))
                 throw std::invalid_argument("Invalid tool registration size");
             GrimToolRegistration normalized;
             std::memcpy(&normalized, record, size);

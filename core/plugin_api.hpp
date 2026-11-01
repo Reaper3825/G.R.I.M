@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.10
+// G.R.I.M Plugin API v3.11
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 10
+#define GRIM_API_VERSION_MINOR 11
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -154,6 +154,10 @@ enum GrimToolUsage : uint32_t {
     GRIM_TOOL_USAGE_SYSTEM = 2,
     GRIM_TOOL_USAGE_IGNORE = 3
 };
+struct GrimToolBinding {
+    const char* placeholder = nullptr;
+    const char* type = nullptr; // Existing world type; labeling only.
+};
 struct GrimToolRegistration {
     uint32_t struct_size = sizeof(GrimToolRegistration);
     GrimToolDescriptor descriptor;
@@ -162,6 +166,10 @@ struct GrimToolRegistration {
     // v3.10 extension; legacy registration prefixes default to Model.
     // Kept outside the embedded descriptor to preserve its ABI and offsets.
     GrimToolUsage usage_type = GRIM_TOOL_USAGE_MODEL;
+    // v3.11: copied into canonical ToolDescriptor::bindings. Kept here to
+    // preserve the embedded descriptor and legacy registration offsets.
+    const GrimToolBinding* bindings = nullptr;
+    size_t binding_count = 0;
 };
 
 enum GrimPerceptionQuery : uint32_t {

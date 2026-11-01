@@ -77,21 +77,25 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     
     struct Entry { const char* id; const char* description; const char* usage; GrimToolHandler handler; bool informational; bool required; };
     const Entry entries[] = {
-        {"profile_person", "Profile a username across public sources", "profile_person <username> [--no-cache] [--verbose]", handleProfilePerson, false, true},
-        {"sherlock_sweep", "Search public sites for a username", "sherlock_sweep <username> [--async]", handleSherlockSweep, false, true},
-        {"osint_report", "Read a username report and optionally export it", "osint_report <username> [--export <file>]", handleOsintReport, false, true},
-        {"osint_status", "Read scan status and consume completed results", "osint_status [username]", handleOsintStatus, false, false},
+        {"profile_person", "Profile a username across public sources", "profile_person {t} [--no-cache] [--verbose]", handleProfilePerson, false, true},
+        {"sherlock_sweep", "Search public sites for a username", "sherlock_sweep {t} [--async]", handleSherlockSweep, false, true},
+        {"osint_report", "Read a username report and optionally export it", "osint_report {t} [--export {o}]", handleOsintReport, false, true},
+        {"osint_status", "Read scan status and consume completed results", "osint_status [{t}]", handleOsintStatus, false, false},
         {"osint_clear_cache", "Delete cached OSINT reports", "osint_clear_cache", handleOsintClearCache, false, false},
-        {"osint_scan_secrets", "Scan discovered URLs for exposed sensitive data", "osint_scan_secrets <username>", handleOsintScanSecrets, false, true},
-        {"osint_show_secrets", "Read discovered sensitive data for a username", "osint_show_secrets <username> [--severity <level>]", handleOsintShowSecrets, true, true},
-        {"osint_show_ui", "Show the OSINT results interface", "osint_show_ui <username>", handleOsintShowUI, false, true}
+        {"osint_scan_secrets", "Scan discovered URLs for exposed sensitive data", "osint_scan_secrets {t}", handleOsintScanSecrets, false, true},
+        {"osint_show_secrets", "Read discovered sensitive data for a username", "osint_show_secrets {t} [--severity <level>]", handleOsintShowSecrets, true, true},
+        {"osint_show_ui", "Show the OSINT results interface", "osint_show_ui {t}", handleOsintShowUI, false, true}
     };
     GrimToolRegistration tools[8];
     GrimToolParameter arguments[8];
+    const GrimToolBinding usernameBindings[] = {{"t", "t"}, {"o", "o"}};
     const char* reportAliases[] = {"osint"};
     const char* sweepAliases[] = {"sherlock"};
     for (size_t i = 0; i < 8; ++i) {
         tools[i].usage_type = GRIM_TOOL_USAGE_IGNORE;
+        if (i != 4) {
+            tools[i].bindings = usernameBindings; tools[i].binding_count = i == 2 ? 2 : 1;
+        }
         const auto& entry = entries[i];
         tools[i].handler = entry.handler;
         auto& d = tools[i].descriptor;

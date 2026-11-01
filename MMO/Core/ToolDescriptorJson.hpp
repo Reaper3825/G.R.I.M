@@ -18,6 +18,7 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     j["version"] = t.version;
     j["description"] = t.description;
     j["usage"] = t.usage;
+    j["bindings"] = t.bindings;
     j["examples"] = t.examples;
     j["category"] = t.category;
     j["permission_bits"] = t.permission_bits;
@@ -49,6 +50,9 @@ inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
     j.at("version").get_to(t.version);
     j.at("description").get_to(t.description);
     j.at("usage").get_to(t.usage);
+    // Older snapshots predate optional world binding labels.
+    t.bindings = j.value("bindings", std::map<std::string, std::string>{});
+    if (!validToolBindings(t)) throw std::invalid_argument("Invalid tool bindings");
     j.at("examples").get_to(t.examples);
     j.at("category").get_to(t.category);
     j.at("permission_bits").get_to(t.permission_bits);

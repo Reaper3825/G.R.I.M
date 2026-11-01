@@ -29,7 +29,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     tools[2].handler = call<cmdAliasRefresh>;
     const char* ids[] = {"alias list", "alias info", "alias refresh"};
     const char* descriptions[] = {"List all defined command aliases", "Show information about a specific alias", "Refresh and reload aliases from disk"};
-    const char* usages[] = {"alias list", "alias info <name>", "alias refresh"};
+    const char* usages[] = {"alias list", "alias info {t}", "alias refresh"};
+    const GrimToolBinding aliasBindings[] = {{"t", "t"}};
+    tools[1].bindings = aliasBindings; tools[1].binding_count = 1;
     const char* examples[] = {"alias list", "alias info editor", "alias refresh"};
     GrimToolParameter name;
     name.name = "name";

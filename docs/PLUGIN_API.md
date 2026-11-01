@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.10.0**. Updated November 1, 2026.
+API version: **3.11.0**. Updated November 1, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -66,6 +66,49 @@ above. The shared codec accepts older snapshots without it as Model, while
 rejecting invalid values. Existing snapshot fields retain their validation.
 The Tools inspector and `tool_info` display the classification.
 
+### World binding labels (v3.11)
+
+The canonical `ToolDescriptor::bindings` is a map from a usage placeholder name
+to an existing world type. For example, `usage: "open {t}"` has
+`bindings: {"t": "t"}`. Usage is the model-facing semantic action template;
+bindings are system-facing metadata. These labels do not
+resolve entities, parse arguments, dispatch tools, or assert world effects.
+Existing argument formats, parameter types, schemas, and handlers retain their
+meaning. Usage targets use the shared world vocabulary, such as `{t}`, `{c}`,
+and `{o}`, rather than subsystem-specific names such as `{panel_id}` or `{path}`.
+`<value>` and `[optional]` continue to document ordinary values/options. Usage
+labels are not necessarily literal handler calls: `ui.show {t}` describes the
+semantic action, while its examples and argument schema retain the actual JSON
+format. No adapter from these labels to handler arguments is implemented here.
+
+Supported types are `t` (thing), `o` (object), `c` (container), `s` (supporter),
+`r` (room), `d` (door), `k` (key), and `f` (food). Reuse these types by semantic
+role across subsystems: a directory is a `c` (container), so its usage labels are
+`cd {c}` and `mkdir {c}`. Broad or mixed targets retain `t`; for example,
+`rm {t}` can target either a file or a directory. File-only targets use `o`,
+as in `create_embedding {t} {o}` and `osint_report {t} [--export {o}]`. Do not introduce
+separate types for filesystem or other subsystem-specific representations.
+Open targets, filesystem destinations, aliases, tool entries, panel/surface IDs,
+click targets, speakers/audio references, and OSINT/network targets carry labels.
+Text, search queries, coordinates, durations, request IDs, flags, and tools with
+no entity arguments have no bindings. No application/file/person-specific types
+are introduced. Classification and model discovery remain unchanged.
+
+Native plugins provide a borrowed `GrimToolBinding` array and `binding_count` on
+`GrimToolRegistration`; the host copies it into the canonical descriptor. The
+v3.11 extension sits after the v3.10 registration prefix so the embedded
+`GrimToolDescriptor`, function table, and old field offsets stay unchanged. The
+host accepts exact v3.0-v3.9 and v3.10 strides, defaulting their bindings to empty.
+Plugins supplying bindings require v3.11; older hosts reject them by version.
+Arrays are limited to 256 entries. Names must be nonempty ASCII letters, digits,
+or underscores, occur as `{name}` in usage, and be unique within a tool. Invalid
+types, names, counts, or pointers reject the registration batch atomically.
+
+Version-1 snapshots add a `bindings` JSON object; missing fields in older snapshots
+default to empty. Model prompts and `tool_info` show usage; binding maps remain in
+system-facing snapshots and the Tools inspector. No changes to world/asset schemas
+or compiled gameplay are included.
+
 ### Descriptor metadata
 
 Descriptors require a canonical tool ID, display name, tool version,
@@ -97,8 +140,10 @@ can register metadata from stack-local storage. The host retains the user_data
 pointer; the plugin must keep its pointee alive until shutdown after active
 calls have drained.
 
-Structures have struct_size; API v3 requires exact sizes except for the explicitly
-supported legacy `GrimToolRegistration` prefix described above.
+Versioned registration, descriptor, parameter, call, result, and writer structures
+have struct_size; API v3 requires exact sizes except for the explicitly supported
+legacy `GrimToolRegistration` prefixes described above. `GrimToolBinding` is a
+pair of borrowed strings, supplied in a counted array.
 Flags use uint32_t with values 0 or 1. Each batch, list, or parameter array is
 limited to 256 entries. Strings are NUL-terminated, limited to 65,536 bytes,
 and required text must be nonempty. Empty optional lists use {nullptr, 0}.

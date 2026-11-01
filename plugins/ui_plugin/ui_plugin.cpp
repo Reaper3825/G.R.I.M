@@ -80,9 +80,15 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Queue hiding a panel; poll to verify completion",
         "Queue bringing a panel forward without changing visibility; poll to verify completion",
         "Read an owned UI request status without blocking; a completed result is consumed"};
-    const char* usages[] = {"ui.list {}", "ui.inspect {\"panel_id\":\"settings\"}",
+    const char* usages[] = {"ui.list", "ui.inspect {t}",
+        "ui.show {t}", "ui.hide {t}", "ui.bring_to_front {t}", "ui.poll <request_id>"};
+    const char* examples[] = {"ui.list {}", "ui.inspect {\"panel_id\":\"settings\"}",
         "ui.show {\"panel_id\":\"settings\"}", "ui.hide {\"panel_id\":\"settings\"}",
         "ui.bring_to_front {\"panel_id\":\"console\"}", "ui.poll {\"request_id\":1}"};
+    const GrimToolBinding panelBindings[] = {{"t", "t"}};
+    for (size_t i = 1; i < 5; ++i) {
+        tools[i].bindings = panelBindings; tools[i].binding_count = 1;
+    }
     tools[0].handler = call<GRIM_UI_LIST>; tools[1].handler = call<GRIM_UI_INSPECT>;
     tools[2].handler = call<GRIM_UI_SHOW>; tools[3].handler = call<GRIM_UI_HIDE>;
     tools[4].handler = call<GRIM_UI_BRING_TO_FRONT>; tools[5].handler = call<GRIM_UI_POLL>;
@@ -95,7 +101,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.description = descriptions[i]; d.usage = usages[i]; d.category = "ui";
         d.argument_format = "json"; d.required_permissions = GRIM_PERM_UI;
         d.is_informational = i < 2 || i == 5; d.needs_confirmation = !d.is_informational;
-        d.examples = {&usages[i], 1}; d.preconditions = {preconditions, 1}; d.capability_tags = {tags, 2};
+        d.examples = {&examples[i], 1}; d.preconditions = {preconditions, 1}; d.capability_tags = {tags, 2};
         if (i == 0) {
             d.argument_schema_json = R"({"type":"object","properties":{},"additionalProperties":false})";
         } else {

@@ -52,6 +52,7 @@ bool ToolRegistry::registerBatch(const std::string& plugin_name,
             if (desc.tool_id.empty() || !registration.handler || desc.provider_name.empty())
                 throw std::invalid_argument("Tool registration requires an ID, provider, and handler");
             if (!validToolUsage(desc.usage_type)) throw std::invalid_argument("Invalid tool usage type");
+            if (!validToolBindings(desc)) throw std::invalid_argument("Invalid tool bindings");
             if (!plugin_name.empty() && (desc.provider_name != plugin_name || desc.provider_type != ToolProviderType::Plugin))
                 throw std::invalid_argument("Tool batch provider mismatch");
             if (!seen.insert(desc.tool_id).second) return false;
@@ -102,7 +103,7 @@ bool ToolRegistry::replaceProvider(const std::string& provider, const std::strin
             if (d.provider_name != provider || d.provider_type != ToolProviderType::Plugin ||
                 d.provider_instance.empty() || d.provider_instance == old_instance ||
                 d.tool_id.empty() || !item.handler || !seen.insert(d.tool_id).second ||
-                candidate.count(d.tool_id) || !validToolUsage(d.usage_type)) return false;
+                candidate.count(d.tool_id) || !validToolUsage(d.usage_type) || !validToolBindings(d)) return false;
             published.emplace_back(d.tool_id, tools_.count(d.tool_id) != 0);
             candidate.emplace(d.tool_id, std::make_shared<Entry>(Entry{d, item.handler}));
         }
@@ -164,6 +165,7 @@ bool ToolRegistry::registerSimple(const std::string& id, const std::string& desc
 
 bool ToolRegistry::updateMetadata(const ToolDescriptor& descriptor) {
     if (!validToolUsage(descriptor.usage_type)) return false;
+    if (!validToolBindings(descriptor)) return false;
     std::vector<ToolRegistryListener*> listeners;
     {
         std::lock_guard<std::mutex> lock(mutex_);

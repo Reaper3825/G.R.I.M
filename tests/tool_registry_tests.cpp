@@ -44,6 +44,37 @@ struct Observer : ToolRegistryListener {
 
 int main() try {
     using namespace GRIM::MMO;
+    // Labels survive snapshots and never resolve or convert handler arguments.
+    {
+        auto labeled = descriptor("binding_fixture");
+        labeled.usage = "binding_fixture {target}";
+        labeled.bindings = {{"target", "t"}};
+        const auto json = nlohmann::json(labeled);
+        check(json.get<ToolDescriptor>().bindings == labeled.bindings, "Binding snapshot roundtrip failed");
+        auto old = json; old.erase("bindings");
+        check(old.get<ToolDescriptor>().bindings.empty(), "Old snapshot did not default to empty bindings");
+        for (const auto& bad : nlohmann::json::array({
+                {{"target", "interface"}}, {{"missing", "t"}}, {{"", "t"}}})) {
+            auto malformed = json; malformed["bindings"] = bad;
+            bool rejected = false;
+            try { malformed.get<ToolDescriptor>(); } catch (const std::exception&) { rejected = true; }
+            check(rejected, "Invalid binding snapshot accepted");
+        }
+        auto& registry = ToolRegistry::instance();
+        registry.registerTool(labeled, echo);
+        check(registry.invoke(labeled.tool_id, "an unresolved entity").message == "an unresolved entity",
+              "Binding labels changed handler arguments");
+        check(registry.generateFullPrompt().find("Usage: binding_fixture {target}") != std::string::npos &&
+              registry.generateFullPrompt().find("Binding:") == std::string::npos,
+              "Full prompt lost usage or exposed system-facing bindings");
+        labeled.bindings = {{"target", "new_type"}};
+        check(!registry.updateMetadata(labeled), "Invalid metadata binding accepted");
+        labeled.tool_id = "invalid_binding";
+        bool rejected = false;
+        try { registry.registerTool(labeled, echo); } catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected && !registry.isRegistered(labeled.tool_id), "Invalid registration binding accepted");
+        registry.unregisterTool("binding_fixture");
+    }
     auto& registry = ToolRegistry::instance();
     Observer observer;
     registry.addListener(&observer);

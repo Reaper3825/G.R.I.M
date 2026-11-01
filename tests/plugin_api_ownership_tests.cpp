@@ -186,12 +186,20 @@ int main(int argc, char** argv) try {
     complete.descriptor.parameters = &parameter;
     complete.descriptor.parameter_count = 1;
     complete.usage_type = GRIM_TOOL_USAGE_SYSTEM;
+    std::string bindingName = "path";
+    std::string bindingType = "t";
+    GrimToolBinding binding{bindingName.c_str(), bindingType.c_str()};
+    complete.descriptor.usage = "staged_tool {path}";
+    complete.bindings = &binding; complete.binding_count = 1;
     check(staged->register_tools(staged, &complete, 1) == GRIM_OK, "Staging failed");
+    bindingName.assign(200, 'x'); bindingType.assign(200, 'x');
     description.assign(200, 'x');
     schema.assign(200, 'x');
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("staged_tool"), "Uncommitted tool leaked");
     check(PluginAPI::commitPluginTools("staged"), "Commit failed");
     auto snapshot = GRIM::MMO::ToolRegistry::instance().getTool("staged_alias");
+    check(snapshot && snapshot->bindings == std::map<std::string, std::string>{{"path", "t"}},
+          "Binding labels were not copied before registration returned");
     check(snapshot && snapshot->usage_type == GRIM::MMO::ToolUsage::System &&
           snapshot->description == "copied metadata" && snapshot->version == "1.2.3" &&
           snapshot->parameters[0].required && snapshot->provider_name == "staged" &&
@@ -219,6 +227,33 @@ int main(int argc, char** argv) try {
           GRIM::MMO::ToolRegistry::instance().getTool("legacy_second")->usage_type == GRIM::MMO::ToolUsage::Model,
           "Legacy batch stride or default usage broken");
     beta->unregister_command(beta, "legacy_first"); beta->unregister_command(beta, "legacy_second");
+    struct V310Registration {
+        uint32_t struct_size = sizeof(V310Registration);
+        GrimToolDescriptor descriptor;
+        GrimToolHandler handler = nullptr;
+        void* user_data = nullptr;
+        GrimToolUsage usage_type = GRIM_TOOL_USAGE_DEBUG;
+    };
+    static_assert(sizeof(V310Registration) == offsetof(GrimToolRegistration, bindings));
+    V310Registration v310[2];
+    for (size_t i = 0; i < 2; ++i) {
+        const auto source = definition(i ? "v310_second" : "v310_first");
+        v310[i].descriptor = source.descriptor; v310[i].handler = source.handler;
+    }
+    check(beta->register_tools(beta, reinterpret_cast<const GrimToolRegistration*>(v310), 2) == GRIM_OK &&
+          GRIM::MMO::ToolRegistry::instance().getTool("v310_first")->bindings.empty() &&
+          GRIM::MMO::ToolRegistry::instance().getTool("v310_second")->usage_type == GRIM::MMO::ToolUsage::Debug,
+          "v3.10 batch stride, classification, or empty binding default broken");
+    beta->unregister_command(beta, "v310_first"); beta->unregister_command(beta, "v310_second");
+    auto badBinding = definition("bad_binding");
+    badBinding.descriptor.usage = "bad_binding {target}";
+    const GrimToolBinding duplicateBindings[] = {{"target", "t"}, {"target", "t"}};
+    badBinding.bindings = duplicateBindings; badBinding.binding_count = 2;
+    check(beta->register_tools(beta, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
+          "Duplicate binding placeholder accepted");
+    badBinding.bindings = nullptr; badBinding.binding_count = 1;
+    check(beta->register_tools(beta, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
+          "Null binding array accepted");
     GrimToolRegistration invalidUsage[] = {definition("usage_valid"), definition("usage_invalid")};
     invalidUsage[1].usage_type = static_cast<GrimToolUsage>(99);
     check(beta->register_tools(beta, invalidUsage, 2) == GRIM_ERROR_INVALID_PARAM &&

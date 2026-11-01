@@ -95,9 +95,14 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             "List entries in the filesystem plugin's working directory",
             "Create one directory; parent directories must already exist",
             "Remove one file, symlink, or empty directory; never recursively"};
-        const char* usages[] = {"pwd", "cd <directory>", "ls", "mkdir <directory>", "rm <path>"};
-        const char* examples[] = {"pwd", "cd C:/Users", "ls", "mkdir new folder", "rm old.txt"};
+        const char* usages[] = {"pwd", "cd {c}", "ls", "mkdir {c}", "rm {t}"};
         GrimToolRegistration tools[5];
+        const GrimToolBinding directoryBindings[] = {{"c", "c"}};
+        const GrimToolBinding pathBindings[] = {{"t", "t"}};
+        tools[1].bindings = directoryBindings; tools[1].binding_count = 1;
+        tools[3].bindings = directoryBindings; tools[3].binding_count = 1;
+        tools[4].bindings = pathBindings; tools[4].binding_count = 1;
+        const char* examples[] = {"pwd", "cd C:/Users", "ls", "mkdir new folder", "rm old.txt"};
         GrimToolParameter paths[5];
         for (size_t i = 0; i < 5; ++i) {
             tools[i].usage_type = GRIM_TOOL_USAGE_SYSTEM;
