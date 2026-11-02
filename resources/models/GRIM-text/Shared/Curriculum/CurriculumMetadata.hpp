@@ -9,6 +9,7 @@ namespace GRIM {
 struct CourseMetadata {
     std::string id;
     std::vector<std::string> concept_block_ids;
+    std::string environment_id;
 };
 
 struct CurriculumMetadata {

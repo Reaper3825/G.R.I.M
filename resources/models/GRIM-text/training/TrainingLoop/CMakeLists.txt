@@ -444,6 +444,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
     ../../Shared/InferenceState/InferenceGenerationSession.cu
+    ../../Shared/InferenceState/RuntimeContextAppend.cu
     ../../Shared/InferenceState/InferencePrefill.cu
     ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../../Shared/InferenceState/LocalAtomRetrievalInferenceState.cu
@@ -620,6 +621,7 @@ target_link_libraries(grim_lora_training_checkpoint PRIVATE
 )
 
 # Main GPU training executable (three-phase architecture)
+add_subdirectory(../../Shared/Environment ${CMAKE_CURRENT_BINARY_DIR}/environment_runtime)
 add_executable(train_gpu 
     ../train_gpu.cu
     ../LoRACheckpointLifecycle.cu
@@ -649,6 +651,8 @@ add_executable(train_gpu
     ../Phases/Startup/Validation/StartupValidation.hpp
     ../Phases/Startup/Validation/Phase2Handoff.cu
     ../Phases/Startup/Validation/Phase2Handoff.hpp
+    ../Phases/Startup/EnvironmentReady.cu
+    ../Phases/Startup/EnvironmentReady.hpp
     ../Phases/Startup/SlidingWindow.cu
     ../Phases/Startup/SlidingWindow.hpp
     ../Phases/Startup/ConceptSupervision.cu
@@ -667,6 +671,10 @@ add_executable(train_gpu
     ../Phases/Phase2_TrainingLoop.hpp
     ../Phases/Phase2_InferenceLoop.cu
     ../Phases/Phase2_InferenceLoop.hpp
+    ../Phases/Phase2_EnvironmentLoop.cu
+    ../Phases/Phase2_EnvironmentLoop.hpp
+    ../Phases/Phase2_EnvironmentDispatch.cu
+    ../Phases/Phase2_EnvironmentDispatch.hpp
     ../Phases/Phase2_InspectionLoop.cu
     ../Phases/Phase2_InspectionLoop.hpp
     ../Diagnostics/DiagnosticInference.cu
@@ -727,6 +735,7 @@ add_executable(train_gpu
     ../TrainingEvents.hpp
     ../../Shared/DataLoader/DataLoader.cu
     ../../Shared/DataLoader/CurriculumRegistry.cu
+    ../../Shared/DataLoader/ConceptBlockCorpusReader.cu
     ../../Shared/SoftRestart/SoftRestart.cu
 )
 
@@ -755,6 +764,7 @@ if(MSVC)
 endif()
 
 target_link_libraries(train_gpu PRIVATE
+    grim_environment_runtime
     grim_compiled_model_config
     flatbuffers::flatbuffers
     nlohmann_json::nlohmann_json

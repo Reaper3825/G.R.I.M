@@ -39,6 +39,22 @@ public:
         }
         throw std::runtime_error("Environment not registered: "+id);
     }
+    // Configured names match registered titles exactly. Never guess between
+    // duplicate titles or accept a file whose title has changed since indexing.
+    EnvironmentEntry resolveByName(const std::string& name) const {
+        if(name.find_first_not_of(" \t\r\n\f\v")==std::string::npos)
+            throw std::runtime_error("Enter an environment name");
+        std::string id;
+        for(const auto& entry:entries())if(entry.title==name) {
+            if(!id.empty())throw std::runtime_error("Ambiguous environment name: "+name);
+            id=entry.id;
+        }
+        if(id.empty())throw std::runtime_error("Environment name not registered: "+name);
+        auto entry=resolve(id);
+        if(entry.title!=name)
+            throw std::runtime_error("Environment title changed for "+id+"; refresh environments");
+        return entry;
+    }
     Document load(const std::string& id) const {
         const auto entry=resolve(id);auto document=Document::parse(loadJsonFile(entry.path));
         if(document.environmentId!=id)throw std::runtime_error("Environment changed during resolution: "+id);

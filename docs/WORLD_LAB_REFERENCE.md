@@ -516,12 +516,13 @@ challenge data saves as version 2 until explicit conversion prevents data loss.
 Asset format is separately versioned at 1. Do not silently reinterpret older files
 when changing semantics. Preserve user-authored games/assets and unrelated changes.
 
-Future model-driven gameplay, training episode export, curriculum generation,
+The Phase2 controller supports single-Goal model-driven gameplay. Training episode
+export, curriculum generation,
 linked asset updates, multi-room templates, asset tags/search, and arbitrary
 TextWorld game import are not implemented. Treat them as new scoped work, not as
 existing features to build assumptions around.
 
-### Recurrent model interaction contract (selected; integration pending)
+### Recurrent model interaction and pending course integration
 
 One course represents one game session; each ConceptBlock Goal represents an
 assignment supplying a native Quest. The course supplies membership through
@@ -562,7 +563,7 @@ Compiled Quest endings stay empty, permitting Goal changes without recompilation
 Each reset/replay creates fresh native progression with the game's knowledge base.
 The `grim-textworld-native-quest-v2` semantics identity invalidates old witnesses.
 This manual Play/replay evaluator is
-implemented; automatic model routing remains pending. See
+implemented and shared by the Phase2 model-command path. See
 [episode evidence binding](WORLD_LAB.md#episode-evidence-binding)
 for the full lifecycle and separation of episode setup from evidence.
 
@@ -583,23 +584,26 @@ validated as one command and submitted to the environment. Submission must be
 tracked once per answer instance; cumulative decoded trajectories must not be
 resent as commands.
 
-The returned observation and verified status become permitted context before the
-next cycle. A requested transition is not an observed result. Retain the active
+Permitted visible observation text enters context before the next cycle; verified
+episode status controls host termination. A requested transition is not an observed result. Retain the active
 Goal while the challenge continues; emitting Answer does not prove victory or
 end the challenge. Observations must not leak hidden world facts, saved solutions,
 or future results. Ordinary user-facing responses use the same optional-phase
 contract without necessarily submitting anything to an environment or tool.
 
-Span-boundary pause/resume exists in GRIM inference. Answer dispatch, runtime
-feedback insertion, challenge sequencing, and recurrent episode export remain
+The Phase2 controller implements span-boundary resume, validated Answer dispatch,
+and permitted runtime feedback insertion for the current frozen Goal. Its ordered
+action receipts prevent duplicate submissions and stop continuation after unknown
+execution outcomes. Challenge sequencing and recurrent episode export remain
 pending. The current source ConceptBlock stores one instance of each phase;
 neither a whole challenge nor every environment step is assumed to map 1:1 to
-an SFT block. This describes the intended integration, not new Play-tab behavior.
+an SFT block. This controller is separate from manual Play-tab behavior.
 
 Manual Play now has a separate host UI route for `ui.list`, `ui.inspect`, and
 `ui.show`, and `ui.hide`, with observed virtual resource references, guarded visibility changes, completion
 polling, and replay rejection. See [manual UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
-This does not connect inference or expose the worker's full facts to a model.
+Validated model Answers may use the same supported host UI route. The worker's
+full facts remain excluded from the model-visible observation projection.
 
 ## Validation workflow
 

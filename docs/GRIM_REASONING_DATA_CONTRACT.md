@@ -53,8 +53,97 @@ schema version 3, C++ Goal types, JSON/database adapters, inference transport,
 and active renderer configuration use this representation. Sections 4.4 and 4.5
 define its semantics. Existing datasets have not been rewritten automatically;
 explicit migration tooling is described below. TextWorld binding, evaluation,
-and the manual episode lifecycle are implemented; model-driven routing and
-feedback insertion remain pending.
+the manual episode lifecycle, and RL Phase1's initial environment handoff are
+implemented. The single-Goal model interaction controller now routes completed
+Answers and inserts permitted environment feedback; RL updates remain separate.
+
+**Scheduled Goal loading:** `loadScheduledGoals()` in
+`Shared/DataLoader/ConceptBlockCorpusReader` reuses curriculum membership and
+`orderedConceptBlocks()` to return owned Goal assignments containing only the
+course ID, course `environment_id`, source ConceptBlock ID, and Goal. Shared
+blocks belong to their first authored course, matching the existing schedule.
+Missing blocks, missing Goals, duplicate selected source IDs, or missing course
+environment IDs reject the operation; there is no root-name fallback. The
+FlatBuffer reader verifies the file buffer but materializes only selected IDs
+and Goals, not authored prompt/DDEA/answer/knowns/unknowns. Legacy JSONL support
+parses one complete line temporarily and retains only its ID and Goal. Evidence
+remains system-facing. This operation does not start an environment, construct
+an inference prefix, or change the current training corpus loading operation.
+Episode advancement remains pending. Focused host checks:
+`powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_scheduled_goals.ps1`.
+
+**RL Phase1 environment handoff:** training startup with `training_stage: "rl"`
+loads the existing tokenizer artifact and restores the model checkpoint without
+running tokenizer generation, loading SFT sequences, or preparing optimizer/epoch
+state. `EnvironmentReady()` loads the selected RL curriculum's Goal schedule using
+the configured block ordering and initialized data seed. It resolves the first
+assignment's `environment_id` through the config-relative
+`resources/models/games/environment_registry.json`, then uses the existing worker
+compile operation to start and evaluate that frozen Goal episode. Only a valid
+initial response publishes `TrainingContext::environment_episode`, which owns the
+client, resolved world/path, immutable assignments, position zero, and full host
+response. `environment_tokenizer` retains the generation tokenizer. Initial
+success/failure/stopped states are preserved without forcing a command. Preparation
+failure destroys the unpublished candidate and its worker. These responses are
+retained as host data; Phase2 projects only the permitted visible fields described
+below. Evidence and authoritative world facts remain private. Phase1 returns
+`ready_for_environment`; the executable routes it to the initial Phase2 environment
+interaction rather than entering SFT or claiming an RL update. Ordinary inference
+and PT/SFT preparation retain their existing paths.
+Host lifecycle checks: `tests/run_environment_preparation.ps1`; startup/handoff
+checks: `python resources/models/GRIM-text/Tests/test_environment_startup_host.py`.
+
+**Phase2 initial environment interaction:** `beginPhase2EnvironmentInteraction()`
+consumes the prepared episode/tokenizer and returns at the first generation span
+pause, EOS, or limit. `buildEnvironmentInferenceInput()` projects only string
+fields `feedback`, `description`, `inventory`, `location`, and `location_path`
+into labelled prompt text. Host observation providers already place their readable
+catalog/details/UI result in `feedback`; their structured envelopes are not
+serialized again. Facts, engine state, requirement evaluations, admissible command
+lists, internal IDs, and saved solutions are excluded. The frozen Goal's target,
+criterion text, and constraint text form the structured `reasoning_state`; evidence
+is removed before rendering regardless of configured span policies. Initial knowns
+and unknowns are empty. The existing `buildInferencePrefill()` provides configured
+span encoding and the full continuation delimiter map. Episode status remains host
+control data, not part of the model prompt. Already-terminal episodes return
+without generation. A live generation session cannot be replaced by another begin.
+The result preserves inference return reasons separately from Goal outcomes; a
+span pause leaves the session in `TrainingContext` for caller-driven continuation.
+The begin entrypoint remains available for inspection of that first return. The
+executable now invokes `executePhase2EnvironmentInteraction()` to continue the
+current Goal through DDE/Update pauses, Answer submissions, and permitted feedback.
+Host begin tests: `Tests/test_environment_interaction_host.py`.
+
+**Recurrent environment controller:** every new span pause is validated against its
+configured root definition, token range, sampled delimiters, and previous delivered
+boundary. Invalid structural markers, stale boundaries, injected context inside a
+generated span, and a phase closing inside an unfinished typed atom stop the run
+without dispatch. Only Determine/Define/Execute/Update/Answer root spans are
+accepted. DDE/Update pauses resume without an environment call. Answer decoding
+selects only the content tokens between that instance's delimiters, with aligned
+atom metadata and strict UTF-8. Surrounding whitespace is trimmed; empty, multiline,
+NUL-containing, and over-512-byte commands are rejected. Native commands and the
+existing explicitly supported host UI commands use `TextWorldClient`'s normal
+step route; the host UI adapter retains its Model-tool eligibility checks.
+
+The episode owner retains its initial response plus ordered action receipts keyed
+by Answer closing position, command, submission status, actual response, and error.
+Repeating a completed submission returns the receipt without executing again;
+conflicting/older boundaries and actions after terminal status are rejected.
+Transport failures, malformed/mismatched responses, and unknown host completion
+retain an unknown receipt and block further actions pending inspection. They are
+never automatically resubmitted. A completed receipt establishes delivery, not
+that a requested world transition or Goal success occurred.
+
+After each continuing response, the same visible-field projection supplies runtime
+context before resuming the existing generation session. The frozen Goal and
+global generation/context budgets remain unchanged between cycles. Native episode
+success/failure/stopped status ends interaction independently of Answer completion;
+EOS/limits end generation without a success claim or dispatch, even if a span also
+closed at that terminal token. Error/episode termination releases the live model
+session. Receipts remain in the owner in memory; persistent training export and
+schedule advancement are not implemented. No rewards, optimizer work, or RL loss
+is performed. Host controller tests: `tests/run_environment_dispatch.ps1`.
 
 ## 1. The inference contract in one view
 
@@ -120,8 +209,9 @@ Goal + permitted observation
   -> next cycle if needed
 ```
 
-Span-boundary pause/resume is implemented (section 7). Automatic answer routing,
-TextWorld model-command submission, and runtime observation insertion are pending.
+Span-boundary pause/resume, Answer routing, TextWorld command submission, and
+post-command permitted feedback insertion are implemented for one frozen Goal.
+Initial observation projection and runtime-context append are described in section 7.
 The existing manual Play command field is not this model-driven controller.
 Recurrent interaction does not imply recurrent-network architecture or a change
 to the SFT loss policy.
@@ -446,7 +536,7 @@ The response reports the difference between the initial and remaining volumes.
 ### 4.4 Evidence — system-facing executable condition
 
 Implemented storage, transport, rendering, and manual TextWorld binding/evaluation
-contract. Automatic model-command routing remains pending.
+contract. The recurrent controller uses the same episode evaluator for model commands.
 This field has no model-visible form. It is paired with one criterion or
 constraint in system storage; only the paired requirement text is supplied to
 the model. This section describes success evidence; section 4.5 applies the
@@ -1205,13 +1295,28 @@ Supplied/runtime context and forced retrieval tokens consume context capacity
 but not the sampled-token budget. The context limit is the smaller of the model's
 sequence limit and KV-cache capacity. Retrieval replay selection uses remaining
 context capacity, rather than charging replay tokens to the sampled budget.
-The runtime-context append/atom-remapping API and tool/READ dispatch remain
-pending; the scheduling supports queued tokens but does not itself authorize or
-construct runtime observations.
+`appendPhase2RuntimeContext(ctx, tokenizer, context)` now tokenizes caller-projected
+feedback with the existing tokenizer and appends it to the matching span-paused
+session through `appendRuntimeContext()`. The operation validates aligned channels,
+vocabulary IDs, complete typed atoms, and remaining capacity (including one slot
+for continuation). It stages changes before publication and remaps atom-entry IDs
+and typed local addresses into cloned session tables, preserving prior snapshots.
+Inserted tokens have `RuntimeContext` provenance, no score entries, and produce no
+generated span events or sampling callbacks. The operation neither acknowledges
+the boundary nor changes the KV cursor. The existing resume operation consumes
+the pending closing marker and queued context once before sampling again.
+Runtime typed atoms contribute their supplied contents to retrieval candidates;
+they never select/replay a different value, and their assigned raw-value address
+is preserved independently of decoded text normalization. Appending is rejected
+while atom generation/replay is unfinished. Empty context is a no-op on a valid
+paused session. Tool/READ dispatch remains pending; the append API does not authorize
+or construct observations. The environment controller supplies its permitted
+projection before resume. Host coverage is in
+`Tests/test_inference_trajectory_host.py`.
 
-For recurrent TextWorld interaction, the controller must additionally distinguish
-observed DDE boundaries from the Answer submission boundary, extract only the
-newly closed answer instance, and insert the actual permitted environment result
+For recurrent TextWorld interaction, the controller distinguishes
+observed DDE boundaries from the Answer submission boundary, extracts only the
+newly closed answer instance, and inserts the actual permitted environment result
 before resuming. A span yield is a scheduling event; only the configured recipient
 policy makes an answer actionable. No other span close automatically dispatches
 a TextWorld command. The current cumulative continuation result is not itself a

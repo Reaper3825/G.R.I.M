@@ -10,6 +10,7 @@
 #include "Startup/Batching/PlannedBatches.hpp"
 #include "Startup/Validation/StartupValidation.hpp"
 #include "Startup/Validation/Phase2Handoff.hpp"
+#include "Startup/EnvironmentReady.hpp"
 #include "../Subprocess/tokenizer_subprocess.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 
@@ -72,30 +73,34 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     HyperparametersReady(ctx);
     CheckpointPlanReady(ctx);
 
-    if (GRIM::HyperParameters::snapshotExecutionMode(ctx.config) == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
+    const bool preparing_environment =
+        execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING &&
+        GRIM::HyperParameters::dataLoadingHP(ctx.config).training_stage ==
+            GRIM::HyperParameters::TrainingStage::RL;
+    if (execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE || preparing_environment) {
         GRIM::Logging::EmitModuleInfo(
             GRIM::Logging::ModuleId::Training,
-            "[Phase1] Loading inference tokenizer artifact bundle...",
+            "[Phase1] Loading generation tokenizer artifact bundle...",
             0);
         auto inference_tokenizer = LoadInferenceTokenizer(ctx.config, *ctx.logging.logger);
         const std::uint32_t inference_vocab_size = static_cast<std::uint32_t>(inference_tokenizer->vocabSize());
         (void)GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
             inference_vocab_size,
-            "executePhase1[inference]");
+            "executePhase1[generation]");
         syncRuntimeVocabSizeFromActualOrThrow(
             ctx.config,
             inference_vocab_size,
-            "executePhase1[inference]");
+            "executePhase1[generation]");
         GRIM::Logging::EmitModuleInfo(
             GRIM::Logging::ModuleId::Training,
-            "[Phase1] ✓ Inference tokenizer ready | vocab_size=" + std::to_string(inference_vocab_size),
+            "[Phase1] ✓ Generation tokenizer ready | vocab_size=" + std::to_string(inference_vocab_size),
             0);
         RngReady(ctx);
         if (inference_vocab_size == 0) {
-            throw std::runtime_error("executePhase1[inference]: tokenizer vocab_size must be ready before layer assembly");
+            throw std::runtime_error("executePhase1[generation]: tokenizer vocab_size must be ready before layer assembly");
         }
         if (ctx.rng.init_seed == 0) {
-            throw std::runtime_error("executePhase1[inference]: RNGContext.init_seed must be ready before layer assembly");
+            throw std::runtime_error("executePhase1[generation]: RNGContext.init_seed must be ready before layer assembly");
         }
         GRIM::Logging::EmitModuleInfo(
             GRIM::Logging::ModuleId::Training,
@@ -108,6 +113,13 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
             0);
         ModelAllocated(ctx, inference_vocab_size, ctx.rng.init_seed);
         CheckpointLoaded(ctx);
+        if (preparing_environment) {
+            validateAttentionOffByOne(ctx);
+            ctx.environment_tokenizer = std::move(inference_tokenizer);
+            EnvironmentReady(ctx);
+            Phase2HandoffReady(ctx);
+            return Phase1Result{Phase1Outcome::ready_for_environment, std::move(ctx)};
+        }
         ctx.start_time = std::chrono::steady_clock::now();
         Phase1Result result{Phase1Outcome::ready_for_inference, std::move(ctx)};
         result.inference_tokenizer = std::move(inference_tokenizer);

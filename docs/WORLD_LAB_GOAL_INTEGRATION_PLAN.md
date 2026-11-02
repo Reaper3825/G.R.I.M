@@ -3,9 +3,10 @@
 Status: implemented for manual Play and independent solution replay. Goal binding,
 controller termination, protocol-2 worker operations, database selection/import,
 version-3 environment documents, and separate version-1 episode records are in
-place. The [World Lab guide](WORLD_LAB.md) documents current usage. Model routing,
-feedback insertion, general reachability proof, and course-driven episode
-assignment remain future work. Persistent environment identity, registry
+place. The [World Lab guide](WORLD_LAB.md) documents current usage. The separate
+Phase2 single-Goal controller now routes model Answers and inserts permitted
+feedback. General reachability proof and course-driven episode advancement
+remain future work. Persistent environment identity, registry
 resolution, and course environment assignment are implemented as the next-phase
 foundation described below.
 
@@ -194,7 +195,7 @@ neither general solvability nor impossibility.
 Completion means manual Play and replay use the database Goal as their sole
 challenge authority, the same compiled environment supports multiple Goals, old
 embedded endings cannot interfere, and documentation distinguishes the completed
-manual integration from pending model-driven interaction and reachability work.
+manual integration from the separate model controller and pending reachability work.
 
 ## Next phase: course-driven assignment (integration pending)
 

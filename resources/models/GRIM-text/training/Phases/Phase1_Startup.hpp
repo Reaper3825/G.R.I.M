@@ -49,6 +49,7 @@
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/InferenceState/GenerationState_GPU.hpp"
+#include "../../Shared/Environment/EnvironmentEpisode.hpp"
 #include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
 #include "../../Shared/Optimizers/OptimizerStep.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
@@ -260,6 +261,10 @@ struct TrainingContext {
 
     /** Registry metadata for the curriculum consumed by this training run. */
     std::optional<GRIM::CurriculumMetadata> current_curriculum_metadata;
+    // RL Phase1 handoff: frozen Goal schedule/cursor and live environment episode.
+    std::unique_ptr<GRIM::Environment::EnvironmentEpisode> environment_episode;
+    // Artifact-loaded tokenizer retained for the future environment dispatch loop.
+    std::unique_ptr<GRIM::Tokenizer::UniByte> environment_tokenizer;
     
     // Optimizer and controllers
     OptimizerContext optimizer;
@@ -388,6 +393,7 @@ enum class Phase1Outcome : int {
     ready_for_training = 0,
     tokenizer_only_complete = 1,
     ready_for_inference = 2,
+    ready_for_environment = 3,
 };
 
 struct Phase1Result {

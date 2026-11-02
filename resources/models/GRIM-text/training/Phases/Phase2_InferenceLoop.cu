@@ -6,6 +6,7 @@
 #include "Phase2_InferenceLoop.hpp"
 #include "../../Shared/InferenceState/InferencePrefill.hpp"
 #include "../../Shared/InferenceState/InferenceGenerationSession.hpp"
+#include "../../Shared/InferenceState/RuntimeContextAppend.hpp"
 #include "../../Shared/Forward/InferenceResultDecode.hpp"
 
 #include "../../Shared/AtomInsertion/AtomInsertionData.hpp"
@@ -388,11 +389,13 @@ GRIM::GeneratedSequence advanceOneSequence(
                             static_cast<std::size_t>(feature)] * inverse_count;
                 }
 
-                const std::string raw_text = tokenizer.decode(
-                    GRIM::Tokenizer::DecodeRequest(
-                        retrieval_state.active_content_token_ids));
-                const auto address = generation_local_atom_table->ticket(
-                    retrieval_state.active_type, raw_text);
+                const auto open_position = retrieval_state.active_open_sequence_index;
+                const auto address = sequence.token_origins[open_position] == GRIM::TokenOrigin::RuntimeContext
+                    ? GRIM::Tokenizer::SequenceLocalAtomAddress{retrieval_state.active_type,
+                        sequence.token_local_atom_indices[open_position]}
+                    : generation_local_atom_table->ticket(retrieval_state.active_type,
+                        tokenizer.decode(GRIM::Tokenizer::DecodeRequest(
+                            retrieval_state.active_content_token_ids)));
                 const int local_index = static_cast<int>(address.local_index);
                 const int candidate_count = retrieval_state.candidateCount(
                     retrieval_state.active_type);
@@ -438,13 +441,19 @@ GRIM::GeneratedSequence advanceOneSequence(
         }
         const auto type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
         const int remaining_token_capacity = remainingContextTokenCapacity(session, model_hp);
-        const int selected_slot = selectLocalRetrievalSlot(
-            tail, type, remaining_token_capacity);
-
         retrieval_state.clearActiveSpan();
         retrieval_state.inside_atom = true;
         retrieval_state.active_type = type;
         retrieval_state.active_open_sequence_index = pending_sequence_index;
+        if (sequence.token_origins[pending_sequence_index] == GRIM::TokenOrigin::RuntimeContext) {
+            // Supplied atom contents are already queued. Observe their encoder
+            // rows and register the candidate on CLOSE; never select/replay a
+            // different value over an environment observation.
+            retrieval_state.active_embedding_sum.assign(static_cast<std::size_t>(d_model), 0.0f);
+            return;
+        }
+        const int selected_slot = selectLocalRetrievalSlot(
+            tail, type, remaining_token_capacity);
         if (selected_slot == GRIM::Batching::kLocalAtomNoReferenceTarget) {
             retrieval_state.active_embedding_sum.assign(
                 static_cast<std::size_t>(d_model), 0.0f);
@@ -571,6 +580,24 @@ Phase2TextInferenceResult executePhase2PayloadInference(
     return decodeInferenceResult(tokenizer, std::move(sequence), prefill_ids,
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::high_resolution_clock::now() - start_generation).count());
+}
+
+std::size_t appendPhase2RuntimeContext(TrainingContext& ctx,
+    GRIM::Tokenizer::UniByte& tokenizer, const std::string& context) {
+    auto& state = ctx.requireGenerationState("appendPhase2RuntimeContext");
+    if (!state.active_session || !state.prefill || state.tokenizer != &tokenizer ||
+        state.active_session->sequence.return_reason != GRIM::Inference::InferenceReturnReason::SpanBoundary)
+        throw std::logic_error("appendPhase2RuntimeContext: no matching paused session");
+    if (state.local_atom_retrieval.inside_atom || state.local_atom_retrieval.hasForcedToken())
+        throw std::logic_error("appendPhase2RuntimeContext: atom generation is still pending");
+    if (tokenizer.vocabSize() != state.prefill->vocab_size)
+        throw std::invalid_argument("appendPhase2RuntimeContext: tokenizer vocabulary mismatch");
+    // The tokenizer returns context tokens directly, without synthetic BOS/EOS.
+    // Raw feedback stays caller-projected; this operation adds no observation
+    // grammar and never feeds these tokens through the generated-span tracker.
+    const auto encoded = tokenizer.tokenizeWithMetadata(context);
+    return GRIM::Inference::appendRuntimeContext(*state.active_session, encoded,
+        GRIM::HyperParameters::modelHP(ctx.config), state.prefill->vocab_size);
 }
 
 Phase2TextInferenceResult resumePhase2PayloadInference(

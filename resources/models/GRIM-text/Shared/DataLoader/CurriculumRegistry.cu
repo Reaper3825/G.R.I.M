@@ -51,6 +51,7 @@ void addCourseMembership(const json& registry, const json& source, CurriculumMet
             throw std::runtime_error("[DataLoader] FATAL: course '" + course_id + "' is missing the concept_block_ids array");
         CourseMetadata course_metadata;
         course_metadata.id = course_id;
+        course_metadata.environment_id = course.value("environment_id", std::string{});
         for (const auto& block_id : course["concept_block_ids"]) {
             if (!block_id.is_string() || block_id.get_ref<const std::string&>().empty())
                 throw std::runtime_error("[DataLoader] FATAL: course '" + course_id + "' contains an invalid concept_block_id");

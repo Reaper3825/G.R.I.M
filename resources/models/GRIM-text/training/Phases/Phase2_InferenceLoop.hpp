@@ -80,4 +80,10 @@ Phase2TextInferenceResult executePhase2PayloadInference(
 Phase2TextInferenceResult resumePhase2PayloadInference(
     TrainingContext& ctx, GRIM::Tokenizer::UniByte& tokenizer);
 
+// Tokenize and queue caller-projected runtime feedback on the retained paused
+// session. The existing resume operation consumes it into the KV cache before
+// sampling again. No prefill, generation, or boundary acknowledgement here.
+std::size_t appendPhase2RuntimeContext(TrainingContext& ctx,
+    GRIM::Tokenizer::UniByte& tokenizer, const std::string& context);
+
 } // namespace GRIMText::Training

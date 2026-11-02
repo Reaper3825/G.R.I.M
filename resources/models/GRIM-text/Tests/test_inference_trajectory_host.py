@@ -23,9 +23,16 @@ def main():
                          if not line.startswith('#include') and line != '#pragma once')
     session_header = without_includes(session.with_suffix('.hpp'))
     session_body = without_includes(session)
+    append_body = without_includes(root / 'Shared/InferenceState/RuntimeContextAppend.cu')
+    local_atom_body = without_includes(root / 'Shared/UnigramByte/SequenceLocalAtomTable.cu')
+    encoded_type = method((root / 'Shared/UnigramByte/UniByte.hpp').read_text(encoding='utf-8'),
+                          'struct UniByteResult') + ';'
     sampling_body = without_includes(root / 'Shared/Sampling/Sampling.cu')
     advance_begin = source.index('    while (!shouldReturn(session, model_hp))')
     advance_loop = source[advance_begin:source.index('    const auto reason =', advance_begin)]
+    process_atom = source[source.index('    auto processPendingLocalAtom = [&]'):]
+    process_atom = process_atom[:process_atom.index('    // ── Prefill:')]
+    append_wrapper = method(source, 'std::size_t appendPhase2RuntimeContext(')
     generation_header = without_includes(root / 'Shared/InferenceState/GenerationState_GPU.hpp')
     handoff = source[source.index('    result.token_ids = sequence.token_ids;'):]
     handoff = handoff[:handoff.index('    return result;') + len('    return result;')]
@@ -36,6 +43,8 @@ def main():
 #include "SEQUENCE_HEADER"
 #include "EPISODE_HEADER"
 #include "LAYOUT_HEADER"
+#include "LOCAL_ATOM_HEADER"
+#include "STRUCTURAL_SPAN_HEADER"
 #include "RETURN_POLICY_HEADER"
 #include <cassert>
 #include <chrono>
@@ -43,6 +52,10 @@ def main():
 #include <optional>
 #include <string>
 #include <utility>
+#include <cstring>
+#include <istream>
+#include <ostream>
+#include <limits>
 #include "SAMPLING_HEADER"
 namespace GRIM::HyperParameters {
 using GenerationStreamCallback = std::function<void(int, float)>;
@@ -55,13 +68,23 @@ namespace GRIM::Tokenizer {
 class AtomTable {
 public:
     int marker = 7;
+    std::vector<std::string> values;
+    uint32_t registerSpan(const StructuralSpan& span) {
+        std::string raw(span.buffer_ptr + span.content_offset, span.content_length);
+        const auto found = std::find(values.begin(), values.end(), raw);
+        if (found != values.end()) return static_cast<uint32_t>(found - values.begin());
+        values.push_back(raw);
+        return static_cast<uint32_t>(values.size() - 1);
+    }
     std::shared_ptr<AtomTable> cloneHostForGeneration() const {
         return std::make_shared<AtomTable>(*this);
     }
 };
-class SequenceLocalAtomTable { public: int marker = 9; };
+ENCODED_TYPE
 }
+LOCAL_ATOM_BODY
 namespace GRIM::Batching {
+constexpr int kLocalAtomNoReferenceTarget = 0;
 struct BatchPayload {
     std::shared_ptr<const GRIM::ConceptSpanDelimiterMap> concept_span_delimiters;
     int vocab_size = 32;
@@ -79,14 +102,39 @@ struct BatchPayload {
 SESSION_HEADER
 SAMPLING_BODY
 SESSION_BODY
+APPEND_BODY
 namespace GRIM {
 struct KvCacheState { int host_seqlen = 0; void resetSession() { host_seqlen = 0; } };
-struct LocalAtomRetrievalInferenceState { void resetSession() {} };
+struct LocalAtomRetrievalInferenceState {
+    bool inside_atom = false;
+    bool forced = false;
+    bool hasForcedToken() const { return forced; }
+    void resetSession() { inside_atom = forced = false; }
+};
 namespace Batching { struct BatchDeviceStorage {}; }
 }
 #define USE_CUDA
 GENERATION_STATE_HEADER
 #undef USE_CUDA
+namespace GRIM::Tokenizer {
+struct DecodeRequest { explicit DecodeRequest(const std::vector<int>&) {} };
+class UniByte {
+public:
+    UniByteResult encoded;
+    std::string last_text;
+    int vocabSize() const { return 512; }
+    UniByteResult tokenizeWithMetadata(const std::string& text) { last_text = text; return encoded; }
+    std::string decode(const DecodeRequest&) { return "normalized-value"; }
+};
+}
+namespace GRIM::HyperParameters { ModelHP modelHP(const ModelHP& hp) { return hp; } }
+struct TrainingContext {
+    GRIM::GenerationState state;
+    GRIM::HyperParameters::ModelHP config;
+    GRIM::GenerationState& requireGenerationState(const char*) { return state; }
+};
+APPEND_WRAPPER
+namespace GRIM::Forward { struct CachedInferenceResult { std::vector<float> encoder_row; }; }
 RESULT_TYPE
 Phase2TextInferenceResult handoff(GRIM::GeneratedSequence sequence) {
     Phase2TextInferenceResult result;
@@ -263,15 +311,28 @@ ADVANCE_LOOP
     running.sequence.return_reason = returnReason(running, model);
     const int sampled_before_observation = sampledTokenCount(running);
     const int capacity_before_observation = remainingContextTokenCapacity(running, model);
-    // Simulate the validated runtime append adapter, which is a separate API.
-    for (int id : {18, 19}) {
-        running.sequence.token_ids.push_back(id);
-        running.sequence.token_origins.push_back(GRIM::TokenOrigin::RuntimeContext);
-        running.sequence.token_numeric_values.push_back(0);
-        running.sequence.token_atom_mask.push_back(0);
-        running.sequence.atom_entry_ids.push_back(UINT32_MAX);
-        running.sequence.token_local_atom_indices.push_back(UINT32_MAX);
-    }
+    auto encodedContext = [](std::vector<int> ids) {
+        GRIM::Tokenizer::UniByteResult result;
+        result.token_ids = std::move(ids);
+        const auto n = result.token_ids.size();
+        result.is_byte_fallback.assign(n, true);
+        result.token_numeric_values.assign(n, 0);
+        result.token_atom_flags.assign(n, 0);
+        result.token_atom_mask.assign(n, 0);
+        result.atom_entry_ids.assign(n, UINT32_MAX);
+        result.token_local_atom_indices.assign(n, UINT32_MAX);
+        result.local_atom_table = std::make_shared<GRIM::Tokenizer::SequenceLocalAtomTable>();
+        result.atom_table = std::make_shared<GRIM::Tokenizer::AtomTable>();
+        result.byte_tokens = n;
+        return result;
+    };
+    const auto scores_before = running.sequence.token_scores;
+    const auto events_before = running.sequence.span_events.size();
+    // Marker-looking observation tokens must not create generation events.
+    assert(appendRuntimeContext(running, encodedContext({20, 21}), model, 32) == 2);
+    assert(running.sequence.token_scores == scores_before);
+    assert(running.sequence.span_events.size() == events_before);
+    assert(running.sequence.return_reason == GRIM::Inference::InferenceReturnReason::SpanBoundary);
     assert(sampledTokenCount(running) == sampled_before_observation);
     assert(remainingContextTokenCapacity(running, model) == capacity_before_observation - 2);
     acknowledgeSpanReturn(running);
@@ -286,6 +347,114 @@ ADVANCE_LOOP
     live.resetSession();
     assert(complete.finished && !live.active_session && !live.prefill);
     assert(!live.inference_device_storage && live.kv_cache.host_seqlen == 0);
+    // Rejection is transactional, even when a late token is invalid.
+    auto paused = GRIM::Inference::createInferenceGenerationSession(payload, model, hp);
+    paused.sequence.return_reason = GRIM::Inference::InferenceReturnReason::SpanBoundary;
+    const auto original_ids = paused.sequence.token_ids;
+    const auto original_atoms = paused.sequence.context_atom_table;
+    auto rejectsAppend = [&](const GRIM::Tokenizer::UniByteResult& input, int vocabulary = 512) {
+        bool rejected = false;
+        try { appendRuntimeContext(paused, input, model, vocabulary); }
+        catch (const std::exception&) { rejected = true; }
+        assert(rejected && paused.sequence.token_ids == original_ids);
+        assert(paused.sequence.context_atom_table == original_atoms);
+    };
+    rejectsAppend(encodedContext({12, 512}));
+    rejectsAppend(encodedContext(std::vector<int>(remainingContextTokenCapacity(paused, model), 12)));
+    auto bad_channels = encodedContext({12}); bad_channels.token_numeric_values.clear();
+    rejectsAppend(bad_channels);
+    const auto int_open = GRIM::Tokenizer::atomTypeToOpenTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
+    const auto int_close = GRIM::Tokenizer::atomTypeToCloseTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
+    auto typed = encodedContext({int_open, 12, int_close});
+    typed.local_atom_table->ticket(GRIM::Tokenizer::AtomType::ATOM_INT, "42");
+    typed.token_local_atom_indices[0] = 0;
+    typed.token_atom_mask[0] = 1; typed.atom_entry_ids[0] = 0;
+    typed.token_numeric_values[0] = 42;
+    typed.atom_tokens = 2; typed.byte_tokens = 1;
+    auto incomplete = typed; incomplete.token_ids[2] = 12;
+    rejectsAppend(incomplete);
+    paused.sequence.context_local_atom_table->ticket(GRIM::Tokenizer::AtomType::ATOM_INT, "7");
+    const auto old_local = paused.sequence.context_local_atom_table;
+    assert(appendRuntimeContext(paused, typed, model, 512) == 3);
+    const auto opening_position = original_ids.size();
+    assert(paused.sequence.token_local_atom_indices[opening_position] == 1);
+    assert(paused.sequence.token_numeric_values[opening_position] == 42);
+    assert(paused.sequence.token_atom_mask[opening_position] == 1);
+    assert(paused.sequence.token_origins[opening_position] == GRIM::TokenOrigin::RuntimeContext);
+    assert(old_local->totalSize() == 1 && original_atoms->values.empty());
+    assert(paused.sequence.context_local_atom_table->totalSize() == 2);
+    assert(paused.sequence.token_scores.empty() && paused.sequence.score_token_positions.empty());
+    assert(appendRuntimeContext(paused, typed, model, 512) == 3);
+    assert(paused.sequence.token_local_atom_indices[opening_position + 3] == 1);
+    assert(paused.sequence.context_atom_table->values.size() == 1);
+    {
+        // Compile production atom processing with host candidate storage. The
+        // observation's assigned value wins even if decoding normalizes text.
+        const bool local_atom_retrieval_enabled = true;
+        const int d_model = 2, stream = 1;
+        auto& sequence = paused.sequence;
+        auto& session = paused;
+        const auto model_hp = model;
+        auto generation_local_atom_table = sequence.context_local_atom_table;
+        GRIM::Tokenizer::UniByte tokenizer;
+        struct Retrieval {
+            bool inside_atom = false, replaying_reference = false;
+            GRIM::Tokenizer::AtomType active_type{};
+            std::size_t active_open_sequence_index = 0, forced_token_cursor = 0;
+            std::vector<int> active_content_token_ids, forced_token_ids;
+            std::vector<float> active_embedding_sum;
+            int active_content_count = 0, candidates = 1, appended = 0;
+            void clearActiveSpan() {
+                inside_atom = replaying_reference = false;
+                active_content_count = 0; active_content_token_ids.clear(); active_embedding_sum.clear();
+            }
+            int candidateCount(GRIM::Tokenizer::AtomType) const { return candidates; }
+            void appendCandidate(GRIM::Tokenizer::AtomType, int index,
+                const std::vector<float>& embedding, const std::vector<int>& content, int) {
+                assert(index == candidates && embedding == std::vector<float>({2,4}));
+                assert(content == std::vector<int>({12})); ++candidates; ++appended;
+            }
+            std::vector<int> candidateContentTokenIds(GRIM::Tokenizer::AtomType, int) const { return {12}; }
+        } retrieval_state;
+        int selections = 0;
+        auto selectLocalRetrievalSlot = [&](const auto&, auto, int) { ++selections; return 0; };
+PROCESS_ATOM
+        GRIM::Forward::CachedInferenceResult tail{{2,4}};
+        for (std::size_t p = opening_position; p < sequence.token_ids.size(); ++p)
+            processPendingLocalAtom(tail, p);
+        assert(!retrieval_state.inside_atom && selections == 0);
+        assert(retrieval_state.appended == 1 && generation_local_atom_table->totalSize() == 2);
+    }
+    {
+        TrainingContext ctx;
+        ctx.config = model;
+        ctx.state.prefill = payload;
+        ctx.state.prefill->vocab_size = 512;
+        ctx.state.active_session = GRIM::Inference::createInferenceGenerationSession(payload, model, hp);
+        ctx.state.active_session->sequence.return_reason = GRIM::Inference::InferenceReturnReason::SpanBoundary;
+        GRIM::Tokenizer::UniByte tokenizer;
+        tokenizer.encoded = encodedContext({12, 13});
+        ctx.state.tokenizer = &tokenizer;
+        ctx.state.kv_cache.host_seqlen = 1;
+        assert(appendPhase2RuntimeContext(ctx, tokenizer, "actual feedback") == 2);
+        assert(tokenizer.last_text == "actual feedback" && ctx.state.kv_cache.host_seqlen == 1);
+        assert(ctx.state.active_session->sequence.token_scores.empty());
+        GRIM::Tokenizer::UniByte different;
+        bool rejected = false;
+        try { appendPhase2RuntimeContext(ctx, different, "wrong tokenizer"); }
+        catch (const std::logic_error&) { rejected = true; }
+        assert(rejected && different.last_text.empty());
+        ctx.state.local_atom_retrieval.forced = true;
+        rejected = false;
+        try { appendPhase2RuntimeContext(ctx, tokenizer, "pending atom"); }
+        catch (const std::logic_error&) { rejected = true; }
+        assert(rejected && tokenizer.last_text == "actual feedback");
+    }
+    paused.sequence.return_reason = GRIM::Inference::InferenceReturnReason::Continue;
+    bool unpaused_rejected = false;
+    try { appendRuntimeContext(paused, encodedContext({12}), model, 32); }
+    catch (const std::logic_error&) { unpaused_rejected = true; }
+    assert(unpaused_rejected);
     // Repeated names and shared token IDs under distinct parents resolve by scope.
     auto parent = answer;
     parent.name = "outer"; parent.open_delimiter_id = 22; parent.close_delimiter_id = 23;
@@ -401,6 +570,11 @@ ADVANCE_LOOP
         'GENERATION_HP': method(groups, 'struct GenerationHP') + ';',
         'MODEL_HP': method(groups, 'struct ModelHP') + ';',
         'SESSION_HEADER': session_header, 'SESSION_BODY': session_body,
+        'APPEND_BODY': append_body, 'LOCAL_ATOM_BODY': local_atom_body,
+        'APPEND_WRAPPER': append_wrapper, 'PROCESS_ATOM': process_atom,
+        'ENCODED_TYPE': encoded_type,
+        'LOCAL_ATOM_HEADER': (root / 'Shared/UnigramByte/SequenceLocalAtomTable.hpp').as_posix(),
+        'STRUCTURAL_SPAN_HEADER': (root / 'Shared/UnigramByte/Detectors/StructuralSpan.hpp').as_posix(),
         'ADVANCE_LOOP': advance_loop, 'GENERATION_STATE_HEADER': generation_header,
         'SAMPLING_BODY': sampling_body,
     }.items():

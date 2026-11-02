@@ -31,6 +31,8 @@
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
 #include "Phases/Phase2_InferenceLoop.hpp"
+#include "Phases/Phase2_EnvironmentLoop.hpp"
+#include "Phases/Phase2_EnvironmentDispatch.hpp"
 #include "Phases/Phase2_InspectionLoop.hpp"
 #include "../Shared/InferenceState/InferencePrefill.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
@@ -526,6 +528,16 @@ int main(int argc, char** argv) {
             return runInferenceWorker(ctx, *inference_tokenizer, worker_port);
         }
         
+        if (phase1.outcome == GRIMText::Training::Phase1Outcome::ready_for_environment) {
+            printPhaseHeader(2, "Environment interaction");
+            const auto run = GRIMText::Training::executePhase2EnvironmentInteraction(ctx);
+            EmitModuleInfo(ModuleId::TrainingOrchestrator,
+                "[Phase 2] Environment interaction stopped | reason=" + run.stop_reason +
+                " | episode=" + run.interaction.episode_status + " | commands=" +
+                std::to_string(ctx.environment_episode->actions().size()), 0);
+            return run.interaction.episode_status == "succeeded" ? 0 : 1;
+        }
+
         {
             const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
             std::ostringstream oss;

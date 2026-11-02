@@ -79,6 +79,8 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Forward_GPU.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase1_Startup.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_InferenceLoop.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_EnvironmentLoop.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_EnvironmentDispatch.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_InspectionLoop.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Rng.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Logging.cu
@@ -91,6 +93,7 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Telemetry/TelemetryInitInputs.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Validation/StartupValidation.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Validation/Phase2Handoff.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/EnvironmentReady.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/SlidingWindow.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/ConceptSupervision.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/ClassBalancedWeights.cu
@@ -183,7 +186,9 @@ target_compile_definitions(grim_server_gpu_impl PRIVATE
     CUDA_GPU_WRAPPER
 )
 
+add_subdirectory(../Shared/Environment ${CMAKE_CURRENT_BINARY_DIR}/environment_runtime)
 target_link_libraries(grim_server_gpu_impl PUBLIC
+    grim_environment_runtime
     CUDA::cudart
     CUDA::cublas
     flatbuffers::flatbuffers

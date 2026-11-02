@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -70,10 +71,20 @@ bool selectedByCurriculum(const std::string& id, const CurriculumMetadata& metad
 	return metadata.concept_block_ids.find(id) != metadata.concept_block_ids.end();
 }
 
-void loadConceptBlocks(const fs::path& cache_dir,
+namespace {
+
+json goalOnlyFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
+    json result{{"id", fbString(source.id())}};
+    if (const auto* goal = source.goal())
+        result["goal"] = goalToJson(GoalStorage::fromFlatBuffer(*goal));
+    return result;
+}
+
+void loadSelectedConceptBlocks(const fs::path& cache_dir,
                        std::vector<json>& out,
                        CurriculumMetadata& out_metadata,
-                       const std::string& curriculum_name) {
+                       const std::string& curriculum_name,
+                       bool goals_only) {
 	const fs::path flatbuffer_path = cache_dir / "concept_blocks.fb";
 	const fs::path legacy_path = cache_dir / "concept_blocks.jsonl";
 	out_metadata = LoadCurriculumMetadataFromRegistry(cache_dir, curriculum_name);
@@ -138,7 +149,8 @@ void loadConceptBlocks(const fs::path& cache_dir,
 				++total;
 				const std::string id = fbString(block->id());
 				if (!selectedByCurriculum(id, out_metadata)) continue;
-				out.push_back(conceptBlockFlatBufferToJson(*block));
+				out.push_back(goals_only ? goalOnlyFlatBufferToJson(*block)
+                                        : conceptBlockFlatBufferToJson(*block));
 				++accepted;
 			}
 		}
@@ -170,7 +182,13 @@ void loadConceptBlocks(const fs::path& cache_dir,
 			if (!selectedByCurriculum(j.value("id", std::string()), out_metadata)) continue;
 			if (j.contains("goal") && !j.at("goal").is_null())
 				j["goal"] = goalToJson(goalFromJson(j.at("goal")));
-			out.push_back(std::move(j));
+			if (goals_only) {
+				json selected{{"id", j.at("id")}};
+				if (j.contains("goal")) selected["goal"] = std::move(j.at("goal"));
+				out.push_back(std::move(selected));
+			} else {
+				out.push_back(std::move(j));
+			}
 			++accepted;
 		} catch (const std::exception& e) {
 			throw std::runtime_error(std::string("[DataLoader] Invalid ConceptBlock JSONL; migrate legacy Goal evidence before use: ") + e.what());
@@ -179,6 +197,50 @@ void loadConceptBlocks(const fs::path& cache_dir,
 	std::cout << "[DataLoader] Loaded " << accepted;
 	if (!out_metadata.concept_block_ids.empty()) std::cout << "/" << total;
 	std::cout << " legacy concept blocks from " << legacy_path.string() << std::endl;
+}
+
+} // namespace
+
+void loadConceptBlocks(const fs::path& cache_dir,
+                       std::vector<json>& out,
+                       CurriculumMetadata& out_metadata,
+                       const std::string& curriculum_name) {
+    loadSelectedConceptBlocks(cache_dir, out, out_metadata, curriculum_name, false);
+}
+
+std::vector<ScheduledGoal> loadScheduledGoals(
+    const fs::path& cache_dir,
+    const std::string& curriculum_name,
+    Batching::CurriculumOrdering ordering,
+    uint64_t seed) {
+    CurriculumMetadata metadata;
+    std::vector<json> selected;
+    loadSelectedConceptBlocks(cache_dir, selected, metadata, curriculum_name, true);
+    const auto order = Batching::orderedConceptBlocks(metadata, ordering, seed);
+    std::unordered_map<std::string, const CourseMetadata*> owners;
+    for (const auto& course : metadata.courses)
+        for (const auto& id : course.concept_block_ids) owners.emplace(id, &course);
+    std::unordered_map<std::string, const json*> blocks;
+    for (const auto& block : selected) {
+        const auto id = block.at("id").get<std::string>();
+        if (!blocks.emplace(id, &block).second)
+            throw std::runtime_error("[DataLoader] Duplicate scheduled ConceptBlock ID: " + id);
+    }
+    std::vector<ScheduledGoal> assignments;
+    assignments.reserve(order.size());
+    for (const auto& id : order) {
+        const auto& course = *owners.at(id);
+        if (course.environment_id.find_first_not_of(" \t\r\n\f\v") == std::string::npos)
+            throw std::runtime_error("[DataLoader] Course has no environment_id: " + course.id);
+        const auto found = blocks.find(id);
+        if (found == blocks.end())
+            throw std::runtime_error("[DataLoader] Scheduled ConceptBlock missing: " + id);
+        const auto& block = *found->second;
+        if (!block.contains("goal") || block.at("goal").is_null())
+            throw std::runtime_error("[DataLoader] Scheduled ConceptBlock has no Goal: " + id);
+        assignments.push_back({course.id, course.environment_id, id, goalFromJson(block.at("goal"))});
+    }
+    return assignments;
 }
 
 } // namespace GRIM

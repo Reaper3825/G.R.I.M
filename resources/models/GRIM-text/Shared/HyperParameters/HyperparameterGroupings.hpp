@@ -38,6 +38,10 @@ struct DataLoadingHP {
     GRIM::NamedConceptSpanDefinitions concept_spans;
 };
 
+struct EnvironmentHP {
+    std::string name;
+};
+
 struct PathsHP {
     std::string data_path;
     std::string vocab_path;
@@ -957,6 +961,11 @@ inline DataLoadingHP dataLoadingHP(const GRIM::Config::AiConfigSnapshot& snapsho
     view.concept_spans = snapshotTrainingConfigField<GRIM::NamedConceptSpanDefinitions>(
         snapshot, "concept_spans");
     return view;
+}
+
+inline EnvironmentHP environmentHP(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    return EnvironmentHP{snapshotEnvironmentName(snapshot)};
 }
 
 inline PathsHP pathsHP(const GRIM::Config::AiConfigSnapshot& snapshot)

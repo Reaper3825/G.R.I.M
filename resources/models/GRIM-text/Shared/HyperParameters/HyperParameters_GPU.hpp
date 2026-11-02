@@ -2290,6 +2290,22 @@ inline T snapshotTrainingConfigField(
     return snapshotTrainingConfig(snapshot).at(name).get<T>();
 }
 
+// Environment is a root runtime setting, not model geometry or training config.
+// The snapshot loader already retains it in the complete authored document.
+inline std::string snapshotEnvironmentName(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto& document = snapshot.document;
+    if (!document.contains("Environment") || !document.at("Environment").is_string()) {
+        throw std::runtime_error("ai_config.json: Environment must be a non-empty string");
+    }
+    const auto name = document.at("Environment").get<std::string>();
+    if (name.find_first_not_of(" \t\r\n\f\v") == std::string::npos) {
+        throw std::runtime_error("ai_config.json: Environment must be a non-empty string");
+    }
+    return name;
+}
+
 inline void validateRootBiasConfig(
     const GRIM::Config::AiConfigSnapshot& snapshot,
     const char* caller)
@@ -2902,6 +2918,7 @@ inline GRIM::Config::AiConfigSnapshot finalizeAiConfigSnapshot(
     char** argv,
     ModelExecutionMode execution_mode)
 {
+    (void)snapshotEnvironmentName(snapshot);
     writeFinalizedTrainingConfigDocumentToSnapshot(
         snapshot,
         buildFinalizedTrainingConfigDocument(

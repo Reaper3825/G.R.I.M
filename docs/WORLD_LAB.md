@@ -27,8 +27,24 @@ grim_plugin_init### Assign and resolve an environment
 
 `EnvironmentRegistry::resolve(id)` returns a validated location, and `load(id)`
 loads the matching document. `UIWorldLabView::openEnvironment(id)` opens it in
-the editor. Course references use the same ID with these APIs; automatic
-course-to-episode assignment remains pending.
+the editor. Course references use the same ID with these APIs. RL Phase1 now
+loads the selected Goal schedule, resolves its first assignment by environment ID,
+and starts that frozen Goal episode through the existing compile operation. Its
+owner, initial response, and schedule position survive in `TrainingContext` for
+Phase2. Its initial interaction entrypoint projects visible feedback, description,
+inventory, and location text, supplies the Goal's requirement text, and begins
+structured model generation. The Phase2 controller resumes through DDE/Update
+pauses, submits only completed Answer contents, and appends permitted response
+text before the next cycle under the same frozen Goal. It stops on episode or
+generation termination without RL updates. Action receipts prevent duplicate
+submission and block retries after unknown outcomes. Assignment advancement,
+training export, and the shared multi-Quest course runtime remain pending.
+
+`EnvironmentRegistry::resolveByName(name)` resolves the root `Environment`
+configuration value (for example, `"GRIM"`) by exact registered title and returns
+the validated environment ID and world-file path. Missing or duplicate names,
+missing files, mismatched IDs, and stale registered titles are errors. Lookup
+does not refresh the registry, rewrite files, or start a game.
 
 New worlds receive independent IDs. Save, title changes, and file moves retain
 identity. **Save copy** creates an independent ID and an unused `-copy` filename;
@@ -92,8 +108,8 @@ references, and invalid bindings need explicit diagnostics. An empty environment
 reference continues to mean no environment assignment. Selecting another row
 must not silently reset a running playtest; starting/resetting a test is explicit.
 
-Course orchestration does not require model-command routing; model-driven play
-and feedback insertion remain separate pending work. See the
+Course orchestration does not require model-command routing; the single-Goal
+Phase2 controller is separate from that pending course runtime. See the
 [next integration phase](WORLD_LAB_GOAL_INTEGRATION_PLAN.md#next-phase-course-driven-assignment-integration-pending).
 
 ## Reusable environments and Goal achievability
@@ -181,8 +197,9 @@ Goal startup preserve the previous session if candidate creation fails.
 
 The first binding implementation requires referenced entities to exist already.
 Quest-specific object insertion/setup, role-bound Goal templates, course-driven
-episode assignment, model Answer routing, feedback insertion, and
-training episode export remain future work. Evidence itself never performs setup.
+episode advancement and training episode export remain future work. Model Answer
+routing and permitted feedback insertion now use the single-Goal Phase2 controller.
+Evidence itself never performs setup.
 
 ## Goal selection, manual playtest, and solutions
 
@@ -330,8 +347,9 @@ passages. This is structural validation, not proof that a puzzle is solvable.
 Version 2 introduced door fields and embedded challenge/solution metadata.
 Version 3 retains door fields but separates challenge data into ConceptBlock
 Goals and episode records. Deleting entities still cleans pending legacy
-references atomically. Model episodes and curriculum generation remain pending;
-importing arbitrary TextWorld games is not supported.
+references atomically. Model episodes run through the Phase2 controller;
+curriculum generation remains pending. Importing arbitrary TextWorld games is
+not supported.
 
 ## Validation
 
@@ -454,8 +472,8 @@ resources, not authored TextWorld entities. A unique exact title (ASCII case
 insensitive) is also accepted; duplicate titles require the explicit reference.
 Visible feedback lists panel names as plain text, adding references only for
 ambiguous or unusable names. Inspect/show/hide feedback reports a short state sentence.
-Structured records remain available to host consumers; a future model context
-projection should use the visible feedback rather than serialize the host envelope.
+Structured records remain available to host consumers; the environment model
+input projection uses visible feedback without serializing the host envelope.
 Unobserved targets fail rather than guessing. Hidden panels are discoverable;
 uninstantiated panels are not. Discovery is explicit and independent of location.
 
@@ -499,8 +517,10 @@ and requires inspection before retrying. No automatic resubmission occurs.
 Host operations do not advance native moves, inject facts, or award Goal success.
 Their commands are rejected by native witness replay, including recorded solutions.
 Reset restarts native state but does not undo host effects. This route is for explicit
-manual Play commands; automatic model Answer dispatch and its policy gate remain
-pending. Full worker facts are still authoring data, not a model observation feed.
+manual Play commands and validated model Answers through the Phase2 controller.
+Only completed Answer contents reach this route, and host actions retain the
+adapter's Model-tool policy checks. Full worker facts remain host data and are
+excluded from the model's visible-field observation projection.
 `ui.create_surface` is classified Ignore for now, preserving its host handler while
 excluding creation from model discovery. Existing-resource UI operations retain
 their classifications; creation argument mapping is outside this slice.
