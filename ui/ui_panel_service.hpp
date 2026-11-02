@@ -12,5 +12,6 @@ struct PanelServiceRequest {
     std::future<nlohmann::json> result;
     std::shared_ptr<std::atomic<bool>> cancelled;
 };
-PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key);
+PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key,
+                                       uint64_t expectedRuntimeId = 0);
 }

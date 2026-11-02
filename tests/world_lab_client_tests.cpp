@@ -6,6 +6,7 @@
 #include "ui/input/ui_input_router.hpp"
 #include "core/input_parser.hpp"
 #include <chrono>
+#include <atomic>
 #include <thread>
 #include <iostream>
 #include <stdexcept>
@@ -83,6 +84,82 @@ void runTextWorldClientTests(){
         check(!failed.contains("tool_catalog"),"Failed examine reused a stale catalog observation");
     }
     Editor example;
+    {
+        // Real mailbox/client/worker path; controlled handlers stand in for UI Plugin.
+        auto& registry = GRIM::MMO::ToolRegistry::instance();
+        int shows = 0, hides = 0;
+        bool visible = false;
+        std::atomic<bool> stall{false}, submitted{false}, released{false};
+        for (const auto& id : {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.poll"}) {
+            GRIM::MMO::ToolDescriptor tool;
+            tool.tool_id = tool.display_name = id; tool.provider_name = "world-ui-tests";
+            tool.argument_format = "json";
+            if (tool.tool_id == "ui.inspect" || tool.tool_id == "ui.show" || tool.tool_id == "ui.hide") {
+                tool.usage = tool.tool_id + " {t}"; tool.bindings = {{"t", "t"}};
+                tool.parameters = {{"panel_id", "string", "Panel key", true}};
+            }
+            registry.registerTool(tool, [&, id = std::string(id)](const std::string& text) {
+                const auto args = nlohmann::json::parse(text);
+                nlohmann::json result = {{"success", true}};
+                if ((id == "ui.list" && stall) || id == "ui.poll") {
+                    submitted = true;
+                    if (args.value("cancel", false)) released = true;
+                    else {
+                        CommandResult pending;
+                        pending.structuredOutputJson = nlohmann::json{{"format", "grim-ui-panel-response"}, {"version", 1},
+                            {"request_id", 1}, {"status", "pending"}}.dump();
+                        return pending;
+                    }
+                }
+                if (id == "ui.list") result["panels"] = {{{"panel_id", "settings"}, {"title", "Settings panel"}, {"runtime_id", 42}}};
+                else if (id != "ui.poll") {
+                    check(args.at("panel_id") == "settings", "Client adapter encoded incorrect key");
+                    if (id == "ui.show" || id == "ui.hide") {
+                        check(args.at("expected_runtime_id") == 42, "Client omitted generation guard");
+                        visible = id == "ui.show";
+                        if (visible) ++shows; else ++hides;
+                    }
+                    result["panel"] = {{"panel_id", "settings"}, {"title", "Settings panel"}, {"runtime_id", 42},
+                        {"visible", visible}, {"minimized", false}, {"maximized", false}};
+                }
+                CommandResult output;
+                output.structuredOutputJson = nlohmann::json{{"format", "grim-ui-panel-response"}, {"version", 1},
+                    {"request_id", 1}, {"status", "completed"}, {"result", result}}.dump();
+                return output;
+            });
+        }
+        TextWorldClient uiClient;
+        const auto initial = request(uiClient, {{"op", "compile"}, {"document", Document::initial().gameJson()}}).at("state");
+        auto state = request(uiClient, {{"op", "step"}, {"command", " ui.list "}}).at("state");
+        check(state.at("host_action").at("resources")[0].at("reference") == "panel:settings", "Client did not project UI discovery");
+        check(!state.contains("host_action_request"), "Internal dispatch request leaked");
+        state = request(uiClient, {{"op", "step"}, {"command", "ui.inspect Settings panel"}}).at("state");
+        check(state.at("host_action").at("status") == "completed" && shows == 0, "Client inspection caused effects");
+        state = request(uiClient, {{"op", "step"}, {"command", "ui.show panel:settings"}}).at("state");
+        check(state.at("host_action").at("status") == "completed" && shows == 1, "Client did not execute one UI action");
+        state = request(uiClient, {{"op", "step"}, {"command", "ui.hide Settings panel"}}).at("state");
+        check(state.at("host_action").at("resource").at("visible") == false && hides == 1,
+              "Client did not execute hide and report completion");
+        check(state.at("facts") == initial.at("facts") && state.at("moves") == initial.at("moves") &&
+            state.at("episode") == initial.at("episode"), "Host effect altered native verification state");
+        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.show panel:settings"}}}), "Cannot submit replay");
+        check(!wait(uiClient).at("ok").get<bool>() && shows == 1, "Replay executed a host effect");
+        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.hide panel:settings"}}}), "Cannot submit hide replay");
+        check(!wait(uiClient).at("ok").get<bool>() && hides == 1, "Replay repeated hide");
+        request(uiClient, {{"op", "reset"}});
+        state = request(uiClient, {{"op", "step"}, {"command", "ui.show panel:settings"}}).at("state");
+        check(state.at("host_action").at("status") == "failed" && shows == 1, "Reset retained observed resources");
+        stall = true;
+        check(uiClient.begin({{"op", "step"}, {"command", "ui.list"}}), "Cannot start pending host request");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!submitted && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        check(submitted, "Host request did not reach submission");
+        uiClient.stop();
+        const auto cancelled = wait(uiClient);
+        check(!cancelled.at("ok").get<bool>() && cancelled.at("transport_error").get<bool>() && released,
+              "Stop during host dispatch did not cancel owned work and stop the worker");
+        registry.unregisterByProvider("world-ui-tests", GRIM::MMO::ToolProviderType::Builtin);
+    }
     example.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"examples/world_lab/locked_door.grimworld.json");
     const Document d=example.document();
     const auto selection=legacyGoal(d);

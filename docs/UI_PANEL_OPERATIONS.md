@@ -72,6 +72,20 @@ needing completion should use the future-based interface.
 
 ## Dynamic surfaces
 
+API v3.14 also supplies `GRIM_UI_HIDE_CURRENT` and optional `expected_runtime_id`
+on `ui.hide`, applying the same UI-thread stale-instance check before hiding.
+World Lab accepts `ui.hide <observed name or panel:reference>` and waits for its
+completion. Native witness replay rejects hide just like other host actions.
+
+For World Lab's resource directory, `submitPanelRequest` additionally accepts an
+optional expected runtime identity. It checks the current instance on the UI
+thread before applying the operation. A mismatch returns `stale_panel` with no
+effect. API v3.13's `GRIM_UI_SHOW_CURRENT` carries that identity through the plugin
+boundary. `ui.show` accepts `expected_runtime_id`; omission retains stable-key-only
+behavior. `GRIM_UI_CANCEL`/`ui.poll` with `cancel:true` cancel still-queued owned work
+and release the request; they cannot undo already completed effects. See
+[manual World Lab dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
+
 `DynamicSurfacePanel` uses its existing `UISurfaceSpec::surface_id` as its panel
 key. The renderer bridge addresses it by key, so different or renamed titles
 do not break lookup. Create/update callbacks defer registry reads to the UI task

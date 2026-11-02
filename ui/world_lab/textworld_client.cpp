@@ -1,5 +1,6 @@
 #include "textworld_client.hpp"
 #include "world_observation.hpp"
+#include "world_tool_dispatch.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -157,6 +158,7 @@ pid_t launch(const fs::path& executable,const std::vector<std::string>& argument
 #endif
 }
 struct TextWorldClient::Impl {
+    WorldToolDispatch toolDispatch;
     std::future<nlohmann::json> pending;
     std::atomic<bool> cancelled{false};
     unsigned sequence=0;
@@ -176,6 +178,7 @@ struct TextWorldClient::Impl {
         return text;
     }
     void shutdown() noexcept {
+        toolDispatch.clear();
         try {
 #ifdef _WIN32
             if(directoryOwned) {std::ofstream stop(directory/"stop");}
@@ -281,6 +284,13 @@ struct TextWorldClient::Impl {
             start();
             const auto requestId=++sequence;
             request["id"]=requestId;request["protocol"]=2;
+            request["host_ui_dispatch"]=true;
+            if(request.value("op",std::string{})=="step" && request.contains("command") && request["command"].is_string()) {
+                auto command=request.at("command").get<std::string>();
+                const auto first=command.find_first_not_of(" \t");
+                if(first!=std::string::npos)command=command.substr(first,command.find_last_not_of(" \t")-first+1);
+                request["command"]=std::move(command);
+            }
             request["observation_providers"]={"tool_catalog","tool_details"};
             request["catalog_tools"]=nlohmann::json::array();
             for(const auto& tool:MMO::ToolRegistry::instance().getModelTools())
@@ -298,6 +308,20 @@ struct TextWorldClient::Impl {
                     std::ifstream in(response,std::ios::binary);nlohmann::json result;in>>result;in.close();fs::remove(response);
                     if(result.at("protocol")!=2 || result.at("id")!=requestId)throw std::runtime_error("TextWorld response ID/protocol mismatch");
                     resolveHostObservation(result);
+                    if(result.value("ok",false) && result.contains("result") && result["result"].contains("state")) {
+                        auto& state=result["result"]["state"];
+                        if(state.contains("host_action_request")) {
+                            const auto command=state.at("host_action_request").at("command").get<std::string>();
+                            state.erase("host_action_request");
+                            if(request.at("op")!="step" || request.at("command")!=command)
+                                throw std::runtime_error("Unsolicited host action request");
+                            state["host_action"]=toolDispatch.execute(command,requestId,[this]{return cancelled.load();});
+                            state["feedback"]=state.at("host_action").at("feedback");
+                            if(cancelled)throw std::runtime_error("TextWorld request cancelled. "+state.at("feedback").get<std::string>());
+                        } else if(request.at("op")=="compile" || request.at("op")=="reset" || request.at("op")=="start_episode") {
+                            toolDispatch.clear();
+                        }
+                    }
                     return result;
                 }
 #ifdef _WIN32

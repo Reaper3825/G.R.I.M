@@ -1448,9 +1448,11 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
         auto& owner = const_cast<PluginContext&>(pluginContext(self));
         ActiveCall active(owner.gate, true);
         if (!active.entered || !checkPermission(self, GRIM_PERM_UI)) return nullptr;
-        if (operation > GRIM_UI_POLL) return nullptr;
-        if (operation == GRIM_UI_POLL) {
+        if (operation > GRIM_UI_HIDE_CURRENT) return nullptr;
+        if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
             if (panel_key || !request_id) return nullptr;
+        } else if (operation == GRIM_UI_SHOW_CURRENT || operation == GRIM_UI_HIDE_CURRENT) {
+            if (!request_id || !panel_key || !*panel_key) return nullptr;
         } else if (request_id || (operation == GRIM_UI_LIST ? panel_key != nullptr : !panel_key || !*panel_key)) {
             return nullptr;
         }
@@ -1458,10 +1460,17 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
         std::lock_guard lock(owner.panelRequestsMutex);
         nlohmann::json response = {{"format", "grim-ui-panel-response"}, {"version", 1},
                                   {"request_id", request_id}, {"status", "pending"}};
-        if (operation == GRIM_UI_POLL) {
+        if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
             const auto found = owner.panelRequests.find(request_id);
             if (found == owner.panelRequests.end()) {
                 response["status"] = "error"; response["error"] = "request_not_found";
+                return allocateString(response.dump());
+            }
+            if (operation == GRIM_UI_CANCEL) {
+                found->second.cancelled->store(true);
+                owner.panelRequests.erase(found);
+                response["status"] = "completed";
+                response["result"] = {{"success", true}, {"released", true}};
                 return allocateString(response.dump());
             }
             if (found->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
@@ -1480,7 +1489,11 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
         }
         const auto id = s_next_panel_request.fetch_add(1);
         response["request_id"] = id;
-        auto request = GRIM::UI::submitPanelRequest(operation, key);
+        const bool guarded = operation == GRIM_UI_SHOW_CURRENT || operation == GRIM_UI_HIDE_CURRENT;
+        auto request = GRIM::UI::submitPanelRequest(
+            operation == GRIM_UI_SHOW_CURRENT ? GRIM_UI_SHOW :
+                (operation == GRIM_UI_HIDE_CURRENT ? GRIM_UI_HIDE : operation), key,
+            guarded ? request_id : 0);
         owner.panelRequests.emplace(id, std::move(request));
         return allocateString(response.dump());
     } catch (...) { return nullptr; }

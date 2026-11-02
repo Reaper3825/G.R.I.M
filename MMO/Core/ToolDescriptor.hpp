@@ -85,6 +85,8 @@ struct ToolDescriptor {
     std::string           usage; // Model-facing action label/template, independent of usage_type.
     // Usage placeholder -> existing world type (t, o, c, s, r, d, k, f).
     // Labels only: no entity resolution, argument conversion, or dispatch.
+    // Host adapters (e.g. World Lab UI) explicitly validate these labels and map
+    // observed resource references to handler parameters; never infer from prose.
     std::map<std::string, std::string> bindings;
     std::vector<std::string> examples;
     std::string           category;         // "action", "information", "system", "ui"

@@ -46,6 +46,7 @@ static void register_all_commands() {
                   "Create a new UI surface (panel, popup, modal, toast, tool window, inspector)",
                   "ui", false);
     tools.back().descriptor.usage = "ui.create_surface {t} <kind> <title>";
+    tools.back().descriptor.usage_type = GRIM::MMO::ToolUsage::Ignore;
     tools.back().descriptor.short_description = "Create a new interface surface of the specified kind";
     tools.back().descriptor.bindings = {{"t", "t"}};
     REGISTER_TOOL("ui.destroy_surface", cmdDestroySurface,

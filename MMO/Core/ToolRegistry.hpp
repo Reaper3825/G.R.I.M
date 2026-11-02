@@ -51,6 +51,10 @@ public:
     // Explicit selected-tool execution. Does not infer intent or run policy gates.
     // Handlers run outside the registry mutex and can query/register other tools.
     CommandResult invoke(const std::string& tool_id, const std::string& arguments);
+    // Canonical Model-only invocation against the caller's validated registry revision.
+    // Selection is atomic with revision/classification checks; policy remains caller-owned.
+    CommandResult invokeModel(const std::string& tool_id, const std::string& arguments,
+                              uint64_t expected_version);
     bool isExecutable(const std::string& tool_id) const;
     std::vector<std::string> getExecutableNames(bool include_aliases = false) const;
 
@@ -74,6 +78,8 @@ public:
 
 private:
     ToolRegistry() = default;
+    CommandResult invokeChecked(const std::string& name, const std::string& arguments,
+                                std::optional<uint64_t> expected_version);
     struct Entry { ToolDescriptor descriptor; ToolHandler handler; };
     using Entries = std::unordered_map<std::string, std::shared_ptr<Entry>>;
     using Aliases = std::unordered_map<std::string, std::string>;

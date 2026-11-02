@@ -1,5 +1,15 @@
 # Native GRIM tool plugins
 
+API v3.14 adds guarded hide (`GRIM_UI_HIDE_CURRENT`). Like `ui.show`, `ui.hide`
+accepts optional `expected_runtime_id`; World Lab supplies it automatically when
+resolving an observed panel. Existing unguarded hide JSON remains supported.
+
+API v3.13 adds guarded panel show and cancellation through the existing UI service.
+`ui.show` accepts optional `expected_runtime_id`; `ui.poll` accepts optional `cancel`.
+No table or registration layout changes. World Lab uses these to protect observed
+panel references and release interrupted requests. See
+[manual UI dispatch](../docs/WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
+
 API v3.12 adds `registration.short_description`: an authored 5-12 word summary
 for the environment tool catalog. The host copies it into the canonical
 descriptor; old plugin records default to empty. See
@@ -338,6 +348,8 @@ This plugin requires v3.8; older v3.x binaries remain compatible with the new
 host. The new host no longer registers `console`, `toggle_settings`,
 `ui.show_surface`, or `ui.hide_surface`. Existing handler functions are retained.
 Surface creation/destruction and OSINT remain host tools.
+`ui.create_surface` is currently Ignore, retaining its host handler while creation
+is excluded from model discovery and World Lab adapter mapping.
 
 Tests load the real DLL against a controlled host UI queue and check metadata,
 validation, permissions, pending/completed/failure results, ownership, request

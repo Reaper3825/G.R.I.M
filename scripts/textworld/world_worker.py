@@ -427,6 +427,14 @@ class Session:
         if op == "step":
             need(not self.done, "Episode is finished; reset or start another Goal")
             command = self.command(request.get("command", ""))
+            if command.startswith("ui."):
+                tool = command.split(" ", 1)[0]
+                need(tool in ("ui.list", "ui.inspect", "ui.show", "ui.hide"), "Unsupported World Lab UI action")
+                need(request.get("host_ui_dispatch") is True, "Host UI dispatch support required")
+                result = self.observation(self.env.state)
+                result.pop("observation_request", None)
+                result["host_action_request"] = {"command": command}
+                return {"state": result}
             state, score, engine_done = self.step(self.env, command)
             self.episode.advance(raw_facts(state), engine_done, command)
             return {"state": self.observation(state, score, engine_done)}
@@ -434,6 +442,8 @@ class Session:
             commands = request.get("commands", [])
             need(isinstance(commands, list) and len(commands) <= 1000, "A solution supports 0-1000 commands")
             commands = [self.command(command) for command in commands]
+            need(not any(command.startswith("ui.") for command in commands),
+                 "Host UI actions cannot be replayed as native solution witnesses")
             witness = request.get("witness")
             if witness is not None:
                 need(isinstance(witness, dict) and witness.get("identity") == self.episode.identity,

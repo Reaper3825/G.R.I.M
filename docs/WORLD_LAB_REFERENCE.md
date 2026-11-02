@@ -596,6 +596,11 @@ pending. The current source ConceptBlock stores one instance of each phase;
 neither a whole challenge nor every environment step is assumed to map 1:1 to
 an SFT block. This describes the intended integration, not new Play-tab behavior.
 
+Manual Play now has a separate host UI route for `ui.list`, `ui.inspect`, and
+`ui.show`, and `ui.hide`, with observed virtual resource references, guarded visibility changes, completion
+polling, and replay rejection. See [manual UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
+This does not connect inference or expose the worker's full facts to a model.
+
 ## Validation workflow
 
 Read the repository AGENTS.md and applicable local instructions before changes.

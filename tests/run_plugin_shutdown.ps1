@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "")
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "", [switch]$BuildUIFixture)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -15,6 +15,12 @@ if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
 $common = @('/nologo','/std:c++20','/EHsc','/W3','/DNOMINMAX')
 $common += @('', '/helpers','/core','/commands','/vcpkg_installed/x64-windows/include') | ForEach-Object { '/I"' + $workspace + $_ + '"' }
+if ($BuildUIFixture) {
+    $UIPluginDirectory = Join-Path $output 'ui-fixture'
+    New-Item -ItemType Directory -Force -Path $UIPluginDirectory | Out-Null
+    $uiFixtureArgs = $common + @('/LD', ('"' + (Join-Path $workspace 'plugins/ui_plugin/ui_plugin.cpp') + '"'), '/Fe:ui-fixture/ui_plugin.dll')
+    Set-Content -LiteralPath (Join-Path $output 'ui-fixture.rsp') -Value $uiFixtureArgs -Encoding ascii
+}
 $fixtureSource = '"' + (Join-Path $workspace 'tests/fixtures/plugin_shutdown_fixture.cpp') + '"'
 foreach ($fixture in @('alpha', 'beta')) {
     $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:fixtures/' + $fixture + '.dll'))
@@ -101,6 +107,11 @@ $commands = @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul
     'cl @registry.rsp','if errorlevel 1 exit /b %errorlevel%',
     'tool_registry_tests.exe','if errorlevel 1 exit /b %errorlevel%')
 Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
+if ($BuildUIFixture) {
+    $insert = @('cl @ui-fixture.rsp', 'if errorlevel 1 exit /b %errorlevel%')
+    $commands = $commands[0..2] + $insert + $commands[3..($commands.Length - 1)]
+    Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
+}
 Push-Location $output
 try {
     & $env:ComSpec /d /c test.cmd

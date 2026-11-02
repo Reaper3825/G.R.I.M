@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.12
+// G.R.I.M Plugin API v3.14
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 12
+#define GRIM_API_VERSION_MINOR 14
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -191,7 +191,11 @@ enum GrimVoiceOperation : uint32_t {
 
 enum GrimUIPanelOperation : uint32_t {
     GRIM_UI_LIST = 0, GRIM_UI_INSPECT = 1, GRIM_UI_SHOW = 2,
-    GRIM_UI_HIDE = 3, GRIM_UI_BRING_TO_FRONT = 4, GRIM_UI_POLL = 5
+    GRIM_UI_HIDE = 3, GRIM_UI_BRING_TO_FRONT = 4, GRIM_UI_POLL = 5,
+    // v3.13: request_id carries the observed runtime_id; check on UI thread before showing.
+    GRIM_UI_SHOW_CURRENT = 6,
+    GRIM_UI_CANCEL = 7, // Cancel/release one owned request; an already applied effect is not undone.
+    GRIM_UI_HIDE_CURRENT = 8 // v3.14: guarded hide, with the same arguments as SHOW_CURRENT.
 };
 
 enum GrimInputOperation : uint32_t {
@@ -404,6 +408,10 @@ typedef struct GrimPluginAPI {
     // JSON; free with string_free. Null = invalid input, denied access, or failure.
     // Submit: request_id=0; panel_key=null for LIST, required for other operations.
     // Poll: panel_key=null, request_id>0. A completed poll consumes its result.
+    // v3.13: SHOW_CURRENT uses panel_key + request_id=observed runtime identity.
+    // v3.14: HIDE_CURRENT uses the same guarded identity for hiding a panel.
+    // CANCEL uses panel_key=null + owned request_id; releases/cancels queued work,
+    // but cannot undo an effect already applied. Table/descriptor layouts unchanged.
     const char* (*ui_panel_service)(const GrimPluginAPI* self, GrimUIPanelOperation operation,
                                     const char* panel_key, uint64_t request_id);
     // v3.9: INPUT permission, plus SYSTEM for CLICK_ON perception/targeting.

@@ -17,25 +17,40 @@ GrimResult deliver(GrimToolResultWriter* writer, bool success, const std::string
 template<GrimUIPanelOperation Operation>
 GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
     try {
-        const auto args = nlohmann::json::parse(std::string(request->arguments, request->arguments_size));
+        const std::string textArgs = request->arguments_size
+            ? std::string(request->arguments, request->arguments_size) : std::string{};
+        // ui.list is advertised without arguments. Direct command dispatch supplies
+        // an empty string; the World Lab adapter supplies an explicit empty object.
+        const auto args = Operation == GRIM_UI_LIST && textArgs.find_first_not_of(" \t\r\n") == std::string::npos
+            ? nlohmann::json::object() : nlohmann::json::parse(textArgs);
         if (!args.is_object()) throw std::invalid_argument("Expected a JSON object");
         std::string key;
         uint64_t id = 0;
+        bool cancel = false;
         if constexpr (Operation == GRIM_UI_LIST) {
             if (!args.empty()) throw std::invalid_argument("ui.list takes an empty object");
         } else if constexpr (Operation == GRIM_UI_POLL) {
-            if (args.size() != 1 || !args.contains("request_id") || !args["request_id"].is_number_unsigned())
+            cancel = args.value("cancel", false);
+            if (args.size() != (args.contains("cancel") ? 2 : 1) || !args.contains("request_id") || !args["request_id"].is_number_unsigned())
                 throw std::invalid_argument("Expected a positive integer request_id");
             id = args["request_id"].get<uint64_t>();
             if (!id) throw std::invalid_argument("request_id must be positive");
         } else {
-            if (args.size() != 1 || !args.contains("panel_id") || !args["panel_id"].is_string())
+            const bool guarded = (Operation == GRIM_UI_SHOW || Operation == GRIM_UI_HIDE) && args.contains("expected_runtime_id");
+            if (args.size() != (guarded ? 2 : 1) || !args.contains("panel_id") || !args["panel_id"].is_string())
                 throw std::invalid_argument("Expected a string panel_id from ui.list");
+            if (guarded) {
+                if (!args["expected_runtime_id"].is_number_unsigned() ||
+                    !(id = args["expected_runtime_id"].get<uint64_t>()))
+                    throw std::invalid_argument("expected_runtime_id must be a positive integer");
+            }
             key = args["panel_id"].get<std::string>();
             if (key.empty() || key.size() > 256 || key.find('\0') != std::string::npos)
                 throw std::invalid_argument("panel_id must contain 1-256 bytes without NUL");
         }
-        const char* raw = host->ui_panel_service(host, Operation,
+        const char* raw = host->ui_panel_service(host, cancel ? GRIM_UI_CANCEL :
+            (Operation == GRIM_UI_SHOW && id ? GRIM_UI_SHOW_CURRENT :
+                (Operation == GRIM_UI_HIDE && id ? GRIM_UI_HIDE_CURRENT : Operation)),
             Operation == GRIM_UI_LIST || Operation == GRIM_UI_POLL ? nullptr : key.c_str(), id);
         if (!raw) return deliver(writer, false, "UI panel service unavailable or request denied", "ERR_UI_SERVICE");
         std::string text;
@@ -118,8 +133,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             p.description = i == 5 ? "Positive request ID returned to this plugin instance" : "Exact stable panel key from ui.list";
             d.parameters = &p; d.parameter_count = 1;
             d.argument_schema_json = i == 5
-                ? R"({"type":"object","properties":{"request_id":{"type":"integer","minimum":1}},"required":["request_id"],"additionalProperties":false})"
+                ? R"({"type":"object","properties":{"request_id":{"type":"integer","minimum":1},"cancel":{"type":"boolean"}},"required":["request_id"],"additionalProperties":false})"
                 : R"({"type":"object","properties":{"panel_id":{"type":"string","minLength":1,"maxLength":256}},"required":["panel_id"],"additionalProperties":false})";
+            if (i == 2 || i == 3) d.argument_schema_json = R"({"type":"object","properties":{"panel_id":{"type":"string","minLength":1,"maxLength":256},"expected_runtime_id":{"type":"integer","minimum":1}},"required":["panel_id"],"additionalProperties":false})";
         }
     }
     return api->register_tools(api, tools, 6);

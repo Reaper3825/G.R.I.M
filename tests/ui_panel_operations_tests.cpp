@@ -115,6 +115,8 @@ void runPanelOperationsTests() {
     auto cancelledHide = GRIM::UI::submitPanelRequest(GRIM_UI_HIDE, "test.first");
     cancelledHide.cancelled->store(true);
     auto missingPanel = GRIM::UI::submitPanelRequest(GRIM_UI_INSPECT, "missing.panel");
+    auto staleShow = GRIM::UI::submitPanelRequest(GRIM_UI_SHOW, "test.first", first->getPanelID());
+    auto staleHide = GRIM::UI::submitPanelRequest(GRIM_UI_HIDE, "test.first", first->getPanelID());
     root.processPendingTasks();
     const auto servicePanels = serviceList.result.get().at("panels");
     check(servicePanels.size() == 3 && servicePanels[0].at("panel_id") == "test.first" &&
@@ -122,6 +124,9 @@ void runPanelOperationsTests() {
     check(cancelledHide.result.get().at("error") == "cancelled" && recreated->isVisible(),
           "Cancelled plugin request changed a real panel");
     check(missingPanel.result.get().at("error") == "not_found", "Plugin service lost host operation failure");
+    check(staleShow.result.get().at("error") == "stale_panel", "Guarded show accepted replaced panel generation");
+    check(staleHide.result.get().at("error") == "stale_panel" && recreated->isVisible(),
+          "Guarded hide changed replaced panel generation");
 
     root.removePanel("test.first"); root.removePanel("test.second"); root.removePanel("test.third");
     root.removePanel("Legacy unkeyed");

@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.12.0**. Updated November 1, 2026.
+API version: **3.14.0**. Updated November 2, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -79,7 +79,9 @@ and `{o}`, rather than subsystem-specific names such as `{panel_id}` or `{path}`
 `<value>` and `[optional]` continue to document ordinary values/options. Usage
 labels are not necessarily literal handler calls: `ui.show {t}` describes the
 semantic action, while its examples and argument schema retain the actual JSON
-format. No adapter from these labels to handler arguments is implemented here.
+format. World Lab now supplies an explicit host adapter for `ui.list`, `ui.inspect`,
+`ui.show`, and `ui.hide`; binding labels alone still do not implement argument conversion.
+See [manual UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
 
 Supported types are `t` (thing), `o` (object), `c` (container), `s` (supporter),
 `r` (room), `d` (door), `k` (key), and `f` (food). Reuse these types by semantic
@@ -127,6 +129,28 @@ to empty when reading older snapshots. The host catalog projects only loaded
 Model tools using `getModelTools()` and never invokes their handlers.
 
 ### Descriptor metadata
+
+API v3.13 adds `GRIM_UI_SHOW_CURRENT` and `GRIM_UI_CANCEL` to the existing UI
+service operation enum without changing table or descriptor layouts. Guarded show
+uses the stable panel key and `request_id` as the expected runtime panel identity;
+the UI thread checks this before mutation and returns `stale_panel` on mismatch.
+Cancel uses a null key and an owned request ID, sets the queued cancellation flag,
+and releases the request. It cannot undo effects that have already occurred.
+Cross-provider cancellation is rejected like cross-provider polling.
+
+The UI Plugin's `ui.show` JSON accepts optional positive `expected_runtime_id`;
+`ui.poll` accepts optional boolean `cancel`. Existing calls retain their meaning.
+The no-argument `ui.list` accepts either empty/whitespace input or `{}` when called
+directly; other non-object or nonempty arguments remain invalid.
+Plugins using these operations require v3.13. World Lab supplies the runtime guard
+from its host-owned observed directory; it does not expose that field in the
+brief resource projection. See [UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
+
+API v3.14 adds `GRIM_UI_HIDE_CURRENT` with the same guarded identity arguments as
+`GRIM_UI_SHOW_CURRENT`. `ui.hide` accepts optional positive `expected_runtime_id`;
+World Lab always supplies it from the observed directory. The UI thread rejects
+stale generations before hiding. Existing unguarded JSON calls retain their meaning;
+table and registration layouts remain unchanged. Guarded hide requires a v3.14 host/plugin.
 
 Descriptors require a canonical tool ID, display name, tool version,
 description, usage, category, and argument format. They can additionally supply:
@@ -398,6 +422,8 @@ Mutations carry confirmation metadata; direct registry invocation does not
 enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, and
 `ui.hide_surface` registrations are removed. `ui.create_surface` and
 `ui.destroy_surface` remain host-owned lifecycle tools, and OSINT is unchanged.
+`ui.create_surface` is currently classified Ignore and excluded from model discovery;
+its host handler remains available for explicit host/developer dispatch.
 See [UI panel operations](UI_PANEL_OPERATIONS.md) for stable keys and examples.
 
 ## Input tool migration (v3.9)

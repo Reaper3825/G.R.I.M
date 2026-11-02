@@ -240,13 +240,27 @@ void ToolRegistry::unregisterByProvider(const std::string& provider, ToolProvide
 }
 
 CommandResult ToolRegistry::invoke(const std::string& name, const std::string& arguments) {
+    return invokeChecked(name, arguments, std::nullopt);
+}
+
+CommandResult ToolRegistry::invokeModel(const std::string& id, const std::string& arguments,
+                                       uint64_t expected_version) {
+    return invokeChecked(id, arguments, expected_version);
+}
+
+CommandResult ToolRegistry::invokeChecked(const std::string& name, const std::string& arguments,
+                                          std::optional<uint64_t> expected_version) {
     std::shared_ptr<Entry> entry;
     std::string id;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (expected_version && *expected_version != version_)
+            return {false, "Tool registry changed; inspect and retry", "ERR_TOOL_STALE", "", "", Colors::Red};
         id = resolveLocked(name);
         if (id.empty()) return {false, "Unknown command: " + name, "ERR_UNKNOWN_CMD", "", "", Colors::Red};
         entry = tools_.at(id);
+        if (expected_version && (id != name || entry->descriptor.usage_type != ToolUsage::Model))
+            return {false, "Canonical Model tool required", "ERR_TOOL_NOT_MODEL", "", "", Colors::Red};
         if (entry->descriptor.swap_state != ToolSwapState::Loaded)
             return {false, "Tool unavailable: " + name, "ERR_TOOL_UNAVAILABLE", "", "", Colors::Red};
     }

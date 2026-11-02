@@ -23,12 +23,15 @@ nlohmann::json take(const GrimPluginAPI* api, const char* value) {
 }
 namespace GRIM::UI {
 // Controlled host boundary: the API/loader/plugin are real, no native UI is started.
-PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key) {
+PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key, uint64_t expectedRuntimeId) {
     auto promise = std::make_shared<std::promise<nlohmann::json>>();
     auto cancel = std::make_shared<std::atomic<bool>>(false);
     auto future = promise->get_future();
-    uiTasks.push_back([promise, cancel, operation, key] {
+    uiTasks.push_back([promise, cancel, operation, key, expectedRuntimeId] {
         if (cancel->load()) { promise->set_value({{"success", false}, {"error", "cancelled"}}); return; }
+        if (expectedRuntimeId && expectedRuntimeId != 42) {
+            promise->set_value({{"success", false}, {"error", "stale_panel"}}); return;
+        }
         if (operation == GRIM_UI_LIST) {
             promise->set_value({{"success", true}, {"panels", {{{"panel_id", "settings"}, {"visible", visible}}}}});
         } else if (key != "settings") {
@@ -65,6 +68,11 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     check(completed.at("result").at("success") && visible && effects == 1, "Completed UI work was not reported");
     check(take(owner, owner->ui_panel_service(owner, GRIM_UI_POLL, nullptr, id)).at("error") == "request_not_found",
           "Completed poll was not consumed");
+    const auto cancelled = take(owner, owner->ui_panel_service(owner, GRIM_UI_HIDE, "settings", 0)).at("request_id").get<uint64_t>();
+    check(take(other, other->ui_panel_service(other, GRIM_UI_CANCEL, nullptr, cancelled)).at("error") == "request_not_found",
+          "Another provider cancelled an owned request");
+    take(owner, owner->ui_panel_service(owner, GRIM_UI_CANCEL, nullptr, cancelled)); pump();
+    check(visible && effects == 1, "Cancelled request applied an effect");
     for (int i = 0; i < 64; ++i)
         check(take(owner, owner->ui_panel_service(owner, GRIM_UI_HIDE, "settings", 0)).at("status") == "pending",
               "UI request capacity rejected too early");
@@ -101,11 +109,34 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     for (const char* args : {"{\"request_id\":-1}", "{\"request_id\":0}", "{\"request_id\":1.2}", "{\"request_id\":\"1\"}"})
         check(dispatchCommand("ui.poll", args).errorCode == "ERR_INVALID_ARGS", "Malformed request ID accepted");
     check(uiTasks.size() == count, "Invalid plugin arguments reached UI service");
+    for (const char* args : {"null", "[]", "{\"unexpected\":true}", "garbage"})
+        check(dispatchCommand("ui.list", args).errorCode == "ERR_INVALID_ARGS", "Invalid listing arguments accepted");
+    check(uiTasks.size() == count, "Invalid listing reached UI service");
+    for (const char* args : {"", " \t "}) {
+        const auto bare = invoke("ui.list", args);
+        check(bare.at("status") == "pending", "Bare listing did not queue discovery");
+        pump();
+        const auto complete = invoke("ui.poll", nlohmann::json{{"request_id", bare.at("request_id")}}.dump());
+        check(complete.at("result").at("panels")[0].at("panel_id") == "settings",
+              "Bare listing did not complete discovery");
+    }
     auto listing = invoke("ui.list", "{}");
     pump();
     auto listed = invoke("ui.poll", nlohmann::json{{"request_id", listing.at("request_id")}}.dump());
     check(listed.at("result").at("panels")[0].at("panel_id") == "settings", "UI discovery result was lost");
-    auto hidden = invoke("ui.hide", "{\"panel_id\":\"settings\"}");
+    const auto effectsBefore = effects;
+    auto stale = invoke("ui.show", R"({"panel_id":"settings","expected_runtime_id":41})");
+    pump();
+    check(!dispatchCommand("ui.poll", nlohmann::json{{"request_id", stale.at("request_id")}}.dump()).success && effects == effectsBefore,
+          "Guarded plugin show ignored runtime identity");
+    stale = invoke("ui.hide", R"({"panel_id":"settings","expected_runtime_id":41})");
+    pump();
+    check(!dispatchCommand("ui.poll", nlohmann::json{{"request_id", stale.at("request_id")}}.dump()).success && visible && effects == effectsBefore,
+          "Guarded plugin hide ignored runtime identity");
+    auto released = invoke("ui.hide", R"({"panel_id":"settings"})");
+    invoke("ui.poll", nlohmann::json{{"request_id", released.at("request_id")}, {"cancel", true}}.dump()); pump();
+    check(visible && effects == effectsBefore, "Plugin cancellation did not cancel queued work");
+    auto hidden = invoke("ui.hide", R"({"panel_id":"settings","expected_runtime_id":42})");
     check(visible, "UI plugin hid panel before processing");
     pump();
     check(invoke("ui.poll", nlohmann::json{{"request_id", hidden.at("request_id")}}.dump()).at("result").at("success") && !visible,

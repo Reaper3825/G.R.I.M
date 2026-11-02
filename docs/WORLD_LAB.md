@@ -436,6 +436,86 @@ tool documentation. `native-open-catalog-v3` invalidates older provider-bound
 witnesses. The worker emits a request and the host fulfills that response without
 an additional worker round trip.
 
+### Manual UI resource discovery and dispatch
+
+The Play command field now supports a deliberately small host UI route:
+
+```text
+ui.list
+ui.inspect panel:settings
+ui.show panel:settings
+ui.hide panel:settings
+```
+
+`ui.list` uses the loaded UI Plugin's registry handler to discover instantiated
+panels. It returns brief `{reference, name, type}` records, where `panel:<stable key>`
+is the session's observed reference and `type` is `t`. Panels are virtual host
+resources, not authored TextWorld entities. A unique exact title (ASCII case
+insensitive) is also accepted; duplicate titles require the explicit reference.
+Visible feedback lists panel names as plain text, adding references only for
+ambiguous or unusable names. Inspect/show/hide feedback reports a short state sentence.
+Structured records remain available to host consumers; a future model context
+projection should use the visible feedback rather than serialize the host envelope.
+Unobserved targets fail rather than guessing. Hidden panels are discoverable;
+uninstantiated panels are not. Discovery is explicit and independent of location.
+
+The host session caches this directory. Its revision changes when membership,
+title, or runtime generation changes; stable repeated listings retain the revision.
+Inspect/show/hide reuse the directory without re-listing everything. Reset, successful
+compile/start, and Stop clear observed references. Registry changes require a fresh
+`ui.list`. Names are readable labels; stable keys remain the underlying identity.
+
+Host ownership is split across the following components:
+
+| Component | Responsibility |
+|---|---|
+| `world_tool_dispatch.hpp` | Manual command parsing and action result envelope. |
+| `ui_tool_adapter.hpp` | Explicit UI adapter table and shared family orchestration; maps `{t}` to `panel_id` and guarded mutations to `expected_runtime_id`. |
+| `ui_panel_resources.hpp` | Session-owned observed panel directory, transactional refresh, name/reference resolution, generation tracking, and visible resource projection. |
+| `ui_tool_completion.hpp` | Shared asynchronous submission, polling, cancellation, and provider ownership checks. |
+| `ui_tool_contract.hpp` | Shared registry eligibility checks and UI adapter contract helpers. |
+| `ToolRegistry` | Sole owner of executable handlers and plugin registration lifetime. |
+
+The adapter table holds host-side mappings, not executable registrations or plugin
+state. It is checked against the current descriptor's binding and parameter metadata;
+usage prose is never parsed or compared to select an argument mapping. All four
+UI actions share one directory and completion protocol. Adding a supported panel
+operation requires an explicit table entry; unknown tools never inherit a mapping.
+Only canonical loaded Model tools are eligible. The registry
+atomically checks the validated revision/classification when selecting the handler.
+The adapter verifies poll/inspect provider ownership. Inspect supplies state on
+demand. Show and hide recheck the observed runtime generation on the UI thread before
+changing visibility, so removal/recreation cannot redirect the effect.
+
+The worker validates a live, nonterminal step and emits a host action request;
+the client verifies it matches the submitted command and invokes the host adapter
+once. Native actions keep their existing route; unsupported `ui.*` commands fail.
+Host feedback includes an action ID and completed/failed/unknown status. Async requests
+are polled off the UI thread for up to ten seconds; pending submission is never
+reported as completed. Cancellation releases owned requests and cancels still-queued
+work. Already applied effects cannot be undone, so interrupted completion is unknown
+and requires inspection before retrying. No automatic resubmission occurs.
+
+Host operations do not advance native moves, inject facts, or award Goal success.
+Their commands are rejected by native witness replay, including recorded solutions.
+Reset restarts native state but does not undo host effects. This route is for explicit
+manual Play commands; automatic model Answer dispatch and its policy gate remain
+pending. Full worker facts are still authoring data, not a model observation feed.
+`ui.create_surface` is classified Ignore for now, preserving its host handler while
+excluding creation from model discovery. Existing-resource UI operations retain
+their classifications; creation argument mapping is outside this slice.
+
+Use a host and UI Plugin built with API v3.14 for guarded show/hide and cancellation.
+Existing descriptor and registration layouts are unchanged. Focused checks:
+
+```powershell
+./tests/run_world_tool_dispatch.ps1
+./tests/run_ui_input_foundation.ps1 -TextWorld
+./tests/run_plugin_shutdown.ps1 -BuildUIFixture
+```
+
+### Native action inspection and composition
+
 World and Asset inspectors provide an Actions shortcut. Rules and command
 templates come from the generated TextWorld 1.7 catalog, while native code only
 binds typed parameters to document entity IDs. World inspection can prepare a

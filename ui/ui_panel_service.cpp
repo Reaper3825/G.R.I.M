@@ -11,17 +11,25 @@ nlohmann::json metadata(const UIPanelInfo& panel) {
             {"operations", {"inspect", "show", "hide", "bring_to_front"}}};
 }
 }
-PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key) {
+PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key,
+                                       uint64_t expectedRuntimeId) {
     auto promise = std::make_shared<std::promise<nlohmann::json>>();
     auto cancelled = std::make_shared<std::atomic<bool>>(false);
     auto future = promise->get_future();
-    UIRoot::get().postTask([promise, cancelled, operation, key] {
+    UIRoot::get().postTask([promise, cancelled, operation, key, expectedRuntimeId] {
         try {
             if (cancelled->load()) {
                 promise->set_value({{"success", false}, {"error", "cancelled"}});
                 return;
             }
             auto& root = UIRoot::get();
+            if (expectedRuntimeId) {
+                const auto panel = root.getPanelByKey(key);
+                if (!panel || panel->getPanelID() != expectedRuntimeId) {
+                    promise->set_value({{"success", false}, {"error", "stale_panel"}});
+                    return;
+                }
+            }
             if (operation == GRIM_UI_LIST) {
                 auto panels = nlohmann::json::array();
                 // The task is now on the UI thread; these host futures are ready immediately.
