@@ -371,6 +371,71 @@ part of either test command.
 
 ## Built-in action inspection
 
+### Host-backed tool catalog
+
+The GRIM environment keeps its subsystem rooms and one tool catalog. The catalog
+is a container that starts closed, with `open_provider: "tool_catalog"`. World
+and asset persistence preserve this optional field through saves, copies, and ID
+remapping. Only containers may use this provider. Older draft `examine_provider`
+fields are rejected explicitly; replace them with `open_provider` on a container.
+
+- `examine tool catalog` describes the catalog and its open/closed state. It does
+  not list tools or misleadingly report native empty contents for virtual entries.
+- `open tool catalog` performs native container opening and returns current Model
+  tool IDs with authored 5-12 word summaries. Repeating this command while open
+  refreshes the listing through a native examine of the accessible container.
+- `close tool catalog` performs native closing and hides its virtual entries.
+  Reset restores the authored closed state.
+
+The worker resolves successful native `open/c` actions to stable entity IDs and
+emits an `observation_request` only for a bound, open container. Repeated-open
+refresh requires native examination applicability; failed or inaccessible actions
+never disclose contents. The move count must advance because TextWorld retains
+`_last_action` after invalid commands. Ordinary entities retain native behavior.
+
+`TextWorldClient` advertises `observation_providers: ["tool_catalog", "tool_details"]`
+on protocol-2 requests. Compilation of provider-bound worlds rejects clients
+without catalog support. The shared `world_observation.hpp` host projection
+fulfills requests after matching response ID/protocol. Catalog requests call
+`ToolRegistry::getModelTools()` and return only IDs, names, and short summaries
+in `state.tool_catalog` and readable feedback. Empty registries and missing legacy
+summaries have explicit messages. Each opening/refresh reads the live registry
+without recompilation; historical observations remain frozen. Handlers are never
+invoked. This service is independent of the Play UI.
+
+#### Deeper tool inspection
+
+Clients send only current Model tool IDs in `catalog_tools`. Virtual entries are
+identified by catalog entity ID plus canonical tool ID. They are not authored or
+compiled world entities and are never saved as world facts. A fresh roster supplies
+the available-command picker; full tool metadata remains in the host until needed.
+
+- `examine open` or `x open` inspects a tool when exactly one catalog is both open
+  and natively examinable, without conflicting with an authored entity name.
+- `examine open in tool catalog` explicitly selects an entry for name collisions
+  or multiple accessible catalogs. The picker offers these scoped commands.
+  Canonical tool IDs containing dots or spaces are supported.
+- Closed catalogs and catalogs in other rooms expose no entries. Closing a
+  catalog removes both bare and scoped deeper-inspection access immediately.
+
+The worker anchors each virtual inspection to native examination of its accessible
+open catalog. The host then calls `getTool(tool_id)` and rechecks canonical identity,
+Model classification, and Loaded status. `state.tool_details` and readable feedback
+contain full description, usage, and named argument documentation. Bindings,
+provider internals, and execution statistics remain excluded. Changes are visible
+immediately; removed, reclassified, or unloaded entries report unavailability.
+Unknown explicit entries receive the same response without disclosing metadata.
+Previously known bare names remain resolvable after removal, while the live picker
+excludes them. Inspection never executes a tool.
+
+Provider metadata and native container state participate in environment/witness
+identity; live registry data remains observation data, not Goal evidence. Saved
+virtual inspections normalize to explicit catalog scope so native replay remains
+independent of future roster changes. Replay verifies world outcomes, not past
+tool documentation. `native-open-catalog-v3` invalidates older provider-bound
+witnesses. The worker emits a request and the host fulfills that response without
+an additional worker round trip.
+
 World and Asset inspectors provide an Actions shortcut. Rules and command
 templates come from the generated TextWorld 1.7 catalog, while native code only
 binds typed parameters to document entity IDs. World inspection can prepare a

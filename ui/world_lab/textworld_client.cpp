@@ -1,4 +1,5 @@
 #include "textworld_client.hpp"
+#include "world_observation.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -280,6 +281,10 @@ struct TextWorldClient::Impl {
             start();
             const auto requestId=++sequence;
             request["id"]=requestId;request["protocol"]=2;
+            request["observation_providers"]={"tool_catalog","tool_details"};
+            request["catalog_tools"]=nlohmann::json::array();
+            for(const auto& tool:MMO::ToolRegistry::instance().getModelTools())
+                request["catalog_tools"].push_back(tool.tool_id);
             const auto body=request.dump();if(body.size()>16*1024*1024)throw std::runtime_error("World request exceeds 16 MB");
             {std::ofstream out(directory/"request.tmp",std::ios::binary);out<<body;out.close();if(!out)throw std::runtime_error("Cannot write TextWorld request");}
             fs::rename(directory/"request.tmp",directory/"request.json");
@@ -292,6 +297,7 @@ struct TextWorldClient::Impl {
                     if(fs::file_size(response)>16*1024*1024)throw std::runtime_error("TextWorld response exceeds 16 MB");
                     std::ifstream in(response,std::ios::binary);nlohmann::json result;in>>result;in.close();fs::remove(response);
                     if(result.at("protocol")!=2 || result.at("id")!=requestId)throw std::runtime_error("TextWorld response ID/protocol mismatch");
+                    resolveHostObservation(result);
                     return result;
                 }
 #ifdef _WIN32

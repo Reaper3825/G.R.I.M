@@ -61,6 +61,11 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* usages[] = {"move_mouse <x> <y>", "click [left|right|middle]", "type <text>",
         "key <key|key+key>", "click_on {t}"};
     const GrimToolBinding targetBindings[] = {{"t", "t"}};
+    const char* summaries[] = {"Move the pointer to specified desktop coordinates",
+        "Click a mouse button at the current position",
+        "Type supplied text into the focused application",
+        "Press a key or combination of keys",
+        "Click a uniquely identified visible interface element"};
     tools[4].bindings = targetBindings; tools[4].binding_count = 1;
     const char* examples[] = {"move_mouse -1200 300", "click left", "type Hello world", "key ctrl+c", "click_on text Submit"};
     const char* names[] = {"coordinates", "button", "text", "keys", "target"};
@@ -75,6 +80,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     GrimToolParameter parameters[5];
     for (size_t i = 0; i < 5; ++i) {
         tools[i].usage_type = GRIM_TOOL_USAGE_DEBUG;
+        tools[i].short_description = summaries[i];
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0"; d.description = descriptions[i];
         d.usage = usages[i]; d.category = "action"; d.argument_format = "raw_text";

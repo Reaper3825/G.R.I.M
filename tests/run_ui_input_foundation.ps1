@@ -18,6 +18,7 @@ if ($Tools) {
     $arguments += '/DGRIM_TOOLS_VIEW_TESTS'
 }
 if ($WorldLab -or $TextWorld) {
+    if (-not $Tools) { $sources += 'MMO/Core/ToolRegistry.cpp' }
     $sources += 'ui/world_lab/world_actions.cpp', 'ui/world_lab/ui_world_actions.cpp'
     $sources += 'ui/world_lab/world_asset.cpp', 'ui/world_lab/ui_world_assets_view.cpp', 'ui/world_lab/world_document.cpp', 'ui/world_lab/ui_world_canvas.cpp', 'ui/world_lab/ui_world_lab_view.cpp', 'ui/world_lab/ui_world_session.cpp', 'ui/world_lab/textworld_client.cpp', 'tests/world_lab_tests.cpp', 'tests/world_asset_tests.cpp'
     $arguments += '/DGRIM_WORLD_LAB_TESTS'

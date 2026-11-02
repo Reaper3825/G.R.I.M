@@ -1,5 +1,10 @@
 # Native GRIM tool plugins
 
+API v3.12 adds `registration.short_description`: an authored 5-12 word summary
+for the environment tool catalog. The host copies it into the canonical
+descriptor; old plugin records default to empty. See
+[catalog summaries](../docs/PLUGIN_API.md#catalog-summaries-v312).
+
 API v3.11 adds optional world binding labels. Supply `GrimToolBinding` entries
 through `registration.bindings` and `registration.binding_count`; the host copies
 them into `ToolDescriptor::bindings`. For `open {t}`, use `{"t", "t"}`.

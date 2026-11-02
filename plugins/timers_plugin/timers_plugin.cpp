@@ -55,6 +55,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         !api->schedule_user_timer) return GRIM_ERROR_API_VERSION_MISMATCH;
     grim::runtime::host = api;
     GrimToolRegistration tool;
+    tool.short_description = "Start a countdown timer for the specified duration";
     tool.handler = call;
     auto& d = tool.descriptor;
     d.tool_id = d.display_name = "set_timer"; d.version = "1.0.0";

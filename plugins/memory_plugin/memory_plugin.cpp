@@ -23,10 +23,14 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* descriptions[] = {"Stage manual information in the host memory rotation pipeline", "Retrieve information from memory",
         "Request legacy forget behavior: check and flush matching records without deleting them"};
     const char* usages[] = {"remember <text>", "recall <query>", "forget <query>"};
+    const char* summaries[] = {"Stage supplied information for the host memory pipeline",
+        "Retrieve stored information matching the supplied memory query",
+        "Check and flush matching memories without deleting records"};
     const char* examples[] = {"remember my color is blue", "recall color", "forget color"};
     GrimToolParameter parameters[3];
     for (size_t i = 0; i < 3; ++i) {
         auto& d = tools[i].descriptor;
+        tools[i].short_description = summaries[i];
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0";
         d.description = descriptions[i]; d.usage = usages[i];
         d.category = i == 1 ? "information" : "action"; d.argument_format = "raw_text";

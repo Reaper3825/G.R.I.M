@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cctype>
 #include <map>
 #include <string>
 #include <vector>
@@ -80,6 +81,7 @@ struct ToolDescriptor {
 
     // Documentation
     std::string           description;
+    std::string           short_description; // Authored 5-12 word catalog summary; empty for legacy tools.
     std::string           usage; // Model-facing action label/template, independent of usage_type.
     // Usage placeholder -> existing world type (t, o, c, s, r, d, k, f).
     // Labels only: no entity resolution, argument conversion, or dispatch.
@@ -127,6 +129,18 @@ inline bool validToolBindings(const ToolDescriptor& tool) {
         if (tool.usage.find("{" + placeholder + "}") == std::string::npos) return false;
     }
     return true;
+}
+
+inline bool validToolShortDescription(const std::string& text) {
+    if (text.empty()) return true; // Legacy and third-party metadata may omit it.
+    if (text.size() > 512 || text.find_first_of("\r\n\0", 0, 3) != std::string::npos) return false;
+    size_t words = 0;
+    bool inWord = false;
+    for (unsigned char c : text) {
+        if (std::isspace(c)) inWord = false;
+        else if (!inWord) { ++words; inWord = true; }
+    }
+    return words >= 5 && words <= 12;
 }
 
 } // namespace GRIM::MMO

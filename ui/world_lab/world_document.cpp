@@ -152,6 +152,7 @@ void Document::validate() const {
     for (const auto& e : entities) {
         require(!e.id.empty() && e.id.size() <= 128 && ids.insert(e.id).second, "Duplicate or invalid entity ID");
         require(!e.name.empty() && e.name.size() <= 256 && e.description.size() <= 16384, "Invalid name or description: " + e.id);
+        require(e.openProvider.empty() || (e.openProvider=="tool_catalog" && e.kind=="container"), "Invalid open provider: " + e.id);
         require(e.kind=="room" || e.kind=="object" || e.kind=="key" || e.kind=="container" || e.kind=="supporter" || e.kind=="food", "Unsupported kind: " + e.kind);
         require(e.state=="open" || e.state=="closed", "Invalid container state");
         if(e.kind=="room") require(e.parent.empty(), "Rooms cannot have a parent");
@@ -225,7 +226,10 @@ nlohmann::json Document::json() const {
         j["navigation"]={{"mode","path"},{"rooms",nlohmann::json::array()}};
         for(const auto& p:paths)j["navigation"]["rooms"].push_back({{"id",p.id},{"parent",p.parent},{"segment",p.segment}});
     }
-    for(const auto& e:entities) j["entities"].push_back({{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}});
+    for(const auto& e:entities) {
+        j["entities"].push_back({{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}});
+        if(!e.openProvider.empty())j["entities"].back()["open_provider"]=e.openProvider;
+    }
     for(const auto& p:passages) j["passages"].push_back({{"id",p.id},{"from",p.from},{"to",p.to},{"direction",p.direction},{"door_name",p.doorName},{"door_state",p.doorState},{"key",p.key}});
     for(const auto& p:layout) j["editor"]["rooms"].push_back({{"id",p.id},{"x",p.x},{"y",p.y}});
     if(legacy){
@@ -251,7 +255,10 @@ Document Document::parse(const nlohmann::json& j) {
     require(j.at("next_id").is_number_integer(),"Invalid next ID");
     const auto next=j.at("next_id").get<int64_t>(); require(next>0 && next<1000000000,"Invalid next ID"); d.nextId=static_cast<unsigned>(next);
     require(j.at("entities").is_array() && j.at("passages").is_array() && j.at("editor").at("rooms").is_array(), "Expected world arrays");
-    for(const auto& e:j.at("entities")) d.entities.push_back({e.at("id"),e.at("name"),e.at("kind"),e.at("parent"),e.at("description"),e.at("state")});
+    for(const auto& e:j.at("entities")) {
+        require(!e.contains("examine_provider"),"Use open_provider on a container for catalog observations");
+        d.entities.push_back({e.at("id"),e.at("name"),e.at("kind"),e.at("parent"),e.at("description"),e.at("state"),e.value("open_provider",std::string{})});
+    }
     for(const auto& p:j.at("passages")) d.passages.push_back({p.at("id"),p.at("from"),p.at("to"),p.at("direction"),p.value("door_name",std::string{}),p.value("door_state",std::string{"open"}),p.value("key",std::string{})});
     if(j.at("version")==2) {
         require(j.at("solution").is_array() && j.at("win_conditions").is_array() && j.at("fail_conditions").is_array(),"Expected challenge arrays");

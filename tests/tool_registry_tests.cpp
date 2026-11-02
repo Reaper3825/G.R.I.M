@@ -48,9 +48,19 @@ int main() try {
     {
         auto labeled = descriptor("binding_fixture");
         labeled.usage = "binding_fixture {target}";
+        labeled.short_description = "Inspect information supplied by a selected entity";
         labeled.bindings = {{"target", "t"}};
         const auto json = nlohmann::json(labeled);
         check(json.get<ToolDescriptor>().bindings == labeled.bindings, "Binding snapshot roundtrip failed");
+        check(json.get<ToolDescriptor>().short_description == labeled.short_description, "Short summary snapshot roundtrip failed");
+        auto legacySummary = json; legacySummary.erase("short_description");
+        check(legacySummary.get<ToolDescriptor>().short_description.empty(), "Legacy summary default changed");
+        for (const auto* invalid : {"Only four words here", "one two three four five six seven eight nine ten eleven twelve thirteen", "Five words with\na newline"}) {
+            auto bad = json; bad["short_description"] = invalid;
+            bool rejected = false;
+            try { bad.get<ToolDescriptor>(); } catch (const std::exception&) { rejected = true; }
+            check(rejected, "Invalid catalog summary accepted");
+        }
         auto old = json; old.erase("bindings");
         check(old.get<ToolDescriptor>().bindings.empty(), "Old snapshot did not default to empty bindings");
         for (const auto& bad : nlohmann::json::array({

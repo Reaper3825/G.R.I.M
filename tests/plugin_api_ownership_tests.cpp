@@ -186,18 +186,23 @@ int main(int argc, char** argv) try {
     complete.descriptor.parameters = &parameter;
     complete.descriptor.parameter_count = 1;
     complete.usage_type = GRIM_TOOL_USAGE_SYSTEM;
+    std::string shortDescription = "Inspect information supplied by a selected entity";
+    complete.short_description = shortDescription.c_str();
     std::string bindingName = "path";
     std::string bindingType = "t";
     GrimToolBinding binding{bindingName.c_str(), bindingType.c_str()};
     complete.descriptor.usage = "staged_tool {path}";
     complete.bindings = &binding; complete.binding_count = 1;
     check(staged->register_tools(staged, &complete, 1) == GRIM_OK, "Staging failed");
+    shortDescription.assign(200, 'x');
     bindingName.assign(200, 'x'); bindingType.assign(200, 'x');
     description.assign(200, 'x');
     schema.assign(200, 'x');
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("staged_tool"), "Uncommitted tool leaked");
     check(PluginAPI::commitPluginTools("staged"), "Commit failed");
     auto snapshot = GRIM::MMO::ToolRegistry::instance().getTool("staged_alias");
+    check(snapshot && snapshot->short_description=="Inspect information supplied by a selected entity",
+          "Short description was not copied during registration");
     check(snapshot && snapshot->bindings == std::map<std::string, std::string>{{"path", "t"}},
           "Binding labels were not copied before registration returned");
     check(snapshot && snapshot->usage_type == GRIM::MMO::ToolUsage::System &&
@@ -245,6 +250,27 @@ int main(int argc, char** argv) try {
           GRIM::MMO::ToolRegistry::instance().getTool("v310_second")->usage_type == GRIM::MMO::ToolUsage::Debug,
           "v3.10 batch stride, classification, or empty binding default broken");
     beta->unregister_command(beta, "v310_first"); beta->unregister_command(beta, "v310_second");
+    struct V311Registration {
+        uint32_t struct_size = sizeof(V311Registration);
+        GrimToolDescriptor descriptor;
+        GrimToolHandler handler = nullptr;
+        void* user_data = nullptr;
+        GrimToolUsage usage_type = GRIM_TOOL_USAGE_MODEL;
+        const GrimToolBinding* bindings = nullptr;
+        size_t binding_count = 0;
+    };
+    static_assert(sizeof(V311Registration) == offsetof(GrimToolRegistration, short_description));
+    V311Registration v311[2];
+    for (size_t i=0;i<2;++i) {
+        const auto source=definition(i ? "v311_second" : "v311_first");
+        v311[i].descriptor=source.descriptor;v311[i].handler=source.handler;
+    }
+    check(beta->register_tools(beta,reinterpret_cast<const GrimToolRegistration*>(v311),2)==GRIM_OK &&
+          GRIM::MMO::ToolRegistry::instance().getTool("v311_second")->short_description.empty(),
+          "v3.11 multi-record stride or empty summary default broken");
+    beta->unregister_command(beta,"v311_first");beta->unregister_command(beta,"v311_second");
+    auto invalidSummary=definition("invalid_summary");invalidSummary.short_description="Too short";
+    check(beta->register_tools(beta,&invalidSummary,1)==GRIM_ERROR_INVALID_PARAM,"Invalid short summary registered");
     auto badBinding = definition("bad_binding");
     badBinding.descriptor.usage = "bad_binding {target}";
     const GrimToolBinding duplicateBindings[] = {{"target", "t"}, {"target", "t"}};

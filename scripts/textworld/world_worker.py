@@ -63,6 +63,10 @@ def build_world(document):
         ident = e["id"]
         need(isinstance(ident, str) and ident and ident not in source, "Duplicate/invalid entity ID", str(ident))
         need(e["kind"] in TYPES, "Unsupported entity kind", ident)
+        need("examine_provider" not in e, "Use open_provider on a container for catalog observations", ident)
+        provider = e.get("open_provider", "")
+        need(provider == "" or (provider == "tool_catalog" and e["kind"] == "container"),
+             "Unsupported container open provider", ident)
         name = game_text(e["name"], ident, True)
         game_text(e.get("description", ""), ident)
         need(name.casefold() not in names, "Playable entity names must be unique", ident)
@@ -151,6 +155,8 @@ def environment_identity(document):
     if "navigation" in document:
         content["navigation"] = document["navigation"]
         content["navigation_semantics"] = "path-v1-adjacent"
+    if any(e.get("open_provider") for e in document["entities"]):
+        content["observation_semantics"] = "native-open-catalog-v3"
     return identity(content)
 
 
@@ -166,6 +172,12 @@ class Session:
         self.build_id = 0
         self.navigation = None
         self.room_names = {}
+        self.open_providers = {}
+        self.catalog_descriptions = {}
+        self.entity_names = {}
+        self.tool_details_enabled = False
+        self.known_catalog_tools = set()
+        self.live_catalog_tools = set()
 
     @property
     def done(self):
@@ -197,6 +209,20 @@ class Session:
                 "engine": {"done": bool(engine_done), "score": engine_score,
                            "won": bool(state.get("won")), "lost": bool(state.get("lost"))},
                 "facts": facts, "admissible_commands": state.get("admissible_commands", [])}
+        if state.get("_host_observation_request"):
+            result["observation_request"] = state["_host_observation_request"]
+        if self.tool_details_enabled:
+            commands = list(result["admissible_commands"])
+            for ident in self.catalogs_in_scope(state):
+                for tool_id in sorted(self.live_catalog_tools):
+                    command = f"examine {tool_id} in {self.entity_names[ident]}"
+                    if len(command) <= 512:
+                        commands.append(command)
+            result["admissible_commands"] = sorted(set(commands))
+        # Reopening an accessible open catalog refreshes its live listing.
+        for ident in self.catalogs_in_scope(state):
+            result["admissible_commands"].append("open " + self.entity_names[ident])
+        result["admissible_commands"] = sorted(set(result["admissible_commands"]))
         if self.navigation and self.navigation.rooms:
             nav = self.navigation
             result["location_path"] = nav.paths[room]
@@ -211,8 +237,84 @@ class Session:
             result["feedback"] += "\nLOCATION: " + nav.paths[room]
         return result
 
+    def observation_entity(self, state, action):
+        if action is None or not (action.name.startswith("examine/") or action.name == "open/c"):
+            return None
+        kb = state["_game_progression"].game.kb
+        matched = kb.rules[action.name].match(action)
+        if not matched:
+            return None
+        target_name = {"examine/t": "t", "examine/d": "d", "open/c": "c"}.get(action.name, "o")
+        target = next((v for p, v in matched.items() if p.name == target_name), None)
+        return self.mapping.get((target.name, target.type)) if target else None
+
+    def catalog_is_open(self, state, ident):
+        symbol = self.bindings[ident]["symbol"]
+        return ("open", (symbol,)) in raw_facts(state)
+
+    def catalogs_in_scope(self, state):
+        # Use applicable native examine rules, including closed-container and
+        # inventory visibility, rather than reimplementing world accessibility.
+        result = set()
+        for action in state["_game_progression"].valid_actions:
+            ident = self.observation_entity(state, action)
+            if self.open_providers.get(ident) == "tool_catalog" and self.catalog_is_open(state, ident):
+                result.add(ident)
+        return sorted(result)
+
+    def catalog_refresh(self, state, command):
+        match = re.fullmatch(r"open\s+(?:the\s+)?(.+)", command.strip(), re.IGNORECASE)
+        if match:
+            target = " ".join(match.group(1).casefold().split())
+            for ident in self.catalogs_in_scope(state):
+                if target == " ".join(self.entity_names[ident].casefold().split()):
+                    return ident
+        return None
+
+    def virtual_examine(self, state, command):
+        if not self.tool_details_enabled:
+            return None
+        match = re.fullmatch(r"(?:examine|x)\s+(.+)", command.strip(), re.IGNORECASE)
+        if not match:
+            return None
+        target = match.group(1).strip()
+        catalogs = self.catalogs_in_scope(state)
+        # Explicit catalog scope is unambiguous and remains replayable even if
+        # a previously listed tool has since disappeared from the live registry.
+        for ident in catalogs:
+            suffix = " in " + self.entity_names[ident]
+            if target.casefold().endswith(suffix.casefold()):
+                tool_id = target[:-len(suffix)].strip()
+                if tool_id:
+                    return ident, self.canonical_tool_id(tool_id) or tool_id
+        # Ordinary world names take precedence over the convenient bare form.
+        # A collision can always be resolved through explicit catalog scope.
+        normalized = " ".join(target.casefold().split())
+        if any(" " + normalized + " " in " " + " ".join(name.casefold().split()) + " "
+               for name in self.entity_names.values()):
+            return None
+        tool_id = self.canonical_tool_id(target)
+        if tool_id is not None and len(catalogs) == 1:
+            return catalogs[0], tool_id
+        return None
+
+    def canonical_tool_id(self, target):
+        if target in self.known_catalog_tools:
+            return target
+        matches = [tool_id for tool_id in self.known_catalog_tools if tool_id.casefold() == target.casefold()]
+        return matches[0] if len(matches) == 1 else None
+
     def step(self, env, command):
         """Shared dispatch for live play and deterministic witness replay."""
+        previous_moves = env.state.get("moves", 0)
+        virtual = self.virtual_examine(env.state, command)
+        refresh = self.catalog_refresh(env.state, command)
+        if virtual:
+            need(len(f"examine {virtual[1]} in {self.entity_names[virtual[0]]}") <= 512,
+                 "Catalog inspection command exceeds 512 characters")
+            command = "examine " + self.entity_names[virtual[0]]
+        elif refresh:
+            command = "examine " + self.entity_names[refresh]
         if self.navigation and self.navigation.rooms:
             state = env.state
             current = next(self.mapping[args[1]] for name, args in raw_facts(state)
@@ -224,7 +326,30 @@ class Session:
             need(not command.casefold().startswith("pathgo"), "Use enter, go <path>, or back")
             if destination:
                 command = "pathgo " + self.room_names[destination]
-        return env.step(command)
+        state, score, done = env.step(command)
+        state.pop("_host_observation_request", None)
+        state.pop("_world_command", None)
+        action = state.get("_last_action")
+        # TextWorld retains _last_action after failed commands; a new successful
+        # action increments moves. Never disclose content based on a stale action.
+        if (state.get("moves", 0) > previous_moves and action is not None
+                and (action.name.startswith("examine/") or action.name == "open/c")):
+            entity_id = self.observation_entity(state, action)
+            provider = self.open_providers.get(entity_id)
+            if provider:
+                observation_request = {"provider": provider, "entity_id": entity_id}
+                if virtual and entity_id == virtual[0] and self.catalog_is_open(state, entity_id):
+                    observation_request.update(provider="tool_details", tool_id=virtual[1])
+                    state["_world_command"] = f"examine {virtual[1]} in {self.entity_names[entity_id]}"
+                    state["_host_observation_request"] = observation_request
+                elif (action.name == "open/c" or refresh == entity_id) and self.catalog_is_open(state, entity_id):
+                    state["_host_observation_request"] = observation_request
+                elif action.name.startswith("examine/"):
+                    # Virtual entries are not native contents: avoid the engine's
+                    # automatic 'empty container' report when describing a catalog.
+                    description = self.catalog_descriptions.get(entity_id) or "A catalog of currently available tools."
+                    state["feedback"] = description + ("\nIt is open." if self.catalog_is_open(state, entity_id) else "\nIt is closed.")
+        return state, score, done
 
     @staticmethod
     def command(value):
@@ -245,8 +370,15 @@ class Session:
 
     def handle(self, request):
         op = request["op"]
+        roster = request.get("catalog_tools", [])
+        need(isinstance(roster, list) and all(isinstance(tool_id, str) and tool_id and
+             not any(c in tool_id for c in "\r\n\x00") for tool_id in roster), "Invalid catalog tool roster")
         if op in ("compile", "validate"):
             document = request["document"]
+            open_providers = {e["id"]: e["open_provider"] for e in document.get("entities", [])
+                                 if e.get("open_provider")}
+            need(not open_providers or "tool_catalog" in request.get("observation_providers", []),
+                 "Host observation support required; restart with the current client")
             navigation = PathNavigation(document)
             maker, mapping = build_world(document)
             next_build = self.build_id + 1
@@ -272,10 +404,19 @@ class Session:
             self.mapping = {(entity.id, entity.type): ident for ident, entity in mapping.items()}
             self.environment_id, self.episode, self.build_id = env_id, episode, next_build
             self.navigation = navigation
+            self.open_providers = open_providers
+            self.catalog_descriptions = {e["id"]: e.get("description", "") for e in document["entities"] if e.get("open_provider")}
+            self.entity_names = {e["id"]: e["name"] for e in document["entities"]}
+            self.entity_names.update({p["id"]: p["door_name"] for p in document.get("passages", []) if p.get("door_name")})
+            self.tool_details_enabled = "tool_details" in request.get("observation_providers", [])
+            self.live_catalog_tools = set(roster)
+            self.known_catalog_tools = set(roster)
             self.room_names = {e["id"]: e["name"] for e in document["entities"] if e["kind"] == "room"}
             return {"state": self.observation(state), "warnings": warnings,
                     "action_catalog": action_catalog(), "build_id": self.build_id, "environment_id": env_id}
         need(self.env is not None, "Compile an environment first")
+        self.live_catalog_tools = set(roster)
+        self.known_catalog_tools.update(roster)
         if op in ("start_episode", "reset"):
             bound = (BoundGoal(request.get("goal"), request.get("source_id", ""), self.bindings)
                      if op == "start_episode" else self.episode.bound)
@@ -299,16 +440,18 @@ class Session:
                      "Saved solution is stale for the environment, starting state, Goal, or evaluator")
             replay, state, episode = self.candidate_episode(self.game_file, self.episode.bound, self.environment_id)
             try:
+                canonical_commands = []
                 need(episode.identity == self.episode.identity, "Replay starting state differs from the active episode")
                 for command in commands:
                     need(episode.result["status"] == "active", "Solution contains commands after the episode ended")
                     state, _, done = self.step(replay, command)
+                    canonical_commands.append(state.get("_world_command", command))
                     episode.advance(raw_facts(state), done, command)
                 need(episode.result["status"] == "succeeded", "Recorded commands do not verify Goal success")
                 self.episode.witness_verified = True
                 self.episode.result["achievability"] = "achievable"
-                return {"verified": True, "commands": commands, "achievability": "achievable",
-                        "witness": {"identity": episode.identity, "commands": commands}}
+                return {"verified": True, "commands": canonical_commands, "achievability": "achievable",
+                        "witness": {"identity": episode.identity, "commands": canonical_commands}}
             finally:
                 replay.close()
         raise WorldError("Unknown operation: " + str(op))

@@ -96,6 +96,11 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             "Create one directory; parent directories must already exist",
             "Remove one file, symlink, or empty directory; never recursively"};
         const char* usages[] = {"pwd", "cd {c}", "ls", "mkdir {c}", "rm {t}"};
+        const char* summaries[] = {"Show the current filesystem working directory",
+            "Change the filesystem working directory to another container",
+            "List entries inside the current working directory",
+            "Create a new directory within an existing parent",
+            "Remove one file or empty directory without recursion"};
         GrimToolRegistration tools[5];
         const GrimToolBinding directoryBindings[] = {{"c", "c"}};
         const GrimToolBinding pathBindings[] = {{"t", "t"}};
@@ -106,6 +111,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         GrimToolParameter paths[5];
         for (size_t i = 0; i < 5; ++i) {
             tools[i].usage_type = GRIM_TOOL_USAGE_SYSTEM;
+            tools[i].short_description = summaries[i];
             tools[i].handler = execute;
             tools[i].user_data = &operations[i];
             auto& d = tools[i].descriptor;

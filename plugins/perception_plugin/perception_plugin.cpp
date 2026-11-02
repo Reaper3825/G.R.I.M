@@ -31,8 +31,12 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* ids[] = {"perception_what_see", "perception_read_text", "perception_detect_objects"};
     const char* descriptions[] = {"Describe what's visible on screen", "Read text from screen using OCR", "Detect and locate objects on screen"};
     const char* contexts[] = {"Host perception subsystem initialized"};
+    const char* summaries[] = {"Describe the currently visible contents of the screen",
+        "Read visible screen text using optical character recognition",
+        "Detect visible objects and report their screen locations"};
     for (size_t i = 0; i < 3; ++i) {
         tools[i].usage_type = GRIM_TOOL_USAGE_DEBUG;
+        tools[i].short_description = summaries[i];
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = d.usage = ids[i];
         d.version = "1.0.0"; d.description = descriptions[i]; d.category = "information";

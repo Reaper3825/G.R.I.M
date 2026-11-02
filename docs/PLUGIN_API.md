@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.11.0**. Updated November 1, 2026.
+API version: **3.12.0**. Updated November 1, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -108,6 +108,23 @@ Version-1 snapshots add a `bindings` JSON object; missing fields in older snapsh
 default to empty. Model prompts and `tool_info` show usage; binding maps remain in
 system-facing snapshots and the Tools inspector. No changes to world/asset schemas
 or compiled gameplay are included.
+
+### Catalog summaries (v3.12)
+
+`ToolDescriptor::short_description` supplies an authored, single-line summary of
+5-12 whitespace-separated words. Native plugins supply the optional
+`GrimToolRegistration::short_description` string; the host copies it before
+registration returns. Nonempty invalid summaries reject the entire batch. Empty
+summaries remain valid for legacy and third-party registrations; the catalog
+honestly displays `Short description unavailable for this registered tool`.
+Existing full descriptions and argument documentation remain separate.
+
+v3.12 appends the summary pointer after the v3.11 registration prefix. The host
+accepts exact v3.0-v3.9, v3.10, and v3.11 record strides with empty summaries.
+Embedded descriptors and the function table retain their layout. New plugins
+require v3.12. Version-1 snapshots add optional `short_description`, defaulting
+to empty when reading older snapshots. The host catalog projects only loaded
+Model tools using `getModelTools()` and never invokes their handlers.
 
 ### Descriptor metadata
 

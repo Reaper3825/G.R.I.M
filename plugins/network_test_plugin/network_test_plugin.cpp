@@ -676,10 +676,13 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* names[] = {"networktest", "networktest_stop"};
     const char* descriptions[] = {"Start a network stress test", "Stop the current network stress test"};
     const char* usages[] = {"networktest {t} <port> [options...]", "networktest_stop"};
+    const char* summaries[] = {"Start a network load test against selected targets",
+        "Stop the currently running network load test"};
     const GrimToolBinding targetBindings[] = {{"t", "t"}};
     tools[0].bindings = targetBindings; tools[0].binding_count = 1;
     for (size_t i = 0; i < 2; ++i) {
         tools[i].usage_type = GRIM_TOOL_USAGE_IGNORE;
+        tools[i].short_description = summaries[i];
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = names[i];
         d.version = "1.0.0";

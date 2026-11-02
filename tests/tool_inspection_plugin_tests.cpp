@@ -94,7 +94,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     int fixtureCalls = 0;
     registry.registerTool(rich, [&](const std::string&) { ++fixtureCalls; return CommandResult{}; });
     const auto encoded = snapshot("fixture_alias");
-    check(encoded.size() == 1 && encoded[0].size() == 30 && encoded[0].at("usage_type") == 1 &&
+    check(encoded.size() == 1 && encoded[0].size() == 31 && encoded[0].at("usage_type") == 1 &&
           encoded[0].at("bindings").at("value") == "t" &&
           encoded[0].at("provider_instance") == "fixture-generation" &&
           encoded[0].at("argument_schema_json") == rich.argument_schema_json && encoded[0].at("success_count") == 75 &&

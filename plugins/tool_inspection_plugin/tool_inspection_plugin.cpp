@@ -32,6 +32,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* ids[] = {"list_tools", "tool_info", "tool_stats"};
     const char* descriptions[] = {"List all registered commands/tools", "Show detailed information about a tool", "Show tool usage statistics"};
     const char* usages[] = {"list_tools [category]", "tool_info {t}", "tool_stats [limit]"};
+    const char* summaries[] = {"List registered tools and their documented descriptions",
+        "Inspect a registered tool and its usage documentation",
+        "Show recorded tool execution counts and success rates"};
     const GrimToolBinding toolBindings[] = {{"t", "t"}};
     tools[1].bindings = toolBindings; tools[1].binding_count = 1;
     const char* examples[] = {"list_tools information", "tool_info list_tools", "tool_stats 10"};
@@ -40,6 +43,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     GrimToolParameter parameters[3];
     for (size_t i = 0; i < 3; ++i) {
         auto& d = tools[i].descriptor;
+        tools[i].short_description = summaries[i];
         d.tool_id = d.display_name = ids[i];
         d.version = "1.0.0";
         d.description = descriptions[i];

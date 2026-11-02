@@ -32,11 +32,12 @@
     },
     {
       "id": "tool_catalog",
+      "open_provider": "tool_catalog",
       "name": "tool catalog",
-      "kind": "supporter",
+      "kind": "container",
       "parent": "tools",
-      "description": "This catalog describes GRIM's command registry. Registered tools can provide a name, description, usage, category, aliases, and parameter metadata. Entries can distinguish informational commands from state-changing actions and indicate confirmation requirements. The reference explains how capabilities are discovered; it is not a snapshot of currently registered tools.",
-      "state": "open"
+      "description": "Open this catalog to browse available tools. Examine an entry inside to learn how to use it.",
+      "state": "closed"
     },
     {
       "id": "computer",

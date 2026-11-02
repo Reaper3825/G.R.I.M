@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.11
+// G.R.I.M Plugin API v3.12
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 11
+#define GRIM_API_VERSION_MINOR 12
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -170,6 +170,8 @@ struct GrimToolRegistration {
     // preserve the embedded descriptor and legacy registration offsets.
     const GrimToolBinding* bindings = nullptr;
     size_t binding_count = 0;
+    // v3.12: optional authored 5-12 word catalog summary.
+    const char* short_description = nullptr;
 };
 
 enum GrimPerceptionQuery : uint32_t {

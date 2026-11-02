@@ -37,14 +37,20 @@ Document Asset::preview() const {
 nlohmann::json Asset::json() const {
     preview();
     nlohmann::json j={{"format","grim-world-asset"},{"version",1},{"name",name},{"root",root},{"entities",nlohmann::json::array()}};
-    for(const auto& e:entities)j["entities"].push_back({{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}});
+    for(const auto& e:entities) {
+        j["entities"].push_back({{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}});
+        if(!e.openProvider.empty())j["entities"].back()["open_provider"]=e.openProvider;
+    }
     return j;
 }
 Asset Asset::parse(const nlohmann::json& j) {
     need(j.at("format")=="grim-world-asset" && j.at("version")==1,"Unsupported asset format/version");
     Asset a;a.name=j.at("name");a.root=j.at("root");
     need(j.at("entities").is_array(),"Expected asset entities array");
-    for(const auto& e:j.at("entities"))a.entities.push_back({e.at("id"),e.at("name"),e.at("kind"),e.at("parent"),e.at("description"),e.at("state")});
+    for(const auto& e:j.at("entities")) {
+        need(!e.contains("examine_provider"),"Use open_provider on a container for catalog observations");
+        a.entities.push_back({e.at("id"),e.at("name"),e.at("kind"),e.at("parent"),e.at("description"),e.at("state"),e.value("open_provider",std::string{})});
+    }
     a.preview();return a;
 }
 Asset Asset::capture(const Document& d,const std::string& root,const std::string& name) {

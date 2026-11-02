@@ -55,10 +55,13 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     tools[0].handler = clean;
     tools[1].handler = help;
     const char* ids[] = {"clean", "help"};
+    const char* summaries[] = {"Clear the current console command history display",
+        "Show help describing the available registered commands"};
     const char* descriptions[] = {"Clean console history", "Show available commands"};
     const char* categories[] = {"system", "information"};
     for (size_t i = 0; i < 2; ++i) {
         auto& d = tools[i].descriptor;
+        tools[i].short_description = summaries[i];
         d.tool_id = d.display_name = d.usage = ids[i];
         d.version = "1.0.0";
         d.description = descriptions[i];

@@ -42,6 +42,114 @@ SOLUTION = ["open toolbox", "take brass key from toolbox", "unlock oak door with
 
 
 class WorkerTests(unittest.TestCase):
+    def test_virtual_tools_require_unambiguous_accessible_catalogs(self):
+        world = {"format": "grim-world", "version": 3, "spawn": "room", "entities": [
+            {"id": "room", "name": "Office", "kind": "room"},
+            {"id": "hidden", "name": "hidden catalog", "kind": "container", "parent": "room", "state": "closed", "open_provider": "tool_catalog"},
+            {"id": "visible", "name": "visible catalog", "kind": "container", "parent": "room", "state": "closed", "open_provider": "tool_catalog"}],
+            "passages": []}
+        self.session.handle({"op": "compile", "document": world, "catalog_tools": ["foo"],
+                             "observation_providers": ["tool_catalog", "tool_details"]})
+        def step(command):
+            return self.session.handle({"op": "step", "command": command, "catalog_tools": ["foo"]})["state"]
+        self.assertNotIn("observation_request", step("examine foo"))
+        step("open visible catalog")
+        state = step("examine foo")
+        self.assertEqual(state["observation_request"]["entity_id"], "visible")
+        self.assertNotIn("examine foo in hidden catalog", state["admissible_commands"])
+        self.assertNotIn("observation_request", step("examine foo in hidden catalog"))
+        step("open hidden catalog")
+        self.assertNotIn("observation_request", step("examine foo"))
+        state = step("x foo in hidden catalog")
+        self.assertEqual(state["observation_request"], {"provider": "tool_details", "entity_id": "hidden", "tool_id": "foo"})
+        step("close visible catalog")
+        self.assertEqual(step("examine foo")["observation_request"]["entity_id"], "hidden")
+
+    def test_virtual_tools_scope_collisions_updates_and_replay(self):
+        world = {"format": "grim-world", "version": 3, "spawn": "r1", "entities": [
+            {"id": "r1", "name": "Entry", "kind": "room"},
+            {"id": "r2", "name": "Office", "kind": "room"},
+            {"id": "ledger", "name": "capability ledger", "kind": "container", "parent": "r2",
+             "state": "closed", "open_provider": "tool_catalog"},
+            {"id": "ordinary", "name": "open", "kind": "object", "parent": "r2",
+             "description": "An ordinary object."}],
+            "passages": [{"id": "p", "from": "r1", "to": "r2", "direction": "east"}]}
+        roster = ["open", "ui.show", "alias info"]
+        self.session.handle({"op": "compile", "document": world, "catalog_tools": roster,
+                             "observation_providers": ["tool_catalog", "tool_details"]})
+        def step(command, tools=None):
+            return self.session.handle({"op": "step", "command": command,
+                                        "catalog_tools": roster if tools is None else tools})["state"]
+        self.assertNotIn("observation_request", step("examine ui.show"))
+        state = step("go east")
+        self.assertNotIn("examine ui.show in capability ledger", state["admissible_commands"])
+        state = step("open capability ledger")
+        self.assertIn("examine ui.show in capability ledger", state["admissible_commands"])
+        self.assertIn("An ordinary object", step("examine open")["feedback"])
+        for command, tool_id in (("examine open in capability ledger", "open"),
+                                 ("x ui.show", "ui.show"), ("examine alias info", "alias info")):
+            state = step(command)
+            self.assertEqual(state["observation_request"],
+                             {"provider": "tool_details", "entity_id": "ledger", "tool_id": tool_id})
+        removed = step("examine ui.show", [])
+        self.assertEqual(removed["observation_request"]["tool_id"], "ui.show")
+        self.assertNotIn("examine ui.show in capability ledger", removed["admissible_commands"])
+        self.assertNotIn("observation_request", step("examine absent"))
+        step("go west")
+        self.assertNotIn("observation_request", step("examine ui.show in capability ledger"))
+        # A saved witness uses explicit catalog scope, independent of live roster.
+        # Start in Office so inspection precedes reaching the destination.
+        world["spawn"] = "r2"
+        self.session.handle({"op": "compile", "document": world, "catalog_tools": roster,
+            "observation_providers": ["tool_catalog", "tool_details"], "source_id": "catalog-replay", "goal": {
+                "success_criteria": [{"criterion": "Arrive", "evidence": {"predicate": "player_at", "subject": "r1"}}]}})
+        verified = self.session.handle({"op": "verify_solution", "commands": ["open capability ledger", "examine ui.show", "go west"],
+                                        "catalog_tools": roster})
+        self.assertEqual(verified["commands"], ["open capability ledger", "examine ui.show in capability ledger", "go west"])
+        self.session.known_catalog_tools.clear()
+        self.assertTrue(self.session.handle({"op": "verify_solution", "commands": verified["commands"],
+                                            "witness": verified["witness"], "catalog_tools": []})["verified"])
+
+    def test_host_open_uses_native_target_and_visibility(self):
+        world = {"format": "grim-world", "version": 3, "spawn": "r1", "entities": [
+            {"id": "r1", "name": "Entry", "kind": "room"},
+            {"id": "r2", "name": "Office", "kind": "room"},
+            {"id": "renamed_id", "name": "capability ledger", "kind": "container", "parent": "r2",
+             "state": "closed", "open_provider": "tool_catalog", "description": "Ledger description."},
+            {"id": "box", "name": "box", "kind": "container", "parent": "r2", "state": "closed"},
+            {"id": "hidden", "name": "hidden ledger", "kind": "object", "parent": "box"},
+            {"id": "ordinary", "name": "ordinary book", "kind": "object", "parent": "r2",
+             "description": "An ordinary description."}],
+            "passages": [{"id": "p", "from": "r1", "to": "r2", "direction": "east"}]}
+        with self.assertRaises(WorldError):
+            self.session.handle({"op": "compile", "document": world})
+        self.session.handle({"op": "compile", "document": world, "observation_providers": ["tool_catalog"]})
+        def step(command):
+            return self.session.handle({"op": "step", "command": command})["state"]
+        self.assertNotIn("observation_request", step("open capability ledger"))
+        step("go east")
+        description = step("examine capability ledger")
+        self.assertNotIn("observation_request", description)
+        self.assertIn("Ledger description", description["feedback"])
+        for command in ("open capability ledger", "open capability ledger", "open the capability ledger"):
+            state = step(command)
+            self.assertEqual(state["observation_request"], {"entity_id": "renamed_id", "provider": "tool_catalog"})
+        for command in ("open absent", "x capability ledger", "examine hidden ledger", "look", "inventory"):
+            state = step(command)
+            self.assertNotIn("observation_request", state)
+            if command == "x capability ledger":
+                self.assertIn("It is open", state["feedback"])
+                self.assertNotIn("empty", state["feedback"])
+        step("open box")
+        self.assertNotIn("observation_request", step("x hidden ledger"))
+        self.assertNotIn("observation_request", step("close capability ledger"))
+        ordinary = step("examine ordinary book")
+        self.assertNotIn("observation_request", ordinary)
+        self.assertIn("An ordinary description", ordinary["feedback"])
+        initial = self.session.handle({"op": "reset"})["state"]
+        self.assertNotIn("observation_request", initial)
+        self.assertIn({"predicate": "closed", "arguments": ["renamed_id"]}, initial["facts"])
+
     def test_native_path_movement_goal_replay_and_reset(self):
         world = path_world()
         request = {"op": "compile", "document": world, "source_id": "path-test", "goal": {

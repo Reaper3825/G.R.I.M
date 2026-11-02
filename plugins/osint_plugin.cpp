@@ -88,11 +88,20 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     };
     GrimToolRegistration tools[8];
     GrimToolParameter arguments[8];
+    const char* summaries[] = {"Build a public source profile for a username",
+        "Search public websites for accounts matching a username",
+        "Read a username report and optionally export findings",
+        "Check scan status and collect completed scan results",
+        "Delete locally cached reports from previous public searches",
+        "Scan discovered web addresses for exposed sensitive information",
+        "Read sensitive information findings for a selected username",
+        "Show the results interface for a selected username"};
     const GrimToolBinding usernameBindings[] = {{"t", "t"}, {"o", "o"}};
     const char* reportAliases[] = {"osint"};
     const char* sweepAliases[] = {"sherlock"};
     for (size_t i = 0; i < 8; ++i) {
         tools[i].usage_type = GRIM_TOOL_USAGE_IGNORE;
+        tools[i].short_description = summaries[i];
         if (i != 4) {
             tools[i].bindings = usernameBindings; tools[i].binding_count = i == 2 ? 2 : 1;
         }

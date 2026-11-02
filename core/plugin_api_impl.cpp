@@ -251,6 +251,8 @@ static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& 
     out.display_name = copyText(in.display_name, true);
     out.version = copyText(in.version, true);
     out.description = copyText(in.description, true);
+    out.short_description = copyText(source.short_description);
+    if (!validToolShortDescription(out.short_description)) throw std::invalid_argument("Invalid short description");
     out.usage = copyText(in.usage, true);
     if (source.binding_count > 256 || (source.binding_count && !source.bindings))
         throw std::invalid_argument("Invalid tool bindings");
@@ -319,15 +321,16 @@ static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRe
         }
         if (!tools || !count || count > 256) throw std::invalid_argument("Invalid batch");
         std::vector<GRIM::MMO::ToolRegistration> copied;
-        // v3.0-v3.9 end at user_data; v3.10 adds usage_type. Walk each declared
-        // stride so legacy multi-tool batches retain default empty bindings.
+        // Walk the exact v3.0-v3.9, v3.10, and v3.11 prefixes. Appended fields
+        // keep their defaults when absent from older multi-tool batches.
         constexpr size_t legacySize = offsetof(GrimToolRegistration, usage_type);
         constexpr size_t v310Size = offsetof(GrimToolRegistration, bindings);
+        constexpr size_t v311Size = offsetof(GrimToolRegistration, short_description);
         auto* record = reinterpret_cast<const unsigned char*>(tools);
         for (size_t i = 0; i < count; ++i) {
             uint32_t size = 0;
             std::memcpy(&size, record, sizeof(size));
-            if (size != legacySize && size != v310Size && size != sizeof(GrimToolRegistration))
+            if (size != legacySize && size != v310Size && size != v311Size && size != sizeof(GrimToolRegistration))
                 throw std::invalid_argument("Invalid tool registration size");
             GrimToolRegistration normalized;
             std::memcpy(&normalized, record, size);

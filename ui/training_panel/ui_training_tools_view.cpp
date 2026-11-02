@@ -34,6 +34,7 @@ std::string detailText(const ToolDescriptor& tool) {
     std::ostringstream out;
     out << tool.tool_id << "\n" << documented(tool.display_name) << "\n\n"
         << documented(tool.description) << "\n\n"
+        << "Short description: " << documented(tool.short_description) << '\n'
         << "Category: " << documented(tool.category) << '\n'
         << "Usage type: " << toolUsageName(tool.usage_type) << '\n'
         << "Provider: " << (tool.provider_type == ToolProviderType::Plugin ? "Plugin" : "Built-in")

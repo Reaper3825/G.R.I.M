@@ -81,6 +81,8 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* ids[] = {"open", "search"};
     const char* descriptions[] = {"Open an application or file", "Search the web for information"};
     const char* usages[] = {"open {t}", "search <query>"};
+    const char* summaries[] = {"Open a selected entity through its available handler",
+        "Search the web for information matching a query"};
     const GrimToolBinding openBindings[] = {{"t", "t"}};
     tools[0].bindings = openBindings; tools[0].binding_count = 1;
     const char* examples[] = {"open notepad", "search weather tomorrow"};
@@ -90,6 +92,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.tool_id = d.display_name = ids[i];
         d.version = "1.0.0";
         d.description = descriptions[i];
+        tools[i].short_description = summaries[i];
         d.usage = usages[i];
         d.category = i == 0 ? "action" : "information";
         d.argument_format = "raw_text";

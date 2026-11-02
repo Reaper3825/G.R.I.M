@@ -82,6 +82,12 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Read an owned UI request status without blocking; a completed result is consumed"};
     const char* usages[] = {"ui.list", "ui.inspect {t}",
         "ui.show {t}", "ui.hide {t}", "ui.bring_to_front {t}", "ui.poll <request_id>"};
+    const char* summaries[] = {"Request a list of instantiated interface panels",
+        "Request current state for a selected interface panel",
+        "Request showing a panel and bringing it forward",
+        "Request hiding a selected interface panel from view",
+        "Request bringing a panel ahead of other panels",
+        "Check completion of an earlier interface panel request"};
     const char* examples[] = {"ui.list {}", "ui.inspect {\"panel_id\":\"settings\"}",
         "ui.show {\"panel_id\":\"settings\"}", "ui.hide {\"panel_id\":\"settings\"}",
         "ui.bring_to_front {\"panel_id\":\"console\"}", "ui.poll {\"request_id\":1}"};
@@ -97,6 +103,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* tags[] = {"ui", "panels"};
     for (size_t i = 0; i < 6; ++i) {
         auto& d = tools[i].descriptor;
+        tools[i].short_description = summaries[i];
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0";
         d.description = descriptions[i]; d.usage = usages[i]; d.category = "ui";
         d.argument_format = "json"; d.required_permissions = GRIM_PERM_UI;

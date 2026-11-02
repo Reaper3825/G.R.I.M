@@ -29,6 +29,17 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* usages[] = {"voice", "voice_stream", "test_tts [text]", "list_voices", "test_sapi", "tts_device", "nevermind",
         "create_embedding {t} {o}", "list_embeddings", "clear_tts_cache", "reset_tts_cache"};
     const GrimToolBinding embeddingBindings[] = {{"t", "t"}, {"o", "o"}};
+    const char* summaries[] = {"Capture speech and transcribe one spoken command",
+        "Start streaming voice input through the host",
+        "Test speech synthesis with supplied or default text",
+        "List available voices for text to speech",
+        "Test audio playback using the existing sample recording",
+        "Show the current speech output device selection",
+        "Acknowledge cancellation without actually stopping current playback",
+        "Acknowledge an embedding request without submitting processing work",
+        "List the available saved voice embedding files",
+        "Clear cached audio produced by speech synthesis",
+        "Reset speech audio cache and regenerate common phrases"};
     tools[7].bindings = embeddingBindings; tools[7].binding_count = 2;
     GrimToolParameter text;
     text.name = "text"; text.type = "string"; text.description = "Test text; omitted uses the existing Coqui test phrase";
@@ -36,6 +47,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     embeddingArguments.name = "arguments"; embeddingArguments.type = "string"; embeddingArguments.required = 1;
     embeddingArguments.description = "Speaker ID followed by reference audio path; preserves the existing placeholder and parsing behavior";
     for (size_t i = 0; i < 11; ++i) {
+        tools[i].short_description = summaries[i];
         tools[i].usage_type = i < 2 ? GRIM_TOOL_USAGE_SYSTEM :
             (i == 6 || i == 7 ? GRIM_TOOL_USAGE_IGNORE : GRIM_TOOL_USAGE_DEBUG);
         tools[i].handler = handlers[i]; auto& d = tools[i].descriptor;

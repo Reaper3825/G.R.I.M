@@ -30,6 +30,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     d.tool_id = d.display_name = "system_info";
     d.version = "1.0.0";
     d.description = "Display system hardware and software information";
+    tool.short_description = "Display information about system hardware and software";
     d.usage = "system_info";
     d.category = "information";
     d.argument_format = "raw_text";

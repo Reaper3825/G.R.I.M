@@ -10,6 +10,7 @@ std::string makeEnvironmentId();
 struct Entity {
     std::string id, name, kind, parent, description;
     std::string state = "open"; // Containers: open or closed. Other kinds ignore this.
+    std::string openProvider; // Optional container-open observation provider; independent of entity ID/name.
 };
 struct RoomLayout { std::string id; float x = 0, y = 0; };
 struct RoomPath { std::string id, parent, segment; };

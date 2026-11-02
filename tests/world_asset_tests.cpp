@@ -5,6 +5,7 @@
 #include "ui/overlay_renderer.hpp"
 #include "core/input_parser.hpp"
 #include <chrono>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -18,6 +19,7 @@ template<class F> void rejects(F f,const char* message){bool failed=false;try{f(
 void runWorldAssetTests() {
     auto source=Document::initial();const auto room=source.spawn;
     const auto box=source.addObject(room,"container");source.find(box)->name="seed box";source.find(box)->state="closed";
+    source.find(box)->openProvider="tool_catalog";
     const auto key=source.addObject(box,"key");source.find(key)->name="brass key";
     const auto other=source.addRoom(400,80);source.connect(room,other,"east");
     source.winConditions.push_back({"carrying",key,""});
@@ -27,6 +29,8 @@ void runWorldAssetTests() {
     check(roomAsset.entities.size()==3 && roomAsset.preview().passages.empty() && roomAsset.preview().winConditions.empty(),"Room asset copied external game data");
     check(objectAsset.entities.size()==2 && objectAsset.entities.front().parent.empty(),"Object asset lost contents or kept external parent");
     check(Asset::parse(objectAsset.json()).json()==objectAsset.json(),"Asset round trip changed data");
+    check(Asset::parse(objectAsset.json()).preview().find(box)->openProvider=="tool_catalog",
+        "Asset roundtrip lost examine provider");
     auto bad=objectAsset.json();bad["entities"][1]["parent"]="outside";
     rejects([&]{Asset::parse(bad);},"External asset reference accepted");
     bad=objectAsset.json();bad["entities"][1]["id"]=box;
@@ -37,6 +41,8 @@ void runWorldAssetTests() {
     rejects([&]{Asset::parse(bad);},"Unsupported asset version accepted");
     Editor destination;const auto before=destination.document().json();std::string first,second;
     destination.change([&](Document& d){first=roomAsset.insert(d,"",400,100);});
+    check(std::count_if(destination.document().entities.begin(),destination.document().entities.end(),
+        [](const auto& e){return e.openProvider=="tool_catalog";})==1,"Remapped asset lost examine provider");
     destination.change([&](Document& d){second=roomAsset.insert(d,"",800,100);});
     check(first!=second && destination.document().entities.size()==7,"Repeated room insertion collided IDs");
     std::set<std::string> names,ids;
