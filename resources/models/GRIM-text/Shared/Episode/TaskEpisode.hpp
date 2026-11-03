@@ -1,12 +1,13 @@
 #pragma once  
 
-// Self-correction-specific episode metadata. Existing generation, goal, and
-// span types retain ownership of their data; runtime/tool machinery belongs
-// at its existing integration boundaries, not in this definition header.
+// Shared Goal-attempt episode record for environment interaction and learning.
+// Live clients and generation sessions retain their existing runtime owners.
 
 #include "Attempt.hpp"
 #include "../Forward/GeneratedSequence.hpp"
-#include "../Goal/Goal.hpp"
+#include "../Goal/GoalContract.hpp"
+#include <nlohmann/json.hpp>
+#include <vector>
 
 #include <array>
 #include <cstddef>
@@ -19,13 +20,22 @@ namespace GRIM {
 struct NamedConceptSpans;
 }
  
-namespace GRIM::SelfCorrection {
+namespace GRIM::Episodes {
 
 inline constexpr std::size_t kMaxAttempts = 2;
 enum class GoalOrigin : std::uint8_t { Undecided, Supplied, ModelGenerated };
 
 enum class EpisodeState : std::uint8_t {
-    Collecting, Complete, InfrastructureInvalid,
+    Collecting, AttemptSubmitted, Complete, InfrastructureInvalid,
+};
+
+// Private host receipt. Never serialize a full response into model context.
+struct EnvironmentAction {
+    std::size_t action_close_position;
+    std::string command;
+    std::string status;
+    nlohmann::json response;
+    std::string error;
 };
 
 struct TaskEpisode {
@@ -44,13 +54,18 @@ struct TaskEpisode {
     // execution evidence is captured at each committed attempt boundary.
     std::string sandbox_instance_id;
     GoalOrigin goal_origin = GoalOrigin::Undecided;
-    std::shared_ptr<const Goal> goal;
+    std::shared_ptr<const ConceptBlockGoal> goal;
     // Grading consumes this record's task/goal, committed attempt, and sandbox
     // snapshot. There is no separate verifier identity or parallel task payload.
     // Existing generation payload owns IDs, scores, atom channels, and tables.
     // Append-only model-visible history; private results stay with the runtime
     // until disclosed. Scoring must never replay tool side effects.
+    // The inference session owns the live sequence. Transfer its final snapshot
+    // here when an attempt ends; do not maintain a second mutable trajectory.
     GeneratedSequence sequence;
+    nlohmann::json initial_environment_response;
+    nlohmann::json latest_environment_response;
+    std::vector<EnvironmentAction> actions;
     std::shared_ptr<const NamedConceptSpans> named_concept_spans;
     // Slot 0 is initial; slot 1 is an actual retry. Null means uncommitted/absent.
     // Publish with no remaining mutable aliases to the committed attempt.
@@ -58,9 +73,9 @@ struct TaskEpisode {
     // Filled after group scoring without editing committed attempts.
     std::array<std::optional<AttemptScore>, kMaxAttempts> scores{};
     EpisodeState state = EpisodeState::Collecting;
-    // Complete after a passing initial attempt or a graded retry. Invalid
-    // infrastructure episodes are excluded/replaced. Group statistics, runtime
-    // state, and optimizer commits have separate owners.
+    // A failed first attempt awaits an explicit retry policy in AttemptSubmitted;
+    // this record does not start a retry or reset the world on its own.
+    // Group statistics, runtime state, and optimizer commits have separate owners.
 };
 
-} // namespace GRIM::SelfCorrection
+} // namespace GRIM::Episodes

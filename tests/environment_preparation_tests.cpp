@@ -1,4 +1,4 @@
-#include "resources/models/GRIM-text/Shared/Environment/EnvironmentEpisode.hpp"
+#include "resources/models/GRIM-text/Shared/Environment/EnvironmentSession.hpp"
 #include "ui/world_lab/environment_registry.hpp"
 
 #include <iostream>
@@ -61,11 +61,11 @@ int main() {
     std::vector<GRIM::ScheduledGoal> schedule{
         {"course-a", "environment-a", "goal-a", goal},
         {"course-b", "environment-b", "goal-b", goal}};
-    using GRIM::Environment::prepareEnvironmentEpisode;
+    using GRIM::Environment::prepareEnvironmentSession;
     for (const auto& status : {"active", "succeeded", "failed", "stopped"}) {
         next_response = response(status);
         const int before = submissions;
-        auto owner = prepareEnvironmentEpisode(schedule, directory);
+        auto owner = prepareEnvironmentSession(schedule, directory);
         check(owner->position() == 0 && owner->schedule().size() == 2, "Schedule/cursor lost");
         check(owner->currentAssignment().concept_block_id == "goal-a", "Wrong first Goal");
         check(owner->environment().environmentId == "environment-a", "Wrong environment");
@@ -82,70 +82,70 @@ int main() {
     check(clients == 0, "Owner did not release client");
     {
         next_response = response();
-        auto owner = prepareEnvironmentEpisode(schedule, directory);
+        auto owner = prepareEnvironmentSession(schedule, directory);
         const auto initial = owner->initialResponse();
         next_response["result"]["state"]["feedback"] = "Nothing changes.";
-        const auto first = owner->submitAnswer(10, "\n look \n");
-        check(submitted.at("op") == "step" && submitted.at("command") == "look", "Answer was not isolated/trimmed");
+        const auto first = owner->submitCommand(10, "\n look \n");
+        check(submitted.at("op") == "step" && submitted.at("command") == "look", "Command was not isolated/trimmed");
         const auto count = submissions;
-        check(owner->submitAnswer(10, "look") == first && submissions == count, "Answer was dispatched twice");
+        check(owner->submitCommand(10, "look") == first && submissions == count, "Command was dispatched twice");
         check(owner->initialResponse() == initial && owner->latestResponse() == first, "Initial/actual response not retained");
         check(owner->actions().size() == 1 && owner->actions()[0].status == "completed", "Missing action receipt");
         const auto invalid = [&](const std::string& command, std::size_t position) {
             bool rejected = false;
-            try { owner->submitAnswer(position, command); } catch (const std::exception&) { rejected = true; }
-            check(rejected && submissions == count, "Invalid answer reached the worker");
+            try { owner->submitCommand(position, command); } catch (const std::exception&) { rejected = true; }
+            check(rejected && submissions == count, "Invalid command reached the worker");
         };
         invalid("go north", 10); invalid("look", 9); invalid("look\ninventory", 11);
         invalid(std::string("look\0north", 10), 11); invalid(" ", 11); invalid(std::string(513, 'x'), 11);
         next_response = response("succeeded");
-        owner->submitAnswer(20, "go north");
+        owner->submitCommand(20, "go north");
         bool terminal_rejected = false;
-        try { owner->submitAnswer(30, "look"); } catch (const std::logic_error&) { terminal_rejected = true; }
+        try { owner->submitCommand(30, "look"); } catch (const std::invalid_argument&) { terminal_rejected = true; }
         check(terminal_rejected && owner->actions().size() == 2, "Post-terminal action was accepted");
     }
     for (const auto& failure : std::vector<json>{
             {{"ok", false}, {"transport_error", true}, {"error", "timeout"}},
             {{"ok", true}, {"result", json::object()}}}) {
         next_response = response();
-        auto owner = prepareEnvironmentEpisode(schedule, directory);
+        auto owner = prepareEnvironmentSession(schedule, directory);
         next_response = failure;
         bool rejected = false;
-        try { owner->submitAnswer(10, "look"); } catch (const std::exception&) { rejected = true; }
+        try { owner->submitCommand(10, "look"); } catch (const std::exception&) { rejected = true; }
         check(rejected && owner->actions()[0].status == "unknown", "Unknown outcome not retained");
         const auto count = submissions;
         for (const auto position : {10, 20}) {
-            try { owner->submitAnswer(position, "look"); } catch (const std::exception&) {}
+            try { owner->submitCommand(position, "look"); } catch (const std::exception&) {}
         }
         check(submissions == count, "Uncertain action was retried or followed by another action");
     }
     {
         next_response = response();
-        auto owner = prepareEnvironmentEpisode(schedule, directory);
+        auto owner = prepareEnvironmentSession(schedule, directory);
         next_response["result"]["state"]["host_action"] = {{"status", "unknown"}};
         bool rejected = false;
-        try { owner->submitAnswer(10, "ui.show panel:settings"); } catch (const std::exception&) { rejected = true; }
+        try { owner->submitCommand(10, "ui.show panel:settings"); } catch (const std::exception&) { rejected = true; }
         check(rejected && owner->actions()[0].status == "unknown", "Unknown host action was treated as completed");
     }
-    rejects([&] { prepareEnvironmentEpisode({}, directory); });
+    rejects([&] { prepareEnvironmentSession({}, directory); });
     auto missing = schedule; missing[0].environment_id = "absent";
     const auto before_lookup = submissions;
-    rejects([&] { prepareEnvironmentEpisode(missing, directory); });
+    rejects([&] { prepareEnvironmentSession(missing, directory); });
     check(submissions == before_lookup, "Failed lookup contacted worker");
-    reject_begin = true; rejects([&] { prepareEnvironmentEpisode(schedule, directory); }); reject_begin = false;
+    reject_begin = true; rejects([&] { prepareEnvironmentSession(schedule, directory); }); reject_begin = false;
     for (const auto& invalid : std::vector<json>{
             {{"ok", false}, {"error", "binding rejected"}},
             {{"ok", false}, {"transport_error", true}, {"error", "worker unavailable"}},
             {{"ok", true}, {"result", json::object()}}, response("bogus")}) {
         next_response = invalid;
-        rejects([&] { prepareEnvironmentEpisode(schedule, directory); });
+        rejects([&] { prepareEnvironmentSession(schedule, directory); });
     }
     next_response = response(); next_response["result"]["state"]["episode"]["identity"]["source_id"] = "wrong";
-    rejects([&] { prepareEnvironmentEpisode(schedule, directory); });
+    rejects([&] { prepareEnvironmentSession(schedule, directory); });
     next_response = response(); next_response["result"]["state"]["done"] = true;
-    rejects([&] { prepareEnvironmentEpisode(schedule, directory); });
+    rejects([&] { prepareEnvironmentSession(schedule, directory); });
     next_response = response(); next_response["result"]["environment_id"] = "wrong";
-    rejects([&] { prepareEnvironmentEpisode(schedule, directory); });
+    rejects([&] { prepareEnvironmentSession(schedule, directory); });
     // Registry failures preserve authored files; tests remove only their own files.
     for (const auto& entry : fs::directory_iterator(directory)) fs::remove(entry.path());
     fs::remove(directory);

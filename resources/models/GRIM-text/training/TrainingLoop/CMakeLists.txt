@@ -673,8 +673,6 @@ add_executable(train_gpu
     ../Phases/Phase2_InferenceLoop.hpp
     ../Phases/Phase2_EnvironmentLoop.cu
     ../Phases/Phase2_EnvironmentLoop.hpp
-    ../Phases/Phase2_EnvironmentDispatch.cu
-    ../Phases/Phase2_EnvironmentDispatch.hpp
     ../Phases/Phase2_InspectionLoop.cu
     ../Phases/Phase2_InspectionLoop.hpp
     ../Diagnostics/DiagnosticInference.cu

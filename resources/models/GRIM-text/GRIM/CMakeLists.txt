@@ -80,7 +80,6 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase1_Startup.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_InferenceLoop.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_EnvironmentLoop.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_EnvironmentDispatch.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_InspectionLoop.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Rng.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Logging.cu

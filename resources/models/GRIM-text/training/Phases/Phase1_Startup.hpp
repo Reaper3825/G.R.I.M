@@ -49,7 +49,7 @@
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/InferenceState/GenerationState_GPU.hpp"
-#include "../../Shared/Environment/EnvironmentEpisode.hpp"
+#include "../../Shared/Environment/EnvironmentSession.hpp"
 #include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
 #include "../../Shared/Optimizers/OptimizerStep.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
@@ -262,7 +262,7 @@ struct TrainingContext {
     /** Registry metadata for the curriculum consumed by this training run. */
     std::optional<GRIM::CurriculumMetadata> current_curriculum_metadata;
     // RL Phase1 handoff: frozen Goal schedule/cursor and live environment episode.
-    std::unique_ptr<GRIM::Environment::EnvironmentEpisode> environment_episode;
+    std::unique_ptr<GRIM::Environment::EnvironmentSession> environment_session;
     // Artifact-loaded tokenizer retained for the future environment dispatch loop.
     std::unique_ptr<GRIM::Tokenizer::UniByte> environment_tokenizer;
     

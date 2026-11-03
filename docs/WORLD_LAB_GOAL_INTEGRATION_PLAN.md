@@ -4,9 +4,10 @@ Status: implemented for manual Play and independent solution replay. Goal bindin
 controller termination, protocol-2 worker operations, database selection/import,
 version-3 environment documents, and separate version-1 episode records are in
 place. The [World Lab guide](WORLD_LAB.md) documents current usage. The separate
-Phase2 single-Goal controller now routes model Answers and inserts permitted
-feedback. General reachability proof and course-driven episode advancement
-remain future work. Persistent environment identity, registry
+Phase2 single-Goal controller now dispatches Execute commands, grades Answer submissions, and inserts permitted
+feedback. Its outer loop now runs all selected course examples, resetting each to
+its authored starting state and retaining per-example results. General reachability
+proof and the shared-state multi-Quest course runtime remain future work. Persistent environment identity, registry
 resolution, and course environment assignment are implemented as the next-phase
 foundation described below.
 

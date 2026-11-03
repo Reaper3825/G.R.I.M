@@ -11,12 +11,29 @@ $fixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'environment_dispat
 # Compile the actual controller body with a scripted generation boundary. Only
 # model forwarding and mailbox transport are substituted; production owner,
 # command validation, projection and span validation are compiled unchanged.
-$implementation = (Get-Content -LiteralPath (Join-Path $workspace 'resources/models/GRIM-text/training/Phases/Phase2_EnvironmentDispatch.cu') | Where-Object { $_ -notmatch '^#include' }) -join "`n"
+$loop = Get-Content -LiteralPath (Join-Path $workspace 'resources/models/GRIM-text/training/Phases/Phase2_EnvironmentLoop.cu') -Raw
+# The begin helper has its own focused host test; this fixture scripts its first
+# return and compiles the actual controlling loop from the same production file.
+$bodies = foreach ($signature in @(
+    'Phase2EnvironmentRunResult executePhase2EnvironmentInteraction(',
+    'Phase2EnvironmentLoopResult executePhase2EnvironmentLoop(')) {
+    $start = $loop.IndexOf($signature)
+    if ($start -lt 0) { throw "Environment loop entrypoint not found: $signature" }
+    $end = $loop.IndexOf('{', $start)
+    $depth = 1
+    while ($depth -gt 0 -and ++$end -lt $loop.Length) {
+        if ($loop[$end] -eq '{') { $depth++ }
+        elseif ($loop[$end] -eq '}') { $depth-- }
+    }
+    if ($depth -ne 0) { throw 'Environment loop entrypoint is incomplete.' }
+    $loop.Substring($start, $end - $start + 1)
+}
+$implementation = "namespace GRIMText::Training {`n" + ($bodies -join "`n") + "`n}"
 $generated = Join-Path $output 'environment_dispatch_tests.cpp'
 Set-Content -LiteralPath $generated -Value $fixture.Replace('// PRODUCTION_DISPATCH', $implementation) -Encoding utf8
 $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $arguments += '"' + $generated + '"'
-$arguments += @('resources/models/GRIM-text/Shared/Environment/EnvironmentEpisode.cpp','resources/models/GRIM-text/Shared/Environment/EnvironmentInput.cpp','resources/models/GRIM-text/Shared/Environment/EnvironmentBoundary.cpp','ui/world_lab/world_document.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$arguments += @('resources/models/GRIM-text/Shared/Environment/EnvironmentSession.cpp','resources/models/GRIM-text/Shared/Environment/EnvironmentInput.cpp','resources/models/GRIM-text/Shared/Environment/EnvironmentBoundary.cpp','ui/world_lab/world_document.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $arguments += '/Fe:environment_dispatch_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'compile.rsp') -Value $arguments -Encoding ascii
 Set-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'),'if errorlevel 1 exit /b %errorlevel%','cl @compile.rsp','if errorlevel 1 exit /b %errorlevel%','environment_dispatch_tests.exe') -Encoding ascii

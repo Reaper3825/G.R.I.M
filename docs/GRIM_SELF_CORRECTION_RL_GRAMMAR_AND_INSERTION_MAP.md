@@ -11,20 +11,17 @@ Existing symbols below were inspected in the repository. Grammar labeled
 **proposed** makes the pending work concrete; it does not silently change the
 current tokenizer, corpus, configuration, or reasoning-state wire contract.
 
-**Scope after the recurrent DDEA transition:** the
-[reasoning data contract](GRIM_REASONING_DATA_CONTRACT.md#11-recurrent-boundary-and-recipient-contract)
-now defines optional Define/Execute phases and a per-cycle Answer payload.
-For TextWorld, DDE is observed and only a validated completed Answer is submitted
-to the environment; feedback then precedes the next cycle. Ordinary user
-responses require no environment/tool call. Span pauses do not independently
-authorize dispatch, and answer completion does not imply challenge completion.
+**Shared action/attempt contract:** the
+[reasoning data contract](GRIM_REASONING_DATA_CONTRACT.md#11-action-and-attempt-boundaries)
+defines optional Define/Execute phases and Answer as the Goal-attempt submission.
+The environment controller dispatches one command at Execute close, inserts actual
+feedback, and grades the frozen attempt at Answer close. A terminal world blocks
+commands while allowing final submission. Ordinary responses need no tool call.
 
-The TOOL/READ grammar and two-attempt grading boundaries below remain a separate,
-pending tool-curriculum design. In particular, dispatch at `</TOOL>` and treating
-each `</answer>` as the grading endpoint must not be copied into the recurrent
-TextWorld controller. Reconcile those policies explicitly if that curriculum
-adopts the new controller; this documentation update does not implement or
-silently change its parser, training schedule, or reward policy.
+The TOOL/READ grammar below remains a pending, separate tool-expression design;
+it must not duplicate the environment adapter's Execute-close dispatch. The
+shared episode record is implemented, while RL collection, retries, and optimizer
+updates remain pending.
 
 ## 1. Grammar: what each construct means
 
@@ -55,8 +52,8 @@ anchored to the task verifier in either case.
 | `<define>` | Model declares local variables and binds supplied inputs | Proposed declaration parser prepares the episode variable store |
 | `<execute>` | Model emits actions and explicit reads | Proposed tool/read parser produces runtime events |
 | `<update>` | Model describes what the observed results established | Does not itself mutate the authoritative variable store |
-| `<answer>` | Model starts its external response for this cycle | This tool-curriculum proposal collects it for grading; TextWorld instead receives its validated command |
-| `</answer>` | Model closes the current response | This proposal freezes its attempt record; recurrent TextWorld submits once and waits for feedback, without assuming task completion |
+| `<answer>` | Model starts its external response for this cycle | Collect the final response for Goal-attempt grading; never execute it as a command |
+| `</answer>` | Model closes the current response | Freeze and grade the Goal attempt; submission does not itself prove success |
 
 The current SFT configuration treats update as context. RL action provenance is
 a separate concern: if the policy samples update tokens, those tokens are
@@ -112,11 +109,11 @@ The complete `</READ>` commits the read request; returned data is runtime
 context, never a model-authored result. A valid read remains available in either
 injection mode.
 
-Proposed TOOL/READ parser scope (not the TextWorld answer adapter): declarations/input bindings are actionable only within
+Proposed TOOL/READ parser scope (separate from the environment Execute adapter): declarations/input bindings are actionable only within
 define; tool calls and reads are actionable only within execute. Text quoted in
 the prompt, tool output, feedback, or answer must never dispatch a TOOL/READ action.
-TextWorld's separate answer adapter handles the completed answer as a game
-command; it does not run the TOOL/READ parser over it.
+The environment adapter handles completed Execute content as a command;
+Answer submits the Goal attempt without running the TOOL/READ parser.
 Only sampled action tokens enter the executable parser. Returned text that
 contains `</answer>` must not close an attempt. A generated answer close is the
 independent boundary even if other grammar is malformed; record that malformed
@@ -248,14 +245,14 @@ tool side effects by itself. No training replay may execute those effects again.
 
 ### 2.1 Episode definition header
 
-[`Shared/SelfCorrection/TaskEpisode.hpp`](../resources/models/GRIM-text/Shared/SelfCorrection/TaskEpisode.hpp)
-now defines only self-correction episode metadata under
-`GRIM::SelfCorrection`: identity snapshots, sampling segments, committed attempt boundaries, verifier outcomes,
+[`Shared/Episode/TaskEpisode.hpp`](../resources/models/GRIM-text/Shared/Episode/TaskEpisode.hpp)
+defines the shared episode record under
+`GRIM::Episodes`: identity snapshots, sampling segments, committed attempt boundaries, verifier outcomes,
 and detached score slots. Attempt definitions live in
-[`Shared/SelfCorrection/Attempt.hpp`](../resources/models/GRIM-text/Shared/SelfCorrection/Attempt.hpp),
+[`Shared/Episode/Attempt.hpp`](../resources/models/GRIM-text/Shared/Episode/Attempt.hpp),
 which `TaskEpisode.hpp` includes. `TaskEpisode` reuses `GeneratedSequence` for token
 IDs, scores, token provenance, score positions, atom channels, and tables, plus the existing `NamedConceptSpans`
-and runtime `Goal` (from `Shared/Goal/Goal.hpp`) types. Token offsets are absolute within the episode
+and the text/evidence `ConceptBlockGoal` contract (from `Shared/Goal/GoalContract.hpp`). Token offsets are absolute within the episode
 sequence; ranges are half-open. Score positions are explicit because existing
 generation excludes prefix scores and records forced-token scores as zero.
 Committed attempts use const ownership, with later scores stored separately.
@@ -275,12 +272,14 @@ the policy and frozen reference through that store, pins the selected reference
 checkpoint identity, and validates it on resume. The episode header does not
 resolve or load artifacts; separate frozen-reference loading remains pending.
 
-This is a definition layer only. The header does not define a parallel token
-payload, tool registry, value codec, variable store, or runtime event system.
-Those runtime integrations remain pending at the insertion points below, as do
-collection, parsing, verification, disclosure, and lifecycle validation. No
-configuration keys, delimiters, serialization, or training dispatch are wired.
-Goal origin remains undecided by default.
+The environment session uses this record for its frozen Goal, command receipts,
+final trajectory, and immutable attempt grade. It owns the live client separately;
+the generation session owns live tokens until the final snapshot is recorded.
+The environment response at attempt end is frozen as private grading evidence,
+without replaying actions. Failed first attempts enter `AttemptSubmitted` pending
+an explicit retry policy. TOOL/READ parsing, RL collection/scoring, retry/reset,
+episode serialization, and optimizer updates remain pending. Goal origin defaults
+to undecided and environment preparation explicitly marks its Goal supplied.
 
 ## 3. Before Phase 1: configuration and grammar artifacts
 

@@ -9,7 +9,7 @@ void EnvironmentReady(TrainingContext& ctx) {
     if (snapshotExecutionMode(ctx.config) != ModelExecutionMode::TRAINING ||
         dataLoadingHP(ctx.config).training_stage != TrainingStage::RL)
         throw std::runtime_error("EnvironmentReady requires the RL startup path");
-    if (ctx.environment_episode)
+    if (ctx.environment_session)
         throw std::runtime_error("EnvironmentReady: environment was already prepared");
     const auto tokenizer_hp = tokenizerHP(ctx.config);
     const auto cache = std::filesystem::path(tokenizer_hp.data_path).parent_path();
@@ -21,13 +21,13 @@ void EnvironmentReady(TrainingContext& ctx) {
         ctx.rng.data_seed);
     // Use the same config-relative resources/models/games registry as World Lab.
     // Assignment environment_id is authoritative; never substitute a named world.
-    auto candidate = GRIM::Environment::prepareEnvironmentEpisode(
+    auto candidate = GRIM::Environment::prepareEnvironmentSession(
         std::move(schedule), resolveMappedPath("resources/models/games"));
     ctx.current_curriculum_metadata = std::move(metadata);
-    ctx.environment_episode = std::move(candidate);
+    ctx.environment_session = std::move(candidate);
     ctx.logging.logger->log("[Phase1] Environment ready | assignment=" +
-        ctx.environment_episode->currentAssignment().concept_block_id + " | environment=" +
-        ctx.environment_episode->currentAssignment().environment_id + " | schedule_position=0");
+        ctx.environment_session->currentAssignment().concept_block_id + " | environment=" +
+        ctx.environment_session->currentAssignment().environment_id + " | schedule_position=0");
 }
 
 } // namespace GRIMText::Training

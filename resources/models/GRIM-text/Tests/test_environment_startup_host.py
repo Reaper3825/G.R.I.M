@@ -62,17 +62,17 @@ std::vector<ScheduledGoal> loadScheduledGoals(const fs::path& cache, const std::
 }
 namespace Environment {
 struct Response { bool is_null() const { return false; } };
-struct EnvironmentEpisode {
+struct EnvironmentSession {
     std::vector<ScheduledGoal> assignments;
     const ScheduledGoal& currentAssignment() const { return assignments.at(0); }
     Response latestResponse() const { return {}; }
 };
-std::unique_ptr<EnvironmentEpisode> prepareEnvironmentEpisode(std::vector<ScheduledGoal> schedule,
+std::unique_ptr<EnvironmentSession> prepareEnvironmentSession(std::vector<ScheduledGoal> schedule,
     const fs::path& directory) {
     assert(directory == fs::path("/config/resources/models/games"));
     ++preparations;
     if (fail_preparation) throw std::runtime_error("worker failed");
-    return std::make_unique<EnvironmentEpisode>(EnvironmentEpisode{std::move(schedule)});
+    return std::make_unique<EnvironmentSession>(EnvironmentSession{std::move(schedule)});
 }
 }
 }
@@ -85,7 +85,7 @@ struct Status {
 };
 struct TrainingContext {
     GRIM::HyperParameters::Config config;
-    std::unique_ptr<GRIM::Environment::EnvironmentEpisode> environment_episode;
+    std::unique_ptr<GRIM::Environment::EnvironmentSession> environment_session;
     std::unique_ptr<int> environment_tokenizer;
     std::optional<GRIM::CurriculumMetadata> current_curriculum_metadata;
     struct { uint64_t data_seed = 123; } rng;
@@ -121,15 +121,15 @@ int main() {
     ctx.config.stage = TrainingStage::RL;
     metadata_stage = "sft";
     rejects([&] { EnvironmentReady(ctx); });
-    assert(loads == 0 && !ctx.current_curriculum_metadata && !ctx.environment_episode);
+    assert(loads == 0 && !ctx.current_curriculum_metadata && !ctx.environment_session);
     metadata_stage = "rl";
     fail_preparation = true;
     rejects([&] { EnvironmentReady(ctx); });
-    assert(!ctx.current_curriculum_metadata && !ctx.environment_episode);
+    assert(!ctx.current_curriculum_metadata && !ctx.environment_session);
     fail_preparation = false;
     EnvironmentReady(ctx);
     assert(ctx.current_curriculum_metadata->training_stage == "rl");
-    assert(ctx.environment_episode->currentAssignment().concept_block_id == "first");
+    assert(ctx.environment_session->currentAssignment().concept_block_id == "first");
     rejects([&] { makePhase2HandoffReady(ctx); }); // Tokenizer is also required.
     ctx.environment_tokenizer = std::make_unique<int>(1);
     auto& owner = makePhase2HandoffReady(ctx).ctx;

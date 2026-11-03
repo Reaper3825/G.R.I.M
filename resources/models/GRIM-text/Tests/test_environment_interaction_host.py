@@ -16,6 +16,7 @@ def main():
     source = r'''
 #include "INPUT_IMPLEMENTATION"
 #include "RENDERER_HEADER"
+#include "EPISODE_HEADER"
 #include <cassert>
 #include <chrono>
 #include <memory>
@@ -51,6 +52,8 @@ namespace GRIMText::Training {
 struct Assignment { GRIM::ConceptBlockGoal goal; };
 struct Episode {
     Assignment assignment;
+    GRIM::Episodes::TaskEpisode task;
+    const GRIM::Episodes::TaskEpisode& taskEpisode() const { return task; }
     json response;
     const Assignment& currentAssignment() const { return assignment; }
     const json& latestResponse() const { return response; }
@@ -58,7 +61,7 @@ struct Episode {
 struct GenerationState { bool active_session = false; };
 struct TrainingContext {
     GRIM::HyperParameters::Config config;
-    std::unique_ptr<Episode> environment_episode;
+    std::unique_ptr<Episode> environment_session;
     std::unique_ptr<GRIM::Tokenizer::UniByte> environment_tokenizer;
     GenerationState generation_state;
     GenerationState& requireGenerationState(const char*) { return generation_state; }
@@ -144,9 +147,10 @@ int main() {
 
     TrainingContext ctx;
     rejects([&] { beginPhase2EnvironmentInteraction(ctx); });
-    ctx.environment_episode = std::make_unique<Episode>();
-    ctx.environment_episode->assignment.goal = goal;
-    ctx.environment_episode->response = raw;
+    ctx.environment_session = std::make_unique<Episode>();
+    ctx.environment_session->assignment.goal = goal;
+    ctx.environment_session->task.goal = std::make_shared<const GRIM::ConceptBlockGoal>(goal);
+    ctx.environment_session->response = raw;
     rejects([&] { beginPhase2EnvironmentInteraction(ctx); });
     ctx.environment_tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>();
     ctx.config.stage = GRIM::HyperParameters::TrainingStage::SFT;
@@ -157,19 +161,21 @@ int main() {
     ctx.config.mode = GRIM::HyperParameters::ModelExecutionMode::TRAINING;
     assert(prefill_calls == 0 && forward_calls == 0);
     for (const auto* status : {"succeeded", "failed", "stopped"}) {
-        ctx.environment_episode->response = response(status);
+        ctx.environment_session->response = response(status);
         const auto terminal = beginPhase2EnvironmentInteraction(ctx);
-        assert(terminal.episode_status == status && !terminal.generation);
+        assert(terminal.episode_status == status && terminal.generation);
+        ctx.generation_state.active_session = false;
     }
-    assert(prefill_calls == 0 && forward_calls == 0);
-    ctx.environment_episode->response = raw;
+    assert(prefill_calls == 3 && forward_calls == 3);
+    prefill_calls = forward_calls = 0;
+    ctx.environment_session->response = raw;
     supply_span_map = false;
     rejects([&] { beginPhase2EnvironmentInteraction(ctx); });
     assert(forward_calls == 0 && !ctx.generation_state.active_session);
     supply_span_map = true;
     forward_fails = true;
     rejects([&] { beginPhase2EnvironmentInteraction(ctx); });
-    assert(!ctx.generation_state.active_session && ctx.environment_episode->response == raw);
+    assert(!ctx.generation_state.active_session && ctx.environment_session->response == raw);
     forward_fails = false;
     const auto result = beginPhase2EnvironmentInteraction(ctx);
     assert(result.episode_status == "active" && result.generation->reason == ReturnReason::SpanBoundary);
@@ -185,11 +191,14 @@ int main() {
         assert(ended.generation->reason == reason && ended.episode_status == "active");
         assert(!ctx.generation_state.active_session); // Model termination isn't Goal completion.
     }
-    assert(ctx.environment_episode->response == raw);
+    assert(ctx.environment_session->response == raw);
+    ctx.environment_session->task.state = GRIM::Episodes::EpisodeState::AttemptSubmitted;
+    rejects([&] { beginPhase2EnvironmentInteraction(ctx); });
 }
 '''
     for key, value in {
         'INPUT_IMPLEMENTATION': (root / 'Shared/Environment/EnvironmentInput.cpp').as_posix(),
+        'EPISODE_HEADER': (root / 'Shared/Episode/TaskEpisode.hpp').as_posix(),
         'RENDERER_HEADER': (root / 'Shared/ConceptBlock/SpanTextRenderer.hpp').as_posix(),
         'RESULT_TYPE': method(phase2.with_suffix('.hpp').read_text(), 'struct Phase2EnvironmentResult') + ';',
         'BEGIN_INTERACTION': method(phase2.read_text(), 'Phase2EnvironmentResult beginPhase2EnvironmentInteraction('),

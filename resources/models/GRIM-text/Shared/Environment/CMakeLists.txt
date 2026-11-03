@@ -2,7 +2,7 @@
 if(NOT TARGET grim_environment_runtime)
     get_filename_component(GRIM_ENVIRONMENT_REPO "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
     add_library(grim_environment_runtime STATIC
-        EnvironmentEpisode.cpp
+        EnvironmentSession.cpp
         EnvironmentInput.cpp
         EnvironmentBoundary.cpp
         "${GRIM_ENVIRONMENT_REPO}/ui/world_lab/world_document.cpp"

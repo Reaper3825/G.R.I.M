@@ -54,8 +54,9 @@ and active renderer configuration use this representation. Sections 4.4 and 4.5
 define its semantics. Existing datasets have not been rewritten automatically;
 explicit migration tooling is described below. TextWorld binding, evaluation,
 the manual episode lifecycle, and RL Phase1's initial environment handoff are
-implemented. The single-Goal model interaction controller now routes completed
-Answers and inserts permitted environment feedback; RL updates remain separate.
+implemented. The single-Goal model interaction controller dispatches completed Execute commands,
+inserts permitted environment feedback, and grades the attempt at Answer close.
+RL updates remain separate.
 
 **Scheduled Goal loading:** `loadScheduledGoals()` in
 `Shared/DataLoader/ConceptBlockCorpusReader` reuses curriculum membership and
@@ -69,7 +70,7 @@ and Goals, not authored prompt/DDEA/answer/knowns/unknowns. Legacy JSONL support
 parses one complete line temporarily and retains only its ID and Goal. Evidence
 remains system-facing. This operation does not start an environment, construct
 an inference prefix, or change the current training corpus loading operation.
-Episode advancement remains pending. Focused host checks:
+The Phase2 outer loop consumes this schedule across examples. Focused host checks:
 `powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_scheduled_goals.ps1`.
 
 **RL Phase1 environment handoff:** training startup with `training_stage: "rl"`
@@ -80,15 +81,16 @@ the configured block ordering and initialized data seed. It resolves the first
 assignment's `environment_id` through the config-relative
 `resources/models/games/environment_registry.json`, then uses the existing worker
 compile operation to start and evaluate that frozen Goal episode. Only a valid
-initial response publishes `TrainingContext::environment_episode`, which owns the
+initial response publishes `TrainingContext::environment_session`, which owns the
 client, resolved world/path, immutable assignments, position zero, and full host
 response. `environment_tokenizer` retains the generation tokenizer. Initial
-success/failure/stopped states are preserved without forcing a command. Preparation
+success/failure/stopped states are preserved without forcing a command; the model
+can still submit its final Answer for grading. Preparation
 failure destroys the unpublished candidate and its worker. These responses are
 retained as host data; Phase2 projects only the permitted visible fields described
 below. Evidence and authoritative world facts remain private. Phase1 returns
-`ready_for_environment`; the executable routes it to the initial Phase2 environment
-interaction rather than entering SFT or claiming an RL update. Ordinary inference
+`ready_for_environment`; the executable routes it to `executePhase2EnvironmentLoop()`
+for all selected examples rather than entering SFT or claiming an RL update. Ordinary inference
 and PT/SFT preparation retain their existing paths.
 Host lifecycle checks: `tests/run_environment_preparation.ps1`; startup/handoff
 checks: `python resources/models/GRIM-text/Tests/test_environment_startup_host.py`.
@@ -105,13 +107,17 @@ criterion text, and constraint text form the structured `reasoning_state`; evide
 is removed before rendering regardless of configured span policies. Initial knowns
 and unknowns are empty. The existing `buildInferencePrefill()` provides configured
 span encoding and the full continuation delimiter map. Episode status remains host
-control data, not part of the model prompt. Already-terminal episodes return
-without generation. A live generation session cannot be replaced by another begin.
+control data, not part of the model prompt. Terminal world state forbids further commands but still permits generation of
+the final Answer submission. A live generation session cannot be replaced by another begin.
 The result preserves inference return reasons separately from Goal outcomes; a
 span pause leaves the session in `TrainingContext` for caller-driven continuation.
 The begin entrypoint remains available for inspection of that first return. The
 executable now invokes `executePhase2EnvironmentInteraction()` to continue the
-current Goal through DDE/Update pauses, Answer submissions, and permitted feedback.
+current Goal through reasoning pauses, Execute commands, feedback, and final
+Answer submission.
+`Phase2_EnvironmentLoop.cu/.hpp` owns both the Phase2 environment entrypoint and
+its begin helper, following the native `Phase2_TrainingLoop` organization; there
+is no separate Phase2 environment dispatch layer.
 Host begin tests: `Tests/test_environment_interaction_host.py`.
 
 **Recurrent environment controller:** every new span pause is validated against its
@@ -119,15 +125,15 @@ configured root definition, token range, sampled delimiters, and previous delive
 boundary. Invalid structural markers, stale boundaries, injected context inside a
 generated span, and a phase closing inside an unfinished typed atom stop the run
 without dispatch. Only Determine/Define/Execute/Update/Answer root spans are
-accepted. DDE/Update pauses resume without an environment call. Answer decoding
-selects only the content tokens between that instance's delimiters, with aligned
+accepted. Determine/Define/Update pauses resume without an environment call. Execute
+decoding selects only the content tokens between that instance's delimiters, with aligned
 atom metadata and strict UTF-8. Surrounding whitespace is trimmed; empty, multiline,
 NUL-containing, and over-512-byte commands are rejected. Native commands and the
 existing explicitly supported host UI commands use `TextWorldClient`'s normal
 step route; the host UI adapter retains its Model-tool eligibility checks.
 
 The episode owner retains its initial response plus ordered action receipts keyed
-by Answer closing position, command, submission status, actual response, and error.
+by Execute closing position, command, submission status, actual response, and error.
 Repeating a completed submission returns the receipt without executing again;
 conflicting/older boundaries and actions after terminal status are rejected.
 Transport failures, malformed/mismatched responses, and unknown host completion
@@ -138,83 +144,86 @@ that a requested world transition or Goal success occurred.
 After each continuing response, the same visible-field projection supplies runtime
 context before resuming the existing generation session. The frozen Goal and
 global generation/context budgets remain unchanged between cycles. Native episode
-success/failure/stopped status ends interaction independently of Answer completion;
-EOS/limits end generation without a success claim or dispatch, even if a span also
-closed at that terminal token. Error/episode termination releases the live model
-session. Receipts remain in the owner in memory; persistent training export and
-schedule advancement are not implemented. No rewards, optimizer work, or RL loss
+success/failure/stopped status stops commands, but its permitted observation is
+inserted before generation continues to the final Answer. Answer close freezes
+and grades the Goal attempt against the latest authoritative world response; it
+never dispatches an action. EOS/limits before submission freeze an incomplete
+failed attempt, even if the world succeeded. Error/attempt termination releases
+the live model session. Persistent training export is not implemented.
+No rewards, optimizer work, or RL loss
 is performed. Host controller tests: `tests/run_environment_dispatch.ps1`.
+
+
+**Full curriculum example loop:** `executePhase2EnvironmentLoop()` wraps the
+single-example `executePhase2EnvironmentInteraction()` and consumes every selected
+course example in the existing loader's configured order. Course membership and
+environment identity remain on each assignment; a Goal belongs to its example's
+sequence/session, not a separate curriculum level. Each example starts at its
+course environment's authored player spawn with a fresh generation context,
+initial observation, Goal prefix, and generation budget. This is on-demand
+inference tokenization, not the SFT/PT token-packing path.
+
+`EnvironmentSession::advanceExample()` uses `start_episode` for another example
+in the same environment, retaining the compiled artifact while resetting native
+world state and host UI references. When the environment ID changes, it resolves
+the course's registry entry and compiles/starts a candidate worker before replacing
+the current one. No extra start/reset follows compile. Completed examples are
+retained in `previousEpisodes()`; the current/final example remains in
+`taskEpisode()`. These are in-memory records, not persistent SFT export.
+
+Passing, failed, EOS/limit, and committed invalid-output attempts advance to the
+next example without automatic retries. Infrastructure failures abort the run
+with prior results retained. An uncertain reset transition cannot be retried
+implicitly. The outer result reports completed/passed/failed example counts and
+commands; reaching the end marks the schedule complete and prevents rerunning the
+last example. This does not implement a shared-state multi-Quest course session:
+each example starts from spawn, rather than inheriting the prior example's world
+or model history. Focused host coverage is `tests/run_environment_dispatch.ps1`.
 
 ## 1. The inference contract in one view
 
-GRIM structured inference is a recurrent, feedback-conditioned process. DDEA
-means Determine, Define, Execute, Answer; Define and Execute are optional and
-need not occur together. Not every user input requires a tool call. A direct
-response must not acquire artificial definitions, execution, or tool use merely
-to fill the phase structure.
+GRIM structured inference pursues one Goal through an attempt. DDEA means
+Determine, Define, Execute, Answer; Define and Execute are optional. A direct
+response does not acquire artificial tool calls to fill the phase structure.
 
 ```text
-UPSTREAM-SUPPLIED PREFIX                         MODEL CONTINUATION / OUTPUT
-
-prompt
-  -> target_state
-  -> success criteria (criterion text only)
-  -> constraints
-  -> persisted knowns/unknowns (later passes only)
-  || inference boundary ||
-  -> determine
-  -> [define]
-  -> [execute]
-  -> [update]
-  -> answer -> completed answer-span boundary
-                  |
-                  +-> deliver response to the configured recipient
-                  +-> receive permitted feedback when the task continues
-                  +-> next reasoning cycle under the same active goal
+supplied prompt + Goal text + available state
+  -> Determine -> [Define]
+  -> [Execute(command) -> actual permitted feedback -> further reasoning/actions]
+  -> [Update]
+  -> Answer -> submit frozen Goal attempt -> evaluate outcome
 ```
 
-The left side describes the task, objective, verification envelope, and any
-state persisted from earlier generation passes. The right side describes the
-model's working trajectory and externally submitted response for one cycle.
-Square brackets mark optional phases. Pre-answer DDE spans are observed as
-working context; they are separate from the answer payload delivered outside
-that cycle. Answer completion does not by itself establish goal completion.
+### 1.1 Action and attempt boundaries
 
-### 1.1 Recurrent boundary and recipient contract
+- A valid completed span can pause generation for controller observation.
+- In the environment controller, a completed Execute contains exactly one
+  environment command. Only that instance's content is decoded and dispatched;
+  surrounding DDEA text and cumulative continuation are excluded.
+- Determine, Define, and Update close without dispatch. Ordinary non-environment
+  Execute retains its computation/working-text meaning; this command rule belongs
+  to the environment recipient adapter.
+- Insert actual permitted feedback after each command and before subsequent
+  generation. A requested transition is not proof that it occurred.
+- A completed Answer submits the entire Goal attempt for grading. Its text is
+  never a TextWorld command, and Answer close does not itself prove success.
+- A terminal world blocks further commands; the model may still submit its Answer.
+  EOS/limits before that submission produce an incomplete failed attempt.
+- Completed action receipts prevent duplicate side effects. Unknown completion
+  blocks further actions and grading; it is infrastructure-invalid, not a retry.
+- Runtime feedback cannot impersonate generated structural markers.
 
-- Each valid completed span can pause generation for controller observation.
-  A DDE span close is not a TextWorld command-dispatch boundary.
-- At a valid generated `</answer>`, the controller selects the contents of that
-  answer instance only. It must not submit preceding DDE, optional update text,
-  tags, earlier answers, or the cumulative decoded continuation.
-- The recipient is task-specific. Ordinary conversation delivers a response to
-  the user without an environment call. A TextWorld challenge validates the
-  answer as one game command and submits that command to the environment.
-- A command submission is an attempt, not proof that its requested transition
-  occurred. Only the returned observation can establish the result.
-- For a continuing environment task, append permitted feedback before generating
-  the next cycle. Retain the active Goal until it is completed, failed, cancelled,
-  or explicitly replaced. An intermediate answer does not end the challenge.
-- Track the delivered span instance and command request so a resume or repeated
-  cumulative result cannot submit the same action twice. Invalid or incomplete
-  answers do not dispatch. Runtime feedback cannot impersonate generated markers.
+`Shared/Episode/TaskEpisode.hpp` defines the one shared record in `GRIM::Episodes`:
+a frozen `ConceptBlockGoal`, final token trajectory, private environment responses,
+command receipts, immutable attempts, and separate optional RL score slots.
+`Shared/Environment/EnvironmentSession.hpp` owns the live client/world and this
+record, rather than defining another episode type. The generation session owns
+live tokens; the final snapshot is retained when the attempt ends. Grading freezes
+the actual host response and never replays commands. A failed first attempt is
+`AttemptSubmitted`; automatic retries and their world-reset policy remain pending.
 
-The selected semantic loop is:
-
-```text
-Goal + permitted observation
-  -> Determine -> [Define] -> [Execute] -> [Update] -> Answer
-  -> submit Answer to the task recipient
-  -> actual feedback / verified task status
-  -> next cycle if needed
-```
-
-Span-boundary pause/resume, Answer routing, TextWorld command submission, and
-post-command permitted feedback insertion are implemented for one frozen Goal.
-Initial observation projection and runtime-context append are described in section 7.
-The existing manual Play command field is not this model-driven controller.
-Recurrent interaction does not imply recurrent-network architecture or a change
-to the SFT loss policy.
+The manual Play lifecycle remains separate. This change does not implement SFT
+episode serialization or RL optimizer updates.
 
 ### 1.2 Existing inference transport
 
@@ -393,8 +402,9 @@ These fields represent the continuation after the normal structured-state
 prefix. Define and Execute are used only when needed; neither implies a mandatory
 tool call. Recurrent episodes additionally have ordered feedback boundaries
 between cycles, with feedback available only after the corresponding submission.
-Their storage/projection must preserve these boundaries rather than treating
-future observations as initial context. For train/inference alignment, every token placed before the first
+Their storage/projection must preserve action/feedback boundaries within an
+attempt rather than treating future observations as initial context. Answer is
+the attempt submission, not an intermediate command. For train/inference alignment, every token placed before the first
 supervised output must be constructible at inference time. The desired
 prefix-equivalence invariant is:
 
@@ -923,9 +933,11 @@ and does not necessarily involve an external tool. Omit it when the response
 does not require such work.
 
 Network role: develops the result or proposed action used to construct Answer.
-For TextWorld, this span is observed, not submitted. An intended or predicted
-environment transition remains unverified until the answer command has been
-submitted and actual feedback received in a later boundary.
+For the environment adapter, this span contains exactly one command. Its
+completed close dispatches that command, and actual feedback is inserted before
+continuing the same Goal attempt. An intended or predicted transition remains
+unverified until its feedback arrives. Outside this adapter, Execute remains
+optional working text and need not invoke a tool.
 
 Rules:
 
@@ -939,10 +951,10 @@ Rules:
 #### Tool-expression closure for self-correction RL
 
 The following is a separately scoped, pending self-correction tool-path design.
-It is not the recurrent TextWorld dispatch contract, does not make tool calls
-mandatory, and must not cause DDE text to be sent to TextWorld. Its proposed
-TOOL/READ dispatch needs explicit adapter-specific reconciliation before use
-with the answer-routed interaction controller. Ordinary response cycles need
+It is not the current environment command contract and does not make tool
+calls mandatory. The environment adapter dispatches a single command at Execute
+close; this pending TOOL/READ path must not create a second dispatch for that
+same action. Ordinary response cycles need
 none of this grammar.
 
 The proposed authoring contract for that tool path is:
@@ -999,8 +1011,8 @@ what became known and what remains unresolved.
 
 Update remains optional and is not an additional mandatory DDEA phase. When
 present, it may summarize already observed results, including feedback from a
-previous cycle. It cannot commit the outcome of the current answer's environment
-action before that answer has been submitted and feedback has arrived.
+earlier command. It cannot commit the outcome of an Execute action before
+that command has been submitted and feedback has arrived.
 
 Network role: state transition/commit boundary.
 
@@ -1020,10 +1032,9 @@ Example:
 consumed volume = 36 liters; no unknowns remain.
 ```
 
-### 4.13 Answer — externally submitted response for the current cycle
+### 4.13 Answer — submit the Goal attempt
 
-Canonical position: final generated response span of the current cycle, not
-necessarily the end of the task or recurrent trajectory.
+Canonical position: final generated response span of the attempt.
 
 Visible form:
 
@@ -1033,25 +1044,20 @@ VALUE
 </answer>
 ```
 
-Definition: the response delivered to the configured recipient. For ordinary
-conversation this is user-facing text; for a TextWorld challenge it is the game
-command submitted to the environment. DDE and optional update remain separate
-working context and are not part of the submitted payload.
-
-Network role: commits the current cycle's external response/action. A valid
-generated close provides the controller boundary for validation and delivery.
+Definition: the final response submitting the work toward the active Goal.
+For an environment task, all command/feedback cycles occur before this submission.
+Answer text is not executed as a command. Closing Answer freezes the attempt;
+the authoritative verifier determines whether it passed.
 
 Rules:
 
-- Must respect the recipient's response format and the active goal/constraints.
-  An intermediate action may advance the goal without satisfying it yet.
-- Must agree with observed state and any actual computation; it must not present
-  predicted environment outcomes as established facts.
-- A final user response must satisfy the target and criteria at the requested
-  level of detail. An intermediate TextWorld response contains one command,
-  without surrounding explanations or a claim that the command succeeded.
-- Preserve units, qualifiers, uncertainty, and safety boundaries when relevant.
-- Do not introduce new unsupported reasoning or contradict the update.
+- Respect the recipient's response format and the active Goal/constraints.
+- Agree with observed state and completed computation; do not present predicted
+  environment outcomes as established facts.
+- Preserve units, qualifiers, uncertainty, and safety boundaries where relevant.
+- Do not introduce unsupported reasoning or contradict Update.
+- Multiple commands may belong to one attempt; an intermediate command belongs
+  in Execute, not Answer. No action is dispatched at Answer close.
 
 ## 5. State-transition invariants for training examples
 
@@ -1063,8 +1069,9 @@ sentences into labeled sections.
 Information may flow forward:
 
 ```text
-prompt/goal/state -> determine -> [define] -> [execute] -> [update] -> answer
-    -> recipient feedback -> next cycle
+prompt/goal/state -> determine -> [define]
+    -> [execute -> actual feedback -> further reasoning/actions]
+    -> [update] -> answer -> attempt grading
 ```
 
 It must not flow backward. In particular:
@@ -1086,14 +1093,13 @@ and relationships needed for it, and `execute` applies those definitions.
 
 Update may commit only what actual computation or already received feedback
 established. It may normalize wording or record remaining work, but it must not
-manufacture a result or anticipate feedback from the current answer submission.
+manufacture a result or anticipate feedback from an uncompleted Execute action.
 
 ### 5.4 Update/answer alignment
 
-Answer is the externally submitted response for this cycle. Any result it
-asserts must be supported by available context or completed work, even when
-Define, Execute, or Update is omitted. A proposed environment command is not an
-assertion of its success. Task completion is established separately by the
+Answer submits the Goal attempt. Any result it asserts must be supported by
+available context or completed work, even when Define, Execute, or Update is
+omitted. Execute commands and their actual feedback precede this submission. Task completion is established separately by the
 task's verifier, not by the existence of an answer close.
 
 ### 5.5 Goal consistency
@@ -1107,7 +1113,7 @@ training examples because they teach poor transition selection.
 This arithmetic example uses Define and Execute because they serve the task.
 It does not require an external tool call and is not a template requiring all
 phases for every user input. A recurrent environment episode can contain many
-cycles before its goal is reached; the following example happens to finish in one.
+action/feedback cycles before final submission; this example finishes in one pass.
 
 ### 6.1 Upstream structured input
 
@@ -1315,14 +1321,13 @@ projection before resume. Host coverage is in
 `Tests/test_inference_trajectory_host.py`.
 
 For recurrent TextWorld interaction, the controller distinguishes
-observed DDE boundaries from the Answer submission boundary, extracts only the
-newly closed answer instance, and inserts the actual permitted environment result
-before resuming. A span yield is a scheduling event; only the configured recipient
-policy makes an answer actionable. No other span close automatically dispatches
-a TextWorld command. The current cumulative continuation result is not itself a
-command payload. A completed answer may finish one cycle while the generation
-session and challenge remain active; terminal budgets/EOS still take precedence
-under the existing return policy.
+Execute action boundaries from the final Answer submission. It extracts only the
+newly closed Execute command and inserts its actual permitted result before
+resuming. Answer freezes and grades the attempt without a worker call. A span yield is a scheduling event; only the configured recipient
+policy makes Execute actionable. Answer close submits the attempt for grading;
+no other root span dispatches a TextWorld command. The current cumulative continuation result is not itself a
+command payload. A completed Answer ends the attempt. Terminal budgets/EOS still take precedence
+under the existing return policy and cannot fabricate a completed submission.
 
 GRMT v34 replaces fixed Goal, phase, collection, and Answer records with generic
 named nodes. The wire representation stores each node's name, range, and parent;
@@ -1401,9 +1406,9 @@ For every example, verify:
 - Execute, when needed, performs the intended work on available inputs; its
   presence or absence must not imply a mandatory external tool call.
 - Optional Update commits only verified work/observations and tracks remaining work.
-- Answer contains only the recipient-facing response for its cycle. For TextWorld,
-  only its validated command is submitted; DDE is observed separately.
-- Each feedback item follows the submission that produced it; no cycle sees
+- Environment Execute contains one validated command and receives actual feedback.
+- Answer submits the Goal attempt and is never dispatched as a command.
+- Each feedback item follows the Execute command that produced it; no cycle sees
   hidden world facts, future results, or saved solutions as supplied context.
 - Goal completion is checked independently from answer-span completion.
 - The active supervision/window policy actually targets the phases the example

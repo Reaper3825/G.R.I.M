@@ -516,7 +516,7 @@ challenge data saves as version 2 until explicit conversion prevents data loss.
 Asset format is separately versioned at 1. Do not silently reinterpret older files
 when changing semantics. Preserve user-authored games/assets and unrelated changes.
 
-The Phase2 controller supports single-Goal model-driven gameplay. Training episode
+The Phase2 controller runs model-driven gameplay for every selected course example. Training episode
 export, curriculum generation,
 linked asset updates, multi-room templates, asset tags/search, and arbitrary
 TextWorld game import are not implemented. Treat them as new scoped work, not as
@@ -576,33 +576,32 @@ changes reuse the compiled environment with fresh episode state. Saved-solution
 replay uses the same evaluator. See the
 [compilation transition](WORLD_LAB.md#compilation-and-challenge-termination).
 
-Each model cycle follows Determine, optional Define, optional Execute, and
-Answer, with optional Update where appropriate. Define and Execute need not
-occur together. They are working context observed at span boundaries, not
-TextWorld commands. Only the contents of the newly completed Answer span are
-validated as one command and submitted to the environment. Submission must be
-tracked once per answer instance; cumulative decoded trajectories must not be
-resent as commands.
+Each Goal attempt may contain multiple action/feedback cycles. Determine,
+Define, and Update are observed without dispatch. In the environment adapter,
+Execute contains one command, dispatched at its generated close; actual permitted
+feedback is appended before the next action. Answer close submits the complete
+Goal attempt for grading and never executes its text. World success alone does
+not submit an attempt: terminal worlds prohibit further commands but allow the
+model's final Answer. EOS/limits before submission produce an incomplete failure.
 
-Permitted visible observation text enters context before the next cycle; verified
-episode status controls host termination. A requested transition is not an observed result. Retain the active
-Goal while the challenge continues; emitting Answer does not prove victory or
-end the challenge. Observations must not leak hidden world facts, saved solutions,
-or future results. Ordinary user-facing responses use the same optional-phase
-contract without necessarily submitting anything to an environment or tool.
-
-The Phase2 controller implements span-boundary resume, validated Answer dispatch,
-and permitted runtime feedback insertion for the current frozen Goal. Its ordered
-action receipts prevent duplicate submissions and stop continuation after unknown
-execution outcomes. Challenge sequencing and recurrent episode export remain
-pending. The current source ConceptBlock stores one instance of each phase;
-neither a whole challenge nor every environment step is assumed to map 1:1 to
-an SFT block. This controller is separate from manual Play-tab behavior.
+The shared `Shared/Episode/TaskEpisode.hpp` record contains the frozen Goal,
+final token trajectory, private world observations, action receipts, and immutable
+attempt grade. `EnvironmentSession` owns the live client/world and that record.
+Receipts prevent duplicate side effects and unknown execution completion blocks
+continuation. The outer loop advances through the full configured course/example
+schedule, starting each example at spawn with a fresh model context. It reuses a
+compiled environment for matching environment IDs and resolves/compiles a new one
+when the course assignment changes environment. Previous episode records remain
+in memory; failed attempts do not halt progression. Infrastructure errors do halt
+progression. Automatic retries, SFT episode export, shared-state multi-Quest course
+sessions, and RL updates remain pending. The current source ConceptBlock stores one instance of
+each phase; a whole episode is not assumed to map 1:1 to an SFT block. This
+controller remains separate from manual Play-tab behavior.
 
 Manual Play now has a separate host UI route for `ui.list`, `ui.inspect`, and
 `ui.show`, and `ui.hide`, with observed virtual resource references, guarded visibility changes, completion
 polling, and replay rejection. See [manual UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
-Validated model Answers may use the same supported host UI route. The worker's
+Validated model Execute commands may use the same supported host UI route. The worker's
 full facts remain excluded from the model-visible observation projection.
 
 ## Validation workflow

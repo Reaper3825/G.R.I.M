@@ -8,8 +8,9 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
 
-namespace GRIM::SelfCorrection {
+namespace GRIM::Episodes {
 
 inline constexpr std::size_t kPilotSampledTokensPerAttempt = 256;
 
@@ -26,7 +27,8 @@ struct SamplingSegment {
 };
 
 enum class AttemptEndReason : std::uint8_t {
-    AnswerClosed, Eos, SampledTokenLimit, ExecutionBudget, InfrastructureFailure,
+    AnswerClosed, Eos, SampledTokenLimit, ContextLimit, ExplicitFinish,
+    InvalidOutput, ExecutionBudget, InfrastructureFailure,
 };
 
 enum class CheckStatus : std::uint8_t { Passed, Failed, NotApplicable };
@@ -64,6 +66,9 @@ struct AttemptRecord {
     // Frozen execution results and environment state from the episode's sandbox
     // at token_end. This is the grading evidence, not a second evidence payload.
     std::string sandbox_snapshot_id;
+    // Frozen authoritative host response at the endpoint, never model input.
+    // Environment grading consumes this snapshot without replaying actions.
+    nlohmann::json environment_snapshot;
     AttemptGrade grade;
 };
 
@@ -72,4 +77,4 @@ struct AttemptScore {
     float advantage = 0.0f; // Detached and attempt-local.
 };
 
-} // namespace GRIM::SelfCorrection
+} // namespace GRIM::Episodes

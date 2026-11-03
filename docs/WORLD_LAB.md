@@ -33,12 +33,19 @@ and starts that frozen Goal episode through the existing compile operation. Its
 owner, initial response, and schedule position survive in `TrainingContext` for
 Phase2. Its initial interaction entrypoint projects visible feedback, description,
 inventory, and location text, supplies the Goal's requirement text, and begins
-structured model generation. The Phase2 controller resumes through DDE/Update
-pauses, submits only completed Answer contents, and appends permitted response
-text before the next cycle under the same frozen Goal. It stops on episode or
-generation termination without RL updates. Action receipts prevent duplicate
-submission and block retries after unknown outcomes. Assignment advancement,
-training export, and the shared multi-Quest course runtime remain pending.
+structured model generation. The Phase2 controller observes Determine/Define/Update
+pauses, submits one command at Execute close, and appends permitted feedback
+before continuing the same Goal attempt. Answer close freezes and grades that
+attempt without dispatch. A terminal world blocks commands but still permits
+the final Answer; EOS/limits before submission produce an incomplete failed
+attempt. No RL updates are performed. Action receipts prevent duplicate
+submission and block retries after unknown outcomes. The outer Phase2 environment
+loop now runs the full selected course/example schedule. Each example receives a
+fresh starting state and generation context; examples sharing an environment reuse
+its compiled artifact via `start_episode`, while environment changes resolve the
+course's registry entry and compile a candidate worker. Outcomes and trajectories
+remain in memory, including failed attempts. Infrastructure errors stop the run.
+Training export and the shared-state multi-Quest course runtime remain pending.
 
 `EnvironmentRegistry::resolveByName(name)` resolves the root `Environment`
 configuration value (for example, `"GRIM"`) by exact registered title and returns
@@ -196,9 +203,10 @@ candidate and checks binding without replacing live play. Compilation and new
 Goal startup preserve the previous session if candidate creation fails.
 
 The first binding implementation requires referenced entities to exist already.
-Quest-specific object insertion/setup, role-bound Goal templates, course-driven
-episode advancement and training episode export remain future work. Model Answer
-routing and permitted feedback insertion now use the single-Goal Phase2 controller.
+Quest-specific object insertion/setup, role-bound Goal templates, shared-state
+multi-Quest course sessions, and training episode export remain future work.
+The Phase2 outer loop advances through selected course examples using the existing
+single-example Execute/feedback/Answer controller.
 Evidence itself never performs setup.
 
 ## Goal selection, manual playtest, and solutions
@@ -517,8 +525,8 @@ and requires inspection before retrying. No automatic resubmission occurs.
 Host operations do not advance native moves, inject facts, or award Goal success.
 Their commands are rejected by native witness replay, including recorded solutions.
 Reset restarts native state but does not undo host effects. This route is for explicit
-manual Play commands and validated model Answers through the Phase2 controller.
-Only completed Answer contents reach this route, and host actions retain the
+manual Play commands and validated model Execute commands through the Phase2 controller.
+Only completed Execute command contents reach this route, and host actions retain the
 adapter's Model-tool policy checks. Full worker facts remain host data and are
 excluded from the model's visible-field observation projection.
 `ui.create_surface` is classified Ignore for now, preserving its host handler while
