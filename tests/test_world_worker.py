@@ -175,7 +175,9 @@ class WorkerTests(unittest.TestCase):
             "success_criteria": [{"criterion": "Arrive", "evidence": {"predicate": "player_at", "subject": "c"}}]}}
         initial = self.session.handle(request)["state"]
         self.assertEqual(initial["location_path"], "/")
-        self.assertIn("enter alpha", initial["admissible_commands"])
+        self.assertEqual(
+            [c for c in initial["admissible_commands"] if c.startswith(("go ", "enter ", "pathgo ")) or c == "back"],
+            ["enter alpha", "enter beta"])
         self.assertFalse(any(c.startswith("pathgo") for c in initial["admissible_commands"]))
         before = self.session.env.state
         for command in ("go /alpha/child", "back", "go /absent"):
@@ -185,6 +187,9 @@ class WorkerTests(unittest.TestCase):
         state = self.session.handle({"op": "step", "command": "enter alpha"})["state"]
         self.assertEqual(state["room_id"], "a")
         self.assertEqual(state["location_path"], "/alpha")
+        self.assertEqual(
+            [c for c in state["admissible_commands"] if c.startswith(("go ", "enter ", "pathgo ")) or c == "back"],
+            ["back", "enter child"])
         self.assertEqual(state["moves"], 1)
         self.assertIn({"predicate": "at", "arguments": ["P", "a"]}, state["facts"])
         self.assertIn("Room A", state["feedback"])

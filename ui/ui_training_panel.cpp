@@ -74,7 +74,10 @@ UITrainingPanel::UITrainingPanel()
         return hub;
     };
     worldLab_->setGoalAccess({[dataHub](const std::string& query){return dataHub()->worldGoalSelections(query);},
-                            [dataHub](const nlohmann::json& value){dataHub()->importWorldGoal(value);}});
+                            [dataHub](const nlohmann::json& value){dataHub()->importWorldGoal(value);},
+                            [dataHub]{return dataHub()->worldCurriculumRegistry();},
+                            [dataHub](const std::string& id){return dataHub()->worldConceptBlock(id);},
+                            [dataHub](const nlohmann::json& input){return dataHub()->worldModelInputPreview(input);}});
     tabAssetsBtn_ = std::make_shared<UIButton>("Assets", [this]() {setView(TrainingPanelTab::Assets);});
     tabAssetsBtn_->setSize(80.0f,28.0f);
     worldAssets_ = std::make_unique<UIWorldAssetsView>(std::filesystem::path(getResourcePath()) / "models" / "world_assets");

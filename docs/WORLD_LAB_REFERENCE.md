@@ -204,9 +204,9 @@ Custom action authoring and non-compass transitions remain future work.
 | Validate world | Compiles/resets a candidate and checks Goal binding; does not prove solvability or replace live play. |
 | Compile / Start | Compiles a changed environment, or reuses the current artifact to start the selected Goal from fresh state. |
 | Command field / Send / Enter | Sends one text command to the live game. |
-| Reset | Restarts the same frozen Goal and environment from the initial state. |
+| Reset | Starts fresh environment state with the currently selected frozen Goal and rebuilds the initial model input. |
 | Stop | Stops the worker and cancels the session/request. Compile again to resume play. |
-| Record | Resets first, then records subsequent commands. |
+| Record | Starts fresh with the selected Goal, rebuilds the initial model input, then records subsequent commands. |
 | Save solution | Independently replays commands using the Goal evaluator and saves a matching episode witness on success. |
 | Check saved | Replays a matching episode witness or verifies imported legacy commands; never changes the live interpreter. |
 | History | Displays an earlier observation; does not rewind gameplay. |
@@ -214,6 +214,13 @@ Custom action authoring and non-compass transitions remain future work.
 Typical commands include `look`, `inventory`, `go east`, `open seed box`,
 `take seed packet from seed box`, and `unlock garden gate with brass key`.
 The available-commands list is an authoring aid for the current observation.
+
+The initial Play history entry displays the projected model input with span
+markers from `training.config.concept_spans`, using the shared structured-input
+renderer. It includes the selected prompt, permitted environment observation,
+and visible Goal fields. `<prompt>` contains only the authored task; cleaned
+observations occupy `<environment_context>`. Author command suggestions remain in the separate live
+picker. This text preview does not resolve tokenizer IDs or start generation.
 
 The canvas highlights the current room and changed objects. Its cards and object
 lists still represent the authored world. History selection can show highlights

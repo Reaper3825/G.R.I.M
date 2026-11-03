@@ -106,12 +106,19 @@ int main() {
     const auto frozen = GRIM::goalToJson(goal);
     const auto raw = response();
     const auto input = GRIM::Environment::buildEnvironmentInferenceInput(goal, raw);
-    assert(input.prompt == "Feedback:\nYou are in a kitchen.\n\nDescription:\nThere is a closed cupboard."
+    assert(input.prompt.empty());
+    assert(input.reasoning_state.at("environment_context") == "Feedback:\nYou are in a kitchen.\n\nDescription:\nThere is a closed cupboard."
         "\n\nInventory:\nYou carry a key.\n\nLocation:\nKitchen\n\nLocation path:\n/home/kitchen");
     assert(input.episode_status == "active" && input.prompt.find("SECRET") == std::string::npos);
     assert(input.reasoning_state.dump().find("SECRET") == std::string::npos);
     assert(input.reasoning_state.at("knowns").empty() && input.reasoning_state.at("unknowns").empty());
     assert(GRIM::goalToJson(goal) == frozen && response() == raw);
+    const std::string task = "Find the key.\nKeep the cupboard closed.";
+    const auto initial = GRIM::Environment::buildEnvironmentInferenceInput(goal, raw, task);
+    assert(initial.prompt == task);
+    assert(initial.reasoning_state == input.reasoning_state);
+    assert(initial.prompt.find("SECRET") == std::string::npos);
+    assert(GRIM::Environment::buildEnvironmentInferenceInput(goal, raw, "").prompt == input.prompt);
 
     // Even a configured evidence leaf has nothing to render after projection.
     GRIM::NamedConceptSpanDefinition prompt;
@@ -123,14 +130,35 @@ int main() {
     auto evidence = prompt; evidence.name = "evidence";
     evidence.source_path = "/goal/success_criteria/0/evidence/subject";
     evidence.open_delimiter = "<evidence>"; evidence.close_delimiter = "</evidence>";
-    GRIM::NamedConceptSpanDefinitions definitions{prompt, target, evidence};
+    auto environment = prompt; environment.name="environment_context";environment.source_path="/environment_context";
+    environment.open_delimiter="<environment_context>";environment.close_delimiter="</environment_context>";
+    GRIM::NamedConceptSpanDefinitions definitions{prompt, environment, target, evidence};
     int id = 1000;
     GRIM::resolveConceptSpanDelimiters(definitions, [&](const auto&) { return id++; });
-    auto source = input.reasoning_state; source["prompt"] = input.prompt;
+    auto source = initial.reasoning_state; source["prompt"] = initial.prompt;
     const auto rendered = GRIM::SpanText::renderInputWithSpans(source, definitions);
-    assert(rendered.text.find("<prompt>\nFeedback:") == 0);
+    assert(rendered.text.find("<prompt>\nFind the key.") == 0);
+    assert(rendered.text.find("<environment_context>\nFeedback:")!=std::string::npos);
     assert(rendered.text.find("<target_state>\nGet the key to the hall") != std::string::npos);
     assert(rendered.text.find("SECRET") == std::string::npos && rendered.text.find("<evidence>") == std::string::npos);
+
+    auto decorated=raw;
+    auto& visible=decorated["result"]["state"];
+    visible["feedback"]="\n\n                    ________  ________  __    __  ________\n"
+        "                   |        \\|        \\|  \\  |  \\|        \\\n"
+        "                       \\$$    \\$$$$$$$$ \\$$   \\$$    \\$$\n\n"
+        "-= System Hub =-\nA useful room description.\n\n>             -= System Hub =-0/1\nLOCATION: /\n";
+    visible["description"]="-= System Hub =-\nA useful room description.";
+    visible["location_path"]="/";
+    const auto decoratedCopy=decorated;
+    const auto clean=GRIM::Environment::buildEnvironmentInferenceInput(goal,decorated,task);
+    const auto observation=clean.reasoning_state.at("environment_context").get<std::string>();
+    assert(clean.prompt==task && decorated==decoratedCopy);
+    assert(observation.find("$$$$")==std::string::npos && observation.find("-= ")==std::string::npos && observation.find("LOCATION:")==std::string::npos);
+    assert(observation.find("Feedback:")==std::string::npos && observation.find("A useful room description.")!=std::string::npos);
+    visible["feedback"]="You cannot go that way.";
+    assert(GRIM::Environment::buildEnvironmentInferenceInput(goal,decorated).reasoning_state.at("environment_context").get<std::string>().find("You cannot go that way.")!=std::string::npos);
+    assert(GRIM::Environment::cleanEnvironmentObservation("Plan:\n+---+\n| X |\n+---+")=="Plan:\n+---+\n| X |\n+---+");
 
     for (const auto& invalid : std::vector<json>{
             {{"ok", false}, {"error", "worker failed"}},
@@ -144,6 +172,7 @@ int main() {
     for (const auto* field : {"feedback", "description", "inventory", "location", "location_path"})
         invalid["result"]["state"].erase(field);
     rejects([&] { GRIM::Environment::buildEnvironmentInferenceInput(goal, invalid); });
+    rejects([&] { GRIM::Environment::buildEnvironmentInferenceInput(goal, invalid, task); });
 
     TrainingContext ctx;
     rejects([&] { beginPhase2EnvironmentInteraction(ctx); });

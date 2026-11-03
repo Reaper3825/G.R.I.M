@@ -229,10 +229,11 @@ class Session:
             result["available_rooms"] = [{"id": ident, "path": nav.paths[ident], "name": self.room_names[ident]}
                                          for ident in nav.adjacent(room)]
             commands = [c for c in result["admissible_commands"] if not c.startswith("pathgo ")]
-            commands += ["go " + nav.paths[ident] for ident in nav.adjacent(room)]
-            commands += ["enter " + segment for _, (parent, segment) in nav.rooms.items() if parent == room]
+            # Advertise one short command per adjacent destination. Absolute
+            # and relative go aliases remain valid for typed input/recordings.
+            commands += ["enter " + segment for parent, segment in nav.rooms.values() if parent == room]
             if nav.rooms[room][0]:
-                commands += ["back", "go .."]
+                commands.append("back")
             result["admissible_commands"] = sorted(set(commands))
             result["feedback"] += "\nLOCATION: " + nav.paths[room]
         return result

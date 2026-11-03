@@ -3,11 +3,34 @@
 
 using namespace UIDataHubDetail;
 
+std::string UIDataHubPanel::worldModelInputPreview(const nlohmann::json& input) const {
+    const auto definitions=aiConfig.at("training").at("config").at("concept_spans")
+        .get<GRIM::NamedConceptSpanDefinitions>();
+    return GRIM::SpanText::renderInput(input,definitions);
+}
+
+nlohmann::json UIDataHubPanel::worldCurriculumRegistry() const {
+    if(!datasetTarget_)throw std::runtime_error("ConceptBlock database is unavailable");
+    nlohmann::json result={{"curriculums",nlohmann::json::array()},{"courses",nlohmann::json::array()}};
+    for(const auto& curriculum:datasetTarget_->getCurriculums())
+        result["curriculums"].push_back({{"id",curriculum.id},{"name",curriculum.name},{"course_ids",curriculum.course_ids}});
+    for(const auto& course:datasetTarget_->getCourses())
+        result["courses"].push_back({{"id",course.id},{"name",course.name},{"concept_block_ids",course.concept_block_ids}});
+    return result;
+}
+nlohmann::json UIDataHubPanel::worldConceptBlock(const std::string& id) const {
+    if(!datasetTarget_ || !worldGoalDatabaseReady_)throw std::runtime_error("ConceptBlock database failed to load; reopen DataHub after migration");
+    const auto block=datasetTarget_->getConceptBlockById(id);
+    if(block.id.empty())throw std::runtime_error("Registered ConceptBlock is missing: "+id);
+    return {{"source_id",block.id},{"name",block.name},{"prompt",block.prompt},
+        {"goal",block.goal?GRIM::goalToJson(*block.goal):nlohmann::json(nullptr)}};
+}
+
 std::vector<nlohmann::json> UIDataHubPanel::worldGoalSelections(const std::string& query) const {
     if(!datasetTarget_ || !worldGoalDatabaseReady_)throw std::runtime_error("ConceptBlock database failed to load. Migrate legacy evidence and reopen DataHub before selecting Goals.");
     std::vector<nlohmann::json> result;
     for(const auto& block:datasetTarget_->searchGoalConceptBlocks(query)){
-        if(block.goal)result.push_back({{"source_id",block.id},{"name",block.name},{"goal",GRIM::goalToJson(*block.goal)}});
+        if(block.goal)result.push_back({{"source_id",block.id},{"name",block.name},{"prompt",block.prompt},{"goal",GRIM::goalToJson(*block.goal)}});
     }
     return result;
 }

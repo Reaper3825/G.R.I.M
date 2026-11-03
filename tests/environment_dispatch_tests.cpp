@@ -1,6 +1,7 @@
 #include "resources/models/GRIM-text/Shared/Environment/EnvironmentSession.hpp"
 #include "resources/models/GRIM-text/Shared/Environment/EnvironmentInput.hpp"
 #include "resources/models/GRIM-text/Shared/Environment/EnvironmentBoundary.hpp"
+#include "resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp"
 #include "resources/models/GRIM-text/Shared/UnigramByte/TokenLayout.hpp"
 #include "ui/world_lab/environment_registry.hpp"
 #include <cassert>
@@ -154,6 +155,11 @@ Phase2EnvironmentResult beginPhase2EnvironmentInteraction(TrainingContext& ctx) 
     sequence = {}; // Production begin creates a fresh generation session per example.
     GRIM::NamedConceptSpanDefinitions definitions;
     int id = 1000;
+    GRIM::NamedConceptSpanDefinition context;
+    context.name="environment_context";context.source_path="/environment_context";
+    context.supervision=GRIM::ConceptSpanSupervision::Context;
+    context.open_delimiter="<environment_context>";context.close_delimiter="</environment_context>";
+    context.open_delimiter_id=id++;context.close_delimiter_id=id++;definitions.push_back(context);
     for (const auto* name : {"determine", "define", "execute", "update", "answer"}) {
         GRIM::NamedConceptSpanDefinition d;
         d.name = name; d.source_path = std::string("/") + name;

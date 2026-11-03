@@ -156,6 +156,8 @@ foreach(STB_HEADER ${STB_HEADERS})
 endforeach()
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
+target_sources(GRIM PRIVATE
+  ${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/Shared/Environment/EnvironmentInput.cpp)
 
 option(GRIM_BUILD_PHYSICAL_IDENTITY_TESTS
        "Build the focused physical identity persistence/matcher test" OFF)

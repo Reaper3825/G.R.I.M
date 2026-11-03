@@ -5,6 +5,8 @@
 #include "commands/command_result.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "core/input_parser.hpp"
+#include "resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp"
+#include <fstream>
 #include <chrono>
 #include <atomic>
 #include <thread>
@@ -162,7 +164,8 @@ void runTextWorldClientTests(){
     }
     example.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"examples/world_lab/locked_door.grimworld.json");
     const Document d=example.document();
-    const auto selection=legacyGoal(d);
+    auto selection=legacyGoal(d);
+    selection["prompt"]="Find the brass key and carry it through the oak door.";
     TextWorldClient client;
     auto start=request(client,{{"op","compile"},{"document",d.gameJson()},
         {"source_id",selection.at("source_id")},{"goal",selection.at("goal")}});
@@ -182,11 +185,35 @@ void runTextWorldClientTests(){
     // Drive the actual play controls with routed input and the installed worker.
     example.change([](Document& world){world.solution.clear();});
     const auto records=std::filesystem::temp_directory_path()/("grim-episode-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    UIWorldSession panel(example,records);panel.selectGoal(selection);panel.setChallenge(false);
+    UIWorldSession panel(example,records);
+    std::ifstream configFile(std::filesystem::path(__FILE__).parent_path().parent_path()/"ai_config.json");
+    nlohmann::json config;configFile>>config;
+    const auto definitions=config.at("training").at("config").at("concept_spans").get<GRIM::NamedConceptSpanDefinitions>();
+    panel.setGoalAccess({{}, {}, {}, {},[&](const nlohmann::json& supplied){return GRIM::SpanText::renderInput(supplied,definitions);}});
+    panel.selectGoal(selection);panel.setChallenge(false);
     auto frame=[&](const InputState& input){auto& router=GRIM::UI::InputRouter::get();router.beginFrame();router.currentPanel=90;panel.update(input,0,{{0,0},{340,650}});router.endFrame();};
-    auto click=[&](float x,float y){InputState input;input.mousePos={x,y};input.mousePressed[0]=input.mouseDown[0]=true;frame(input);input.mousePressed[0]=input.mouseDown[0]=false;input.mouseReleased[0]=true;frame(input);};
+    auto click=[&](float x,float y){InputState input;input.mousePos={x,y+116};input.mousePressed[0]=input.mouseDown[0]=true;frame(input);input.mousePressed[0]=input.mouseDown[0]=false;input.mouseReleased[0]=true;frame(input);};
     auto ready=[&]{const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(135);while(panel.busy() && std::chrono::steady_clock::now()<deadline){frame({});std::this_thread::sleep_for(std::chrono::milliseconds(20));}check(!panel.busy(),"Play panel request timed out");};
     frame({});click(50,48);ready();check(panel.status()=="Ready for a command.","Play panel did not compile the example");
+    check(panel.initialModelInput().has_value(),"Start did not publish model input");
+    auto supplied=panel.initialModelInput()->reasoning_state;supplied["prompt"]=panel.initialModelInput()->prompt;
+    check(panel.initialModelText()==GRIM::SpanText::renderInput(supplied,definitions),"World Lab preview differs from the configured inference renderer");
+    check(panel.initialModelText().starts_with("<prompt>\n") && panel.initialModelText().find("<target_state>\n")!=std::string::npos &&
+          panel.initialModelText().find("<criteria>\n")!=std::string::npos,"Initial preview omitted configured span markers");
+    check(panel.initialModelText().find("<evidence>")==std::string::npos && panel.initialModelText().find("<determine>")==std::string::npos &&
+          panel.initialModelText().find("admissible_commands")==std::string::npos,"Initial preview exposed private data or authored continuation");
+    check(panel.initialModelInput()->prompt==selection.at("prompt").get<std::string>() &&
+          panel.initialModelInput()->reasoning_state.at("environment_context").get<std::string>().find("Description:\n")!=std::string::npos,"Start lost the authored prompt or live observation");
+    check(panel.initialModelText().find("<prompt>\n"+selection.at("prompt").get<std::string>()+"\n</prompt>")==0 &&
+          panel.initialModelText().find("<environment_context>\n")!=std::string::npos,"Task and environment did not render in separate spans");
+    check(panel.initialModelText().find("$$$$")==std::string::npos && panel.initialModelText().find("-= ")==std::string::npos &&
+          panel.initialModelText().find("LOCATION:")==std::string::npos,"Model input retained interpreter chrome");
+    const auto firstGoal=panel.initialModelInput()->reasoning_state.at("goal");
+    check(firstGoal.at("target_state")==selection.at("goal").at("target_state") &&
+          firstGoal.at("success_criteria").size()==selection.at("goal").at("success_criteria").size(),"Selected Goal did not reach model input");
+    check(firstGoal.dump().find("evidence")==std::string::npos &&
+          panel.initialModelInput()->reasoning_state.at("knowns").empty() &&
+          panel.initialModelInput()->reasoning_state.at("unknowns").empty(),"Initial model state leaked evidence or retained intermediate state");
     // Preparing a typed action does not execute it. Dropdown selection cannot
     // click through to the Prepare button underneath its popup.
     click(280,202); // Actions composer.
@@ -208,19 +235,35 @@ void runTextWorldClientTests(){
     const auto recordFile=std::filesystem::directory_iterator(records)->path();
     const auto record=readEpisodeRecord(recordFile);
     check(record.at("commands")==solution && record.at("verified").get<bool>(),"Play panel did not save verified recording");
+    check(record.at("selection").at("prompt")==selection.at("prompt"),"Saved recording lost the task prompt");
+    auto legacyRecord=record;legacyRecord["selection"].erase("prompt");saveJsonFile(recordFile,legacyRecord);
     click(250,86);ready();check(panel.status()=="Solution verified and saved for this environment/Goal pairing.","Saved witness replay failed");
     GRIM::ConceptBlockGoal initialGoal;
+    initialGoal.target_state="Remain in the starting room.";
     initialGoal.success_criteria.push_back({"At starting room",GRIM::EvidenceCondition{"player_at",d.spawn,""}});
-    panel.selectGoal({{"source_id","initial-goal"},{"goal",GRIM::goalToJson(initialGoal)}});
-    click(50,48);ready();check(panel.status()=="Won!","Goal-only start did not evaluate initial success");
+    panel.selectGoal({{"source_id","initial-goal"},{"prompt","Stay in this room."},{"goal",GRIM::goalToJson(initialGoal)}});
+    check(!panel.initialModelInput(),"Selecting another block retained the previous attempt input");
+    panel.prepareCommand("a stale command");
+    click(180,48);ready();check(panel.status()=="Won!","Reset did not bind the newly selected Goal");
+    check(panel.preparedCommand().empty() && panel.initialModelInput()->reasoning_state.at("goal").at("target_state")==initialGoal.target_state &&
+          !panel.initialModelInput()->reasoning_state.at("environment_context").get<std::string>().empty(),"Reset did not refresh Goal and starting observation together");
+    check(panel.initialModelInput()->prompt=="Stay in this room." &&
+          panel.initialModelInput()->prompt.find(selection.at("prompt").get<std::string>())==std::string::npos,"Reset retained the previous block's prompt");
+    check(panel.initialModelText().find("Stay in this room.")!=std::string::npos &&
+          panel.initialModelText().find(selection.at("prompt").get<std::string>())==std::string::npos,"Reset retained the previous rendered span text");
     click(40,86);ready();click(130,86);ready();
     check(panel.status()=="Solution verified and saved for this environment/Goal pairing.","Zero-command solution was not saved");
+    panel.selectGoal({{"source_id",""},{"goal",nullptr}});click(40,86);ready();
+    check(panel.initialModelInput() && panel.initialModelInput()->reasoning_state.at("goal").at("target_state")=="" &&
+          panel.initialModelInput()->reasoning_state.at("goal").at("success_criteria").empty(),"Recording a sandbox retained the previous Goal");
+    check(panel.initialModelInput()->prompt.empty(),"Sandbox retained an authored task prompt");
     panel.selectGoal(selection);click(50,48);ready();
     example.change([](Document& world){world.objective="A changed objective.";});frame({});
     click(180,48);ready();check(panel.status()=="Ready for a command.","Legacy metadata incorrectly invalidated environment compilation");
     example.change([](Document& world){world.find(world.spawn)->description="Changed environment description.";});frame({});
     click(180,48);check(panel.status()=="Compile & Play the current world first","Play panel reused a stale compiled world");
     panel.hide();ready();
+    check(!panel.initialModelInput(),"Hidden session retained live model input");
     for(const auto& entry:std::filesystem::directory_iterator(records))std::filesystem::remove(entry.path());
     std::filesystem::remove(records);
     check(sessions()==sessionsBefore,"TextWorld client leaked temporary session folders");

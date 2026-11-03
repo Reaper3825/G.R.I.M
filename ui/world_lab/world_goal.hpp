@@ -8,6 +8,10 @@ namespace GRIM::WorldLab {
 struct GoalAccess {
     std::function<std::vector<nlohmann::json>(const std::string&)> list;
     std::function<void(const nlohmann::json&)> import;
+    // Registry metadata and exact ID lookup avoid the Goal search result limit.
+    std::function<nlohmann::json()> registry;
+    std::function<nlohmann::json(const std::string&)> byId;
+    std::function<std::string(const nlohmann::json&)> renderInput;
 };
 inline std::string recordKey(const std::string& text) {
     uint64_t hash=14695981039346656037ull;

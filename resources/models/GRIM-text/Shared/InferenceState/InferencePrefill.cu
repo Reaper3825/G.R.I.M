@@ -33,6 +33,9 @@ GRIM::Batching::BatchPayload buildInferencePrefill(
         });
         delimiter_map = std::make_shared<const GRIM::ConceptSpanDelimiterMap>(definitions);
         const auto rendered = GRIM::SpanText::renderInputWithSpans(source, delimiter_map->definitions());
+        if(source.contains("environment_context") && !source.at("environment_context").get<std::string>().empty() &&
+           rendered.text.find(source.at("environment_context").get<std::string>())==std::string::npos)
+            throw std::invalid_argument("Environment context is absent from the configured inference spans");
         encoded = GRIM::SpanText::encodeSpanText(rendered,
             [&](const auto& content, const auto& boundaries, auto* counts) {
                 return tokenizer.tokenizeWithMetadata(content, boundaries, counts);

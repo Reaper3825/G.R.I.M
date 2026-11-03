@@ -2,13 +2,15 @@
 #include "concept_block.hpp"
 
 namespace GRIM {
-// Supplied by upstream state producers; excludes answers and execution output.
+// Supplied task/observation context; excludes model-authored continuation.
 struct ReasoningState {
     std::vector<std::string> knowns;
     std::vector<std::string> unknowns;
     std::optional<ConceptBlockGoal> goal;
+    std::string environment_context;
 
     ConceptBlock withPrompt(const std::string& prompt) const {
+        if(!environment_context.empty())throw std::invalid_argument("ConceptBlock cannot store recurrent environment context; use inference input directly");
         ConceptBlock block;
         block.prompt = prompt;
         block.knowns = knowns;

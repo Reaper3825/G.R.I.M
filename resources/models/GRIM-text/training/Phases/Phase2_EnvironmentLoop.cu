@@ -1,6 +1,7 @@
 #include "Phase2_EnvironmentLoop.hpp"
 #include "../../Shared/Environment/EnvironmentInput.hpp"
 #include "../../Shared/Environment/EnvironmentBoundary.hpp"
+#include "../../Shared/ConceptBlock/SpanTextRenderer.hpp"
 #include "../../Shared/InferenceState/InferencePrefill.hpp"
 
 #include <chrono>
@@ -92,7 +93,12 @@ Phase2EnvironmentRunResult executePhase2EnvironmentInteraction(TrainingContext& 
                 const auto input = GRIM::Environment::buildEnvironmentInferenceInput(
                     *episode.taskEpisode().goal, episode.latestResponse());
                 run.interaction.episode_status = input.episode_status;
-                appendPhase2RuntimeContext(ctx, tokenizer, "\n\n" + input.prompt + "\n\n");
+                const auto feedback=GRIM::SpanText::renderInput(
+                    {{"environment_context",input.reasoning_state.at("environment_context")}},
+                    sequence.concept_span_delimiters->definitions());
+                if(feedback.empty() && !input.reasoning_state.at("environment_context").get<std::string>().empty())
+                    throw std::logic_error("Environment context span is missing or ignored in the active configuration");
+                appendPhase2RuntimeContext(ctx, tokenizer, "\n\n" + feedback + "\n\n");
             }
             // Determine/Define/Update only resume. Execute feedback, including
             // terminal world observations, precedes the model's final Answer.

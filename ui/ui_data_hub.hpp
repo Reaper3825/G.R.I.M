@@ -72,6 +72,9 @@ public:
     void        setView(DataHubView view);
     DataHubView currentView() const { return activeView_; }
     std::vector<nlohmann::json> worldGoalSelections(const std::string& query) const;
+    nlohmann::json worldCurriculumRegistry() const;
+    nlohmann::json worldConceptBlock(const std::string& id) const;
+    std::string worldModelInputPreview(const nlohmann::json& input) const;
     void importWorldGoal(const nlohmann::json& selection);
 
 private:

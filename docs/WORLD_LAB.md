@@ -235,7 +235,34 @@ Evidence itself never performs setup.
    observations without rewinding the interpreter; available commands use the
    latest live state. Canvas highlights reflect the selected observation while
    cards still describe the authored initial world.
-6. **Reset** restarts the same frozen Goal. **Record** resets and records commands.
+   The curriculum dropdown lists the registry's curricula; the course dropdown
+   lists the selected curriculum's courses in registered order. Selecting a course
+   selects its first ConceptBlock. **Next** and **Back** browse that course's
+   `concept_block_ids` in authored order, with a position/count indicator and no
+   wrapping at either end. Lookup is by exact ID, independent of the Goal search
+   limit. Blocks without Goals can be selected and are labelled accordingly;
+   missing blocks report an error and preserve the previous selection. Browsing
+   does not start/reset an episode; choose **Compile / Start** to play the selected
+   Goal. **Reload Goals** also refreshes the registry selectors. Registry access
+   uses the same DataHub database connection as Goal selection.
+6. **Reset** and **Record** start a fresh environment episode bound to the currently
+   selected ConceptBlock Goal, including after browsing to another block. Record
+   also begins recording commands. Successful Start/Reset/Record clears history,
+   recording commands, and the pending command together, and rebuilds the initial
+   model input using the same permitted observation/Goal projection as inference.
+   Initial Play history and the Goal panel show the selected ConceptBlock's prompt
+   alongside its Goal target, success criteria, and constraints. The initial model
+   input keeps only that authored text in `<prompt>` and places the cleaned live
+   observation in a separate `<environment_context>` span; resetting
+   or recording refreshes both from the selected block. Saved solution metadata
+   retains the prompt; older witnesses without prompt metadata remain replayable.
+   After starting, the initial Play entry renders the complete supplied input
+   through the shared inference renderer and current `concept_spans` configuration,
+   including its configured delimiters and ignore policies. The live command
+   picker remains separate from this model-input preview.
+   Verification evidence stays private. Selecting a different block invalidates
+   the previous initial model input until a new attempt starts. This preview does
+   not launch model generation or export SFT episodes.
    **Save solution** independently replays them through the same evaluator and
    saves a witness only on verified success. Zero-command solutions are supported
    when initial success holds. **Check saved** replays the matching saved witness
@@ -608,7 +635,10 @@ teleport, and paths never refer to host filesystem locations. Unknown addresses,
 nonadjacent destinations, and traversal above `/` return errors without changing
 the session. `look` retains TextWorld inspection behavior. Observations add
 `location_path` and adjacent `available_rooms`; feedback prints the current path,
-and the live command picker offers path commands. The offline composer offers
+and the live command picker offers `enter <segment>` for each direct child and
+`back` for the parent, with one command per adjacent destination. Absolute and
+relative `go` paths remain accepted for typed commands and existing recordings
+but are omitted from that list to avoid duplicate moves. The offline composer offers
 `go <room path>` and `back` instead of compass moves.
 
 `scripts/textworld/path_navigation.py` extends a private TextWorld knowledge base

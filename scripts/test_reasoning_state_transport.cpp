@@ -45,6 +45,15 @@ int main() {
     block.answer = "consumed = 36 liters";
     auto training = GRIM::ConceptCanonical::render(block, definitions);
     assert(input == training.text.substr(0, training.findNamedSpan("answer")->begin));
+    auto environmentState=received.at("reasoning_state");environmentState["environment_context"]="Description:\nA quiet room.";
+    const auto withEnvironment=GRIM::reasoningStateFromJson(environmentState);
+    assert(GRIM::reasoningStateToJson(withEnvironment).at("environment_context")==environmentState.at("environment_context"));
+    assert(GRIM::Forward::inferenceInputSource("",environmentState).at("prompt")=="");
+    rejects([&]{withEnvironment.withPrompt("Question?");});
+    for(const auto& value:std::vector<json>{nullptr,5,json::array()}){
+        rejects([&]{GRIM::reasoningStateFromJson({{"environment_context",value}});});
+        rejects([&]{GRIM::Forward::inferenceInputSource("Question?",{{"environment_context",value}});});
+    }
     assert(!GRIM::reasoningStateFromJson(json::object()).goal);
     assert(!GRIM::reasoningStateFromJson({{"goal", nullptr}}).goal);
     assert(GRIM::reasoningStateToJson(GRIM::ReasoningState{}).at("knowns").empty());

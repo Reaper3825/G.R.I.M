@@ -99,7 +99,7 @@ checks: `python resources/models/GRIM-text/Tests/test_environment_startup_host.p
 consumes the prepared episode/tokenizer and returns at the first generation span
 pause, EOS, or limit. `buildEnvironmentInferenceInput()` projects only string
 fields `feedback`, `description`, `inventory`, `location`, and `location_path`
-into labelled prompt text. Host observation providers already place their readable
+into labelled `environment_context` text, separate from the authored prompt. Host observation providers already place their readable
 catalog/details/UI result in `feedback`; their structured envelopes are not
 serialized again. Facts, engine state, requirement evaluations, admissible command
 lists, internal IDs, and saved solutions are excluded. The frozen Goal's target,
@@ -225,6 +225,49 @@ the actual host response and never replays commands. A failed first attempt is
 The manual Play lifecycle remains separate. This change does not implement SFT
 episode serialization or RL optimizer updates.
 
+World Lab's manual Start, Reset, and Record bind the currently selected frozen
+ConceptBlock Goal while resetting the environment. Reset/Record use the worker's
+`start_episode` operation so a newly browsed Goal cannot inherit the previous
+episode's binding. After a successful start, the panel rebuilds its initial model
+input through `buildEnvironmentInferenceInput()`: the selected block's authored
+prompt (when present), Goal target/criterion/constraint text, fresh permitted
+observation, and empty knowns/unknowns. The initial-input overload preserves the
+exact authored prompt in `/prompt`; cleaned observations are supplied separately
+as `/environment_context`. There is no added `Task:` label inside the prompt.
+Later feedback renders only the environment-context span and never repeats the task.
+The authored prompt cannot substitute for a missing active-world observation.
+DataHub's exact lookup and Goal search both retain the prompt in the frozen
+manual selection and saved solution metadata. The worker receives only Goal and
+source identity; authored reasoning and answer fields are not projected.
+The Phase2 scheduled-Goal loader remains Goal-only. Initial Play history and the
+Goal panel display prompt and visible Goal text; evidence remains host-only. Selecting a
+different block or stopping/hiding the session invalidates this initial-input
+preview. This is manual authoring/inspection plumbing, not an inference launch
+or persisted recurrent SFT serialization.
+
+World Lab renders its initial Play entry with `SpanText::renderInput()` and the
+current `training.config.concept_spans` definitions, using only the projected
+reasoning state plus the authored task prompt. This displays the
+same configured text delimiters and ignore policies as structured prefill.
+The initial entry adds no transcript command prefix, duplicate inventory, or
+admissible-command author aid to that rendered text. No authored continuation
+fields are supplied. Actual delimiter token IDs are still resolved by structured
+prefill with its matching tokenizer; the manual preview does not tokenize.
+
+The context-only `environment_context` root follows `prompt` in the active span
+configuration and uses `<environment_context>`/`</environment_context>` markers.
+It contains only permitted observation prose. The shared projection removes the
+recognized TextWorld startup logo, room/status headings, standalone interpreter
+prompts, and the duplicate `LOCATION:` line when a structured path is available.
+Identical feedback and description/inventory are emitted once. Raw host responses
+stay unchanged; action errors, tool feedback, and ordinary ASCII diagrams remain
+available. Authored task and Goal text are never cleaned or rewritten.
+Environment-only inference may omit an empty authored prompt when nonempty
+environment context is supplied. The compatibility `withPrompt()` ConceptBlock
+adapter rejects nonempty environment context because single-cycle storage cannot
+represent it. New context delimiters require regenerated tokenizer/config/corpus
+artifacts before running the model; existing vocabulary IDs are never reassigned.
+
 ### 1.2 Existing inference transport
 
 The compatibility `reasoning_state` wire object (also serialized by
@@ -235,6 +278,7 @@ The compatibility `reasoning_state` wire object (also serialized by
 - `goal.constraints`
 - `knowns`
 - `unknowns`
+- `environment_context` (optional observation text; context-only)
 
 The user prompt travels separately and is combined with that state immediately
 before inference. First-pass examples leave knowns and unknowns empty; those
@@ -281,11 +325,17 @@ one reasoning cycle per task. Recurrent trajectory serialization is not yet
 represented by repeated phase fields in the source schema.
 The active renderer configuration excludes evidence leaves entirely and renders
 only the text from criterion and constraint objects.
+The optional environment-context node is runtime input; the single-cycle
+ConceptBlock source schema does not persist that observation field.
 
 ```text
 <prompt>
 PROMPT VALUE
 </prompt>
+
+<environment_context>
+PERMITTED ENVIRONMENT OBSERVATION (WHEN SUPPLIED)
+</environment_context>
 
 <target_state>
 TARGET STATE VALUE
@@ -374,6 +424,7 @@ The normal structured inference prefix is:
 
 ```text
 prompt
+[environment_context]
 [target_state]
 [criteria text]
 [constraints]
@@ -474,6 +525,8 @@ Inference ownership: supplied by the caller, separately from `ReasoningState`.
 
 Definition: the observation, request, question, or situation that initiates the
 reasoning process.
+For environment episodes, this is only the authored task text. The separate
+`environment_context` span carries the current observation and actual feedback.
 
 Rules:
 

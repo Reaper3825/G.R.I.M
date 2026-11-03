@@ -28,6 +28,53 @@ void drag(UIWorldCanvas& canvas,Vec2 from,Vec2 to,bool cancel=false){
 }
 void runWorldLabTests(){
     {
+        Editor editor;UIWorldSession browser(editor);
+        std::vector<std::string> ids;for(int i=0;i<103;++i)ids.push_back("registered-"+std::to_string(i));
+        const nlohmann::json registry={
+            {"curriculums",nlohmann::json::array({
+                {{"id","curr"},{"name","Ordered curriculum"},{"course_ids",{"course","empty","broken"}}},
+                {{"id","other"},{"name","Other curriculum"},{"course_ids",nlohmann::json::array()}}})},
+            {"courses",nlohmann::json::array({
+                {{"id","course"},{"name","Ordered course"},{"concept_block_ids",ids}},
+                {{"id","empty"},{"name","Empty course"},{"concept_block_ids",nlohmann::json::array()}},
+                {{"id","broken"},{"name","Missing block"},{"concept_block_ids",{"missing"}}}})}};
+        std::vector<std::string> lookups;
+        browser.setGoalAccess({{}, {},[&]{return registry;},[&](const std::string& id)->nlohmann::json{
+            lookups.push_back(id);
+            if(id=="missing")throw std::runtime_error("Missing block");
+            return {{"source_id",id},{"name","Block "+id},{"prompt","Task for "+id},{"goal",nullptr}};
+        }});
+        browser.reloadRegistry();browser.selectCurriculum(0);browser.selectCourse(0);
+        check(browser.selectedGoal().at("source_id")==ids[0] && browser.conceptBlockIndex()==0,"Course did not select its first registered block");
+        rejects([&]{browser.moveConceptBlock(-1);},"Back wrapped past course start");
+        for(int i=1;i<103;++i)browser.moveConceptBlock(1);
+        check(browser.selectedGoal().at("source_id")==ids.back() && lookups==ids,"Course browsing did not preserve exact IDs beyond search limit");
+        rejects([&]{browser.moveConceptBlock(1);},"Next wrapped past course end");
+        browser.moveConceptBlock(-1);check(browser.selectedGoal().at("source_id")==ids[101],"Back did not select preceding block");
+        check(browser.selectedGoal().at("prompt")=="Task for "+ids[101],"Course browsing lost the ConceptBlock prompt");
+        const auto previous=browser.selectedGoal();
+        rejects([&]{browser.selectCourse(2);},"Missing registered block accepted");
+        check(browser.selectedGoal()==previous && browser.conceptBlockIndex()==101,"Failed lookup changed selected block");
+        browser.reloadRegistry();check(browser.selectedGoal()==previous,"Registry refresh replaced the selected Goal snapshot");
+        browser.selectCurriculum(0);browser.selectCourse(0);
+        browser.selectCourse(1);check(browser.conceptBlockIndex()==-1 && browser.selectedGoal().at("source_id")=="","Empty course retained previous block");
+        rejects([&]{browser.moveConceptBlock(1);},"Empty course allowed navigation");
+        browser.selectCurriculum(1);rejects([&]{browser.selectCourse(0);},"Course from another curriculum remained available");
+        browser.selectCurriculum(0);browser.selectCourse(0);
+        OverlayRenderer renderer;router.beginFrame();router.currentPanel=90;
+        browser.setChallenge(false);browser.update({},0,{{0,0},{340,650}});browser.draw(renderer,{{0,0},{340,650}});router.endFrame();
+        check(browser.selectedGoal().at("source_id")==ids[0],"Switching views changed course selection");
+        auto browseClick=[&](float x){
+            InputState input;input.mousePos={x,84};input.mousePressed[0]=input.mouseDown[0]=true;
+            router.beginFrame();router.currentPanel=90;browser.update(input,0,{{0,0},{340,650}});router.endFrame();
+            input.mousePressed[0]=input.mouseDown[0]=false;input.mouseReleased[0]=true;
+            router.beginFrame();router.currentPanel=90;browser.update(input,0,{{0,0},{340,650}});router.endFrame();
+        };
+        browseClick(300);check(browser.selectedGoal().at("source_id")==ids[1],"Next button did not browse the course");
+        browseClick(220);check(browser.selectedGoal().at("source_id")==ids[0] && !browser.busy(),"Back button started an episode or failed to browse");
+        browser.hide();
+    }
+    {
         auto& registry=GRIM::MMO::ToolRegistry::instance();
         GRIM::MMO::ToolDescriptor tool;
         tool.tool_id="catalog_test";tool.provider_name="catalog-tests";

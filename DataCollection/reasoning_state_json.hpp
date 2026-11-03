@@ -7,14 +7,16 @@ namespace GRIM {
 inline nlohmann::json reasoningStateToJson(const ReasoningState& state) {
     nlohmann::json out{{"knowns", state.knowns}, {"unknowns", state.unknowns}};
     if (state.goal) out["goal"] = goalToJson(*state.goal);
+    if(!state.environment_context.empty())out["environment_context"]=state.environment_context;
     return out;
 }
 inline ReasoningState reasoningStateFromJson(const nlohmann::json& source) {
     if (!source.is_object()) throw std::invalid_argument("reasoning_state must be an object");
     for (auto it = source.begin(); it != source.end(); ++it)
-        if (it.key() != "knowns" && it.key() != "unknowns" && it.key() != "goal")
+        if (it.key() != "knowns" && it.key() != "unknowns" && it.key() != "goal" && it.key() != "environment_context")
             throw std::invalid_argument("Unsupported reasoning_state field: " + it.key());
     ReasoningState state;
+    state.environment_context=source.value("environment_context",std::string{});
     state.knowns = source.value("knowns", std::vector<std::string>{});
     state.unknowns = source.value("unknowns", std::vector<std::string>{});
     if (source.contains("goal") && !source["goal"].is_null()) {
