@@ -417,3 +417,12 @@ The eleven former AI/NLP/settings tools are retired from agent registration,
 with their handler logic retained for possible host/developer use. They are no
 longer a pending plugin migration set. See
 [retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md).
+
+## Scheduling plugin (API v3.16)
+
+`schedule_plugin` registers `schedule.create`, `schedule.get`, `schedule.list`,
+`schedule.update`, `schedule.cancel`, and `schedule.status` as Model tools.
+It requires SYSTEM and FILESYSTEM permissions and calls the host-owned shared
+schedule_service. See [tool contract](../docs/SCHEDULING_TOOLS.md). Standalone
+and optional host CMake builds include the plugin; deploy through the existing
+plugin deployment mechanism. No built-in duplicate registrations are added.

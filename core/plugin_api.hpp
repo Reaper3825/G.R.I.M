@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.14
+// G.R.I.M Plugin API v3.16
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -16,12 +16,13 @@
 
 #include <cstdint>
 #include <cstddef>
+#include "scheduling_api.h"
 
 // ============================================================================
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 14
+#define GRIM_API_VERSION_MINOR 16
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -421,7 +422,15 @@ typedef struct GrimPluginAPI {
     // Null = invalid input, denied access, unpublished/stopping provider, or API failure.
     const char* (*input_service)(const GrimPluginAPI* self, GrimInputOperation operation,
                                 const char* arguments, size_t arguments_size);
-    void* reserved[18];
+    // v3.15: SYSTEM permission. Creates an isolated, volatile local calendar.
+    // Caller serializes calls and must destroy it before plugin shutdown.
+    GrimScheduleResult (*create_local_calendar)(const GrimPluginAPI* self,
+        uint32_t version, GrimScheduleProviderV1* out_provider);
+    // v3.16: SYSTEM + FILESYSTEM; shared durable scheduling service.
+    // JSON object input <=64 KiB; host-owned JSON result, release with string_free.
+    const char* (*schedule_service)(const GrimPluginAPI* self, const char* operation,
+        const char* arguments, size_t arguments_size);
+    void* reserved[16];
     
 } GrimPluginAPI;
 

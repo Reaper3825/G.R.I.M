@@ -118,7 +118,7 @@ ConsolePanel::ConsolePanel()
     setBorder(UITheme::Colors::DividerLine);
     
     // Build toolbar layout box with all buttons
-    float btnW = 110.0f;
+    float btnW = 90.0f;
     float btnH = 25.0f;
     if (settingsButton) settingsButton->setSize(btnW, btnH);
     if (DCButton)       DCButton->setSize(btnW, btnH);
@@ -126,13 +126,18 @@ ConsolePanel::ConsolePanel()
     if (storageButton)  storageButton->setSize(btnW, btnH);
     if (cameraButton)   cameraButton->setSize(btnW, btnH);
     if (digitalButton)  digitalButton->setSize(btnW, btnH);
-    if (geoSpatialButton) geoSpatialButton->setSize(120.0f, btnH);
+    if (geoSpatialButton) geoSpatialButton->setSize(100.0f, btnH);
     addSessionButton->setSize(26.0f, 26.0f);
     
     toolbarBox = std::make_shared<UIHBox>(LayoutDirection::Horizontal, 8.0f);
     toolbarBox->addWidget(DCButton);
     toolbarBox->addWidget(trainingButton);
     toolbarBox->addWidget(storageButton);
+    auto calendarButton = std::make_shared<UIButton>("Calendar", [] {
+        UIRoot::get().setVisible("calendar", true);
+    });
+    calendarButton->setSize(90.0f, btnH);
+    toolbarBox->addWidget(calendarButton);
     toolbarBox->addWidget(cameraButton);
     toolbarBox->addWidget(digitalButton);
     toolbarBox->addWidget(geoSpatialButton);

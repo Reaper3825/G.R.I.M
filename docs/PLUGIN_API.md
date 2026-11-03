@@ -896,3 +896,15 @@ placeholders, large transcripts, permissions, exception behavior, cache ordering
 and unload survival. Native COM/SAPI code receives a syntax check. Validation
 does not record audio, play sound, start a model/server, or modify the real cache.
 See [build and deployment instructions](../plugins/README.md#voice-plugin).
+
+## Shared scheduling service (v3.16)
+
+`const char* schedule_service(self, operation, arguments, arguments_size)` consumes
+one reserved table slot; total table size is unchanged. Requires SYSTEM and
+FILESYSTEM and a published, accepting plugin call gate. Operations are create,
+get, list, update, cancel and status; input is object JSON, limited to 64 KiB.
+Returns owned JSON with success and either operation data or error/message;
+release via string_free. Null means unavailable/denied/malformed API input.
+No plugin callback survives the call. Durable records remain host-owned on unload.
+The Model-classified schedule_plugin exports the six matching schedule.* tools.
+See [scheduling contract](SCHEDULING_TOOLS.md).

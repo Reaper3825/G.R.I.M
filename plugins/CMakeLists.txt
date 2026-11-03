@@ -15,3 +15,5 @@ add_subdirectory(perception_plugin)
 add_subdirectory(voice_plugin)
 add_subdirectory(ui_plugin)
 add_subdirectory(input_plugin)
+
+add_subdirectory(schedule_plugin)

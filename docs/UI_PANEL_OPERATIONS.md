@@ -21,6 +21,7 @@ they are not generated from titles and require no database.
 | `training_control` | GRIM-text Training Control (including World Lab and Assets tabs) |
 | `data_hub` | DataHub |
 | `storage` | Shared Storage |
+| `calendar` | Calendar |
 | `geospatial` | GeoSpatial |
 | `physical_environment` | Physical Environment |
 | `digital_environment` | Digital Environment |

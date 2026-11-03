@@ -25,6 +25,7 @@
 #include "../ui/ui_root.hpp"
 #include "../ui/ui_settings_menu.hpp"
 #include "../ui/ui_storage_panel.hpp"
+#include "../ui/ui_calendar_panel.hpp"
 #include "../ui/ui_surface_renderer_bridge.hpp"
 #include "../ui/ui_training_panel.hpp"
 
@@ -187,6 +188,7 @@ UIBootstrapResult bootstrapUI(
         trainingPanel,
         dataHubPanel,
         storagePanel,
+        std::make_shared<UICalendarPanel>(),
         geoSpatialPanel,
         physicalEnvironmentPanel,
         digitalEnvironmentPanel,
