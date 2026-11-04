@@ -34,7 +34,7 @@ int main() {
     });
     const nlohmann::json source{{"prompt", "Q"}, {"state", {{"kept", "K"}}}};
     const auto rendered = ConceptCanonical::renderReasoningPromptWithSpans(source, definitions);
-    assert(rendered.text == "<q>\nQ\n</q>\n\n<kept>\nK\n</kept>\n\n");
+    assert(rendered.text == "<q>\nQ\n</q>\n<kept>\nK\n</kept>\n");
     assert(rendered.named_spans.size() == 3 && rendered.delimiters.size() == 4);
     assert(rendered.named_spans[2].parent_entry_index == 1);
     assert(rendered.named_spans[1].child_entry_indices == std::vector<std::uint32_t>{2});
@@ -55,7 +55,7 @@ int main() {
         }).value();
     validateNamedConceptSpans(*encoded.named_concept_spans, encoded.token_ids.size());
     const auto& prompt_span = encoded.named_concept_spans->entries[0].span;
-    assert(prompt_span.begin == 0 && prompt_span.end == 7);
+    assert(prompt_span.begin == 0 && prompt_span.end == 6);
     assert(static_cast<std::size_t>(prompt_span.end) < encoded.token_ids.size());
     std::string decoded;
     for (int id : encoded.token_ids)

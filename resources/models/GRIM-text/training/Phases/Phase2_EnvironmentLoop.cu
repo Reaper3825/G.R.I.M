@@ -98,7 +98,7 @@ Phase2EnvironmentRunResult executePhase2EnvironmentInteraction(TrainingContext& 
                     sequence.concept_span_delimiters->definitions());
                 if(feedback.empty() && !input.reasoning_state.at("environment_context").get<std::string>().empty())
                     throw std::logic_error("Environment context span is missing or ignored in the active configuration");
-                appendPhase2RuntimeContext(ctx, tokenizer, "\n\n" + feedback + "\n\n");
+                if (!feedback.empty()) appendPhase2RuntimeContext(ctx, tokenizer, "\n" + feedback);
             }
             // Determine/Define/Update only resume. Execute feedback, including
             // terminal world observations, precedes the model's final Answer.

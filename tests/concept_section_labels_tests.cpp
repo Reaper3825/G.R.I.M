@@ -21,7 +21,7 @@ int main() {
     const auto rendered = GRIM::ConceptCanonical::render(row, definitions);
     const auto again = GRIM::ConceptCanonical::render(row, definitions);
     assert(rendered.text == again.text && lookups == ids.size());
-    assert(rendered.text.find("<prompt>\nQuestion\n</prompt>\n\n") == 0);
+    assert(rendered.text.find("<prompt>\nQuestion\n</prompt>\n") == 0);
     assert(rendered.text.find("<reasoning>") == std::string::npos);
     assert(rendered.text.find("Legacy line\n<determine>") != std::string::npos);
     const auto sequence = testSpanSequence(row, definitions);

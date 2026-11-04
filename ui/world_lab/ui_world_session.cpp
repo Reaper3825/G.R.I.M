@@ -319,7 +319,7 @@ void UIWorldSession::receive(){
                 clearHistory();trajectory_=std::move(modelInputText);
                 recorded_.clear();recording_=operation_=="record";command_.clear();
             }else{
-                trajectory_+="\n\n"+observation+"\n\n";
+                trajectory_+=observation;
             }
             if(operation_=="step" && recording_)recorded_.push_back(sentCommand_);
             const auto& state=result.at("state");done_=state.at("done");episode_=state.at("episode");

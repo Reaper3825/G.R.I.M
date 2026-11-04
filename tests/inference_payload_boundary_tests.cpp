@@ -38,7 +38,7 @@ int main() {
     resolveConceptSpanDelimiters(definitions, [&](const auto&) { return next++; });
     const auto source = Forward::inferenceInputSource("120 liters", {{"goal", {{"target_state", "Quantity"}}}});
     const auto rendered = SpanText::renderInputWithSpans(source, definitions);
-    assert(rendered.text == "<q>\n120 liters\n</q>\n\n<target>\nQuantity\n</target>\n\n");
+    assert(rendered.text == "<q>\n120 liters\n</q>\n<target>\nQuantity\n</target>\n");
     for (const auto* output : {"determine", "define", "execute", "update", "answer", "raw"})
         rejects([&] { Forward::inferenceInputSource("Q", {{output, "future output"}}); });
     rejects([&] { Forward::inferenceInputSource("Q", {{"goal", {{"answer", "future output"}}}}); });

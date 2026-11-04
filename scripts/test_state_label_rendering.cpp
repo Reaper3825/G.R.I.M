@@ -6,7 +6,7 @@ int main() {
     const nlohmann::json minimal{{"prompt", "Question?"}, {"knowns", {""}},
                                  {"goal", {{"success_criteria", {{{"criterion", ""}}}}}}};
     const auto result = render(minimal, definitions);
-    assert(result.text == "<prompt>\nQuestion?\n</prompt>\n\n");
+    assert(result.text == "<prompt>\nQuestion?\n</prompt>\n");
     assert(result.named_spans.size() == 1 && result.delimiters.size() == 2);
     assert(renderReasoningPrompt(minimal, definitions) == result.text);
     const nlohmann::json raw{{"raw", "literal raw text"}};

@@ -1344,10 +1344,11 @@ be contained by their parent. Every tagged node includes its opening/closing
 delimiter, content, and following separator. There are no value-only exceptions.
 
 Tagged nodes render an opening delimiter plus newline, children or
-newline-terminated leaf content, then a closing delimiter plus two newlines.
+newline-terminated leaf content, then a closing delimiter plus one newline.
 Transparent parents add no bytes. Empty/missing values and parents with no
 rendered children emit nothing. This uniform rule applies to the final answer
-as well: it has the same trailing separator as every tagged scalar.
+as well: it has the same trailing separator as every tagged scalar. Regenerate existing
+corpora to apply the separator change.
 
 Each delimiter text resolves once to one exact vocabulary piece ID after the
 tokenizer loads. Missing/exact-match failures are fatal, including UNK fallback.

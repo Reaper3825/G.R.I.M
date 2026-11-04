@@ -255,7 +255,7 @@ void runTextWorldClientTests(){
         const auto pendingPreview=panel.historyModelText(before);
         ready();
         const auto& completed=panel.historyEntries().back();
-        expectedTrajectory+="\n\n"+completed.observation+"\n\n";
+        expectedTrajectory+=completed.observation;
         if(panel.historyEntries().size()!=before+2 || panel.historyModelText(before+1)!=expectedTrajectory ||
            panel.historyModelText(before)!=pendingPreview || panel.historyModelText(0)!=initialPreview){
             throw std::runtime_error("Response boundary mismatch for "+command+"; status="+panel.status()+

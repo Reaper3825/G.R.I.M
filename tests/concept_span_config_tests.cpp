@@ -13,7 +13,7 @@ int main() {
     GRIM::ConceptBlock supplied_state;
     supplied_state.prompt = "Question";
     assert(GRIM::ConceptCanonical::renderReasoningPrompt(supplied_state, spans) ==
-           "<prompt>\nQuestion\n</prompt>\n\n");
+           "<prompt>\nQuestion\n</prompt>\n");
     assert(GRIM::conceptSpanLayout(spans) == GRIM::conceptSpanLayout(definitions));
     std::cout << "snapshot span access and structured inference rendering passed\n";
 }

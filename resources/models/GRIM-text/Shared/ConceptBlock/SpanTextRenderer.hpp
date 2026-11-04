@@ -96,7 +96,7 @@ inline RenderResult render(const nlohmann::json& source,
             return;
         }
         delimiter(d.close_delimiter, d.close_delimiter_id);
-        if (!d.close_delimiter.empty()) result.text += "\n\n";
+        if (!d.close_delimiter.empty()) result.text += "\n";
         result.named_spans[index].span = {begin, result.text.size(), true};
         if (parent != kNoNamedConceptSpanEntry)
             result.named_spans[parent].child_entry_indices.push_back(index);
