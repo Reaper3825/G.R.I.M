@@ -1,7 +1,7 @@
 #pragma once
 
 // Diagnostics use the worker-owned tokenizer; the HTTP bridge owns no artifacts.
-#include "../../Shared/UnigramByte/UniByte.hpp"
+#include "../../Shared/ConceptBlock/SpanTextEncoder.hpp"
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <stdexcept>
@@ -27,12 +27,19 @@ inline void validateTokenizerEncoding(const GRIM::Tokenizer::UniByteResult& enco
     }
 }
 
-inline nlohmann::json encodeTokenizerText(const GRIM::Tokenizer::UniByte& tokenizer, const std::string& text) {
+inline nlohmann::json encodeTokenizerText(const GRIM::Tokenizer::UniByte& tokenizer,
+    const std::string& text, const GRIM::NamedConceptSpanDefinitions& definitions) {
     using namespace GRIM::Tokenizer;
     if (text.empty() || text.size() > 65536)
         throw std::invalid_argument("Enter between 1 and 65536 bytes of text");
     const auto start = std::chrono::steady_clock::now();
-    const auto encoded = tokenizer.tokenizeWithMetadata(text);
+    const auto rendered = GRIM::SpanText::markConfiguredDelimiters(text, definitions,
+        [&](const auto& marker) { return GRIM::SpanText::exactDelimiterId(tokenizer, marker); });
+    const auto encoded = rendered.delimiters.empty()
+        ? tokenizer.tokenizeWithMetadata(text)
+        : GRIM::SpanText::encodeSpanText(rendered, [&](const auto& content, const auto& boundaries, auto* counts) {
+            return tokenizer.tokenizeWithMetadata(content, boundaries, counts);
+        }).tokens;
     const auto encode_ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();
     validateTokenizerEncoding(encoded, tokenizer.vocabSize());

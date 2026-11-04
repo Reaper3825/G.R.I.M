@@ -9,6 +9,8 @@
 #include "ui/primitives/ui_dropdown.hpp"
 #include "ui/primitives/ui_textarea.hpp"
 #include <optional>
+#include <chrono>
+#include <future>
 
 class UIWorldSession {
 public:
@@ -64,6 +66,7 @@ private:
     void refreshGoalChoices();
     void clearHistory();
     void appendHistory(HistoryEntry entry);
+    void updatePreviewTokenCount();
     GRIM::WorldLab::Editor& editor_;
     GRIM::WorldLab::GoalAccess access_;
     std::filesystem::path recordsDirectory_;
@@ -94,4 +97,9 @@ private:
     std::string trajectory_,pendingExecute_,continuationStatus_="not_started";
     std::vector<HistoryEntry> historyEntries_;
     int historyIndex_=-1;
+    std::size_t previewRevision_ = 0;
+    std::size_t countedRevision_ = 0;
+    std::future<GRIM::WorldLab::PreviewTokenResult> previewTokenFuture_;
+    GRIM::WorldLab::PreviewTokenResult previewTokenResult_;
+    std::chrono::steady_clock::time_point retryPreviewCountAt_;
 };

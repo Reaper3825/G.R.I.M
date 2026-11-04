@@ -2,6 +2,7 @@
 
 #include "../MMO/UI/UISurfaceRegistry.hpp"
 #include "../ai/ai_rl.hpp"
+#include "../ai/grim_text_server_manager.hpp"
 #include "../ai/training_server_manager.hpp"
 #include "../bootstrap/bootstrap.hpp"
 #include "../control/devices/server/device_comm_server.hpp"
@@ -152,6 +153,7 @@ void shutdownApplication(
         g_resourceSignal = nullptr;
     }
 
+    stopGRIMTextServer();
     stopTrainingServer();
 
     Voice::shutdownQueue();

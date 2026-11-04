@@ -220,7 +220,12 @@ markers from `training.config.concept_spans`, using the shared structured-input
 renderer. It includes the selected prompt, permitted environment observation,
 and visible Goal fields. `<prompt>` contains only the authored task; cleaned
 observations occupy `<environment_context>`. Author command suggestions remain in the separate live
-picker. This text preview does not resolve tokenizer IDs or start generation.
+picker. The **Preview tokens** footer counts the selected history text using the
+Tokenizer tab's encode endpoint. It updates in the background and shows
+unavailable when the tokenizer cannot be reached. Both views count configured
+markers with exact vocabulary entries as one token and tokenize other markers as
+ordinary text. Structured prefill still requires exact delimiter entries, so a
+preview count can be available before the vocabulary supports that input.
 
 History shows the accumulated **Manual trajectory preview** through the selected
 boundary. Snapshot zero is the supplied input. Sending a command appends its

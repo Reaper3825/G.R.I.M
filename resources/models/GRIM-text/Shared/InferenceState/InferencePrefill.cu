@@ -27,9 +27,7 @@ GRIM::Batching::BatchPayload buildInferencePrefill(
         const auto source = GRIM::Forward::inferenceInputSource(prompt, *input_state);
         auto definitions = GRIM::HyperParameters::dataLoadingHP(config).concept_spans;
         GRIM::resolveConceptSpanDelimiters(definitions, [&](const std::string& text) {
-            const auto id = tokenizer.unigramLM().getPieceId(text);
-            const auto* piece = tokenizer.unigramLM().getPiece(id);
-            return piece && piece->text == text ? id : -1;
+            return GRIM::SpanText::exactDelimiterId(tokenizer, text);
         });
         delimiter_map = std::make_shared<const GRIM::ConceptSpanDelimiterMap>(definitions);
         const auto rendered = GRIM::SpanText::renderInputWithSpans(source, delimiter_map->definitions());

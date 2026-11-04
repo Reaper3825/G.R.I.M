@@ -178,6 +178,7 @@ void UIWorldSession::importLegacyGoal(){
     message_="Imported ConceptBlock Goal and archived solution. Save the world to persist its environment-only format.";
 }
 void UIWorldSession::clearHistory(){
+    ++previewRevision_;
     historyEntries_.clear();trajectory_.clear();pendingExecute_.clear();historyIndex_=-1;
     history_->collapse();history_->setItems({});continuationStatus_="not_started";
 }
@@ -190,6 +191,7 @@ void UIWorldSession::appendHistory(HistoryEntry entry){
 }
 void UIWorldSession::selectHistory(int index){
     if(index<0 || index>=static_cast<int>(historyEntries_.size()))throw std::out_of_range("History boundary is unavailable");
+    if (historyIndex_ != index) ++previewRevision_;
     historyIndex_=index;history_->setSelectedIndex(index);transcriptText_.scrollToTop();
     if(onState)onState(currentEpisode()?historyEntries_[index].state:nlohmann::json{});
 }
@@ -375,9 +377,32 @@ void UIWorldSession::layout(const PanelRect& area){
     place(*history_,x,y+114,std::max(80.f,w-116));place(*historyView_,x+w-108,y+114,108);place(command_,x,y+154,std::max(80.f,w-74));place(*playButtons_[5],x+w-66,y+154,66);
     place(*available_,x,y+190,w-92);place(*playButtons_[7],x+w-84,y+190,84);
     const float transcriptY=challenge_?186.f:composerVisible_?390.f:226.f;
-    transcript_={{x,y+transcriptY},{w,std::max(24.f,area.size.y-transcriptY-166)}};
+    const float countFooterSpace = !challenge_ && !hostDetailsVisible_ && historyIndex_ >= 0 &&
+        access_.countPreviewTokens ? 12.f : 0.f;
+    transcript_={{x,y+transcriptY},{w,std::max(24.f,area.size.y-transcriptY-166-countFooterSpace)}};
     transcriptText_.setPosition(transcript_.origin);transcriptText_.setSize(transcript_.size);
 }
+void UIWorldSession::updatePreviewTokenCount() {
+    using namespace std::chrono_literals;
+    const auto now = std::chrono::steady_clock::now();
+    if (previewTokenFuture_.valid()) {
+        if (previewTokenFuture_.wait_for(0s) != std::future_status::ready) return;
+        previewTokenResult_ = previewTokenFuture_.get();
+        retryPreviewCountAt_ = now + 5s;
+    }
+    if (challenge_ || hostDetailsVisible_ || historyIndex_ < 0 || !access_.countPreviewTokens) return;
+    if (countedRevision_ == previewRevision_ && (previewTokenResult_.count || now < retryPreviewCountAt_)) return;
+
+    countedRevision_ = previewRevision_;
+    previewTokenResult_ = {};
+    auto text = historyModelText(historyIndex_);
+    if (text.empty()) {
+        previewTokenResult_.count = 0;
+        return;
+    }
+    previewTokenFuture_ = access_.countPreviewTokens(std::move(text));
+}
+
 void UIWorldSession::update(const InputState& input,float dt,const PanelRect& area){
     report([&]{receive();});if(editor_.document().json()!=lastDocument_)refresh();
     layout(area);const auto clipped=input.clipped(area.origin,area.size);
@@ -386,6 +411,7 @@ void UIWorldSession::update(const InputState& input,float dt,const PanelRect& ar
     for(auto* w:widgets)if(auto* d=dynamic_cast<UIDropdown*>(w);d && d->isVisible() && d->isExpanded()){popup=w;w->update(clipped,dt);break;}
     for(auto* w:widgets)if(w!=popup && w->isVisible())w->update(clipped,dt);
     if(!challenge_ && composerVisible_)actions_.update(clipped,dt,{{area.origin.x+8,area.origin.y+342},{area.size.x-16,160}},GRIM::UI::InputRouter::get().currentPanel);
+    updatePreviewTokenCount();
 }
 void UIWorldSession::hide(){actions_.hide();for(auto* w:controls()){w->cancelInput();if(auto* d=dynamic_cast<UIDropdown*>(w))d->collapse();}client_.stop();live_=recording_=false;initialModelInput_.reset();continuationStatus_="terminated: stopped";if(onState)onState({});}
 void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
@@ -422,5 +448,19 @@ void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
     transcriptText_.setText(text);for(auto* w:controls())if(w->isVisible())w->drawOverlay(r,{});
     if(!challenge_ && composerVisible_)actions_.draw(r,{{area.origin.x+8,area.origin.y+342},{area.size.x-16,160}},false);
     for(auto* w:controls())if(auto* d=dynamic_cast<UIDropdown*>(w);d && d->isVisible() && d->isExpanded())d->drawExpandedList(r,{});
+    if (!challenge_ && !hostDetailsVisible_ && historyIndex_ >= 0 && access_.countPreviewTokens) {
+        std::string count = "Counting preview tokens...";
+        if (countedRevision_ == previewRevision_ && !previewTokenFuture_.valid()) {
+            if (previewTokenResult_.count) {
+                count = "Preview tokens: " + std::to_string(*previewTokenResult_.count);
+            } else {
+                count = previewTokenResult_.error.empty() ? "Preview token count unavailable"
+                                                         : "Tokenizer: " + previewTokenResult_.error;
+            }
+        }
+        const auto lines = r.wrapText(count, transcript_.size.x, 11);
+        for (std::size_t i = 0; i < std::min<std::size_t>(2, lines.size()); ++i)
+            r.drawText({x, transcript_.origin.y + transcript_.size.y + 4 + 12.f * i}, lines[i], TextSecondary, 11);
+    }
     r.drawText({x,area.origin.y+area.size.y-34},message_,client_.busy()?Warning:TextSecondary,11);r.popClipRect();
 }

@@ -273,7 +273,9 @@ same configured text delimiters and ignore policies as structured prefill.
 The initial entry adds no transcript command prefix, duplicate inventory, or
 admissible-command author aid to that rendered text. No authored continuation
 fields are supplied. Actual delimiter token IDs are still resolved by structured
-prefill with its matching tokenizer; the manual preview does not tokenize.
+prefill with its matching tokenizer. World Lab and the Tokenizer tab use the
+same encode endpoint. It recognizes exact configured marker spellings in pasted
+or rendered text and applies the structured delimiter encoder to those ranges.
 
 World Lab manual history retains one accumulated preview with immutable byte
 boundaries: initial supplied input (snapshot zero), each submitted command while

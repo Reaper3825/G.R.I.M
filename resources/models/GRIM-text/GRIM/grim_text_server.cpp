@@ -33,6 +33,24 @@ using json = nlohmann::json;
 
 namespace {
 
+bool bindPublicBridge(httplib::Server& server, int port) {
+#ifdef _WIN32
+    // cpp-httplib defaults to SO_REUSEADDR, which on Windows can let
+    // multiple bridge processes listen on the same address and port.
+    server.set_socket_options([](socket_t socket) {
+        const BOOL exclusive = TRUE;
+        if (setsockopt(socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                       reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) == SOCKET_ERROR) {
+            const auto error = WSAGetLastError();
+            closesocket(socket);
+            throw std::runtime_error("Cannot make public bridge socket exclusive (Winsock " +
+                                     std::to_string(error) + ")");
+        }
+    });
+#endif
+    return server.bind_to_port(GRIM::ServerAPI::kLoopbackHost, port);
+}
+
 struct BridgeOptions {
     int public_port = GRIM::ServerAPI::kDefaultPublicPort;
     int worker_port = GRIM::ServerAPI::kDefaultWorkerPort;
@@ -234,7 +252,7 @@ int main(int argc, char** argv)
         httplib::Server svr;
         // Reserve the public port before spawning a GPU worker. Duplicate bridge
         // launches must fail without creating an orphan or loading a second model.
-        if (!svr.bind_to_port(GRIM::ServerAPI::kLoopbackHost, options.public_port)) {
+        if (!bindPublicBridge(svr, options.public_port)) {
             throw std::runtime_error("Cannot bind public bridge port " + std::to_string(options.public_port));
         }
         WorkerRuntime worker(options);

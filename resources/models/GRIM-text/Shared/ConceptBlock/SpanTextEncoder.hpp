@@ -1,8 +1,52 @@
 #pragma once
 #include "SpanTextRenderer.hpp"
 #include "../UnigramByte/UniByte.hpp"
+#include <string_view>
 
 namespace GRIM::SpanText {
+inline int exactDelimiterId(const Tokenizer::UniByte& tokenizer, const std::string& text) {
+    const auto id = tokenizer.unigramLM().getPieceId(text);
+    const auto* piece = tokenizer.unigramLM().getPiece(id);
+    return piece && piece->text == text ? id : -1;
+}
+
+// Diagnostics accept text without a span tree. Reserve markers with exact
+// vocabulary entries and leave other spellings in the text for tokenization.
+template<class Lookup>
+inline RenderResult markConfiguredDelimiters(const std::string& text,
+    const NamedConceptSpanDefinitions& definitions, Lookup&& lookup) {
+    std::vector<const std::string*> markers;
+    const auto collect = [&](const auto& visit, const auto& nodes) -> void {
+        for (const auto& node : nodes) {
+            if (!node.open_delimiter.empty()) markers.push_back(&node.open_delimiter);
+            if (!node.close_delimiter.empty()) markers.push_back(&node.close_delimiter);
+            visit(visit, node.children);
+        }
+    };
+    collect(collect, definitions);
+    std::sort(markers.begin(), markers.end(), [](const auto* left, const auto* right) {
+        return left->size() > right->size();
+    });
+
+    RenderResult rendered;
+    rendered.text = text;
+    const std::string_view view(text);
+    for (std::size_t offset = 0; offset < view.size();) {
+        const auto remaining = view.substr(offset);
+        const auto marker = std::find_if(markers.begin(), markers.end(),
+            [&](const auto* candidate) { return remaining.compare(0, candidate->size(), *candidate) == 0; });
+        if (marker == markers.end()) {
+            ++offset;
+            continue;
+        }
+        const auto& spelling = **marker;
+        const auto id = lookup(spelling);
+        if (id >= 0) rendered.delimiters.push_back({offset, offset + spelling.size(), id});
+        offset += spelling.size();
+    }
+    return rendered;
+}
+
 struct EncodedText {
     Tokenizer::UniByteResult tokens;
     std::shared_ptr<const NamedConceptSpans> spans;

@@ -77,7 +77,15 @@ UITrainingPanel::UITrainingPanel()
                             [dataHub](const nlohmann::json& value){dataHub()->importWorldGoal(value);},
                             [dataHub]{return dataHub()->worldCurriculumRegistry();},
                             [dataHub](const std::string& id){return dataHub()->worldConceptBlock(id);},
-                            [dataHub](const nlohmann::json& input){return dataHub()->worldModelInputPreview(input);}});
+                            [dataHub](const nlohmann::json& input){return dataHub()->worldModelInputPreview(input);},
+                            [](std::string text) {
+                                const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
+                                return std::async(std::launch::async, [url, text = std::move(text)]() -> GRIM::WorldLab::PreviewTokenResult {
+                                    const auto result = TokenizerClient(url).encodeText(text);
+                                    if (!result.success) return {std::nullopt, result.error};
+                                    return {result.token_count, {}};
+                                });
+                            }});
     tabAssetsBtn_ = std::make_shared<UIButton>("Assets", [this]() {setView(TrainingPanelTab::Assets);});
     tabAssetsBtn_->setSize(80.0f,28.0f);
     worldAssets_ = std::make_unique<UIWorldAssetsView>(std::filesystem::path(getResourcePath()) / "models" / "world_assets");

@@ -15,6 +15,7 @@
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
+#include <vector>
 
 #ifdef _WIN32
 #include "core/grim_platform.h"
@@ -98,14 +99,7 @@ GRIMTextServerManager::GRIMTextServerManager()
     : serverPath_("resources/models/GRIM-text/training/build/Release/grim_text_server.exe"),
       serverURL_(GRIM::ServerAPI::defaultPublicURL()),
       running_(false)
-#ifdef _WIN32
-      , hProcess_(nullptr)
-      , hMutex_(nullptr)
-#endif
 {
-#ifdef _WIN32
-    ZeroMemory(&processInfo_, sizeof(processInfo_));
-#endif
 }
 
 GRIMTextServerManager::~GRIMTextServerManager() {
@@ -136,27 +130,11 @@ bool GRIMTextServerManager::checkHealth(int timeoutMs) {
 }
 
 bool GRIMTextServerManager::start() {
-    if (running_) {
+    if (isRunning()) {
         LOG_DEBUG("GRIMTextServer", "Server already running");
         return true;
     }
-    
-    // Check if another instance is already running
-#ifdef _WIN32
-    hMutex_ = CreateMutexA(nullptr, FALSE, "Global\\GRIMTextServerMutex");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        LOG_DEBUG("GRIMTextServer", "Another GRIM-text server is already running");
-        if (checkHealth(2000)) {
-            LOG_DEBUG("GRIMTextServer", "Existing server is healthy, reusing it");
-            running_ = true;  // Mark as running so we don't try to stop it
-            return true;
-        }
-        LOG_DEBUG("GRIMTextServer", "Existing server not responding, killing stale processes");
-        // Kill any orphaned grim_text_server processes
-        system("taskkill /F /IM grim_text_server.exe >nul 2>&1");
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-#endif
+    shutdown();
     
     LOG_DEBUG("GRIMTextServer", "Starting GRIM-text server...");
 
@@ -181,15 +159,6 @@ bool GRIMTextServerManager::start() {
     LOG_DEBUG("GRIMTextServer", "Working directory: " + grimRoot.string());
     
 #ifdef _WIN32
-    // Setup startup info
-    STARTUPINFOA si{};
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;  // Run in background
-    
-    ZeroMemory(&processInfo_, sizeof(processInfo_));
-    
     // train_gpu reads model/vocabulary settings from canonical ai_config.json.
     // Only process-scoped bridge ports are passed on the command line.
     const int publicPort = extractConfiguredPublicPort(serverURL_);
@@ -200,8 +169,59 @@ bool GRIMTextServerManager::start() {
     
     std::vector<char> mutableCmd(cmdLine.begin(), cmdLine.end());
     mutableCmd.push_back('\0');
+    const std::string workingDirectory = grimRoot.string();
     
     LOG_DEBUG("GRIMTextServer", "Command: " + cmdLine);
+
+    STARTUPINFOEXA startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    SIZE_T attributeBytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeBytes);
+    if (attributeBytes == 0) {
+        LOG_ERROR("GRIMTextServer", "Cannot size the bridge launch attributes");
+        return false;
+    }
+    std::vector<unsigned char> attributeStorage(attributeBytes);
+    startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
+
+    hMutex_ = CreateMutexA(nullptr, FALSE, "Global\\GRIMTextServerMutex");
+    const DWORD mutexStatus = GetLastError();
+    if (!hMutex_) {
+        LOG_ERROR("GRIMTextServer", "Cannot open the bridge launch guard: " + std::to_string(mutexStatus));
+        return false;
+    }
+    if (mutexStatus == ERROR_ALREADY_EXISTS) {
+        shutdown();
+        if (checkHealth(2000)) {
+            LOG_DEBUG("GRIMTextServer", "Reusing the bridge owned by another GRIM host");
+            return true;
+        }
+        LOG_ERROR("GRIMTextServer", "Another GRIM host owns the bridge launch guard and the server did not respond");
+        return false;
+    }
+
+    hJob_ = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!hJob_ ||
+        !SetInformationJobObject(hJob_, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
+        !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &attributeBytes)) {
+        LOG_ERROR("GRIMTextServer", "Cannot prepare bridge process ownership: " + std::to_string(GetLastError()));
+        shutdown();
+        return false;
+    }
+
+    // Assign the job at creation so even an interrupted launch cannot orphan the bridge.
+    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                                  &hJob_, sizeof(hJob_), nullptr, nullptr)) {
+        const DWORD error = GetLastError();
+        DeleteProcThreadAttributeList(startup.lpAttributeList);
+        LOG_ERROR("GRIMTextServer", "Cannot set bridge launch job: " + std::to_string(error));
+        shutdown();
+        return false;
+    }
+
+    PROCESS_INFORMATION child{};
     
     BOOL success = CreateProcessA(
         nullptr,
@@ -209,23 +229,26 @@ bool GRIMTextServerManager::start() {
         nullptr,
         nullptr,
         FALSE,
-        CREATE_NO_WINDOW,  // Don't create new console - inherit parent's process group
+        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
         nullptr,
-        grimRoot.string().c_str(),
-        &si,
-        &processInfo_
+        workingDirectory.c_str(),
+        &startup.StartupInfo,
+        &child
     );
+    const DWORD launchError = success ? ERROR_SUCCESS : GetLastError();
+    DeleteProcThreadAttributeList(startup.lpAttributeList);
     
     if (!success) {
-        DWORD error = GetLastError();
-        LOG_ERROR("GRIMTextServer", "Failed to launch server: " + std::to_string(error));
+        LOG_ERROR("GRIMTextServer", "Failed to launch server: " + std::to_string(launchError));
+        shutdown();
         return false;
     }
     
-    hProcess_ = processInfo_.hProcess;
+    CloseHandle(child.hThread);
+    hProcess_ = child.hProcess;
     running_ = true;
     
-    LOG_DEBUG("GRIMTextServer", "Server process started (PID: " + std::to_string(processInfo_.dwProcessId) + ")");
+    LOG_DEBUG("GRIMTextServer", "Server process started (PID: " + std::to_string(child.dwProcessId) + ")");
     
     // Wait for server to become ready
     LOG_DEBUG("GRIMTextServer", "Waiting for server to respond...");
@@ -235,7 +258,7 @@ bool GRIMTextServerManager::start() {
     int elapsed = 0;
     
     while (elapsed < maxWaitMs) {
-        if (checkHealth(1000)) {
+        if (checkHealth(1000) && isRunning()) {
             LOG_PHASE("GRIM-text server ready", true);
             LOG_DEBUG("GRIMTextServer", "Server ready at " + serverURL_ + " (took " + std::to_string(elapsed) + "ms)");
             return true;
@@ -248,7 +271,7 @@ bool GRIMTextServerManager::start() {
                 "Server process terminated unexpectedly (exit code: " + std::to_string(exitCode) +
                 ", status: " + formatWindowsStatusCode(exitCode) + ")");
             logServerTerminationDiagnosis(exitCode, serverExe);
-            running_ = false;
+            shutdown();
             return false;
         }
         
@@ -267,29 +290,19 @@ bool GRIMTextServerManager::start() {
 }
 
 void GRIMTextServerManager::shutdown() {
-    if (!running_) {
-        return;
-    }
-    
-    LOG_DEBUG("GRIMTextServer", "Shutting down GRIM-text server...");
-    
 #ifdef _WIN32
+    if (hJob_) {
+        CloseHandle(hJob_);
+        hJob_ = nullptr;
+    }
     if (hProcess_) {
-        // Try graceful shutdown first (server should handle CTRL+C)
-        if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, processInfo_.dwProcessId)) {
-            // If that fails, terminate forcefully
-            LOG_DEBUG("GRIMTextServer", "Forcefully terminating server process");
-            TerminateProcess(hProcess_, 0);
+        const DWORD result = WaitForSingleObject(hProcess_, 5000);
+        if (result != WAIT_OBJECT_0) {
+            const DWORD error = result == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
+            LOG_ERROR("GRIMTextServer", "Could not confirm bridge exit: " + std::to_string(error));
         }
-        
-        // Wait for process to exit
-        WaitForSingleObject(hProcess_, 5000);
-        
-        CloseHandle(processInfo_.hProcess);
-        CloseHandle(processInfo_.hThread);
-        
+        CloseHandle(hProcess_);
         hProcess_ = nullptr;
-        ZeroMemory(&processInfo_, sizeof(processInfo_));
     }
     
     // Release the mutex
@@ -300,7 +313,6 @@ void GRIMTextServerManager::shutdown() {
 #endif
     
     running_ = false;
-    LOG_DEBUG("GRIMTextServer", "Server shutdown complete");
 }
 
 bool GRIMTextServerManager::isRunning() const {
@@ -324,7 +336,9 @@ bool startGRIMTextServer() {
 }
 
 void stopGRIMTextServer() {
-    GRIMTextServerManager::getInstance().shutdown();
+    if (g_grimTextServerManager) {
+        g_grimTextServerManager->shutdown();
+    }
 }
 
 bool isGRIMTextServerRunning() {

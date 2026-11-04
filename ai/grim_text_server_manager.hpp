@@ -54,9 +54,9 @@ private:
     std::atomic<bool> running_;
     
 #ifdef _WIN32
-    PROCESS_INFORMATION processInfo_;
-    HANDLE hProcess_;
-    HANDLE hMutex_;  // Mutex to prevent multiple instances
+    HANDLE hProcess_ = nullptr;
+    HANDLE hJob_ = nullptr;
+    HANDLE hMutex_ = nullptr;  // Named launch guard shared by GRIM hosts
 #endif
 };
 

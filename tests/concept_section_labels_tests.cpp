@@ -1,4 +1,5 @@
 #include "concept_span_test_helpers.hpp"
+#include "../resources/models/GRIM-text/training/Diagnostics/TokenizerDiagnostics.hpp"
 #include <iostream>
 #include <unordered_map>
 int main() {
@@ -39,6 +40,32 @@ int main() {
     }
     for (const auto& d : rendered.delimiters)
         assert(ids.at(rendered.text.substr(d.begin, d.end - d.begin)) == d.token_id);
+    // The diagnostics input has only rendered text, including nested and repeated markers.
+    const auto lookup = [&](const std::string& marker) { return ids.at(marker); };
+    const auto marked = GRIM::SpanText::markConfiguredDelimiters(rendered.text, definitions, lookup);
+    assert(marked.delimiters.size() == rendered.delimiters.size());
+    for (std::size_t i = 0; i < marked.delimiters.size(); ++i) {
+        const auto& detected = marked.delimiters[i];
+        const auto& authored = rendered.delimiters[i];
+        assert(detected.begin == authored.begin && detected.end == authored.end &&
+               detected.token_id == authored.token_id);
+    }
+    assert(GRIM::SpanText::markConfiguredDelimiters("Question <unknown_tag>", definitions, lookup)
+               .delimiters.empty());
+    GRIM::NamedConceptSpanDefinition context;
+    context.open_delimiter = "<environment_context>";
+    context.close_delimiter = "</environment_context>";
+    auto preview_definitions = definitions;
+    preview_definitions.push_back(context);
+    const std::string preview = "<prompt>Question</prompt>\n<environment_context>Observation</environment_context>";
+    const auto preview_marked = GRIM::SpanText::markConfiguredDelimiters(preview, preview_definitions,
+        [&](const auto& marker) {
+            const auto id = ids.find(marker);
+            return id == ids.end() ? -1 : id->second;
+        });
+    assert(preview_marked.text == preview && preview_marked.delimiters.size() == 2);
+    assert(preview_marked.delimiters[0].token_id == ids.at("<prompt>"));
+    assert(preview_marked.delimiters[1].token_id == ids.at("</prompt>"));
     auto prefix = row;
     for (const auto* name : {"determine", "define", "execute", "update", "answer"}) prefix.erase(name);
     assert(GRIM::ConceptCanonical::renderReasoningPrompt(prefix, definitions) ==

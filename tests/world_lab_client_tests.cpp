@@ -195,6 +195,10 @@ void runTextWorldClientTests(){
     panel.setGoalAccess({{}, {}, {}, {},[&](const nlohmann::json& supplied){
         if(failObservation && supplied.contains("environment_context"))throw std::runtime_error("Injected observation rendering failure");
         return GRIM::SpanText::renderInput(supplied,definitions);
+    }, [](std::string text) {
+        std::promise<GRIM::WorldLab::PreviewTokenResult> count;
+        count.set_value({text.find("<execute>") == std::string::npos ? 42 : 87, {}});
+        return count.get_future();
     }});
     panel.selectGoal(selection);panel.setChallenge(false);
     auto frame=[&](const InputState& input){auto& router=GRIM::UI::InputRouter::get();router.beginFrame();router.currentPanel=90;panel.update(input,0,{{0,0},{340,650}});router.endFrame();};
@@ -287,9 +291,19 @@ void runTextWorldClientTests(){
           "Historical selection rewound the live terminal world");
     panel.prepareCommand("");panel.selectHistory(static_cast<int>(terminalCount)-1);
     OverlayRenderer historyRenderer;
+    frame({});frame({});
+    renderedTestText.clear();panel.draw(historyRenderer,{{0,0},{340,650}});
+    check(renderedTestText.find("Preview tokens: 87")!=std::string::npos,
+          "Trajectory footer did not count the selected command history");
+    panel.selectHistory(0);frame({});frame({});
+    renderedTestText.clear();panel.draw(historyRenderer,{{0,0},{340,650}});
+    check(renderedTestText.find("Preview tokens: 42")!=std::string::npos,
+          "Trajectory footer retained the count for a different boundary");
+    panel.selectHistory(static_cast<int>(terminalCount)-1);
     click(270,126);frame({});renderedTestText.clear();panel.draw(historyRenderer,{{0,0},{340,650}});
     check(renderedTestText.find("Boundary status:")!=std::string::npos &&
-          renderedTestText.find("Manual trajectory preview")==std::string::npos,"Host-details toggle did not select the separate inspection view");
+          renderedTestText.find("Manual trajectory preview")==std::string::npos &&
+          renderedTestText.find("Preview tokens:")==std::string::npos,"Host-details toggle did not select the separate inspection view");
     click(270,126);renderedTestText.clear();panel.draw(historyRenderer,{{0,0},{340,650}});
     check(renderedTestText.find("Manual trajectory preview")!=std::string::npos &&
           renderedTestText.find("Host receipt (private)")==std::string::npos,"Trajectory view mixed private host details into model text");

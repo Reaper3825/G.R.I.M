@@ -50,6 +50,20 @@ int main(int argc, char** argv) {
         fs::create_directories(root / "nested");
         std::ofstream(root / "ai_config.json") << "{}";
         fs::current_path(root / "nested");
+#ifdef _WIN32
+        {
+            const int publicPort = unusedPort();
+            httplib::Server owner;
+            require(bindPublicBridge(owner, publicPort), "Cannot reserve public bridge port");
+            std::thread listener([&] { owner.listen_after_bind(); });
+            owner.wait_until_ready();
+            httplib::Server duplicate;
+            const bool duplicateBound = bindPublicBridge(duplicate, publicPort);
+            owner.stop();
+            listener.join();
+            require(!duplicateBound, "Two public bridges bound the same port");
+        }
+#endif
         BridgeOptions options;
         options.worker_port = unusedPort();
         options.worker_executable = executable;

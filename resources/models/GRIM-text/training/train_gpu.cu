@@ -263,7 +263,8 @@ int runInferenceWorker(
                 return;
             }
             auto response = encode
-                ? GRIMText::Diagnostics::encodeTokenizerText(tokenizer, requireJsonString(request, "text"))
+                ? GRIMText::Diagnostics::encodeTokenizerText(tokenizer, requireJsonString(request, "text"),
+                    GRIM::HyperParameters::dataLoadingHP(ctx.config).concept_spans)
                 : GRIMText::Diagnostics::validateLoadedTokenizer(tokenizer);
             response["vocab_path"] = paths_hp.vocab_path;
             response["loaded_checkpoint_path"] = ctx.loaded_checkpoint_path;

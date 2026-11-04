@@ -3,8 +3,14 @@
 #include "resources/models/GRIM-text/Shared/Goal/GoalContract.hpp"
 #include <sstream>
 #include <iomanip>
+#include <optional>
+#include <future>
 
 namespace GRIM::WorldLab {
+struct PreviewTokenResult {
+    std::optional<int> count;
+    std::string error;
+};
 struct GoalAccess {
     std::function<std::vector<nlohmann::json>(const std::string&)> list;
     std::function<void(const nlohmann::json&)> import;
@@ -12,6 +18,7 @@ struct GoalAccess {
     std::function<nlohmann::json()> registry;
     std::function<nlohmann::json(const std::string&)> byId;
     std::function<std::string(const nlohmann::json&)> renderInput;
+    std::function<std::future<PreviewTokenResult>(std::string)> countPreviewTokens;
 };
 inline std::string recordKey(const std::string& text) {
     uint64_t hash=14695981039346656037ull;
