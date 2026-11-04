@@ -35,7 +35,19 @@ public:
     const std::string& status() const { return message_; }
     const nlohmann::json& selectedGoal() const { return selected_; }
     const std::optional<GRIM::Environment::EnvironmentInferenceInput>& initialModelInput() const { return initialModelInput_; }
-    std::string initialModelText() const { return initialModelInput_ && !historyEntries_.empty()?historyEntries_.front().modelInput:std::string{}; }
+    // Manual preview boundaries are byte offsets, not sampled model token positions.
+    struct HistoryEntry {
+        std::string command, observation, continuationStatus;
+        nlohmann::json state, receipt;
+        std::size_t trajectoryEnd = 0;
+    };
+    const std::vector<HistoryEntry>& historyEntries() const { return historyEntries_; }
+    int historyIndex() const { return historyIndex_; }
+    void selectHistory(int index);
+    std::string historyModelText(std::size_t index) const { return trajectory_.substr(0, historyEntries_.at(index).trajectoryEnd); }
+    std::string initialModelText() const { return initialModelInput_ && !historyEntries_.empty()?historyModelText(0):std::string{}; }
+    std::string continuationStatus() const;
+    std::string historyHostDetails(std::size_t index) const;
     std::function<void(const std::string&)> onErrorEntity;
     std::function<void(const nlohmann::json&)> onState;
 private:
@@ -50,6 +62,8 @@ private:
     void saveWitness(const nlohmann::json&);
     void selectCourseBlock(int index);
     void refreshGoalChoices();
+    void clearHistory();
+    void appendHistory(HistoryEntry entry);
     GRIM::WorldLab::Editor& editor_;
     GRIM::WorldLab::GoalAccess access_;
     std::filesystem::path recordsDirectory_;
@@ -63,6 +77,8 @@ private:
     UITextArea transcriptText_{"", "", {}};
     PanelRect area_{},transcript_{};
     std::unique_ptr<UIDropdown> goals_,history_,available_;
+    std::unique_ptr<UIButton> historyView_;
+    bool hostDetailsVisible_=false;
     std::unique_ptr<UIDropdown> curriculums_,courses_;
     std::unique_ptr<UIButton> previousBlock_,nextBlock_;
     nlohmann::json registry_;
@@ -75,7 +91,7 @@ private:
     std::vector<std::string> availableCommands_,recorded_;
     bool catalogCompatible_=true,composerVisible_=false;
     std::vector<std::unique_ptr<UIButton>> challengeButtons_,playButtons_;
-    struct Entry { std::string command,feedback; nlohmann::json state; std::string modelInput; };
-    std::vector<Entry> historyEntries_;
+    std::string trajectory_,pendingExecute_,continuationStatus_="not_started";
+    std::vector<HistoryEntry> historyEntries_;
     int historyIndex_=-1;
 };

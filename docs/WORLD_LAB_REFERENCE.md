@@ -222,6 +222,24 @@ and visible Goal fields. `<prompt>` contains only the authored task; cleaned
 observations occupy `<environment_context>`. Author command suggestions remain in the separate live
 picker. This text preview does not resolve tokenizer IDs or start generation.
 
+History shows the accumulated **Manual trajectory preview** through the selected
+boundary. Snapshot zero is the supplied input. Sending a command appends its
+configured Execute span and an awaiting-result boundary; receiving its result
+appends only the permitted environment-context span and a response boundary.
+The task and Goal are not repeated, and no model reasoning or Answer is invented.
+Earlier boundaries remain unchanged when later results arrive. Status distinguishes
+ready for a command, awaiting a result, and a terminal world awaiting Answer;
+manual Play itself does not generate or submit Answer.
+
+Use **Host details** beside History to inspect that boundary's observation, private
+receipt, and boundary/live status separately from trajectory text. **Trajectory**
+returns to the preview. History inspection never rewinds gameplay. A transport
+failure retains its receipt and terminates live play without resubmission.
+Stop/hide marks live continuation stopped while retaining history. A successful
+fresh start replaces history; choosing another Goal clears it. Validate world and
+independent solution replay do not create trajectory entries. These are text
+preview boundaries, not model token positions or a persisted training export.
+
 The canvas highlights the current room and changed objects. Its cards and object
 lists still represent the authored world. History selection can show highlights
 from an older observation; the next command always acts on the live state.
@@ -583,13 +601,20 @@ changes reuse the compiled environment with fresh episode state. Saved-solution
 replay uses the same evaluator. See the
 [compilation transition](WORLD_LAB.md#compilation-and-challenge-termination).
 
-Each Goal attempt may contain multiple action/feedback cycles. Determine,
-Define, and Update are observed without dispatch. In the environment adapter,
+Each Goal attempt is an ordered trajectory of whichever valid generated spans
+and actual environment responses are needed toward one frozen Goal. There is no
+required cycle grouping. Determine-first and canonical phase ordering are
+training-data conventions, not runtime presence/order requirements. Determine,
+Define, and Update are optional and observed without dispatch. In the environment adapter,
 Execute contains one command, dispatched at its generated close; actual permitted
 feedback is appended before the next action. Answer close submits the complete
 Goal attempt for grading and never executes its text. World success alone does
 not submit an attempt: terminal worlds prohibit further commands but allow the
-model's final Answer. EOS/limits before submission produce an incomplete failure.
+model's final Answer. Answer close is normal completion, not a span every
+trajectory must produce: EOS or token/context overflow before submission produces
+an incomplete failure; invalid output and infrastructure errors retain their
+respective failure/error handling. Intermediate session state is the accumulated
+trajectory and currently available context at any boundary.
 
 The shared `Shared/Episode/TaskEpisode.hpp` record contains the frozen Goal,
 final token trajectory, private world observations, action receipts, and immutable

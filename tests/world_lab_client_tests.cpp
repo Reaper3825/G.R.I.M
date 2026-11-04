@@ -4,6 +4,8 @@
 #include "MMO/Core/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include "ui/input/ui_input_router.hpp"
+#include "ui/overlay_renderer.hpp"
+extern std::string renderedTestText;
 #include "core/input_parser.hpp"
 #include "resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp"
 #include <fstream>
@@ -189,7 +191,11 @@ void runTextWorldClientTests(){
     std::ifstream configFile(std::filesystem::path(__FILE__).parent_path().parent_path()/"ai_config.json");
     nlohmann::json config;configFile>>config;
     const auto definitions=config.at("training").at("config").at("concept_spans").get<GRIM::NamedConceptSpanDefinitions>();
-    panel.setGoalAccess({{}, {}, {}, {},[&](const nlohmann::json& supplied){return GRIM::SpanText::renderInput(supplied,definitions);}});
+    bool failObservation=false;
+    panel.setGoalAccess({{}, {}, {}, {},[&](const nlohmann::json& supplied){
+        if(failObservation && supplied.contains("environment_context"))throw std::runtime_error("Injected observation rendering failure");
+        return GRIM::SpanText::renderInput(supplied,definitions);
+    }});
     panel.selectGoal(selection);panel.setChallenge(false);
     auto frame=[&](const InputState& input){auto& router=GRIM::UI::InputRouter::get();router.beginFrame();router.currentPanel=90;panel.update(input,0,{{0,0},{340,650}});router.endFrame();};
     auto click=[&](float x,float y){InputState input;input.mousePos={x,y+116};input.mousePressed[0]=input.mouseDown[0]=true;frame(input);input.mousePressed[0]=input.mouseDown[0]=false;input.mouseReleased[0]=true;frame(input);};
@@ -208,6 +214,12 @@ void runTextWorldClientTests(){
           panel.initialModelText().find("<environment_context>\n")!=std::string::npos,"Task and environment did not render in separate spans");
     check(panel.initialModelText().find("$$$$")==std::string::npos && panel.initialModelText().find("-= ")==std::string::npos &&
           panel.initialModelText().find("LOCATION:")==std::string::npos,"Model input retained interpreter chrome");
+    check(panel.historyEntries().size()==1 && panel.historyIndex()==0 && panel.continuationStatus()=="ready_for_command",
+          "Start did not publish snapshot zero and its continuation status");
+    const auto initialPreview=panel.initialModelText();
+    check(panel.historyEntries().front().receipt.contains("result") &&
+          panel.historyHostDetails(0).find("Host receipt (private)")!=std::string::npos,
+          "Initial boundary lost its separate host receipt");
     const auto firstGoal=panel.initialModelInput()->reasoning_state.at("goal");
     check(firstGoal.at("target_state")==selection.at("goal").at("target_state") &&
           firstGoal.at("success_criteria").size()==selection.at("goal").at("success_criteria").size(),"Selected Goal did not reach model input");
@@ -226,14 +238,69 @@ void runTextWorldClientTests(){
     check(!panel.preparedCommand().empty(),"Live available-command picker failed");
     panel.prepareCommand("");
     click(40,86);ready();check(panel.status()=="Recording from the starting state.","Record did not reset the game");
+    check(panel.historyEntries().size()==1 && panel.initialModelText()==initialPreview,
+          "Record did not reset trajectory history to the new initial input");
+    std::string expectedTrajectory=panel.initialModelText();
     for(const auto& command:solution){
-        click(20,166);InputState input;input.textInput=command;frame(input);input.textInput.clear();input.keyPressed[VK_RETURN]=true;frame(input);ready();
+        const auto before=panel.historyEntries().size();
+        // Inspect snapshot zero while executing against the latest live state.
+        panel.selectHistory(0);
+        check(panel.historyIndex()==0 && panel.historyModelText(0)==initialPreview,
+              "History selection changed snapshot zero");
+        click(20,166);InputState input;input.textInput=command;frame(input);input.textInput.clear();input.keyPressed[VK_RETURN]=true;frame(input);
+        expectedTrajectory+=GRIM::SpanText::renderInput({{"execute",command}},definitions);
+        check(panel.historyEntries().size()==before+1 && panel.continuationStatus()=="awaiting_action_result" &&
+              panel.historyModelText(before)==expectedTrajectory && panel.historyEntries().back().observation.empty(),
+              "Pending boundary lost Execute or included future observation");
+        const auto pendingPreview=panel.historyModelText(before);
+        ready();
+        const auto& completed=panel.historyEntries().back();
+        expectedTrajectory+="\n\n"+completed.observation+"\n\n";
+        if(panel.historyEntries().size()!=before+2 || panel.historyModelText(before+1)!=expectedTrajectory ||
+           panel.historyModelText(before)!=pendingPreview || panel.historyModelText(0)!=initialPreview){
+            throw std::runtime_error("Response boundary mismatch for "+command+"; status="+panel.status()+
+                "; entries="+std::to_string(panel.historyEntries().size())+" expected="+std::to_string(before+2)+
+                "; actual bytes="+std::to_string(panel.historyModelText(panel.historyEntries().size()-1).size())+
+                " expected bytes="+std::to_string(expectedTrajectory.size()));
+        }
+        const auto& response=completed.receipt;
+        const auto projected=GRIM::Environment::buildEnvironmentInferenceInput(GRIM::goalFromJson(selection.at("goal")),response);
+        check(completed.observation==GRIM::SpanText::renderInput(
+                  {{"environment_context",projected.reasoning_state.at("environment_context")}},definitions),
+              "Historical observation differs from inference projection");
+        check(expectedTrajectory.find("admissible_commands")==std::string::npos &&
+              expectedTrajectory.find("<evidence>")==std::string::npos && expectedTrajectory.find("<answer>")==std::string::npos &&
+              expectedTrajectory.find("<determine>")==std::string::npos,
+              "Manual trajectory leaked host data or invented reasoning/submission");
     }
     check(panel.status()=="Won!","Play panel commands did not win");
+    check(panel.continuationStatus()=="world_terminal: succeeded; awaiting_answer",
+          "World success incorrectly submitted the attempt");
+    const auto terminalCount=panel.historyEntries().size();
+    const auto terminalPreview=panel.historyModelText(terminalCount-1);
+    nlohmann::json historicalState;
+    panel.onState=[&](const auto& state){historicalState=state;};
+    panel.selectHistory(0);
+    check(historicalState.at("room_id")==d.spawn,"History selection did not project the historical canvas state");
+    panel.prepareCommand("look");click(280,166);
+    check(!panel.busy() && panel.status()=="Episode finished; reset to play again" && panel.historyEntries().size()==terminalCount,
+          "Historical selection rewound the live terminal world");
+    panel.prepareCommand("");panel.selectHistory(static_cast<int>(terminalCount)-1);
+    OverlayRenderer historyRenderer;
+    click(270,126);frame({});renderedTestText.clear();panel.draw(historyRenderer,{{0,0},{340,650}});
+    check(renderedTestText.find("Boundary status:")!=std::string::npos &&
+          renderedTestText.find("Manual trajectory preview")==std::string::npos,"Host-details toggle did not select the separate inspection view");
+    click(270,126);renderedTestText.clear();panel.draw(historyRenderer,{{0,0},{340,650}});
+    check(renderedTestText.find("Manual trajectory preview")!=std::string::npos &&
+          renderedTestText.find("Host receipt (private)")==std::string::npos,"Trajectory view mixed private host details into model text");
+    check(panel.historyIndex()==static_cast<int>(terminalCount)-1 && panel.historyModelText(terminalCount-1)==terminalPreview,
+          "Host-details inspection changed the trajectory or selection");
     click(130,86);ready();check(example.document().solution.empty(),"Solution leaked back into environment document");
     check(std::filesystem::is_directory(records),"Play panel did not save an episode record");
     const auto recordFile=std::filesystem::directory_iterator(records)->path();
     const auto record=readEpisodeRecord(recordFile);
+    check(panel.historyEntries().size()==terminalCount && panel.historyModelText(terminalCount-1)==terminalPreview,
+          "Independent verification created a live trajectory boundary");
     check(record.at("commands")==solution && record.at("verified").get<bool>(),"Play panel did not save verified recording");
     check(record.at("selection").at("prompt")==selection.at("prompt"),"Saved recording lost the task prompt");
     auto legacyRecord=record;legacyRecord["selection"].erase("prompt");saveJsonFile(recordFile,legacyRecord);
@@ -242,7 +309,8 @@ void runTextWorldClientTests(){
     initialGoal.target_state="Remain in the starting room.";
     initialGoal.success_criteria.push_back({"At starting room",GRIM::EvidenceCondition{"player_at",d.spawn,""}});
     panel.selectGoal({{"source_id","initial-goal"},{"prompt","Stay in this room."},{"goal",GRIM::goalToJson(initialGoal)}});
-    check(!panel.initialModelInput(),"Selecting another block retained the previous attempt input");
+    check(!panel.initialModelInput() && panel.historyEntries().empty() && panel.historyIndex()==-1,
+          "Selecting another block retained the previous attempt history");
     panel.prepareCommand("a stale command");
     click(180,48);ready();check(panel.status()=="Won!","Reset did not bind the newly selected Goal");
     check(panel.preparedCommand().empty() && panel.initialModelInput()->reasoning_state.at("goal").at("target_state")==initialGoal.target_state &&
@@ -258,12 +326,31 @@ void runTextWorldClientTests(){
           panel.initialModelInput()->reasoning_state.at("goal").at("success_criteria").empty(),"Recording a sandbox retained the previous Goal");
     check(panel.initialModelInput()->prompt.empty(),"Sandbox retained an authored task prompt");
     panel.selectGoal(selection);click(50,48);ready();
+    panel.selectGoal(selection);panel.prepareCommand("look");click(280,166);
+    check(!panel.busy() && panel.historyEntries().empty() && panel.status()=="Start the selected Goal first",
+          "Reselecting the active Goal allowed continuation without fresh history");
+    click(180,48);ready();
     example.change([](Document& world){world.objective="A changed objective.";});frame({});
     click(180,48);ready();check(panel.status()=="Ready for a command.","Legacy metadata incorrectly invalidated environment compilation");
+    const auto originalDescription=example.document().find(example.document().spawn)->description;
     example.change([](Document& world){world.find(world.spawn)->description="Changed environment description.";});frame({});
     click(180,48);check(panel.status()=="Compile & Play the current world first","Play panel reused a stale compiled world");
+    example.change([&](Document& world){world.find(world.spawn)->description=originalDescription;});frame({});
+    panel.prepareCommand("look");click(280,166);
+    check(panel.continuationStatus()=="awaiting_action_result","Fault test did not submit an action");
+    const auto pendingFailurePreview=panel.historyModelText(panel.historyEntries().size()-1);
+    failObservation=true;ready();failObservation=false;
+    const auto& failedBoundary=panel.historyEntries().back();
+    check(panel.continuationStatus()=="terminated: infrastructure_error" && !panel.initialModelInput() &&
+          failedBoundary.receipt.at("status")=="completed" && failedBoundary.receipt.at("response").at("result").contains("state") &&
+          failedBoundary.observation.empty() && panel.historyModelText(panel.historyEntries().size()-1)==pendingFailurePreview,
+          "Post-dispatch render failure lost its receipt, invented feedback, or remained resumable");
+    const auto failedCount=panel.historyEntries().size();panel.prepareCommand("look");click(280,166);
+    check(!panel.busy() && panel.historyEntries().size()==failedCount && panel.status()=="Compile & Play the current world first",
+          "Infrastructure failure allowed implicit action resubmission");
     panel.hide();ready();
-    check(!panel.initialModelInput(),"Hidden session retained live model input");
+    check(!panel.initialModelInput() && panel.continuationStatus()=="terminated: stopped",
+          "Hidden session retained live model input or a resumable status");
     for(const auto& entry:std::filesystem::directory_iterator(records))std::filesystem::remove(entry.path());
     std::filesystem::remove(records);
     check(sessions()==sessionsBefore,"TextWorld client leaked temporary session folders");

@@ -143,7 +143,7 @@ that a requested world transition or Goal success occurred.
 
 After each continuing response, the same visible-field projection supplies runtime
 context before resuming the existing generation session. The frozen Goal and
-global generation/context budgets remain unchanged between cycles. Native episode
+global generation/context budgets remain unchanged throughout the attempt. Native episode
 success/failure/stopped status stops commands, but its permitted observation is
 inserted before generation continues to the final Answer. Answer close freezes
 and grades the Goal attempt against the latest authoritative world response; it
@@ -182,9 +182,28 @@ or model history. Focused host coverage is `tests/run_environment_dispatch.ps1`.
 
 ## 1. The inference contract in one view
 
-GRIM structured inference pursues one Goal through an attempt. DDEA means
-Determine, Define, Execute, Answer; Define and Execute are optional. A direct
-response does not acquire artificial tool calls to fill the phase structure.
+GRIM structured inference pursues one Goal through an attempt. DDEA names
+Determine, Define, Execute, Answer. Training data uses the canonical phase order,
+with Determine first among explicit reasoning spans; phases should serve the task.
+This authoring convention is not a runtime requirement to emit Determine or to
+complete a DDEA sequence.
+
+At runtime, Determine, Define, Execute, and Update are optional. The controller
+validates emitted span syntax, configured boundaries, and action payloads without
+requiring a phase's presence, a fixed phase order, or a repeated cycle. Answer
+close is the normal completed-attempt submission boundary, not a guarantee that
+every trajectory produces an Answer. EOS, sampled-token exhaustion, context
+overflow, invalid output, and infrastructure errors retain their distinct
+termination/failure handling; none requires manufacturing a missing Answer.
+
+An attempt is the ordered trajectory of generated spans and disclosed environment
+responses toward one frozen Goal. Intermediate session state is that accumulated
+trajectory and its currently available context at any boundary. A task episode
+holds the frozen Goal, action receipts, and attempt records. The word "cycle" is
+only informal shorthand for interaction; it imposes no schema, grouping, or
+required phase sequence. A direct response does not acquire artificial tool calls.
+
+The following is a canonical authoring example, not a runtime phase grammar:
 
 ```text
 supplied prompt + Goal text + available state
@@ -196,6 +215,8 @@ supplied prompt + Goal text + available state
 
 ### 1.1 Action and attempt boundaries
 
+- No non-return reasoning span is required at runtime; canonical training order
+  does not impose a mandatory Determine-first or repeated DDEA sequence.
 - A valid completed span can pause generation for controller observation.
 - In the environment controller, a completed Execute contains exactly one
   environment command. Only that instance's content is decoded and dispatched;
@@ -254,6 +275,28 @@ admissible-command author aid to that rendered text. No authored continuation
 fields are supplied. Actual delimiter token IDs are still resolved by structured
 prefill with its matching tokenizer; the manual preview does not tokenize.
 
+World Lab manual history retains one accumulated preview with immutable byte
+boundaries: initial supplied input (snapshot zero), each submitted command while
+awaiting its result, then each disclosed environment response. Typed commands
+render as configured Execute spans; responses use the shared permitted projection
+and environment-context renderer. Earlier snapshots are retained text prefixes,
+not reconstructed from the latest world state. No Determine, Define, Update,
+Answer, or knowns/unknowns updates are invented. This is a manual text preview,
+not a sampled or tokenized model trajectory.
+
+Each boundary retains its disclosed observation, private host receipt, and
+continuation status separately. Host details exposes the receipt outside the
+model-visible text. Pending submissions contain no future observation; uncertain
+transport completion terminates live play and retains the error without retrying.
+World success/failure stops commands but is labelled awaiting Answer, not as model
+submission. Manual Play does not generate or submit Answer. Selecting history only
+changes inspection and canvas highlights; commands use the latest live state.
+Successful Start/Reset/Record replace history; choosing another Goal clears it.
+Stop/hide retains historical inspection with a stopped live status. Independent
+validation and witness replay do not append live trajectory boundaries. Actual
+model generation, Answer submission, and EOS/overflow outcomes remain owned by
+the separate inference controller; the UI does not fabricate them.
+
 The context-only `environment_context` root follows `prompt` in the active span
 configuration and uses `<environment_context>`/`</environment_context>` markers.
 It contains only permitted observation prose. The shared projection removes the
@@ -264,7 +307,7 @@ stay unchanged; action errors, tool feedback, and ordinary ASCII diagrams remain
 available. Authored task and Goal text are never cleaned or rewritten.
 Environment-only inference may omit an empty authored prompt when nonempty
 environment context is supplied. The compatibility `withPrompt()` ConceptBlock
-adapter rejects nonempty environment context because single-cycle storage cannot
+adapter rejects nonempty environment context because single-block storage cannot
 represent it. New context delimiters require regenerated tokenizer/config/corpus
 artifacts before running the model; existing vocabulary IDs are never reassigned.
 
@@ -320,12 +363,12 @@ not require corpus regeneration.
 ## 2. Selected single-block canonical model-visible order
 
 Only non-empty fields render. Authored array order is preserved. This is the
-selected ConceptBlock rendering for one cycle/example, not a limit of
-one reasoning cycle per task. Recurrent trajectory serialization is not yet
+selected ConceptBlock rendering for one authored example, not a runtime phase
+sequence or interaction limit. Recurrent trajectory serialization is not yet
 represented by repeated phase fields in the source schema.
 The active renderer configuration excludes evidence leaves entirely and renders
 only the text from criterion and constraint objects.
-The optional environment-context node is runtime input; the single-cycle
+The optional environment-context node is runtime input; the single-block
 ConceptBlock source schema does not persist that observation field.
 
 ```text
@@ -410,9 +453,10 @@ Important rendering facts:
 - Legacy `explanation`/`intermediates` text is unlabeled and appears immediately
   before `determine`.
 - Each phase and answer has at most one field in the current persisted
-  ConceptBlock. The recurrent contract permits successive cycles, with optional
-  Define/Execute in each. Do not pack an entire interactive trajectory into one
-  scalar or imply that the existing schema already serializes repeated cycles.
+  ConceptBlock. A runtime attempt may contain whichever valid generated spans
+  are needed, interleaved with actual feedback, without a required cycle or phase
+  sequence. Do not pack an entire interactive trajectory into one scalar or imply
+  that the existing schema already serializes recurrent trajectories.
 - A non-empty `raw` value bypasses this entire structure and is therefore not a
   valid structured reasoning-state input.
 
@@ -438,7 +482,7 @@ on; it must not contain hidden future state.
 
 ### 3.2 Complete training sequence
 
-A current single-cycle example may append:
+A current single-block training example may append, in canonical authoring order:
 
 ```text
 [legacy reasoning]
@@ -452,7 +496,8 @@ A current single-cycle example may append:
 These fields represent the continuation after the normal structured-state
 prefix. Define and Execute are used only when needed; neither implies a mandatory
 tool call. Recurrent episodes additionally have ordered feedback boundaries
-between cycles, with feedback available only after the corresponding submission.
+after actions, with feedback available only after the corresponding Execute
+submission. These boundaries do not require a new Determine or full DDEA sequence.
 Their storage/projection must preserve action/feedback boundaries within an
 attempt rather than treating future observations as initial context. Answer is
 the attempt submission, not an intermediate command. For train/inference alignment, every token placed before the first
@@ -866,7 +911,8 @@ Rules:
 
 ### 4.9 Determine — state what must be done
 
-Canonical position: first explicit reasoning phase.
+Canonical training-data position: first explicit reasoning phase. Runtime does
+not require Determine to appear or to precede other valid generated spans.
 
 Visible form:
 
@@ -921,7 +967,8 @@ operands, and leaks the result.
 
 ### 4.10 Define — create local definitions
 
-Canonical position: immediately after `determine` and before `execute`.
+Canonical training-data position: immediately after `determine` and before
+`execute`. This is an authoring convention, not a runtime presence/order rule.
 
 Visible form:
 
@@ -970,7 +1017,8 @@ ${used_liters};
 
 ### 4.11 Execute — perform the intended action
 
-Canonical position: after `define`.
+Canonical training-data position: after `define`, when Define is needed. Runtime
+does not require Define, Execute, or this phase sequence.
 
 Visible form:
 
@@ -1007,8 +1055,7 @@ The following is a separately scoped, pending self-correction tool-path design.
 It is not the current environment command contract and does not make tool
 calls mandatory. The environment adapter dispatches a single command at Execute
 close; this pending TOOL/READ path must not create a second dispatch for that
-same action. Ordinary response cycles need
-none of this grammar.
+same action. Ordinary responses need none of this grammar.
 
 The proposed authoring contract for that tool path is:
 
@@ -1049,7 +1096,8 @@ for implementation ownership.
 
 ### 4.12 Update — commit the transition result to state
 
-Canonical position: after `execute` and before `answer`.
+Canonical training-data position: after `execute` and before `answer`. Runtime
+does not require Update or this phase sequence; claims still require prior evidence.
 
 Visible form:
 
@@ -1087,7 +1135,9 @@ consumed volume = 36 liters; no unknowns remain.
 
 ### 4.13 Answer — submit the Goal attempt
 
-Canonical position: final generated response span of the attempt.
+Canonical position: final generated response span of a normally submitted attempt.
+EOS, token/context limits, invalid output, or infrastructure failure may end the
+trajectory without a completed Answer; preserve that termination outcome.
 
 Visible form:
 
@@ -1098,7 +1148,8 @@ VALUE
 ```
 
 Definition: the final response submitting the work toward the active Goal.
-For an environment task, all command/feedback cycles occur before this submission.
+For an environment task, all command submissions and their actual feedback occur
+before this submission.
 Answer text is not executed as a command. Closing Answer freezes the attempt;
 the authoritative verifier determines whether it passed.
 
@@ -1161,12 +1212,13 @@ Every reasoning phase must move toward the target state while respecting
 criteria and constraints. Irrelevant but correct computations are still bad
 training examples because they teach poor transition selection.
 
-## 6. Single-cycle canonical inference example
+## 6. Single-block canonical inference example
 
 This arithmetic example uses Define and Execute because they serve the task.
 It does not require an external tool call and is not a template requiring all
-phases for every user input. A recurrent environment episode can contain many
-action/feedback cycles before final submission; this example finishes in one pass.
+phases for every user input. A recurrent environment attempt can contain many
+actions and responses before final submission, without a repeated phase sequence;
+this example finishes in one pass.
 
 ### 6.1 Upstream structured input
 
@@ -1258,7 +1310,8 @@ consumed volume = 36 liters; no unknowns remain.
 
 Whether the active model is trained to generate every continuation section or
 only a configured subset depends on the active supervision/window policy. The
-semantic ordering remains the same.
+canonical training-data ordering remains the same; runtime does not enforce
+that order or require omitted reasoning spans.
 
 ## 7. Span boundaries seen by the architecture
 
@@ -1407,9 +1460,10 @@ source model/adapter, but not the GRMT span format.
 
 The structured evidence milestone updates source storage, transport, and renderer
 configuration; existing source datasets and GRMT corpora still require explicit
-migration/regeneration. Recurrent episode storage and feedback projection remain
-pending; a challenge, an interaction cycle, and a persisted SFT ConceptBlock are
-not assumed to have a 1:1 mapping.
+migration/regeneration. Persistent recurrent episode serialization and training projection remain
+pending; runtime feedback projection is implemented. A task episode, an attempt,
+an individual action/response, and a persisted SFT ConceptBlock are distinct;
+there is no required cycle grouping or assumed 1:1 mapping.
 
 ## 8. Supporting storage and non-visible data
 
@@ -1461,7 +1515,10 @@ For every example, verify:
 - Optional Update commits only verified work/observations and tracks remaining work.
 - Environment Execute contains one validated command and receives actual feedback.
 - Answer submits the Goal attempt and is never dispatched as a command.
-- Each feedback item follows the Execute command that produced it; no cycle sees
+- Canonical data puts Determine first; runtime requires no non-return phase or
+  fixed phase sequence. Answer close submits normally; failure/overflow may end
+  the attempt without Answer.
+- Each feedback item follows the Execute command that produced it; no span sees
   hidden world facts, future results, or saved solutions as supplied context.
 - Goal completion is checked independently from answer-span completion.
 - The active supervision/window policy actually targets the phases the example

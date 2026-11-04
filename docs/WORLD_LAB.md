@@ -36,7 +36,14 @@ inventory, and location text, supplies the Goal's requirement text, and begins
 structured model generation. The Phase2 controller observes Determine/Define/Update
 pauses, submits one command at Execute close, and appends permitted feedback
 before continuing the same Goal attempt. Answer close freezes and grades that
-attempt without dispatch. A terminal world blocks commands but still permits
+attempt without dispatch. Determine-first is a training-data convention; runtime
+requires no non-return phase, fixed phase order, or repeated DDEA cycle. An
+attempt groups whichever valid generated spans and actual responses are needed
+toward one frozen Goal. Intermediate session state is the accumulated trajectory
+and available context at any boundary. Answer is the normal submission boundary;
+invalid output and infrastructure failures retain their own termination handling,
+and token/context overflow or EOS can end an attempt without Answer.
+A terminal world blocks commands but still permits
 the final Answer; EOS/limits before submission produce an incomplete failed
 attempt. No RL updates are performed. Action receipts prevent duplicate
 submission and block retries after unknown outcomes. The outer Phase2 environment
@@ -259,7 +266,17 @@ Evidence itself never performs setup.
    After starting, the initial Play entry renders the complete supplied input
    through the shared inference renderer and current `concept_spans` configuration,
    including its configured delimiters and ignore policies. The live command
-   picker remains separate from this model-input preview.
+   picker remains separate from this model-input preview. History extends this
+   input with configured Execute spans for manual commands and permitted
+   environment-context spans for actual responses. It records pending submissions
+   before feedback arrives and retains immutable prefixes for earlier boundaries.
+   No model reasoning or Answer is invented. **Host details** beside History shows
+   the selected observation, private receipt, and boundary/live continuation status;
+   **Trajectory** returns to the accumulated manual preview. Historical selection
+   never changes the live world used by the next command. World termination is
+   distinct from Answer submission. Stop/hide marks live continuation stopped;
+   transport uncertainty retains its receipt and blocks commands without retrying.
+   Validation and independent replay do not add live history boundaries.
    Verification evidence stays private. Selecting a different block invalidates
    the previous initial model input until a new attempt starts. This preview does
    not launch model generation or export SFT episodes.

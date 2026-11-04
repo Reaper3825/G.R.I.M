@@ -13,7 +13,10 @@ current tokenizer, corpus, configuration, or reasoning-state wire contract.
 
 **Shared action/attempt contract:** the
 [reasoning data contract](GRIM_REASONING_DATA_CONTRACT.md#11-action-and-attempt-boundaries)
-defines optional Define/Execute phases and Answer as the Goal-attempt submission.
+defines optional runtime reasoning phases and Answer close as normal Goal-attempt
+submission. Determine-first is a training-data convention; runtime requires no
+non-return span, fixed phase order, or cycle grouping. EOS, token/context overflow,
+invalid output, and infrastructure errors may terminate without Answer.
 The environment controller dispatches one command at Execute close, inserts actual
 feedback, and grades the frozen attempt at Answer close. A terminal world blocks
 commands while allowing final submission. Ordinary responses need no tool call.
@@ -31,8 +34,9 @@ The current single-block canonical order is prompt, target state, criteria/evide
 constraints, persisted knowns/unknowns, then determine, define, execute, update,
 and answer. Define and Execute are optional and need not occur together; no
 phase should be invented merely to force tool use. Empty fields can be omitted
-according to the current contract. Recurrent tasks can span multiple cycles;
-the current source ConceptBlock still has one field per phase.
+according to the current contract. This canonical data order is not a runtime
+presence/order requirement. Recurrent attempts contain generated spans and actual
+feedback without a mandatory cycle; the source ConceptBlock has one field per phase.
 The supplied prefix is context; the continuation is generated behavior.
 
 Goal ownership for the planned RL path is undecided. The goal rows below describe
@@ -52,7 +56,7 @@ anchored to the task verifier in either case.
 | `<define>` | Model declares local variables and binds supplied inputs | Proposed declaration parser prepares the episode variable store |
 | `<execute>` | Model emits actions and explicit reads | Proposed tool/read parser produces runtime events |
 | `<update>` | Model describes what the observed results established | Does not itself mutate the authoritative variable store |
-| `<answer>` | Model starts its external response for this cycle | Collect the final response for Goal-attempt grading; never execute it as a command |
+| `<answer>` | Model supplies its final response for the Goal attempt | Collect the final response for Goal-attempt grading; never execute it as a command |
 | `</answer>` | Model closes the current response | Freeze and grade the Goal attempt; submission does not itself prove success |
 
 The current SFT configuration treats update as context. RL action provenance is
@@ -206,9 +210,11 @@ tool snapshot, disclosure mode, and actual environment transitions. Four
 episodes share a task for first-attempt advantage normalization, but do not
 share mutable fixture state or variable stores.
 
-An **attempt** is the generated DDEA continuation, including any tool/read
-pauses and inserted observations, ending at `</answer>` or an incomplete-budget
-termination. A **segment** is uninterrupted sampling between runtime events.
+An **attempt** is the ordered generated continuation, including whichever valid
+reasoning spans, tool/read pauses, and disclosed observations are needed. It
+normally submits at `</answer>`; EOS, token/context overflow, invalid output,
+or infrastructure failure can terminate it without a completed Answer. Preserve
+the distinct completion, incomplete/failure, or infrastructure-error outcome. A **segment** is uninterrupted sampling between runtime events.
 A segment is neither an attempt nor an episode. The retry retains first-attempt
 history and valid state; it receives a fresh 256 sampled-token budget.
 

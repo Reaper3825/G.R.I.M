@@ -1,5 +1,4 @@
 #include "ui_world_session.hpp"
-#include "world_transcript.hpp"
 #include "core/input_parser.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "ui/input/ui_input_router.hpp"
@@ -33,7 +32,12 @@ UIWorldSession::UIWorldSession(Editor& editor,std::filesystem::path recordsDirec
     previousBlock_=std::make_unique<UIButton>("Back",[this]{report([&]{moveConceptBlock(-1);});});
     nextBlock_=std::make_unique<UIButton>("Next",[this]{report([&]{moveConceptBlock(1);});});
     history_=std::make_unique<UIDropdown>("",std::vector<std::string>{},0,[this](int i,const auto&){
-        if(i>=0 && i<static_cast<int>(historyEntries_.size())){historyIndex_=i;transcriptText_.scrollToTop();if(onState)onState(historyEntries_[i].state);}
+        report([&]{selectHistory(i);});
+    });
+    historyView_=std::make_unique<UIButton>("Host details",[this]{
+        hostDetailsVisible_=!hostDetailsVisible_;
+        historyView_->setText(hostDetailsVisible_?"Trajectory":"Host details");
+        transcriptText_.scrollToTop();
     });
     available_=std::make_unique<UIDropdown>("",std::vector<std::string>{"Live available commands"},0,[this](int i,const auto&){
         if(currentEpisode() && !done_ && i>0 && i<=static_cast<int>(availableCommands_.size()))prepareCommand(availableCommands_[i-1]);
@@ -49,7 +53,7 @@ UIWorldSession::UIWorldSession(Editor& editor,std::filesystem::path recordsDirec
     auto playButton=[&](const auto& name,std::function<void()> fn){playButtons_.push_back(std::make_unique<UIButton>(name,[this,fn]{report(fn);}));};
     playButton("Compile / Start",[this]{request(currentGame()?"start_episode":"compile");});
     playButton("Reset",[this]{request("reset");});
-    playButton("Stop",[this]{client_.stop();live_=recording_=false;initialModelInput_.reset();message_="Stopping worker...";if(onState)onState({});});
+    playButton("Stop",[this]{client_.stop();live_=recording_=false;initialModelInput_.reset();continuationStatus_="terminated: stopped";message_="Stopping worker...";if(onState)onState({});});
     playButton("Record",[this]{request("record");});
     playButton("Save solution",[this]{request("verify_solution");});
     playButton("Send",[this]{request("step");});
@@ -68,7 +72,7 @@ void UIWorldSession::selectGoal(nlohmann::json selection){
     }
     selection.erase("name"); // Display labels do not affect episode compatibility.
     selected_=std::move(selection);recording_=false;blockIndex_=-1;blockName_.clear();
-    initialModelInput_.reset();
+    initialModelInput_.reset();clearHistory();
     refreshGoalChoices();
     message_=currentGame()?"Goal selected. Compile / Start begins a fresh episode without recompiling.":"Goal selected. Compile / Start to play.";
     if(onState)onState({});
@@ -173,9 +177,35 @@ void UIWorldSession::importLegacyGoal(){
     reloadGoals();selectGoal(selection);refresh();
     message_="Imported ConceptBlock Goal and archived solution. Save the world to persist its environment-only format.";
 }
+void UIWorldSession::clearHistory(){
+    historyEntries_.clear();trajectory_.clear();pendingExecute_.clear();historyIndex_=-1;
+    history_->collapse();history_->setItems({});continuationStatus_="not_started";
+}
+void UIWorldSession::appendHistory(HistoryEntry entry){
+    historyEntries_.push_back(std::move(entry));
+    std::vector<std::string> labels;
+    for(std::size_t i=0;i<historyEntries_.size();++i)
+        labels.push_back(std::to_string(i)+": "+historyEntries_[i].command+" ["+historyEntries_[i].continuationStatus+"]");
+    history_->setItems(labels);selectHistory(static_cast<int>(historyEntries_.size())-1);
+}
+void UIWorldSession::selectHistory(int index){
+    if(index<0 || index>=static_cast<int>(historyEntries_.size()))throw std::out_of_range("History boundary is unavailable");
+    historyIndex_=index;history_->setSelectedIndex(index);transcriptText_.scrollToTop();
+    if(onState)onState(currentEpisode()?historyEntries_[index].state:nlohmann::json{});
+}
+std::string UIWorldSession::continuationStatus() const {
+    if(continuationStatus_=="starting" || continuationStatus_=="not_started")return continuationStatus_;
+    return currentEpisode() || !live_ ? continuationStatus_ : "unavailable: environment or Goal changed";
+}
+std::string UIWorldSession::historyHostDetails(std::size_t index) const {
+    const auto& e=historyEntries_.at(index);
+    return "Boundary status: "+e.continuationStatus+"\nLive status: "+continuationStatus()+
+        "\n\nCommand: "+e.command+"\n\nDisclosed observation\n"+e.observation+
+        "\n\nHost receipt (private)\n"+e.receipt.dump(2);
+}
 void UIWorldSession::refresh(){lastDocument_=editor_.document().json();if(live_ && !currentGame() && onState)onState({});}
 bool UIWorldSession::currentGame() const{return live_ && compiled_==editor_.document().gameJson();}
-bool UIWorldSession::currentEpisode() const{return currentGame() && active_==selected_;}
+bool UIWorldSession::currentEpisode() const{return currentGame() && initialModelInput_ && !historyEntries_.empty() && active_==selected_;}
 std::filesystem::path UIWorldSession::recordPath() const {
     return recordsDirectory_/(recordKey(episode_.at("identity").dump())+".grimepisode.json");
 }
@@ -195,12 +225,16 @@ void UIWorldSession::request(const std::string& op){report([&]{
     if(op=="compile" || op=="validate"){
         sentDocument_=editor_.document().gameJson();request["document"]=sentDocument_;
     }
+    if(beginsAttempt && !access_.renderInput)throw std::runtime_error("Model-input preview renderer is unavailable");
     if(beginsAttempt || op=="validate"){
         request["goal"]=selected_.at("goal");request["source_id"]=selected_.at("source_id");
     }
     if(op=="step"){
         if(done_)throw std::runtime_error("Episode finished; reset to play again");
         sentCommand_=command_.getText();if(sentCommand_.empty())return;request["command"]=sentCommand_;
+        if(!access_.renderInput)throw std::runtime_error("Model-input preview renderer is unavailable");
+        pendingExecute_=access_.renderInput({{"execute",sentCommand_}});
+        if(pendingExecute_.empty())throw std::runtime_error("Execute span is missing or ignored in the active configuration");
     }
     // Rebind the selected frozen Goal and reset the world as one operation.
     // Worker reset alone intentionally retains its previous bound Goal.
@@ -219,78 +253,106 @@ void UIWorldSession::request(const std::string& op){report([&]{
         if(record.at("environment")!=compiled_ || recordSelection!=activeBinding)throw std::runtime_error("Saved solution is stale for this environment or Goal");
         request["commands"]=record.at("commands");if(record.contains("witness"))request["witness"]=record.at("witness");
     }
-    if(client_.begin(std::move(request))){operation_=op;details_.clear();message_="Working: "+op+"...";}
+    if(client_.begin(std::move(request))){operation_=op;
+        if(op=="step"){
+            trajectory_+=pendingExecute_;pendingExecute_.clear();continuationStatus_="awaiting_action_result";
+            // Keep the last authoritative live observation even when inspecting an older boundary.
+            const auto state=historyEntries_.back().state;
+            appendHistory({sentCommand_,"",continuationStatus_,state,
+                {{"status","pending"},{"command",sentCommand_}},trajectory_.size()});
+        }
+        else if(beginsAttempt)continuationStatus_="starting";
+        details_.clear();message_="Working: "+op+"...";}
 });}
 void UIWorldSession::receive(){
     auto response=client_.poll();if(!response)return;
-    if(!response->value("ok",false)){
-        if(response->value("transport_error",false)){live_=recording_=false;initialModelInput_.reset();if(onState)onState({});}
-        details_=response->value("error",std::string{"TextWorld request failed"});
-        if(!response->value("collection",std::string{}).empty())details_+=" ["+response->value("source_id",std::string{})+" / "+response->at("collection").get<std::string>()+" / "+std::to_string(response->value("index",-1))+"]";
-        message_="Request failed. See details below.";
-        const auto id=response->value("entity_id",std::string{});if(!id.empty() && onErrorEntity)onErrorEntity(id);return;
-    }
-    const auto& result=response->at("result");
-    if(result.value("stopped",false)){live_=false;message_="Worker stopped.";return;}
-    if(operation_=="validate")message_="World compiled/reset and Goal bound. Achievability: "+result.at("episode").at("achievability").get<std::string>()+".";
-    if(operation_=="verify_solution" || operation_=="check_saved"){
-        if(!currentEpisode()){message_="Environment or Goal changed during replay; start and verify again.";return;}
-        saveWitness(result);episode_["achievability"]="achievable";recording_=false;message_="Solution verified and saved for this environment/Goal pairing.";
-    }
-    if(result.contains("state")){
-        std::string modelInputText;
-        if(operation_=="compile"){
-            catalogCompatible_=result.contains("action_catalog") && result.at("action_catalog")==actionCatalog();
-            compiled_=sentDocument_;live_=true;
+    try{
+        if(!response->value("ok",false)){
+            if(response->value("transport_error",false)){
+                live_=recording_=false;initialModelInput_.reset();
+                if(continuationStatus_!="terminated: stopped")continuationStatus_="terminated: infrastructure_error";
+                if(onState)onState({});
+            }else if(operation_=="step")continuationStatus_="action_rejected";
+            else if(continuationStatus_=="starting")continuationStatus_=historyEntries_.empty()?"not_started":historyEntries_.back().continuationStatus;
+            if(operation_=="step" && !historyEntries_.empty()){
+                const auto state=historyEntries_.back().state;
+                appendHistory({sentCommand_,"",continuationStatus_,state,*response,trajectory_.size()});
+            }
+            details_=response->value("error",std::string{"TextWorld request failed"});
+            if(!response->value("collection",std::string{}).empty())details_+=" ["+response->value("source_id",std::string{})+" / "+response->at("collection").get<std::string>()+" / "+std::to_string(response->value("index",-1))+"]";
+            message_="Request failed. See details below.";
+            const auto id=response->value("entity_id",std::string{});if(!id.empty() && onErrorEntity)onErrorEntity(id);return;
         }
-        if(operation_=="compile" || operation_=="start_episode" || operation_=="reset" || operation_=="record"){
+        const auto& result=response->at("result");
+        if(result.value("stopped",false)){
+            live_=false;
+            if(continuationStatus_!="terminated: infrastructure_error"){
+                continuationStatus_="terminated: stopped";message_="Worker stopped.";
+            }
+            return;
+        }
+        if(operation_=="validate")message_="World compiled/reset and Goal bound. Achievability: "+result.at("episode").at("achievability").get<std::string>()+".";
+        if(operation_=="verify_solution" || operation_=="check_saved"){
+            if(!currentEpisode()){message_="Environment or Goal changed during replay; start and verify again.";return;}
+            saveWitness(result);episode_["achievability"]="achievable";recording_=false;message_="Solution verified and saved for this environment/Goal pairing.";
+        }
+        if(result.contains("state")){
+            // Only live start/action responses extend history. Validation and independent
+            // witness replay must not create a fake action or observation boundary.
+            const bool beginsAttempt=operation_=="compile" || operation_=="start_episode" || operation_=="reset" || operation_=="record";
+            if(!beginsAttempt && operation_!="step")return;
             const auto goal=sentGoal_.at("goal").is_null()?GRIM::ConceptBlockGoal{}:GRIM::goalFromJson(sentGoal_.at("goal"));
-            auto input=GRIM::Environment::buildEnvironmentInferenceInput(goal,*response,sentGoal_.value("prompt",std::string{}));
-            if(access_.renderInput){
+            const auto input=GRIM::Environment::buildEnvironmentInferenceInput(goal,*response,
+                beginsAttempt?sentGoal_.value("prompt",std::string{}):std::string{});
+            const auto observation=access_.renderInput({{"environment_context",input.reasoning_state.at("environment_context")}});
+            if(observation.empty() && !input.reasoning_state.at("environment_context").get<std::string>().empty())
+                throw std::runtime_error("Environment context span is missing or ignored in the active configuration");
+            std::string modelInputText;
+            if(operation_=="compile"){
+                catalogCompatible_=result.contains("action_catalog") && result.at("action_catalog")==actionCatalog();
+                compiled_=sentDocument_;live_=true;
+            }
+            if(beginsAttempt){
                 auto supplied=input.reasoning_state;supplied["prompt"]=input.prompt;
                 modelInputText=access_.renderInput(supplied);
+                active_=sentGoal_;initialModelInput_=input;
+                clearHistory();trajectory_=std::move(modelInputText);
+                recorded_.clear();recording_=operation_=="record";command_.clear();
+            }else{
+                trajectory_+="\n\n"+observation+"\n\n";
             }
-            active_=sentGoal_;initialModelInput_=std::move(input);
-            historyEntries_.clear();recorded_.clear();recording_=operation_=="record";
-            command_.clear();
+            if(operation_=="step" && recording_)recorded_.push_back(sentCommand_);
+            const auto& state=result.at("state");done_=state.at("done");episode_=state.at("episode");
+            availableCommands_=state.value("admissible_commands",std::vector<std::string>{});
+            std::vector<std::string> availableLabels{"Live available commands"};
+            if(!done_)availableLabels.insert(availableLabels.end(),availableCommands_.begin(),availableCommands_.end());
+            available_->collapse();available_->setItems(availableLabels);available_->setSelectedIndex(0);
+            continuationStatus_=done_?"world_terminal: "+input.episode_status+"; awaiting_answer":"ready_for_command";
+            appendHistory({operation_=="step"?sentCommand_:"Start",observation,continuationStatus_,state,*response,trajectory_.size()});
+            if(operation_=="step")command_.clear();
+            const auto status=episode_.at("status").get<std::string>();
+            message_=status=="succeeded"?"Won!":status=="failed"?"Goal failed.":status=="stopped"?"Episode stopped without verified Goal success.":recording_?"Recording from the starting state.":"Ready for a command.";
+            if(!catalogCompatible_)message_+=" Catalog mismatch: composer disabled.";
         }
-        if(operation_=="step" && recording_)recorded_.push_back(sentCommand_);
-        const auto& state=result.at("state");done_=state.at("done");episode_=state.at("episode");
-        availableCommands_=state.value("admissible_commands",std::vector<std::string>{});
-        std::vector<std::string> availableLabels{"Live available commands"};
-        if(!done_)availableLabels.insert(availableLabels.end(),availableCommands_.begin(),availableCommands_.end());
-        available_->collapse();available_->setItems(availableLabels);available_->setSelectedIndex(0);
-        std::string feedback=cleanTranscript(state.value("feedback",std::string{}));
-        if(operation_!="step"){
-            const auto description=cleanTranscript(state.value("description",std::string{}));
-            if(!description.empty())feedback=description;
-            if(initialModelInput_){
-                const auto& goal=initialModelInput_->reasoning_state.at("goal");
-                std::string goalText;
-                const auto target=goal.at("target_state").get<std::string>();
-                if(!target.empty())goalText="Goal\n"+target+"\n\n";
-                for(const auto& criterion:goal.at("success_criteria"))goalText+="Success criterion: "+criterion.at("criterion").get<std::string>()+"\n";
-                for(const auto& constraint:goal.at("constraints"))goalText+="Constraint: "+constraint.at("constraint").get<std::string>()+"\n";
-                if(!goalText.empty())feedback=goalText+"\n"+feedback;
-            }
-            const auto prompt=active_.value("prompt",std::string{});
-            if(!prompt.empty())feedback="Prompt\n"+prompt+"\n\n"+feedback;
+        if((operation_=="compile" || operation_=="validate") && sentDocument_!=editor_.document().gameJson())message_="World changed during compilation; compile again.";
+    }catch(const std::exception& error){
+        // Preserve the actual receipt even if projection/rendering fails after dispatch.
+        client_.stop();live_=recording_=false;initialModelInput_.reset();
+        continuationStatus_="terminated: infrastructure_error";
+        if(operation_=="step" && !historyEntries_.empty()){
+            const auto state=historyEntries_.back().state;
+            const bool completed=response->is_object() && response->contains("ok") && response->at("ok")==true &&
+                response->contains("result") && response->at("result").contains("state");
+            appendHistory({sentCommand_,"",continuationStatus_,state,
+                {{"status",completed?"completed":"unknown"},{"response",*response},{"error",error.what()}},trajectory_.size()});
         }
-        historyEntries_.push_back({operation_=="step"?sentCommand_:"Start",std::move(feedback),state,std::move(modelInputText)});
-        std::vector<std::string> labels;for(size_t i=0;i<historyEntries_.size();++i)labels.push_back(std::to_string(i)+": "+historyEntries_[i].command);
-        history_->setItems(labels);historyIndex_=static_cast<int>(labels.size())-1;history_->setSelectedIndex(historyIndex_);transcriptText_.scrollToTop();
-        if(onState)onState(currentEpisode()?state:nlohmann::json{});
-        if(operation_=="step")command_.clear();
-        const auto status=episode_.at("status").get<std::string>();
-        message_=status=="succeeded"?"Won!":status=="failed"?"Goal failed.":status=="stopped"?"Episode stopped without verified Goal success.":recording_?"Recording from the starting state.":"Ready for a command.";
-        if(!catalogCompatible_)message_+=" Catalog mismatch: composer disabled.";
+        if(onState)onState({});throw;
     }
-    if((operation_=="compile" || operation_=="validate") && sentDocument_!=editor_.document().gameJson())message_="World changed during compilation; compile again.";
 }
 std::vector<Widget*> UIWorldSession::controls(){
     std::vector<Widget*> result;
     if(challenge_){result={&goalSearch_,goals_.get()};for(auto& b:challengeButtons_)result.push_back(b.get());}
-    else{result={&command_,history_.get(),available_.get()};for(auto& b:playButtons_)result.push_back(b.get());}
+    else{result={&command_,history_.get(),historyView_.get(),available_.get()};for(auto& b:playButtons_)result.push_back(b.get());}
     result.insert(result.end(),{curriculums_.get(),courses_.get(),previousBlock_.get(),nextBlock_.get()});
     result.push_back(&transcriptText_);return result;
 }
@@ -310,7 +372,7 @@ void UIWorldSession::layout(const PanelRect& area){
     place(*challengeButtons_[2],x,y+146,140);place(*challengeButtons_[3],x+148,y+146,140);
     place(*playButtons_[0],x,y+36,140);place(*playButtons_[1],x+148,y+36,70);place(*playButtons_[2],x+226,y+36,65);
     place(*playButtons_[3],x,y+74,75);place(*playButtons_[4],x+83,y+74,115);place(*playButtons_[6],x+206,y+74,100);
-    place(*history_,x,y+114);place(command_,x,y+154,std::max(80.f,w-74));place(*playButtons_[5],x+w-66,y+154,66);
+    place(*history_,x,y+114,std::max(80.f,w-116));place(*historyView_,x+w-108,y+114,108);place(command_,x,y+154,std::max(80.f,w-74));place(*playButtons_[5],x+w-66,y+154,66);
     place(*available_,x,y+190,w-92);place(*playButtons_[7],x+w-84,y+190,84);
     const float transcriptY=challenge_?186.f:composerVisible_?390.f:226.f;
     transcript_={{x,y+transcriptY},{w,std::max(24.f,area.size.y-transcriptY-166)}};
@@ -325,14 +387,14 @@ void UIWorldSession::update(const InputState& input,float dt,const PanelRect& ar
     for(auto* w:widgets)if(w!=popup && w->isVisible())w->update(clipped,dt);
     if(!challenge_ && composerVisible_)actions_.update(clipped,dt,{{area.origin.x+8,area.origin.y+342},{area.size.x-16,160}},GRIM::UI::InputRouter::get().currentPanel);
 }
-void UIWorldSession::hide(){actions_.hide();for(auto* w:controls()){w->cancelInput();if(auto* d=dynamic_cast<UIDropdown*>(w))d->collapse();}client_.stop();live_=recording_=false;initialModelInput_.reset();if(onState)onState({});}
+void UIWorldSession::hide(){actions_.hide();for(auto* w:controls()){w->cancelInput();if(auto* d=dynamic_cast<UIDropdown*>(w))d->collapse();}client_.stop();live_=recording_=false;initialModelInput_.reset();continuationStatus_="terminated: stopped";if(onState)onState({});}
 void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
     using namespace UITheme::Colors;layout(area);r.pushClipRect(area.origin,area.size);r.drawRect(area.origin,area.size,CardSurface);
     const float x=area.origin.x+8,y=area.origin.y;
     r.drawText({x,y+10},challenge_?"ConceptBlock Goal":"Manual playtest",TextPrimary,16);
     const auto progress=blockIndex_<0?"No course block selected":std::to_string(blockIndex_+1)+" / "+std::to_string(courseBlockIds_.size())+"  "+blockName_;
     r.drawText({x,y+108},progress,TextSecondary,11);
-    std::string text=details_.empty()?"":details_+"\n\n";
+    std::string text=details_.empty() || (!challenge_ && !hostDetailsVisible_)?"":details_+"\n\n";
     if(challenge_){
         text+="Selected: "+selected_.at("source_id").get<std::string>()+"\n";
         const auto prompt=selected_.value("prompt",std::string{});
@@ -353,12 +415,9 @@ void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
             }
         }
     }else if(historyIndex_>=0 && historyIndex_<static_cast<int>(historyEntries_.size())){
-        const auto& e=historyEntries_[historyIndex_];
-        if(!e.modelInput.empty())text+=e.modelInput;
-        else{
-            text+="> "+e.command+"\n"+e.feedback+"\n\n"+cleanTranscript(e.state.value("inventory",std::string{}));
-            text+="\n\nAvailable commands (author aid):\n";for(const auto& command:e.state.value("admissible_commands",std::vector<std::string>{}))text+=command+"\n";
-        }
+        if(hostDetailsVisible_)text+=historyHostDetails(historyIndex_);
+        else text+="Manual trajectory preview - boundary "+std::to_string(historyIndex_)+
+            "\n"+historyEntries_[historyIndex_].continuationStatus+"\n\n"+historyModelText(historyIndex_);
     }
     transcriptText_.setText(text);for(auto* w:controls())if(w->isVisible())w->drawOverlay(r,{});
     if(!challenge_ && composerVisible_)actions_.draw(r,{{area.origin.x+8,area.origin.y+342},{area.size.x-16,160}},false);
