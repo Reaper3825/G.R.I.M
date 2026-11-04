@@ -8,6 +8,20 @@ using namespace GRIM::WorldLab;
 namespace {
 void place(Widget& w,float x,float y,float width=168,float height=28){w.setPosition(x,y);w.setSize(width,height);}
 nlohmann::json sandbox(){return {{"source_id",""},{"name","Sandbox"},{"goal",nullptr}};}
+
+uint32_t previewMarkerColor(std::string_view line) {
+    using namespace UITheme::Colors;
+    if (line.size() < 3 || line.front() != '<' || line.back() != '>') return 0;
+    line.remove_prefix(1);
+    line.remove_suffix(1);
+    if (line.starts_with('/')) line.remove_prefix(1);
+    if (line.empty() || line.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        != std::string_view::npos) return 0;
+    if (line == "execute") return WarningLight;
+    if (line == "environment_context") return Success;
+    if (line == "prompt") return AccentBlue;
+    return 0xFFC5A8DE;
+}
 }
 UIWorldSession::UIWorldSession(Editor& editor,std::filesystem::path recordsDirectory)
     :editor_(editor),recordsDirectory_(std::move(recordsDirectory)),actions_(editor),selected_(sandbox()) {
@@ -420,6 +434,7 @@ void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
     r.drawText({x,y+10},challenge_?"ConceptBlock Goal":"Manual playtest",TextPrimary,16);
     const auto progress=blockIndex_<0?"No course block selected":std::to_string(blockIndex_+1)+" / "+std::to_string(courseBlockIds_.size())+"  "+blockName_;
     r.drawText({x,y+108},progress,TextSecondary,11);
+    transcriptText_.setLineStyle({});
     std::string text=details_.empty() || (!challenge_ && !hostDetailsVisible_)?"":details_+"\n\n";
     if(challenge_){
         text+="Selected: "+selected_.at("source_id").get<std::string>()+"\n";
@@ -442,8 +457,22 @@ void UIWorldSession::draw(OverlayRenderer& r,const PanelRect& area){
         }
     }else if(historyIndex_>=0 && historyIndex_<static_cast<int>(historyEntries_.size())){
         if(hostDetailsVisible_)text+=historyHostDetails(historyIndex_);
-        else text+="Manual trajectory preview - boundary "+std::to_string(historyIndex_)+
-            "\n"+historyEntries_[historyIndex_].continuationStatus+"\n\n"+historyModelText(historyIndex_);
+        else {
+            text = "Trajectory preview  /  Boundary " + std::to_string(historyIndex_) +
+                " of " + std::to_string(historyEntries_.size() - 1) + "\n" +
+                historyEntries_[historyIndex_].continuationStatus + "\n\n";
+            const auto bodyOffset = text.size();
+            const auto boundaryStart = bodyOffset +
+                (historyIndex_ > 0 ? historyEntries_[historyIndex_ - 1].trajectoryEnd : 0);
+            text += historyModelText(historyIndex_);
+            transcriptText_.setLineStyle([bodyOffset, boundaryStart](std::string_view line, std::size_t offset) {
+                if (line.empty()) return UITextArea::LineStyle{};
+                if (offset < bodyOffset) return UITextArea::LineStyle{TextHeader, RowSelected};
+                const auto markerColor = previewMarkerColor(line);
+                const auto background = offset >= boundaryStart ? 0x50384557u : 0u;
+                return UITextArea::LineStyle{markerColor ? markerColor : TextLight, background};
+            });
+        }
     }
     transcriptText_.setText(text);for(auto* w:controls())if(w->isVisible())w->drawOverlay(r,{});
     if(!challenge_ && composerVisible_)actions_.draw(r,{{area.origin.x+8,area.origin.y+342},{area.size.x-16,160}},false);

@@ -552,20 +552,19 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         int startLine = static_cast<int>(scrollOffset);
         float yPos = position.y + kTextPad;
 
-        // Draw selection highlight
-        if (focused && hasSelection()) {
-            int lo = std::min(selStart, selEnd);
-            int hi = std::max(selStart, selEnd);
-
-            for (int i = startLine; i < static_cast<int>(wrappedLines.size()) && i < startLine + maxVisLines; ++i) {
-                const auto& wl = wrappedLines[i];
-                // Compute the absolute text range this wrapped line covers
-                int wrapAbsStart = lineStartOffset(wl.logicalLine) + wl.colStart;
+        for (int i = startLine; i < static_cast<int>(wrappedLines.size()) && i < startLine + maxVisLines; ++i) {
+            const auto& wl = wrappedLines[i];
+            const int lineOffset = lineStartOffset(wl.logicalLine);
+            const auto style = lineStyle ? lineStyle(lines[wl.logicalLine], lineOffset) : LineStyle{};
+            if (style.background) {
+                renderer.drawRect({position.x + 2, yPos}, {std::max(0.f, size.x - 4), kLineHeight},
+                                  style.background);
+            }
+            if (focused && hasSelection()) {
+                int wrapAbsStart = lineOffset + wl.colStart;
                 int wrapAbsEnd = wrapAbsStart + static_cast<int>(wl.text.size());
-
-                // Intersect with selection
-                int selLo = std::max(lo, wrapAbsStart);
-                int selHi = std::min(hi, wrapAbsEnd);
+                int selLo = std::max(std::min(selStart, selEnd), wrapAbsStart);
+                int selHi = std::min(std::max(selStart, selEnd), wrapAbsEnd);
 
                 if (selLo < selHi) {
                     int localLo = selLo - wrapAbsStart;
@@ -573,14 +572,10 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
                     float selX = position.x + kTextPad + renderer.measureTextWidth(wl.text.substr(0, localLo));
                     float selEndX = position.x + kTextPad + renderer.measureTextWidth(wl.text.substr(0, localHi));
                     float selW = std::max(0.0f, selEndX - selX);
-                    float selY = position.y + kTextPad + (i - startLine) * kLineHeight;
-                    renderer.drawRect({selX, selY}, {selW, kLineHeight}, 0xE63366AA);
+                    renderer.drawRect({selX, yPos}, {selW, kLineHeight}, 0xE63366AA);
                 }
             }
-        }
-
-        for (int i = startLine; i < static_cast<int>(wrappedLines.size()) && i < startLine + maxVisLines; ++i) {
-            renderer.drawText({position.x + kTextPad, yPos}, wrappedLines[i].text, 0xFFD0D0D0);
+            renderer.drawText({position.x + kTextPad, yPos}, wl.text, style.text);
             yPos += kLineHeight;
         }
 

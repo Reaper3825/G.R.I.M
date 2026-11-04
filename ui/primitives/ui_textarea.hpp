@@ -2,6 +2,7 @@
 #include "widget.hpp"
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cstdint>
 
@@ -14,6 +15,14 @@ public:
     void draw(class UIRenderer& renderer) override;
     
     void setText(const std::string& text);
+    struct LineStyle {
+        uint32_t text = 0xFFD0D0D0;
+        uint32_t background = 0;
+    };
+    // Style a logical line by its text and source byte offset, including wrapped rows.
+    void setLineStyle(std::function<LineStyle(std::string_view, std::size_t)> style) {
+        lineStyle = std::move(style);
+    }
     // Read-only keeps focus, navigation, selection, and clipboard copying enabled.
     void setReadOnly(bool value) { readOnly = value; }
     bool isReadOnly() const { return readOnly; }
@@ -30,6 +39,7 @@ private:
     std::string text;
     std::string placeholder;
     std::function<void(const std::string&)> callback;
+    std::function<LineStyle(std::string_view, std::size_t)> lineStyle;
     
     bool readOnly = false;
     bool hovered = false;
