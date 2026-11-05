@@ -16,7 +16,8 @@ void runTrainingToolsTests() {
     tool.description = "Inspect metadata";
     tool.usage = "viewer_test {target}";
     tool.bindings = {{"target", "t"}};
-    tool.category = "information";
+    // The first alphabetical tool must stay first even with a later category.
+    tool.category = "z_information";
     tool.usage_type = ToolUsage::Debug;
     tool.provider_name = "test_provider";
     tool.aliases = {"unique_alias"};

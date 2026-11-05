@@ -22,6 +22,49 @@ CommandResult response(const Json& value) {
 }
 int main() try {
     auto& registry = ToolRegistry::instance();
+    {
+        // One shared routing boundary covers host and Model invocations.
+        auto definition = tool("execution_mode_fixture");
+        int calls = 0;
+        registry.registerTool(definition, [&](const std::string& args) {
+            ++calls;
+            CommandResult result;
+            result.success = args != "fail";
+            result.message = args;
+            result.errorCode = result.success ? "ERR_NONE" : "FIXTURE_FAILURE";
+            result.structuredOutputJson = Json{{"actual", args}}.dump();
+            return result;
+        });
+        const auto version = registry.version();
+        const auto implicit = registry.invoke(definition.tool_id, "implicit");
+        check(implicit.success && implicit.message == "implicit" &&
+              Json::parse(implicit.structuredOutputJson).at("actual") == "implicit" && calls == 1,
+              "Default invocation did not return the real Production result");
+        check(registry.invoke(definition.tool_id, "explicit", ToolExecutionMode::Production).success && calls == 2,
+              "Explicit Production did not invoke the handler");
+        check(registry.invokeModel(definition.tool_id, "model", version).success && calls == 3,
+              "Model invocation did not default to Production");
+        check(registry.invokeModel(definition.tool_id, "model", version, ToolExecutionMode::Production).success && calls == 4,
+              "Explicit Model Production did not invoke the handler");
+        const auto failed = registry.invoke(definition.tool_id, "fail");
+        check(!failed.success && failed.errorCode == "FIXTURE_FAILURE" && calls == 5,
+              "Production failure result was replaced");
+        const auto stats = *registry.getTool(definition.tool_id);
+        const auto sandbox = registry.invoke(definition.tool_id, "sandbox", ToolExecutionMode::Sandbox);
+        check(!sandbox.success && sandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
+              "Reserved Sandbox invoked Production or claimed success");
+        const auto modelSandbox = registry.invokeModel(definition.tool_id, "sandbox", version, ToolExecutionMode::Sandbox);
+        check(!modelSandbox.success && modelSandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
+              "Reserved Model Sandbox invoked Production or claimed success");
+        const auto invalid = registry.invoke(definition.tool_id, "invalid", static_cast<ToolExecutionMode>(255));
+        check(!invalid.success && invalid.errorCode == "ERR_TOOL_EXECUTION_MODE" && calls == 5,
+              "Invalid mode invoked Production");
+        const auto after = *registry.getTool(definition.tool_id);
+        check(after.usage_count == stats.usage_count && after.success_count == stats.success_count &&
+              after.failure_count == stats.failure_count && registry.version() == version,
+              "Unimplemented execution modes changed Production statistics or metadata");
+        registry.unregisterTool(definition.tool_id);
+    }
     uint64_t next = 0, runtime = 7;
     bool visible = false, duplicate = false, removed = false, replaceBeforeShow = false, replaceBeforeHide = false;
     int shows = 0, hides = 0, lists = 0, cancels = 0;

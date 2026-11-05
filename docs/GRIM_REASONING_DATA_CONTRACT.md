@@ -1470,6 +1470,30 @@ there is no required cycle grouping or assumed 1:1 mapping.
 
 ## 8. Supporting storage and non-visible data
 
+### Standalone recurrent authoring examples
+
+`scripts/textworld/generate_internal_demonstrations.py` replays the verified GRIM
+internal witnesses into `DataCollection/curated/grim_internal_state_v1/demonstrations`.
+These standalone `grim-recurrent-authoring-example` version-1 JSONL records have
+masked `input` plus ordered assistant and environment `events`. Each event names
+its logical `span`, `content`, `origin`, and authoring `supervised` flag. Assistant
+Determine/Execute/Answer events are targets; environment-context events are masked.
+They preserve individual action/feedback boundaries, not scalar ConceptBlock
+continuations. Span flags are authoring metadata; native trainer ingestion,
+configured delimiter encoding, and token-level projection are not implemented.
+
+Only permitted visible fields enter observations. Structured evidence, authoritative
+facts, outcomes, and witness commands are retained separately in
+`verification.private.jsonl`; that file must never be projected as model input.
+Catalog feedback uses the explicitly stored empty-model-tool-registry fixture,
+matching the existing host observation provider's empty-registry response; it
+does not claim to capture a running host registry. Native worker responses remain
+unchanged in audit receipts. Unknown provider requests reject generation.
+Determine and Answer are authored demonstrations, not sampled model tokens;
+Answer is appended after independent evidence success without claiming a native
+controller submission/grading run. These files do not implement persistent
+runtime `TaskEpisode` export or change existing corpus loading/supervision.
+
 The FlatBuffer is the persistence envelope for training examples, but the
 following fields do not become canonical model-visible text:
 

@@ -1,0 +1,227 @@
+{
+  "dataset": "grim_internal_state_v1",
+  "environment_id": "env-4056413a539c4244b300030bbd119462",
+  "environment_identity": "b1c2a1cf4cfb0a619d3dab6e091a30886a426c84bf3bbdf37e7f6156e785af35",
+  "episode_count": 9,
+  "episodes": [
+    {
+      "commands": 1,
+      "final_location": "/computer",
+      "record": "64d32ae9a15ea7b8.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the computer room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is closed."
+        },
+        {
+          "collection": "constraints",
+          "index": 0,
+          "status": "unsatisfied",
+          "text": "Do not open the tool catalog."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_computer_closed",
+      "status": "succeeded"
+    },
+    {
+      "commands": 1,
+      "final_location": "/memory",
+      "record": "44724de51fd72f04.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the memory room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is closed."
+        },
+        {
+          "collection": "constraints",
+          "index": 0,
+          "status": "unsatisfied",
+          "text": "Do not open the tool catalog."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_memory_closed",
+      "status": "succeeded"
+    },
+    {
+      "commands": 1,
+      "final_location": "/perception",
+      "record": "c51301191f721ca3.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the perception room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is closed."
+        },
+        {
+          "collection": "constraints",
+          "index": 0,
+          "status": "unsatisfied",
+          "text": "Do not open the tool catalog."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_perception_closed",
+      "status": "succeeded"
+    },
+    {
+      "commands": 1,
+      "final_location": "/tools",
+      "record": "c482739366a5781e.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the tools room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is closed."
+        },
+        {
+          "collection": "constraints",
+          "index": 0,
+          "status": "unsatisfied",
+          "text": "Do not open the tool catalog."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_tools_closed",
+      "status": "succeeded"
+    },
+    {
+      "commands": 2,
+      "final_location": "/tools",
+      "record": "233a1c05dff96ebd.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the tools room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is open."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_tools_open",
+      "status": "succeeded"
+    },
+    {
+      "commands": 3,
+      "final_location": "/",
+      "record": "17e4c8c1ac5da48e.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the System Hub."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is open."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_hub_open",
+      "status": "succeeded"
+    },
+    {
+      "commands": 4,
+      "final_location": "/computer",
+      "record": "ae00acb627971bae.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the computer room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is open."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_computer_open",
+      "status": "succeeded"
+    },
+    {
+      "commands": 4,
+      "final_location": "/memory",
+      "record": "a52cb1280a09dd66.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the memory room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is open."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_memory_open",
+      "status": "succeeded"
+    },
+    {
+      "commands": 4,
+      "final_location": "/perception",
+      "record": "de93d96725c8bb5e.grimepisode.json",
+      "requirements": [
+        {
+          "collection": "success_criteria",
+          "index": 0,
+          "status": "satisfied",
+          "text": "You are in the perception room."
+        },
+        {
+          "collection": "success_criteria",
+          "index": 1,
+          "status": "satisfied",
+          "text": "The tool catalog is open."
+        }
+      ],
+      "source_id": "grim_internal_state_v1_perception_open",
+      "status": "succeeded"
+    }
+  ],
+  "evaluator_semantics": "grim-textworld-native-quest-v2",
+  "excluded_initial_states": 1,
+  "format": "grim-internal-state-episode-set",
+  "reachable_states": 10,
+  "search": "breadth-first native worker replay",
+  "version": 1
+}

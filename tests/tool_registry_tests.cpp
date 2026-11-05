@@ -44,6 +44,32 @@ struct Observer : ToolRegistryListener {
 
 int main() try {
     using namespace GRIM::MMO;
+    // Snapshot ordering is independent of registration order and category.
+    {
+        auto& registry = ToolRegistry::instance();
+        for (const auto* id : {"zebra", "alpha", "middle"}) {
+            auto tool = descriptor(id, "ordering_tests");
+            tool.category = std::string(id) == "middle" ? "a_category" : "z_category";
+            tool.capability_tags = {"ordering"};
+            check(registry.registerTool(tool, echo), "Ordering fixture registration failed");
+        }
+        const auto ordered = [&](const auto& tools) {
+            check(tools.size() == 3 && tools[0].tool_id == "alpha" &&
+                  tools[1].tool_id == "middle" && tools[2].tool_id == "zebra",
+                  "Tools must be alphabetical across categories");
+        };
+        ordered(registry.getAllTools());
+        ordered(registry.getModelTools());
+        ordered(registry.getByCapabilityTag("ordering"));
+        ordered(registry.getInformationalTools());
+        check(registry.getCategories() == std::vector<std::string>{"a_category", "z_category"},
+              "Categories must remain sorted and unique");
+        auto alpha = *registry.getTool("alpha");
+        alpha.category = "a_category";
+        check(registry.updateMetadata(alpha), "Ordering metadata update failed");
+        ordered(registry.getAllTools());
+        registry.unregisterByProvider("ordering_tests");
+    }
     // Labels survive snapshots and never resolve or convert handler arguments.
     {
         auto labeled = descriptor("binding_fixture");

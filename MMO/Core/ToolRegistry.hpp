@@ -1,6 +1,7 @@
 // The authoritative store for tool metadata and execution bindings.
 #pragma once
 #include "ToolDescriptor.hpp"
+#include "ToolExecutionMode.hpp"
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -50,15 +51,20 @@ public:
 
     // Explicit selected-tool execution. Does not infer intent or run policy gates.
     // Handlers run outside the registry mutex and can query/register other tools.
-    CommandResult invoke(const std::string& tool_id, const std::string& arguments);
+    // Production uses the registered handler. Sandbox is reserved and returns
+    // an explicit not-implemented result without invoking the handler.
+    CommandResult invoke(const std::string& tool_id, const std::string& arguments,
+                         ToolExecutionMode mode = ToolExecutionMode::Production);
     // Canonical Model-only invocation against the caller's validated registry revision.
     // Selection is atomic with revision/classification checks; policy remains caller-owned.
     CommandResult invokeModel(const std::string& tool_id, const std::string& arguments,
-                              uint64_t expected_version);
+                              uint64_t expected_version,
+                              ToolExecutionMode mode = ToolExecutionMode::Production);
     bool isExecutable(const std::string& tool_id) const;
     std::vector<std::string> getExecutableNames(bool include_aliases = false) const;
 
     std::optional<ToolDescriptor> getTool(const std::string& tool_id) const;
+    // Snapshots and their filtered subsets are ordered alphabetically by tool ID.
     std::vector<ToolDescriptor> getAllTools() const;
     // Loaded tools explicitly classified for model use. Host discovery is unfiltered.
     std::vector<ToolDescriptor> getModelTools() const;
@@ -79,7 +85,7 @@ public:
 private:
     ToolRegistry() = default;
     CommandResult invokeChecked(const std::string& name, const std::string& arguments,
-                                std::optional<uint64_t> expected_version);
+                                std::optional<uint64_t> expected_version, ToolExecutionMode mode);
     struct Entry { ToolDescriptor descriptor; ToolHandler handler; };
     using Entries = std::unordered_map<std::string, std::shared_ptr<Entry>>;
     using Aliases = std::unordered_map<std::string, std::string>;

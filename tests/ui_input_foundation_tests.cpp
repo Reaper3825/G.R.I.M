@@ -32,6 +32,7 @@ void OverlayRenderer::drawRoundedBorder(const Vec2&, const Vec2&, uint32_t, floa
 std::string renderedTestText;
 void OverlayRenderer::drawText(const Vec2&, const std::string& text, uint32_t, float) { renderedTestText += text + "\n"; }
 float OverlayRenderer::measureTextWidth(const std::string& text, float) const { return static_cast<float>(text.size()) * 8; }
+std::vector<std::string> OverlayRenderer::wrapText(const std::string& text, float, float) const { return {text}; }
 void OverlayRenderer::drawLine(const Vec2&, const Vec2&, uint32_t, float) {}
 void OverlayRenderer::pushClipRect(const Vec2&, const Vec2&) {}
 void OverlayRenderer::popClipRect() {}

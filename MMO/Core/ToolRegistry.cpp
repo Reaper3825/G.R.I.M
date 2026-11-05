@@ -239,17 +239,28 @@ void ToolRegistry::unregisterByProvider(const std::string& provider, ToolProvide
         for (auto* listener : listeners) listener->onToolUnregistered(id);
 }
 
-CommandResult ToolRegistry::invoke(const std::string& name, const std::string& arguments) {
-    return invokeChecked(name, arguments, std::nullopt);
+CommandResult ToolRegistry::invoke(const std::string& name, const std::string& arguments,
+                                   ToolExecutionMode mode) {
+    return invokeChecked(name, arguments, std::nullopt, mode);
 }
 
 CommandResult ToolRegistry::invokeModel(const std::string& id, const std::string& arguments,
-                                       uint64_t expected_version) {
-    return invokeChecked(id, arguments, expected_version);
+                                       uint64_t expected_version, ToolExecutionMode mode) {
+    return invokeChecked(id, arguments, expected_version, mode);
 }
 
 CommandResult ToolRegistry::invokeChecked(const std::string& name, const std::string& arguments,
-                                          std::optional<uint64_t> expected_version) {
+                                          std::optional<uint64_t> expected_version, ToolExecutionMode mode) {
+    // Route at the shared boundary; a reserved mode must never fall through
+    // to a real handler or affect its production execution statistics.
+    switch (mode) {
+        case ToolExecutionMode::Production:
+            break;
+        case ToolExecutionMode::Sandbox:
+            return {false, "Sandbox tool execution is not implemented", "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED", "", "", Colors::Red};
+        default:
+            return {false, "Invalid tool execution mode", "ERR_TOOL_EXECUTION_MODE", "", "", Colors::Red};
+    }
     std::shared_ptr<Entry> entry;
     std::string id;
     {
@@ -297,7 +308,7 @@ std::vector<ToolDescriptor> ToolRegistry::getAllTools() const {
     std::vector<ToolDescriptor> result;
     for (const auto& [id, entry] : tools_) result.push_back(entry->descriptor);
     std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
-        return a.category != b.category ? a.category < b.category : a.tool_id < b.tool_id;
+        return a.tool_id < b.tool_id;
     });
     return result;
 }
@@ -331,8 +342,9 @@ std::vector<ToolDescriptor> ToolRegistry::getInformationalTools() const {
 }
 std::vector<std::string> ToolRegistry::getCategories() const {
     std::vector<std::string> result;
-    for (const auto& tool : getAllTools())
-        if (result.empty() || result.back() != tool.category) result.push_back(tool.category);
+    for (const auto& tool : getAllTools()) result.push_back(tool.category);
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
     return result;
 }
 bool ToolRegistry::isRegistered(const std::string& name) const {

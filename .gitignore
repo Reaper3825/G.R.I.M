@@ -275,6 +275,10 @@ cache/geospatial/*.sqlite-wal
 /plugins/utility_plugin/*
 !/plugins/utility_plugin/CMakeLists.txt
 !/plugins/utility_plugin/utility_plugin.cpp
+!/plugins/calculator_plugin/
+/plugins/calculator_plugin/*
+!/plugins/calculator_plugin/CMakeLists.txt
+!/plugins/calculator_plugin/calculator_plugin.cpp
 !/plugins/application_plugin/
 /plugins/application_plugin/*
 !/plugins/application_plugin/CMakeLists.txt

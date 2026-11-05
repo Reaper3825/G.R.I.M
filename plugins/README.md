@@ -121,6 +121,36 @@ its old registrations. The new host continues to load v3.0 plugin binaries;
 the application plugin requires v3.1. The compatibility test uses a controlled
 native launch sink and does not open applications or browsers.
 
+## Calculator plugin
+
+`calculator_plugin` owns the expression parser and registers the Model tool
+`calculate`. Its implementation lives entirely in
+`plugins/calculator_plugin/calculator_plugin.cpp`; the former
+`Tools/Math/Calculator` library and standalone calculator test were retired.
+No host calculator service or forwarding layer is involved.
+
+Pass a raw expression, for example `calculate sqrt(144) + 2^3`. The tool is
+informational and requires no permissions or confirmation. It supports arithmetic,
+parentheses, constants `pi` and `e`, and the mathematical functions documented in
+its registry descriptor. Angles are radians and arithmetic uses finite doubles.
+Inputs are limited to 4096 bytes and 64 active recursive parsing levels.
+
+Successful structured output contains `success`, `value`, and `answer`. Failures
+contain `success: false`, `error`, `error_message`, and `error_offset` (a zero-based
+byte offset). Error codes use the `ERR_CALC_` prefix; success uses `ERR_NONE`.
+
+Build and test only this plugin using the existing toolchain:
+
+    cmake -S plugins/calculator_plugin -B .codex-build/calculator-plugin -G "Visual Studio 17 2022" -A x64 -DGRIM_CALCULATOR_TESTS=ON -DGRIM_DEPLOY_PLUGINS=OFF
+    cmake --build .codex-build/calculator-plugin --config Release --target calculator_plugin_tests --parallel 2
+    ctest --test-dir .codex-build/calculator-plugin -C Release --output-on-failure
+
+The tests load the real DLL and exercise registration, Model invocation through
+ToolRegistry, arithmetic, structured errors, input limits, and provider removal.
+They do not start GRIM or a model. To publish the built DLL to the watched folder:
+
+    cmake -DPLUGIN_FILE=D:/G.R.I.M/.codex-build/calculator-plugin/plugins/calculator_plugin.dll -DDEPLOY_DIR=D:/G.R.I.M/plugins -P plugins/deploy_plugin.cmake
+
 ## Utility plugin
 
 `utility_plugin` supplies `clean` and `help`. Their original complete result

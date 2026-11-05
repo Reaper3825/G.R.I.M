@@ -1,0 +1,138 @@
+{
+  "commands": [
+    "enter tools",
+    "open tool catalog",
+    "back",
+    "enter memory"
+  ],
+  "environment": {
+    "entities": [
+      {
+        "description": "You are in GRIM's system hub, an orientation space for its internal subsystems. The perception, tools, computer, and memory rooms are connected beneath this hub.",
+        "id": "hub",
+        "kind": "room",
+        "name": "System Hub",
+        "parent": "",
+        "state": "open"
+      },
+      {
+        "description": "You are in the perception subsystem, where sensory inputs become observations that reasoning can use. Computer control and durable memory storage belong to other subsystems.",
+        "id": "perception",
+        "kind": "room",
+        "name": "perception",
+        "parent": "",
+        "state": "open"
+      },
+      {
+        "description": "You are in the tools subsystem, where available commands are described and requests are prepared for execution. A tool catalog stands here.",
+        "id": "tools",
+        "kind": "room",
+        "name": "tools",
+        "parent": "",
+        "state": "open"
+      },
+      {
+        "description": "Open this catalog to browse available tools. Examine an entry inside to learn how to use it.",
+        "id": "tool_catalog",
+        "kind": "container",
+        "name": "tool catalog",
+        "open_provider": "tool_catalog",
+        "parent": "tools",
+        "state": "closed"
+      },
+      {
+        "description": "You are in the computer subsystem, a representation of the digital workspace and the controls used to interact with it. Perception supplies observations of that workspace, while computer controls can change it.",
+        "id": "computer",
+        "kind": "room",
+        "name": "computer",
+        "parent": "",
+        "state": "open"
+      },
+      {
+        "description": "You are in the memory subsystem, where information is retained and retrieved for later use. Observation, retrieval, and durable recording are separate operations.",
+        "id": "memory",
+        "kind": "room",
+        "name": "memory",
+        "parent": "",
+        "state": "open"
+      }
+    ],
+    "format": "grim-world",
+    "navigation": {
+      "mode": "path",
+      "rooms": [
+        {
+          "id": "hub",
+          "parent": "",
+          "segment": ""
+        },
+        {
+          "id": "perception",
+          "parent": "hub",
+          "segment": "perception"
+        },
+        {
+          "id": "tools",
+          "parent": "hub",
+          "segment": "tools"
+        },
+        {
+          "id": "computer",
+          "parent": "hub",
+          "segment": "computer"
+        },
+        {
+          "id": "memory",
+          "parent": "hub",
+          "segment": "memory"
+        }
+      ]
+    },
+    "passages": [],
+    "spawn": "hub",
+    "version": 4
+  },
+  "format": "grim-episode",
+  "selection": {
+    "goal": {
+      "constraints": [],
+      "success_criteria": [
+        {
+          "criterion": "You are in the memory room.",
+          "evidence": {
+            "predicate": "player_at",
+            "subject": "memory"
+          }
+        },
+        {
+          "criterion": "The tool catalog is open.",
+          "evidence": {
+            "predicate": "open",
+            "subject": "tool_catalog"
+          }
+        }
+      ],
+      "target_state": "You are in the memory room with the tool catalog open."
+    },
+    "name": "GRIM internal: memory, catalog open",
+    "prompt": "Open the tool catalog in the tools room, then go to the memory room. Leave the catalog open.",
+    "source_id": "grim_internal_state_v1_memory_open"
+  },
+  "verified": true,
+  "version": 1,
+  "witness": {
+    "commands": [
+      "enter tools",
+      "open tool catalog",
+      "back",
+      "enter memory"
+    ],
+    "identity": {
+      "environment": "b1c2a1cf4cfb0a619d3dab6e091a30886a426c84bf3bbdf37e7f6156e785af35",
+      "goal": "50c979d79c4564d700d0557d4ab49a8bbd29ee5c55249c3039c9de061ce22414",
+      "semantics": "grim-textworld-native-quest-v2",
+      "source_id": "grim_internal_state_v1_memory_open",
+      "starting_state": "6cf18dcf7d4156a8de4c245b8f50cfc722550c7e6118e3a10dc292ba07b2abd0"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "command_count": 21,
+  "example_count": 9,
+  "examples": [
+    {
+      "id": "grim_internal_state_v1_computer_closed",
+      "identity": "4dedd5715a1d10d2974793fcc6a9976fbb24e679d601f38588bf523466e3eb5c"
+    },
+    {
+      "id": "grim_internal_state_v1_memory_closed",
+      "identity": "9b3e1f844260100e1deb774c363fcf554dc1b7fff774549a64aefa983cb7bbf4"
+    },
+    {
+      "id": "grim_internal_state_v1_perception_closed",
+      "identity": "75d1049563345ccb77bcb54afac724d96a267f77e1c46c52b2588738d673408e"
+    },
+    {
+      "id": "grim_internal_state_v1_tools_closed",
+      "identity": "e263e7c5b1dddb1c5c9c74d60be1d4902d6431781ba4dca299e561822ff1c0a7"
+    },
+    {
+      "id": "grim_internal_state_v1_tools_open",
+      "identity": "3490dc1e614db96219c3cf58ebe5df9ee928806362e6d7879ede08d738f4b213"
+    },
+    {
+      "id": "grim_internal_state_v1_hub_open",
+      "identity": "1b109f82b4de57975c2d81552f4e243cd84d26fddcb40cfac68d1fc832c12b8e"
+    },
+    {
+      "id": "grim_internal_state_v1_computer_open",
+      "identity": "b77f4d1eda1491a4aba4944236bcf0554b958a9542a091fb558b3ddff59a3a94"
+    },
+    {
+      "id": "grim_internal_state_v1_memory_open",
+      "identity": "50287423b08116f140fbc73cd4a6b7fbbf109390af391e5c9508672126f05215"
+    },
+    {
+      "id": "grim_internal_state_v1_perception_open",
+      "identity": "06e93d7f0bd5d9f608e142ea84708ac0cb4055cc670de036568369aaa6fa469e"
+    }
+  ],
+  "fixture_id": "empty-model-tool-catalog-v1",
+  "format": "grim-recurrent-authoring-set",
+  "trainer_integration": "pending; event supervision flags are authoring metadata",
+  "version": 1
+}

@@ -25,6 +25,20 @@ handlers. Plugins call api->register_tools(api, tools, count) with a batch
 of GrimToolRegistration values. Each contains a descriptor, handler, and
 plugin-owned user_data.
 
+### Host tool execution mode
+
+The shared C++ `ToolExecutionMode` selects the execution/feedback source per
+invocation. Both `ToolRegistry::invoke` and `invokeModel` accept it as an optional
+final argument, defaulting to `Production`. Existing callers therefore use the
+registered handler and receive its actual result, with existing registry checks
+and execution statistics preserved.
+
+`Sandbox` is a reserved option. Selecting it currently returns
+`ERR_TOOL_SANDBOX_NOT_IMPLEMENTED` without calling a handler or updating its
+execution statistics. There is no simulation or fallback to Production. This is
+a host invocation option, not a tool-descriptor field, global mode, or plugin ABI
+change; individual tool registrations are unchanged.
+
 ### Tool usage classification (v3.10)
 
 Each tool has a `ToolUsage usage_type` in the canonical descriptor. Plugin
@@ -556,6 +570,22 @@ The optional `-FilesystemPluginDirectory` argument to `tests/run_plugin_shutdown
 exercises the built DLL in a private temporary folder, including metadata,
 absolute/relative navigation, paths with spaces, failed operations, nonrecursive
 removal, and removal of the deployed plugin file. No application or model runs.
+
+### Native calculator plugin
+
+`calculator_plugin` owns its parser and evaluation handler, and registers the
+informational Model tool `calculate` through `register_tools`. It has no required
+permissions, confirmation, or host-service dependency. The raw expression parameter
+is documented as `calculate {t}` with the text binding `t`.
+
+The synchronous result writer receives a human-readable answer and JSON containing
+`success`, `value`, and `answer`. Evaluation errors use an `ERR_CALC_` code and JSON
+fields `success: false`, `error`, `error_message`, and `error_offset` (a zero-based
+byte offset). The plugin bounds input length and recursive parsing, rejects
+non-finite results, and keeps C++ parser exceptions within the plugin boundary.
+
+See the [calculator plugin instructions](../plugins/README.md#calculator-plugin)
+for the standalone build and DLL/ToolRegistry tests.
 
 ### Utility migration and compatibility boundary
 
