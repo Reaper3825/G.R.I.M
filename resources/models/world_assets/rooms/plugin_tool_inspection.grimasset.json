@@ -1,0 +1,44 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Tool Inspection Plugin",
+  "root": "plugin_tool_inspection",
+  "entities": [
+    {
+      "id": "plugin_tool_inspection",
+      "name": "Tool Inspection room",
+      "kind": "room",
+      "parent": "",
+      "description": "Inspection of authoritative tool registry metadata and statistics.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Tool Inspection Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.tool_inspection",
+        "entity_id": "plugin_tool_inspection",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_tool_inspection_registry",
+      "name": "Tool registry view",
+      "kind": "supporter",
+      "parent": "plugin_tool_inspection",
+      "description": "Read-only registry projection. Tools remain registered by their providers and retain usage classification and policy.",
+      "state": "open",
+      "resource_binding": {
+        "type": "tools.registry",
+        "key": "registry"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.tool_inspection.registry",
+        "entity_id": "plugin_tool_inspection_registry",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

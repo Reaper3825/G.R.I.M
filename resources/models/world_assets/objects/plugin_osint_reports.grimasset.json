@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - OSINT Self-Audit - OSINT reports",
+  "root": "plugin_osint_reports",
+  "entities": [
+    {
+      "id": "plugin_osint_reports",
+      "name": "OSINT reports",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Cached reports and findings addressed by username. No reports or personal information are captured.",
+      "state": "open",
+      "resource_binding": {
+        "type": "osint.reports",
+        "key": "reports"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.osint.reports",
+        "entity_id": "plugin_osint_reports",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

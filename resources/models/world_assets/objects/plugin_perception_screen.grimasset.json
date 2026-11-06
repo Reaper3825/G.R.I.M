@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Perception - Screen observation",
+  "root": "plugin_perception_screen",
+  "entities": [
+    {
+      "id": "plugin_perception_screen",
+      "name": "Screen observation",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Screen-analysis observation and source identity. No live screen content is captured.",
+      "state": "open",
+      "resource_binding": {
+        "type": "perception.screen",
+        "key": "screen"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.perception.screen",
+        "entity_id": "plugin_perception_screen",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

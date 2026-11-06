@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Voice - Voice capture",
+  "root": "plugin_voice_capture",
+  "entities": [
+    {
+      "id": "plugin_voice_capture",
+      "name": "Voice capture",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Capture and streaming state. No microphone capture is started.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.capture",
+        "key": "capture"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.capture",
+        "entity_id": "plugin_voice_capture",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

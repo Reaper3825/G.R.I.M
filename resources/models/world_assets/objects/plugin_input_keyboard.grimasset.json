@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Input - Keyboard",
+  "root": "plugin_input_keyboard",
+  "entities": [
+    {
+      "id": "plugin_input_keyboard",
+      "name": "Keyboard",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Key state and text input for the focused application.",
+      "state": "open",
+      "resource_binding": {
+        "type": "input.keyboard",
+        "key": "keyboard"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.input.keyboard",
+        "entity_id": "plugin_input_keyboard",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Calculator Plugin",
+  "root": "plugin_calculator",
+  "entities": [
+    {
+      "id": "plugin_calculator",
+      "name": "Calculator room",
+      "kind": "room",
+      "parent": "",
+      "description": "Stateless arithmetic evaluation supplied by the calculate tool.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Calculator Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.calculator",
+        "entity_id": "plugin_calculator",
+        "version": 1
+      }
+    }
+  ]
+}

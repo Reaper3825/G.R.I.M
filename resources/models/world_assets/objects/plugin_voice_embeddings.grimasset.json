@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Voice - Voice embeddings",
+  "root": "plugin_voice_embeddings",
+  "entities": [
+    {
+      "id": "plugin_voice_embeddings",
+      "name": "Voice embeddings",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Available embedding files. The create_embedding acknowledgment does not implement bridge submission.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.embeddings",
+        "key": "embeddings"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.embeddings",
+        "entity_id": "plugin_voice_embeddings",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

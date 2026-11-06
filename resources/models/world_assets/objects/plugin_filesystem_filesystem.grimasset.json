@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Filesystem - Filesystem entries",
+  "root": "plugin_filesystem_filesystem",
+  "entities": [
+    {
+      "id": "plugin_filesystem_filesystem",
+      "name": "Filesystem entries",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Files and directories addressed relative to the working directory. Removal is nonrecursive.",
+      "state": "open",
+      "resource_binding": {
+        "type": "filesystem.tree",
+        "key": "filesystem"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.filesystem.filesystem",
+        "entity_id": "plugin_filesystem_filesystem",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

@@ -17,6 +17,61 @@ void check(bool value,const char* message){if(!value)throw std::runtime_error(me
 template<class F> void rejects(F f,const char* message){bool failed=false;try{f();}catch(const std::exception&){failed=true;}check(failed,message);}
 }
 void runWorldAssetTests() {
+    // Binding metadata is independent of generated IDs and has no live-provider dependency.
+    {
+        auto world=Document::initial();
+        const auto room=world.spawn;
+        const auto object=world.addObject(room,"object");
+        world.find(room)->pluginBinding=PluginBinding{"Test Provider","test-resources",3};
+        world.find(room)->assetSource=AssetSource{"test-room","room-template",2};
+        world.find(object)->resourceBinding=ResourceBinding{"test.resource","console"};
+        world.find(object)->assetSource=AssetSource{"test-room","console-template",2};
+        world.find(object)->initialState=nlohmann::json{{"visible",true},{"nested",{{"count",1}}}};
+        world.validate();
+        const auto saved=world.json();
+        check(Document::parse(saved).json()==saved,"World metadata roundtrip changed data");
+        check(world.gameJson().at("entities")==saved.at("entities"),"Game projection discarded binding metadata");
+        const auto asset=Asset::capture(world,room,"Bound room");
+        const auto parsed=Asset::parse(asset.json());
+        check(parsed.json()==asset.json(),"Asset metadata roundtrip changed data");
+        auto destination=Document::initial();
+        const auto first=parsed.insert(destination,"",400,80);
+        const auto second=parsed.insert(destination,"",800,80);
+        check(first!=second && destination.find(first)->pluginBinding->version==3 &&
+              destination.find(second)->assetSource->entityId=="room-template","Insertion lost room metadata");
+        std::vector<Entity*> resources;
+        for(auto& entity:destination.entities)if(entity.resourceBinding)resources.push_back(&entity);
+        check(resources.size()==2 && resources[0]->id!=resources[1]->id &&
+              resources[0]->resourceBinding->key=="console" && resources[1]->resourceBinding->key=="console" &&
+              resources[0]->assetSource->entityId=="console-template","Insertion rewrote resource identity or provenance");
+        (*resources[0]->initialState)["nested"]["count"]=9;
+        check(resources[1]->initialState->at("nested").at("count")==1 &&
+              world.find(object)->initialState->at("nested").at("count")==1,"Inserted state metadata shared mutable storage");
+        auto malformed=saved;
+        malformed["entities"][1]["plugin_binding"]=saved["entities"][0]["plugin_binding"];
+        rejects([&]{Document::parse(malformed);},"Object accepted a room plugin binding");
+        malformed=saved;malformed["entities"][0]["resource_binding"]=saved["entities"][1]["resource_binding"];
+        rejects([&]{Document::parse(malformed);},"Room accepted an object resource binding");
+        for(const auto& version:std::vector<nlohmann::json>{0,-1,1.5,4294967296ULL,"1",nullptr}) {
+            malformed=saved;malformed["entities"][0]["plugin_binding"]["version"]=version;
+            rejects([&]{Document::parse(malformed);},"Invalid metadata version accepted");
+        }
+        malformed=saved;malformed["entities"][1]["resource_binding"]["key"]="";
+        rejects([&]{Document::parse(malformed);},"Empty resource key accepted");
+        malformed=saved;malformed["entities"][1]["asset_source"]["entity_id"]="";
+        rejects([&]{Document::parse(malformed);},"Empty asset provenance accepted");
+        malformed=saved;malformed["entities"][1]["initial_state"]=nlohmann::json::array();
+        rejects([&]{Document::parse(malformed);},"Non-object initial state accepted");
+        auto badAsset=parsed.json();badAsset["entities"][0]["plugin_binding"]=nullptr;
+        rejects([&]{Asset::parse(badAsset);},"Null plugin binding accepted");
+        Editor editor;editor.reset(world);
+        editor.change([&](Document& d){d.find(room)->pluginBinding->contract="changed";});
+        editor.undo();check(editor.document().json()==saved,"Undo lost binding metadata");
+        editor.redo();check(editor.document().find(room)->pluginBinding->contract=="changed","Redo lost binding metadata");
+        const auto legacy=Document::initial().json();
+        check(Document::parse(legacy).json()==legacy && !legacy["entities"][0].contains("plugin_binding") &&
+              !legacy["entities"][0].contains("initial_state"),"Unbound worlds acquired metadata");
+    }
     auto source=Document::initial();const auto room=source.spawn;
     const auto box=source.addObject(room,"container");source.find(box)->name="seed box";source.find(box)->state="closed";
     source.find(box)->openProvider="tool_catalog";

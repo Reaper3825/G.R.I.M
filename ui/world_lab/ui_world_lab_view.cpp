@@ -52,6 +52,15 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
     auto button=[this](const std::string& text,std::function<void()> action){
         toolbar_.push_back(std::make_unique<UIButton>(text,[this,action]{act(action);}));
     };
+    liveButton_=std::make_unique<UIButton>("Live",[this]{act([this]{
+        if(!apply())return;
+        hide();
+        if(!liveWorld_) {
+            liveWorld_=std::make_unique<UILiveWorldView>();
+            liveWorld_->onExit=[this]{liveWorld_->hide();liveWorldVisible_=false;};
+        }
+        liveWorldVisible_=true;
+    });});
     button("New",[this]{if(!apply())return;editor_.newWorld();newGamePath();canvas_.cancelInput();canvas_.selected=editor_.document().spawn;refresh();canvas_.fitWorld();status_="New world. Undo restores the previous world.";});
     button("Open",[this]{openGame(std::filesystem::u8path(path_.getText()));});
     button("Save",[this]{saveEnvironment(std::filesystem::u8path(path_.getText()));});
@@ -125,7 +134,7 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
     refresh();
 }
 std::vector<Widget*> UIWorldLabView::controls() {
-    std::vector<Widget*> result{&path_,&title_,games_.get()};
+    std::vector<Widget*> result{&path_,&title_,games_.get(),liveButton_.get()};
     if(!sessionVisible_)for(auto* w:std::vector<Widget*>{&name_,&description_,&roomPath_,navigation_.get(),kind_.get(),location_.get(),state_.get(),doorState_.get(),doorKey_.get(),apply_.get(),add_.get(),spawn_.get(),erase_.get(),saveAsset_.get(),actionsShortcut_.get()})result.push_back(w);
     for(auto& b:toolbar_)result.push_back(b.get());
     return result;
@@ -199,6 +208,7 @@ void UIWorldLabView::layout(const PanelRect& content) {
     float x=content.origin.x+8,y=content.origin.y+8;
     const float w=std::max(0.f,content.size.x-16);
     place(title_,x,y,std::max(120.f,w-280));
+    place(*liveButton_,x+w-70,y,70);
     float bx=x;
     for(size_t i=0;i<toolbar_.size();++i){const float bw=i>=8?84.f:i==5?78.f:64.f;place(*toolbar_[i],bx,y+36,bw);bx+=bw+5;}
     place(*games_,x,y+72,168);
@@ -287,6 +297,7 @@ void UIWorldLabView::autosave() {
     auto copy=editor_;copy.save(recoveryPath_);recoveredSnapshot_=snapshot;
 }
 void UIWorldLabView::update(const InputState& input,float dt,const PanelRect& content,uint64_t panel) {
+    if(liveWorldVisible_){liveWorld_->update(input,dt,content,panel);return;}
     layout(content);canvas_.setPanelID(panel);
     const auto clipped=input.clipped(content.origin,content.size);
     librarySplit_.setPanelID(panel);inspectorSplit_.setPanelID(panel);
@@ -322,6 +333,7 @@ void UIWorldLabView::update(const InputState& input,float dt,const PanelRect& co
     if(recoveryTimer_>=10){recoveryTimer_=0;act([this]{if(apply())autosave();});}
 }
 void UIWorldLabView::hide() {
+    if(liveWorld_)liveWorld_->hide();
     librarySplit_.cancelInput();inspectorSplit_.cancelInput();
     if(browser_)browser_->hide();
     actions_.hide();
@@ -334,10 +346,12 @@ void UIWorldLabView::hide() {
     if(session_)session_->hide();
 }
 void UIWorldLabView::draw(OverlayRenderer& r,const PanelRect& content) {
+    if(liveWorldVisible_){liveWorld_->draw(r,content);return;}
     using namespace UITheme::Colors;
     layout(content);
     r.pushClipRect(content.origin,content.size);
     for(size_t i=0;i<toolbar_.size();++i) toolbar_[i]->drawOverlay(r,{});
+    liveButton_->drawOverlay(r,{});
     games_->drawOverlay(r,{});path_.drawOverlay(r,{});title_.drawOverlay(r,{});
     const auto& d=editor_.document();
     bool pending=title_.getText()!=d.title || session_->hasPendingEdits() || (d.find(canvas_.selected) && (name_.getText()!=d.find(canvas_.selected)->name || description_.getText()!=d.find(canvas_.selected)->description));

@@ -1687,9 +1687,9 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
     owner.staging = false;
     bool committed;
     try {
-        committed = replacing
-            ? registry.replaceProvider(owner.name, pluginContext(replacing).instance, owner.pending)
-            : registry.registerBatch(owner.name, owner.pending);
+        committed = registry.publishProvider(
+            {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
+            owner.pending, replacing ? pluginContext(replacing).instance : std::string{});
     } catch (...) {
         owner.staging = true;
         throw;

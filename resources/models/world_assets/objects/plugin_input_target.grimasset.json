@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Input - Grounded input target",
+  "root": "plugin_input_target",
+  "entities": [
+    {
+      "id": "plugin_input_target",
+      "name": "Grounded input target",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Fresh foreground-window OCR or native control target. No target is assumed by this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "input.target",
+        "key": "target"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.input.target",
+        "entity_id": "plugin_input_target",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

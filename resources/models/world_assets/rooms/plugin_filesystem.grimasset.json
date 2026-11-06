@@ -1,0 +1,62 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Filesystem Plugin",
+  "root": "plugin_filesystem",
+  "entities": [
+    {
+      "id": "plugin_filesystem",
+      "name": "Filesystem room",
+      "kind": "room",
+      "parent": "",
+      "description": "Working directory and filesystem resources exposed by the filesystem plugin.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Filesystem Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.filesystem",
+        "entity_id": "plugin_filesystem",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_filesystem_working_directory",
+      "name": "Working directory",
+      "kind": "supporter",
+      "parent": "plugin_filesystem",
+      "description": "Plugin-local current directory. No host path is captured in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "filesystem.directory",
+        "key": "working_directory"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.filesystem.working_directory",
+        "entity_id": "plugin_filesystem_working_directory",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_filesystem_filesystem",
+      "name": "Filesystem entries",
+      "kind": "supporter",
+      "parent": "plugin_filesystem",
+      "description": "Files and directories addressed relative to the working directory. Removal is nonrecursive.",
+      "state": "open",
+      "resource_binding": {
+        "type": "filesystem.tree",
+        "key": "filesystem"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.filesystem.filesystem",
+        "entity_id": "plugin_filesystem_filesystem",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

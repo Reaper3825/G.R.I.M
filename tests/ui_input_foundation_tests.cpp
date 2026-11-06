@@ -67,6 +67,7 @@ void runTrainingToolsTests();
 void runSplitPaneTests();
 #ifdef GRIM_WORLD_LAB_TESTS
 void runWorldLabTests();
+void runLiveWorldUITests();
 void runWorldAssetTests();
 #endif
 #ifdef GRIM_TEXTWORLD_INTEGRATION
@@ -82,6 +83,7 @@ int main() try {
 #endif
 #ifdef GRIM_WORLD_LAB_TESTS
     runWorldLabTests();
+    runLiveWorldUITests();
     runWorldAssetTests();
 #endif
     runCanvasTests();

@@ -161,6 +161,7 @@ struct TextWorldClient::Impl {
     WorldToolDispatch toolDispatch;
     std::future<nlohmann::json> pending;
     std::atomic<bool> cancelled{false};
+    bool stopping=false; // Caller-thread state, independent of future readiness.
     unsigned sequence=0;
     fs::path directory,docker;
     bool directoryOwned=false;
@@ -348,10 +349,21 @@ bool TextWorldClient::begin(nlohmann::json request) {
 }
 std::optional<nlohmann::json> TextWorldClient::poll() {
     if(!busy() || impl_->pending.wait_for(0ms)!=std::future_status::ready)return {};
-    return impl_->pending.get();
+    auto result=impl_->pending.get();
+    impl_->stopping=false;
+    return result;
 }
 void TextWorldClient::stop() {
+    if(impl_->stopping)return;
+    impl_->stopping=true;
     impl_->cancelled=true;
-    if(!busy())impl_->pending=std::async(std::launch::async,[this]{impl_->shutdown();return nlohmann::json{{"ok",true},{"result",{{"stopped",true}}}};});
+    // Drain and discard even a ready, unconsumed response. Cleanup must complete
+    // without another UI poll (the user may have switched to the live world).
+    auto previous=std::move(impl_->pending);
+    impl_->pending=std::async(std::launch::async,[this,previous=std::move(previous)]()mutable{
+        if(previous.valid())try{(void)previous.get();}catch(...){}
+        impl_->shutdown();
+        return nlohmann::json{{"ok",true},{"result",{{"stopped",true}}}};
+    });
 }
 }

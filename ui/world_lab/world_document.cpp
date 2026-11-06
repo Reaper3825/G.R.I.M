@@ -35,6 +35,49 @@ std::string allocate(Document& d) {
     }
 }
 }
+namespace {
+std::uint32_t metadataVersion(const nlohmann::json& j) {
+    const auto& value=j.at("version");
+    require(value.is_number_integer() && value > 0 && value <= UINT32_MAX,
+            "Metadata version must be a positive uint32 integer");
+    return value.get<std::uint32_t>();
+}
+bool metadataText(const std::string& value) {
+    return !value.empty() && value.size()<=256 && value.find_first_of("\r\n\0",0,3)==std::string::npos;
+}
+}
+void to_json(nlohmann::json& j,const Entity& e) {
+    j={{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}};
+    if(!e.openProvider.empty())j["open_provider"]=e.openProvider;
+    if(e.pluginBinding) {
+        const auto& b=*e.pluginBinding;
+        j["plugin_binding"]={{"provider_name",b.providerName},{"contract",b.contract},{"version",b.version}};
+    }
+    if(e.resourceBinding)j["resource_binding"]={{"type",e.resourceBinding->type},{"key",e.resourceBinding->key}};
+    if(e.assetSource) {
+        const auto& b=*e.assetSource;
+        j["asset_source"]={{"asset_id",b.assetId},{"entity_id",b.entityId},{"version",b.version}};
+    }
+    if(e.initialState)j["initial_state"]=*e.initialState;
+}
+void from_json(const nlohmann::json& j,Entity& e) {
+    require(!j.contains("examine_provider"),"Use open_provider on a container for catalog observations");
+    Entity candidate{j.at("id"),j.at("name"),j.at("kind"),j.at("parent"),j.at("description"),j.at("state"),j.value("open_provider",std::string{})};
+    if(j.contains("plugin_binding")) {
+        const auto& b=j.at("plugin_binding");
+        candidate.pluginBinding=PluginBinding{b.at("provider_name").get<std::string>(),b.at("contract").get<std::string>(),metadataVersion(b)};
+    }
+    if(j.contains("resource_binding")) {
+        const auto& b=j.at("resource_binding");
+        candidate.resourceBinding=ResourceBinding{b.at("type").get<std::string>(),b.at("key").get<std::string>()};
+    }
+    if(j.contains("asset_source")) {
+        const auto& b=j.at("asset_source");
+        candidate.assetSource=AssetSource{b.at("asset_id").get<std::string>(),b.at("entity_id").get<std::string>(),metadataVersion(b)};
+    }
+    if(j.contains("initial_state"))candidate.initialState=j.at("initial_state");
+    e=std::move(candidate);
+}
 std::string opposite(const std::string& d) {
     if (d == "north") return "south";
     if (d == "south") return "north";
@@ -155,6 +198,20 @@ void Document::validate() const {
         require(e.openProvider.empty() || (e.openProvider=="tool_catalog" && e.kind=="container"), "Invalid open provider: " + e.id);
         require(e.kind=="room" || e.kind=="object" || e.kind=="key" || e.kind=="container" || e.kind=="supporter" || e.kind=="food", "Unsupported kind: " + e.kind);
         require(e.state=="open" || e.state=="closed", "Invalid container state");
+        if(e.pluginBinding) {
+            const auto& b=*e.pluginBinding;
+            require(e.kind=="room" && metadataText(b.providerName) && metadataText(b.contract) && b.version>0,
+                    "Invalid room plugin binding: " + e.id);
+        }
+        if(e.resourceBinding) {
+            const auto& b=*e.resourceBinding;
+            require(e.kind!="room" && metadataText(b.type) && metadataText(b.key),"Invalid object resource binding: " + e.id);
+        }
+        if(e.assetSource) {
+            const auto& b=*e.assetSource;
+            require(metadataText(b.assetId) && metadataText(b.entityId) && b.version>0,"Invalid asset provenance: " + e.id);
+        }
+        require(!e.initialState || e.initialState->is_object(),"Initial state metadata must be an object: " + e.id);
         if(e.kind=="room") require(e.parent.empty(), "Rooms cannot have a parent");
         else {
             require(holder(find(e.parent)), "Object has no valid location: " + e.name);
@@ -226,10 +283,7 @@ nlohmann::json Document::json() const {
         j["navigation"]={{"mode","path"},{"rooms",nlohmann::json::array()}};
         for(const auto& p:paths)j["navigation"]["rooms"].push_back({{"id",p.id},{"parent",p.parent},{"segment",p.segment}});
     }
-    for(const auto& e:entities) {
-        j["entities"].push_back({{"id",e.id},{"name",e.name},{"kind",e.kind},{"parent",e.parent},{"description",e.description},{"state",e.state}});
-        if(!e.openProvider.empty())j["entities"].back()["open_provider"]=e.openProvider;
-    }
+    for(const auto& e:entities)j["entities"].push_back(e);
     for(const auto& p:passages) j["passages"].push_back({{"id",p.id},{"from",p.from},{"to",p.to},{"direction",p.direction},{"door_name",p.doorName},{"door_state",p.doorState},{"key",p.key}});
     for(const auto& p:layout) j["editor"]["rooms"].push_back({{"id",p.id},{"x",p.x},{"y",p.y}});
     if(legacy){
@@ -256,8 +310,7 @@ Document Document::parse(const nlohmann::json& j) {
     const auto next=j.at("next_id").get<int64_t>(); require(next>0 && next<1000000000,"Invalid next ID"); d.nextId=static_cast<unsigned>(next);
     require(j.at("entities").is_array() && j.at("passages").is_array() && j.at("editor").at("rooms").is_array(), "Expected world arrays");
     for(const auto& e:j.at("entities")) {
-        require(!e.contains("examine_provider"),"Use open_provider on a container for catalog observations");
-        d.entities.push_back({e.at("id"),e.at("name"),e.at("kind"),e.at("parent"),e.at("description"),e.at("state"),e.value("open_provider",std::string{})});
+        d.entities.push_back(e.get<Entity>());
     }
     for(const auto& p:j.at("passages")) d.passages.push_back({p.at("id"),p.at("from"),p.at("to"),p.at("direction"),p.value("door_name",std::string{}),p.value("door_state",std::string{"open"}),p.value("key",std::string{})});
     if(j.at("version")==2) {

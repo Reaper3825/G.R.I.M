@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Utility Plugin",
+  "root": "plugin_utility",
+  "entities": [
+    {
+      "id": "plugin_utility",
+      "name": "Utility room",
+      "kind": "room",
+      "parent": "",
+      "description": "Fixed console utility responses and static legacy help. The clean handler returns an acknowledgment without changing UI state.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Utility Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.utility",
+        "entity_id": "plugin_utility",
+        "version": 1
+      }
+    }
+  ]
+}

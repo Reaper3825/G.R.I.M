@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Perception - Detected objects",
+  "root": "plugin_perception_objects",
+  "entities": [
+    {
+      "id": "plugin_perception_objects",
+      "name": "Detected objects",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Detected object observation and source identity.",
+      "state": "open",
+      "resource_binding": {
+        "type": "perception.objects",
+        "key": "objects"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.perception.objects",
+        "entity_id": "plugin_perception_objects",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

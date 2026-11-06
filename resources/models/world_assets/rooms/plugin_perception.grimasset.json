@@ -1,0 +1,80 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Perception Plugin",
+  "root": "plugin_perception",
+  "entities": [
+    {
+      "id": "plugin_perception",
+      "name": "Perception room",
+      "kind": "room",
+      "parent": "",
+      "description": "Screen, OCR and object observations provided by host perception services.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Perception Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.perception",
+        "entity_id": "plugin_perception",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_perception_screen",
+      "name": "Screen observation",
+      "kind": "supporter",
+      "parent": "plugin_perception",
+      "description": "Screen-analysis observation and source identity. No live screen content is captured.",
+      "state": "open",
+      "resource_binding": {
+        "type": "perception.screen",
+        "key": "screen"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.perception.screen",
+        "entity_id": "plugin_perception_screen",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_perception_ocr",
+      "name": "OCR observation",
+      "kind": "supporter",
+      "parent": "plugin_perception",
+      "description": "OCR text observation and source identity.",
+      "state": "open",
+      "resource_binding": {
+        "type": "perception.ocr",
+        "key": "ocr"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.perception.ocr",
+        "entity_id": "plugin_perception_ocr",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_perception_objects",
+      "name": "Detected objects",
+      "kind": "supporter",
+      "parent": "plugin_perception",
+      "description": "Detected object observation and source identity.",
+      "state": "open",
+      "resource_binding": {
+        "type": "perception.objects",
+        "key": "objects"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.perception.objects",
+        "entity_id": "plugin_perception_objects",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

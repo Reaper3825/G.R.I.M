@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Voice - Voice playback",
+  "root": "plugin_voice_playback",
+  "entities": [
+    {
+      "id": "plugin_voice_playback",
+      "name": "Voice playback",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Synthesis and output-device state. The nevermind acknowledgment does not implement playback cancellation.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.playback",
+        "key": "playback"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.playback",
+        "entity_id": "plugin_voice_playback",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

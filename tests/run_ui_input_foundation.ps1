@@ -23,6 +23,7 @@ if ($WorldLab -or $TextWorld) {
     $sources += 'resources/models/GRIM-text/Shared/Environment/EnvironmentInput.cpp'
     $sources += 'ui/world_lab/world_asset.cpp', 'ui/world_lab/ui_world_assets_view.cpp', 'ui/world_lab/world_document.cpp', 'ui/world_lab/ui_world_canvas.cpp', 'ui/world_lab/ui_world_lab_view.cpp', 'ui/world_lab/ui_world_session.cpp', 'ui/world_lab/textworld_client.cpp', 'tests/world_lab_tests.cpp', 'tests/world_asset_tests.cpp'
     $arguments += '/DGRIM_WORLD_LAB_TESTS'
+    $sources += 'tests/live_world_ui_tests.cpp'
 }
 if ($TextWorld) {
     $sources += 'tests/world_lab_client_tests.cpp'

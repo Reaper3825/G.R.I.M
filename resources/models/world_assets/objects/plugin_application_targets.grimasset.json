@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Application - Application targets",
+  "root": "plugin_application_targets",
+  "entities": [
+    {
+      "id": "plugin_application_targets",
+      "name": "Application targets",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Application and browser targets. Launch success does not establish application readiness.",
+      "state": "open",
+      "resource_binding": {
+        "type": "application.targets",
+        "key": "targets"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.application.targets",
+        "entity_id": "plugin_application_targets",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

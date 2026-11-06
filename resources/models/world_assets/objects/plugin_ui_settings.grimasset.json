@@ -1,0 +1,30 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - UI - Settings panel",
+  "root": "plugin_ui_settings",
+  "entities": [
+    {
+      "id": "plugin_ui_settings",
+      "name": "Settings panel",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Settings panel fixture addressed by the existing settings stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "settings"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.settings",
+        "entity_id": "plugin_ui_settings",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": false,
+        "minimized": false,
+        "maximized": false
+      }
+    }
+  ]
+}

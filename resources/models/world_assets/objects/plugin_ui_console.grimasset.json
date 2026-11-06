@@ -1,0 +1,30 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - UI - Console panel",
+  "root": "plugin_ui_console",
+  "entities": [
+    {
+      "id": "plugin_ui_console",
+      "name": "Console panel",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Console panel fixture addressed by the existing console stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "console"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.console",
+        "entity_id": "plugin_ui_console",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": true,
+        "minimized": false,
+        "maximized": false
+      }
+    }
+  ]
+}

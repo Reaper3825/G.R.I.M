@@ -1,0 +1,98 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Voice Plugin",
+  "root": "plugin_voice",
+  "entities": [
+    {
+      "id": "plugin_voice",
+      "name": "Voice room",
+      "kind": "room",
+      "parent": "",
+      "description": "Host-owned voice capture, streaming, synthesis, playback and cache services.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Voice Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.voice",
+        "entity_id": "plugin_voice",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_voice_capture",
+      "name": "Voice capture",
+      "kind": "supporter",
+      "parent": "plugin_voice",
+      "description": "Capture and streaming state. No microphone capture is started.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.capture",
+        "key": "capture"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.capture",
+        "entity_id": "plugin_voice_capture",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_voice_playback",
+      "name": "Voice playback",
+      "kind": "supporter",
+      "parent": "plugin_voice",
+      "description": "Synthesis and output-device state. The nevermind acknowledgment does not implement playback cancellation.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.playback",
+        "key": "playback"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.playback",
+        "entity_id": "plugin_voice_playback",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_voice_cache",
+      "name": "Speech cache",
+      "kind": "supporter",
+      "parent": "plugin_voice",
+      "description": "TTS audio cache contents and regeneration state.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.cache",
+        "key": "cache"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.cache",
+        "entity_id": "plugin_voice_cache",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_voice_embeddings",
+      "name": "Voice embeddings",
+      "kind": "supporter",
+      "parent": "plugin_voice",
+      "description": "Available embedding files. The create_embedding acknowledgment does not implement bridge submission.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.embeddings",
+        "key": "embeddings"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.embeddings",
+        "entity_id": "plugin_voice_embeddings",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

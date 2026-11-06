@@ -42,6 +42,12 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(old && !old->provider_instance.empty() && old->provider_path == (watched / "alpha.dll").string(),
           "Loaded generation/source identity missing");
     const auto firstInstance = old->provider_instance;
+    const auto provider = [&]() -> std::optional<GRIM::MMO::ProviderDescriptor> {
+        for (const auto& p : registry.snapshot().providers)
+            if (p.name == "Declared-alpha" && p.type == GRIM::MMO::ToolProviderType::Plugin) return p;
+        return std::nullopt;
+    };
+    check(provider() && provider()->instance == firstInstance, "Plugin commit did not publish provider identity");
     PluginManager::initialize(watched.string());
     check(registry.getTool("Declared-alpha")->provider_instance == firstInstance, "Repeated initialize reloaded unchanged plugin");
     auto* observer = PluginAPI::createPluginAPI("observer", "", 0);
@@ -53,6 +59,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     };
     // A staged candidate's subscriptions/timers must not replace the old ones.
     install("failed");
+    check(provider() && provider()->instance == firstInstance, "Failed init changed the published provider");
     check(registry.getTool("Declared-alpha")->provider_instance == firstInstance &&
           dispatchCommand("Declared-alpha", "").message == "old-result", "Failed init displaced working plugin");
     PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
@@ -82,6 +89,8 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     registry.removeListener(&notification);
     check(notification.callable, "Committed replacement was not callable from a registry observer");
     auto replacement = registry.getTool("Declared-alpha");
+    check(provider() && replacement && provider()->instance == replacement->provider_instance,
+          "Replacement provider and tools have different generations");
     check(replacement && replacement->provider_instance != firstInstance &&
           dispatchCommand("Declared-alpha", "").message == "new-result", "Valid replacement was not committed");
     check(!registry.isRegistered("Declared-alpha-extra"), "Replacement retained a removed tool");
@@ -120,6 +129,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(registry.isRegistered("Declared-alpha"), "Plugin folder recreation was not discovered");
     PluginManager::unloadAll();
     PluginManager::tick();
+    check(!provider(), "Provider identity survived plugin unload");
     check(registry.toolCount() == baseline, "Tick rediscovered plugins during teardown");
     fs::remove(watched / "alpha.dll");
     fs::remove(watched);

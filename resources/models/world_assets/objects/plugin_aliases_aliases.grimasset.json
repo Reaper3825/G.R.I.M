@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Aliases - Alias mappings",
+  "root": "plugin_aliases_aliases",
+  "entities": [
+    {
+      "id": "plugin_aliases_aliases",
+      "name": "Alias mappings",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Loaded alias mappings and metadata. Refresh requests belong to the alias service.",
+      "state": "open",
+      "resource_binding": {
+        "type": "alias.catalog",
+        "key": "aliases"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.aliases.aliases",
+        "entity_id": "plugin_aliases_aliases",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

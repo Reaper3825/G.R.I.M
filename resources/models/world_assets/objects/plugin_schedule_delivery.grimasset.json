@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Schedule - Notification delivery",
+  "root": "plugin_schedule_delivery",
+  "entities": [
+    {
+      "id": "plugin_schedule_delivery",
+      "name": "Notification delivery",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Host delivery capabilities and item dispatch state. Dispatch does not mean user acknowledgment.",
+      "state": "open",
+      "resource_binding": {
+        "type": "schedule.delivery",
+        "key": "delivery"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.schedule.delivery",
+        "entity_id": "plugin_schedule_delivery",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

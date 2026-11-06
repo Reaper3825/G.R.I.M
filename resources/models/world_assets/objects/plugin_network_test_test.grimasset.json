@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Network Test - Network test session",
+  "root": "plugin_network_test_test",
+  "entities": [
+    {
+      "id": "plugin_network_test_test",
+      "name": "Network test session",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Test configuration, running state and request counters. No network target or test is started.",
+      "state": "open",
+      "resource_binding": {
+        "type": "network_test.session",
+        "key": "session"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.network_test.test",
+        "entity_id": "plugin_network_test_test",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

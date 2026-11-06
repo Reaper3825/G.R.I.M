@@ -1,0 +1,62 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - OSINT Self-Audit Plugin",
+  "root": "plugin_osint",
+  "entities": [
+    {
+      "id": "plugin_osint",
+      "name": "OSINT Self-Audit room",
+      "kind": "room",
+      "parent": "",
+      "description": "OSINT scan jobs and cached reports. Existing Ignore tool classification remains authoritative.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "OSINT Self-Audit Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.osint",
+        "entity_id": "plugin_osint",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_osint_jobs",
+      "name": "OSINT scan jobs",
+      "kind": "supporter",
+      "parent": "plugin_osint",
+      "description": "Submitted public-source scan jobs and completion state.",
+      "state": "open",
+      "resource_binding": {
+        "type": "osint.jobs",
+        "key": "jobs"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.osint.jobs",
+        "entity_id": "plugin_osint_jobs",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_osint_reports",
+      "name": "OSINT reports",
+      "kind": "supporter",
+      "parent": "plugin_osint",
+      "description": "Cached reports and findings addressed by username. No reports or personal information are captured.",
+      "state": "open",
+      "resource_binding": {
+        "type": "osint.reports",
+        "key": "reports"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.osint.reports",
+        "entity_id": "plugin_osint_reports",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

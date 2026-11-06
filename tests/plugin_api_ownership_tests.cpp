@@ -115,6 +115,16 @@ void runUIPluginTests(const std::filesystem::path&);
 void runInputPluginTests(const std::filesystem::path&);
 
 int main(int argc, char** argv) try {
+    {
+        auto& registry = GRIM::MMO::ToolRegistry::instance();
+        const auto count = registry.snapshot().providers.size();
+        auto* empty = PluginAPI::createPluginAPI("zero-tool-provider", "empty.dll", 0, true);
+        check(registry.snapshot().providers.size() == count, "Staged provider leaked before commit");
+        check(PluginAPI::commitPluginTools(empty), "Zero-tool provider commit failed");
+        check(registry.snapshot().providers.size() == count + 1, "Zero-tool provider was not published");
+        PluginAPI::cleanupPluginContext(empty);
+        check(registry.snapshot().providers.size() == count, "Zero-tool provider survived unload");
+    }
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY);
     check(registerOne(alpha, "alpha_tool") == GRIM_OK, "Alpha registration failed");
     auto* beta = PluginAPI::createPluginAPI("beta", "beta.dll", GRIM_PERM_UI);

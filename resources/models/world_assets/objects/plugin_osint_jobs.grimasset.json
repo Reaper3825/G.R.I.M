@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - OSINT Self-Audit - OSINT scan jobs",
+  "root": "plugin_osint_jobs",
+  "entities": [
+    {
+      "id": "plugin_osint_jobs",
+      "name": "OSINT scan jobs",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Submitted public-source scan jobs and completion state.",
+      "state": "open",
+      "resource_binding": {
+        "type": "osint.jobs",
+        "key": "jobs"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.osint.jobs",
+        "entity_id": "plugin_osint_jobs",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

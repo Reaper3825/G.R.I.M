@@ -1,6 +1,7 @@
 // The authoritative store for tool metadata and execution bindings.
 #pragma once
 #include "ToolDescriptor.hpp"
+#include "ProviderDescriptor.hpp"
 #include "ToolExecutionMode.hpp"
 #include <functional>
 #include <memory>
@@ -37,10 +38,15 @@ public:
     bool registerSimple(const std::string& tool_id, const std::string& description,
                         const std::string& category, ToolHandler handler, bool is_informational = true);
     bool registerBatch(const std::string& plugin_name, const std::vector<ToolRegistration>& tools,
-                       bool replace = false);
+                       bool replace = false, const ProviderDescriptor* publication = nullptr);
+    // Publish provider identity and tools in the same transaction, including zero tools.
+    bool publishProvider(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
+                         const std::string& old_instance = {});
+    ToolRegistrySnapshot snapshot() const;
     // Atomically replace one loaded generation, including removing vanished tools.
     bool replaceProvider(const std::string& provider, const std::string& old_instance,
-                         const std::vector<ToolRegistration>& tools);
+                         const std::vector<ToolRegistration>& tools,
+                         const ProviderDescriptor* publication = nullptr);
     void unregisterInstance(const std::string& provider, const std::string& instance);
     // Update documentation/policy without losing the callable or execution stats.
     bool updateMetadata(const ToolDescriptor& descriptor);
@@ -93,6 +99,7 @@ private:
     std::string resolveLocked(const std::string& name) const;
     mutable std::mutex mutex_;
     Entries tools_;
+    std::map<std::pair<ToolProviderType, std::string>, ProviderDescriptor> providers_;
     Aliases alias_index_;
     uint64_t version_ = 0;
     std::vector<ToolRegistryListener*> listeners_;

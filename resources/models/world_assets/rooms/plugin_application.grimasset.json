@@ -1,0 +1,44 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Application Plugin",
+  "root": "plugin_application",
+  "entities": [
+    {
+      "id": "plugin_application",
+      "name": "Application room",
+      "kind": "room",
+      "parent": "",
+      "description": "Application and browser targets resolved through host launch services.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Application Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.application",
+        "entity_id": "plugin_application",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_application_targets",
+      "name": "Application targets",
+      "kind": "supporter",
+      "parent": "plugin_application",
+      "description": "Application and browser targets. Launch success does not establish application readiness.",
+      "state": "open",
+      "resource_binding": {
+        "type": "application.targets",
+        "key": "targets"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.application.targets",
+        "entity_id": "plugin_application_targets",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+#include "ui/world_lab/ui_live_world_view.hpp"
+#include "ui/world_lab/textworld_client.hpp"
+#include "ui/input/ui_input_router.hpp"
+#include "core/input_parser.hpp"
+#include <thread>
+#include <iostream>
+
+extern std::string renderedTestText;
+
+namespace {
+void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+}
+void runLiveWorldUITests() {
+    using namespace GRIM::MMO;
+    auto& registry = ToolRegistry::instance();
+    const ProviderDescriptor provider{ToolProviderType::Plugin, "Live UI fixture", "first", "fixture.dll"};
+    const auto initialRooms = registry.snapshot().providers.size() + 1;
+    UILiveWorldView view;
+    auto& router = GRIM::UI::InputRouter::get();
+    OverlayRenderer renderer;
+    const PanelRect area{{0, 0}, {1000, 700}};
+    auto frame = [&](const InputState& input) {
+        router.beginFrame(); router.currentPanel = 91;
+        view.update(input, 0, area, 91);
+        renderedTestText.clear(); view.draw(renderer, area); router.endFrame();
+    };
+    auto click = [&](float x, float y) {
+        InputState input; input.mousePos = {x, y}; input.mousePressed[0] = input.mouseDown[0] = true; frame(input);
+        input.mousePressed[0] = input.mouseDown[0] = false; input.mouseReleased[0] = true; frame(input);
+    };
+    frame({});
+    check(view.session().world().document().entities.size() == initialRooms, "Live UI startup projection mismatch");
+    check(registry.publishProvider(provider, {}), "UI fixture registration failed");
+    frame({});
+    check(view.session().world().document().entities.size() == initialRooms + 1, "Published provider room did not appear automatically");
+    check(renderedTestText.find("Live UI fixture") != std::string::npos, "Automatic provider room not drawn");
+    const auto path = view.session().world().providerPath(GRIM::WorldLab::providerKey(provider));
+    const auto actions = view.session().observation().at("admissible_commands").get<std::vector<std::string>>();
+    const auto actionIndex = std::find(actions.begin(), actions.end(), "go " + path) - actions.begin();
+    check(actionIndex < 7, "Navigation option outside visible test dropdown");
+    click(100, 93);
+    check(renderedTestText.find("go /Live-UI-fixture") != std::string::npos,
+        "Expanded action menu did not draw navigation options");
+    click(100, 108 + static_cast<float>(actionIndex + 1) * 25 + 12);
+    check(view.session().world().location() != "system_hub", "Available action did not enter provider room");
+    const auto identity = view.session().observation().at("session_id");
+    const auto history = view.session().history().size();
+    view.hide();
+    registry.unregisterInstance(provider.name, provider.instance);
+    frame({});
+    check(view.session().world().location() == "system_hub" && view.session().world().document().entities.size() == initialRooms,
+        "Provider unload while hidden did not reconcile on return");
+    check(view.session().history().size() > history && view.session().observation().at("session_id") == identity,
+        "Live view lost session/history after hiding");
+    view.hide();
+
+    // Stop must complete even when its response is not polled immediately. No
+    // request is started here, so this test never launches Docker or TextWorld.
+    GRIM::WorldLab::TextWorldClient client;
+    client.stop(); client.stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::optional<nlohmann::json> response;
+    for (int i = 0; i < 100 && !response; ++i) {
+        response = client.poll();
+        if (!response) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    check(response && response->at("result").at("stopped") == true && !client.busy(), "Stop did not produce one completed response");
+    std::cout << "Live world UI automatic population, navigation, hidden unload and stop tests passed\n";
+}

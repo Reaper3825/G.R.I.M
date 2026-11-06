@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Input - Mouse pointer",
+  "root": "plugin_input_pointer",
+  "entities": [
+    {
+      "id": "plugin_input_pointer",
+      "name": "Mouse pointer",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Pointer position and mouse button state.",
+      "state": "open",
+      "resource_binding": {
+        "type": "input.pointer",
+        "key": "pointer"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.input.pointer",
+        "entity_id": "plugin_input_pointer",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

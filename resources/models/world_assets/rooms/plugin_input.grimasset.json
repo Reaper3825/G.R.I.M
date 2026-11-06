@@ -1,0 +1,80 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Input Plugin",
+  "root": "plugin_input",
+  "entities": [
+    {
+      "id": "plugin_input",
+      "name": "Input room",
+      "kind": "room",
+      "parent": "",
+      "description": "Mouse and keyboard input through host-owned input services.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Input Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.input",
+        "entity_id": "plugin_input",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_input_pointer",
+      "name": "Mouse pointer",
+      "kind": "supporter",
+      "parent": "plugin_input",
+      "description": "Pointer position and mouse button state.",
+      "state": "open",
+      "resource_binding": {
+        "type": "input.pointer",
+        "key": "pointer"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.input.pointer",
+        "entity_id": "plugin_input_pointer",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_input_keyboard",
+      "name": "Keyboard",
+      "kind": "supporter",
+      "parent": "plugin_input",
+      "description": "Key state and text input for the focused application.",
+      "state": "open",
+      "resource_binding": {
+        "type": "input.keyboard",
+        "key": "keyboard"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.input.keyboard",
+        "entity_id": "plugin_input_keyboard",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_input_target",
+      "name": "Grounded input target",
+      "kind": "supporter",
+      "parent": "plugin_input",
+      "description": "Fresh foreground-window OCR or native control target. No target is assumed by this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "input.target",
+        "key": "target"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.input.target",
+        "entity_id": "plugin_input_target",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

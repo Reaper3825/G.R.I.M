@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Tool Inspection - Tool registry view",
+  "root": "plugin_tool_inspection_registry",
+  "entities": [
+    {
+      "id": "plugin_tool_inspection_registry",
+      "name": "Tool registry view",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Read-only registry projection. Tools remain registered by their providers and retain usage classification and policy.",
+      "state": "open",
+      "resource_binding": {
+        "type": "tools.registry",
+        "key": "registry"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.tool_inspection.registry",
+        "entity_id": "plugin_tool_inspection_registry",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Schedule Plugin",
+  "root": "plugin_schedule",
+  "entities": [
+    {
+      "id": "plugin_schedule",
+      "name": "Schedule room",
+      "kind": "room",
+      "parent": "",
+      "description": "Saved calendar items and in-process notification delivery state.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Schedule Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.schedule",
+        "entity_id": "plugin_schedule",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_schedule_items",
+      "name": "Scheduled items",
+      "kind": "supporter",
+      "parent": "plugin_schedule",
+      "description": "Events, timers, alarms and reminders with item revisions.",
+      "state": "open",
+      "resource_binding": {
+        "type": "schedule.items",
+        "key": "items"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.schedule.items",
+        "entity_id": "plugin_schedule_items",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_schedule_delivery",
+      "name": "Notification delivery",
+      "kind": "supporter",
+      "parent": "plugin_schedule",
+      "description": "Host delivery capabilities and item dispatch state. Dispatch does not mean user acknowledgment.",
+      "state": "open",
+      "resource_binding": {
+        "type": "schedule.delivery",
+        "key": "delivery"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.schedule.delivery",
+        "entity_id": "plugin_schedule_delivery",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

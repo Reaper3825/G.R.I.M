@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - UI - Panel requests",
+  "root": "plugin_ui_requests",
+  "entities": [
+    {
+      "id": "plugin_ui_requests",
+      "name": "Panel requests",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Owned asynchronous panel request lifecycle. Pending submission is not completed execution.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.requests",
+        "key": "requests"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.requests",
+        "entity_id": "plugin_ui_requests",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

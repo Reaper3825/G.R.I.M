@@ -1,0 +1,44 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Timers Plugin",
+  "root": "plugin_timers",
+  "entities": [
+    {
+      "id": "plugin_timers",
+      "name": "Timers room",
+      "kind": "room",
+      "parent": "",
+      "description": "Legacy countdown requests supplied by the host timer queue.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Timers Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.timers",
+        "entity_id": "plugin_timers",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_timers_queue",
+      "name": "Countdown timers",
+      "kind": "supporter",
+      "parent": "plugin_timers",
+      "description": "Host-owned countdown timer queue, distinct from saved schedule items.",
+      "state": "open",
+      "resource_binding": {
+        "type": "timers.queue",
+        "key": "queue"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.timers.queue",
+        "entity_id": "plugin_timers_queue",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

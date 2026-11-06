@@ -12,6 +12,33 @@ ToolRegistry& ToolRegistry::instance() {
     return registry;
 }
 
+bool ToolRegistry::publishProvider(const ProviderDescriptor& provider,
+                                  const std::vector<ToolRegistration>& tools,
+                                  const std::string& old_instance) {
+    if (old_instance.empty()) return registerBatch(provider.name, tools, false, &provider);
+    return replaceProvider(provider.name, old_instance, tools, &provider);
+}
+
+ToolRegistrySnapshot ToolRegistry::snapshot() const {
+    std::lock_guard lock(mutex_);
+    ToolRegistrySnapshot result;
+    result.revision = version_;
+    auto providers = providers_;
+    for (const auto& [id, entry] : tools_) {
+        const auto& tool = entry->descriptor;
+        result.tools.push_back(tool);
+        // Built-ins have no DLL lifecycle; their registrations define availability.
+        if (tool.provider_type == ToolProviderType::Builtin)
+            providers.try_emplace(std::make_pair(tool.provider_type, tool.provider_name),
+                ProviderDescriptor{tool.provider_type, tool.provider_name, tool.provider_instance, tool.provider_path});
+    }
+    for (const auto& [key, provider] : providers) result.providers.push_back(provider);
+    std::sort(result.tools.begin(), result.tools.end(), [](const auto& a, const auto& b) {
+        return a.tool_id < b.tool_id;
+    });
+    return result;
+}
+
 bool ToolRegistry::buildAliases(const Entries& entries, Aliases& aliases) {
     for (const auto& [id, entry] : entries) {
         auto add = [&](const std::string& alias) {
@@ -39,16 +66,30 @@ bool ToolRegistry::registerTool(const ToolDescriptor& descriptor, ToolHandler ha
 }
 
 bool ToolRegistry::registerBatch(const std::string& plugin_name,
-                               const std::vector<ToolRegistration>& registrations, bool replace) {
-    if (registrations.empty()) return true;
+                               const std::vector<ToolRegistration>& registrations, bool replace,
+                               const ProviderDescriptor* publication) {
+    if (registrations.empty() && !publication) return true;
     std::vector<ToolRegistryListener*> listeners;
     std::vector<std::pair<std::string, bool>> changes;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        auto providers = providers_;
+        if (publication) {
+            if (publication->type != ToolProviderType::Plugin || publication->name != plugin_name ||
+                publication->name.empty() || publication->instance.empty() ||
+                providers.count({publication->type, publication->name})) return false;
+            for (const auto& [id, entry] : tools_)
+                if (entry->descriptor.provider_type == publication->type &&
+                    entry->descriptor.provider_name == publication->name) return false;
+            providers.emplace(std::make_pair(publication->type, publication->name), *publication);
+        }
         auto candidate = tools_;
         std::unordered_set<std::string> seen;
         for (const auto& registration : registrations) {
             const auto& desc = registration.descriptor;
+            const auto owner = providers.find({desc.provider_type, desc.provider_name});
+            if (owner != providers.end() && (owner->second.instance != desc.provider_instance ||
+                                            owner->second.path != desc.provider_path)) return false;
             if (desc.tool_id.empty() || !registration.handler || desc.provider_name.empty())
                 throw std::invalid_argument("Tool registration requires an ID, provider, and handler");
             if (!validToolUsage(desc.usage_type)) throw std::invalid_argument("Invalid tool usage type");
@@ -68,6 +109,7 @@ bool ToolRegistry::registerBatch(const std::string& plugin_name,
         if (!buildAliases(candidate, aliases)) return false;
         listeners = listeners_;
         tools_.swap(candidate);
+        providers_.swap(providers);
         alias_index_.swap(aliases);
         ++version_;
     }
@@ -82,13 +124,22 @@ bool ToolRegistry::registerBatch(const std::string& plugin_name,
 }
 
 bool ToolRegistry::replaceProvider(const std::string& provider, const std::string& old_instance,
-                                   const std::vector<ToolRegistration>& registrations) {
+                                   const std::vector<ToolRegistration>& registrations,
+                                   const ProviderDescriptor* publication) {
     if (provider.empty() || old_instance.empty()) return false;
     std::vector<ToolRegistryListener*> listeners;
     std::vector<std::pair<std::string, bool>> published;
     std::vector<std::string> removed;
     {
         std::lock_guard lock(mutex_);
+        auto providers = providers_;
+        const auto owner = providers.find({ToolProviderType::Plugin, provider});
+        if (publication) {
+            if (publication->type != ToolProviderType::Plugin || publication->name != provider ||
+                publication->instance.empty() || publication->instance == old_instance ||
+                owner == providers.end() || owner->second.instance != old_instance) return false;
+            owner->second = *publication;
+        } else if (owner != providers.end()) return false; // Tracked providers require a generation record.
         auto candidate = tools_;
         for (auto it = candidate.begin(); it != candidate.end();) {
             const auto& d = it->second->descriptor;
@@ -101,6 +152,8 @@ bool ToolRegistry::replaceProvider(const std::string& provider, const std::strin
         std::unordered_set<std::string> seen;
         for (const auto& item : registrations) {
             const auto& d = item.descriptor;
+            if (publication && (d.provider_instance != publication->instance ||
+                                d.provider_path != publication->path)) return false;
             if (d.provider_name != provider || d.provider_type != ToolProviderType::Plugin ||
                 d.provider_instance.empty() || d.provider_instance == old_instance ||
                 d.tool_id.empty() || !item.handler || !seen.insert(d.tool_id).second ||
@@ -113,6 +166,7 @@ bool ToolRegistry::replaceProvider(const std::string& provider, const std::strin
         if (!buildAliases(candidate, aliases)) return false;
         listeners = listeners_;
         tools_.swap(candidate);
+        providers_.swap(providers);
         alias_index_.swap(aliases);
         ++version_;
         std::erase_if(removed, [&](const auto& id){ return seen.count(id) != 0; });
@@ -138,8 +192,11 @@ void ToolRegistry::unregisterInstance(const std::string& provider, const std::st
             if (d.provider_type == ToolProviderType::Plugin && d.provider_name == provider &&
                 d.provider_instance == instance) removed.push_back(id);
         }
-        if (removed.empty()) return;
+        const auto owner = providers_.find({ToolProviderType::Plugin, provider});
+        const bool removeProvider = owner != providers_.end() && owner->second.instance == instance;
+        if (removed.empty() && !removeProvider) return;
         listeners = listeners_;
+        if (removeProvider) providers_.erase(owner);
         for (const auto& id : removed) tools_.erase(id);
         for (auto it = alias_index_.begin(); it != alias_index_.end();) {
             if (!tools_.count(it->second)) it = alias_index_.erase(it);
@@ -226,8 +283,10 @@ void ToolRegistry::unregisterByProvider(const std::string& provider, ToolProvide
         std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& [id, entry] : tools_)
             if (entry->descriptor.provider_name == provider && entry->descriptor.provider_type == type) removed.push_back(id);
-        if (removed.empty()) return;
+        const auto owner = providers_.find({type, provider});
+        if (removed.empty() && owner == providers_.end()) return;
         listeners = listeners_;
+        if (owner != providers_.end()) providers_.erase(owner);
         for (const auto& id : removed) tools_.erase(id);
         for (auto it = alias_index_.begin(); it != alias_index_.end();) {
             if (!tools_.count(it->second)) it = alias_index_.erase(it);

@@ -1,0 +1,88 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - UI Plugin",
+  "root": "plugin_ui",
+  "entities": [
+    {
+      "id": "plugin_ui",
+      "name": "UI room",
+      "kind": "room",
+      "parent": "",
+      "description": "Generic panel discovery, inspection, visibility and request completion.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "UI Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.ui",
+        "entity_id": "plugin_ui",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_ui_console",
+      "name": "Console panel",
+      "kind": "supporter",
+      "parent": "plugin_ui",
+      "description": "Console panel fixture addressed by the existing console stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "console"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.console",
+        "entity_id": "plugin_ui_console",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": true,
+        "minimized": false,
+        "maximized": false
+      }
+    },
+    {
+      "id": "plugin_ui_settings",
+      "name": "Settings panel",
+      "kind": "supporter",
+      "parent": "plugin_ui",
+      "description": "Settings panel fixture addressed by the existing settings stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "settings"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.settings",
+        "entity_id": "plugin_ui_settings",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": false,
+        "minimized": false,
+        "maximized": false
+      }
+    },
+    {
+      "id": "plugin_ui_requests",
+      "name": "Panel requests",
+      "kind": "supporter",
+      "parent": "plugin_ui",
+      "description": "Owned asynchronous panel request lifecycle. Pending submission is not completed execution.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.requests",
+        "key": "requests"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.requests",
+        "entity_id": "plugin_ui_requests",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

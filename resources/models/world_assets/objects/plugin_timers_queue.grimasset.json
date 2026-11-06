@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Timers - Countdown timers",
+  "root": "plugin_timers_queue",
+  "entities": [
+    {
+      "id": "plugin_timers_queue",
+      "name": "Countdown timers",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Host-owned countdown timer queue, distinct from saved schedule items.",
+      "state": "open",
+      "resource_binding": {
+        "type": "timers.queue",
+        "key": "queue"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.timers.queue",
+        "entity_id": "plugin_timers_queue",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

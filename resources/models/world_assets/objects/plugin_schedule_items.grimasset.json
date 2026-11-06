@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Schedule - Scheduled items",
+  "root": "plugin_schedule_items",
+  "entities": [
+    {
+      "id": "plugin_schedule_items",
+      "name": "Scheduled items",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Events, timers, alarms and reminders with item revisions.",
+      "state": "open",
+      "resource_binding": {
+        "type": "schedule.items",
+        "key": "items"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.schedule.items",
+        "entity_id": "plugin_schedule_items",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

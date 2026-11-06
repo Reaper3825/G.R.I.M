@@ -2,16 +2,37 @@
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <functional>
+#include <optional>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace GRIM::WorldLab {
 std::string makeEnvironmentId();
+// Declarative metadata only; no plugin loading, entity resolution or dispatch.
+struct PluginBinding {
+    std::string providerName, contract;
+    std::uint32_t version = 1;
+};
+struct ResourceBinding {
+    std::string type, key;
+};
+struct AssetSource {
+    std::string assetId, entityId;
+    std::uint32_t version = 1;
+};
 struct Entity {
     std::string id, name, kind, parent, description;
     std::string state = "open"; // Containers: open or closed. Other kinds ignore this.
     std::string openProvider; // Optional container-open observation provider; independent of entity ID/name.
+    std::optional<PluginBinding> pluginBinding; // Room's declared provider/contract.
+    std::optional<ResourceBinding> resourceBinding; // Non-room resource identity, independent of world ID.
+    std::optional<AssetSource> assetSource; // Explicit provenance; preserved, never inferred from filenames.
+    std::optional<nlohmann::json> initialState; // Authored object-valued metadata; not live runtime state.
 };
+// Shared codec keeps assets, documents and editor snapshots consistent.
+void to_json(nlohmann::json&, const Entity&);
+void from_json(const nlohmann::json&, Entity&);
 struct RoomLayout { std::string id; float x = 0, y = 0; };
 struct RoomPath { std::string id, parent, segment; };
 struct Passage {

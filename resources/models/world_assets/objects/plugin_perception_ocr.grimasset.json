@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Perception - OCR observation",
+  "root": "plugin_perception_ocr",
+  "entities": [
+    {
+      "id": "plugin_perception_ocr",
+      "name": "OCR observation",
+      "kind": "supporter",
+      "parent": "",
+      "description": "OCR text observation and source identity.",
+      "state": "open",
+      "resource_binding": {
+        "type": "perception.ocr",
+        "key": "ocr"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.perception.ocr",
+        "entity_id": "plugin_perception_ocr",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

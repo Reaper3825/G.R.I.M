@@ -159,7 +159,18 @@ bool UIWorldCanvas::updateCanvasContent(const InputState& source,float) {
 void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
     using namespace UITheme::Colors;
     const auto& d=editor_.document();
-    for(const auto& p:d.paths)if(!p.parent.empty())drawWorldLine(r,port(p.parent,"south"),port(p.id,"north"),Primary,2.f);
+    for(const auto& p:d.paths)if(!p.parent.empty()) {
+        if(!radialPaths) {drawWorldLine(r,port(p.parent,"south"),port(p.id,"north"),Primary,2.f);continue;}
+        const auto parent=roomRect(p.parent), child=roomRect(p.id);
+        const Vec2 a{parent.origin.x+parent.size.x/2,parent.origin.y+parent.size.y/2};
+        const Vec2 b{child.origin.x+child.size.x/2,child.origin.y+child.size.y/2};
+        const auto edge=[](Vec2 center,Vec2 target,CanvasRect rect) {
+            const float dx=target.x-center.x,dy=target.y-center.y;
+            const float extent=std::max(std::abs(dx)/(rect.size.x/2),std::abs(dy)/(rect.size.y/2));
+            return extent>0?Vec2{center.x+dx/extent,center.y+dy/extent}:center;
+        };
+        drawWorldLine(r,edge(a,b,parent),edge(b,a,child),Primary,2.f);
+    }
     for(const auto& edge:d.passages) {
         const auto a=port(edge.from,edge.direction),b=port(edge.to,opposite(edge.direction));
         drawWorldLine(r,a,b,selected==edge.id?PrimaryLight:Primary,selected==edge.id?3.f:2.f);

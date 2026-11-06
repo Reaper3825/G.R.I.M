@@ -1,0 +1,44 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - System Information Plugin",
+  "root": "plugin_system_info",
+  "entities": [
+    {
+      "id": "plugin_system_info",
+      "name": "System Information room",
+      "kind": "room",
+      "parent": "",
+      "description": "Hardware and system information supplied by the host hardware service.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "System Information Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.system_info",
+        "entity_id": "plugin_system_info",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_system_info_hardware",
+      "name": "System information",
+      "kind": "supporter",
+      "parent": "plugin_system_info",
+      "description": "Host hardware snapshot. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "hardware"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.hardware",
+        "entity_id": "plugin_system_info_hardware",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

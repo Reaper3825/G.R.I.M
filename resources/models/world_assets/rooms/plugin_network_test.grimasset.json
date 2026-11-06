@@ -1,0 +1,44 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Network Test Plugin",
+  "root": "plugin_network_test",
+  "entities": [
+    {
+      "id": "plugin_network_test",
+      "name": "Network Test room",
+      "kind": "room",
+      "parent": "",
+      "description": "Network test lifecycle and counters. Existing Ignore tool classification remains authoritative.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Network Test Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.network_test",
+        "entity_id": "plugin_network_test",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_network_test_test",
+      "name": "Network test session",
+      "kind": "supporter",
+      "parent": "plugin_network_test",
+      "description": "Test configuration, running state and request counters. No network target or test is started.",
+      "state": "open",
+      "resource_binding": {
+        "type": "network_test.session",
+        "key": "session"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.network_test.test",
+        "entity_id": "plugin_network_test_test",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

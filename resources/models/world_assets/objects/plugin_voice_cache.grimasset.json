@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Voice - Speech cache",
+  "root": "plugin_voice_cache",
+  "entities": [
+    {
+      "id": "plugin_voice_cache",
+      "name": "Speech cache",
+      "kind": "supporter",
+      "parent": "",
+      "description": "TTS audio cache contents and regeneration state.",
+      "state": "open",
+      "resource_binding": {
+        "type": "voice.cache",
+        "key": "cache"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.voice.cache",
+        "entity_id": "plugin_voice_cache",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

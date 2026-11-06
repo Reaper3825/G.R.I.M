@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - Memory - Memory records",
+  "root": "plugin_memory_memory",
+  "entities": [
+    {
+      "id": "plugin_memory_memory",
+      "name": "Memory records",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Host-owned memory records and staging state. The forget tool checks and flushes matches; it does not delete records.",
+      "state": "open",
+      "resource_binding": {
+        "type": "memory.store",
+        "key": "memory"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.memory.memory",
+        "entity_id": "plugin_memory_memory",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

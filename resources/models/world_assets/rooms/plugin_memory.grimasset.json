@@ -1,0 +1,44 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Memory Plugin",
+  "root": "plugin_memory",
+  "entities": [
+    {
+      "id": "plugin_memory",
+      "name": "Memory room",
+      "kind": "room",
+      "parent": "",
+      "description": "Manual memory staging, search and legacy flush operations.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Memory Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.memory",
+        "entity_id": "plugin_memory",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_memory_memory",
+      "name": "Memory records",
+      "kind": "supporter",
+      "parent": "plugin_memory",
+      "description": "Host-owned memory records and staging state. The forget tool checks and flushes matches; it does not delete records.",
+      "state": "open",
+      "resource_binding": {
+        "type": "memory.store",
+        "key": "memory"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.memory.memory",
+        "entity_id": "plugin_memory_memory",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

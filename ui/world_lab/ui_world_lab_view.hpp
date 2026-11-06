@@ -10,6 +10,7 @@
 #include "ui_world_actions.hpp"
 #include "ui_world_asset_browser.hpp"
 #include "ui/primitives/ui_split_pane.hpp"
+#include "ui_live_world_view.hpp"
 #include <memory>
 
 class UIWorldLabView {
@@ -50,6 +51,9 @@ private:
     std::unique_ptr<UIDropdown> doorState_, doorKey_;
     std::vector<std::string> doorKeys_;
     std::unique_ptr<UIWorldSession> session_;
+    std::unique_ptr<UILiveWorldView> liveWorld_;
+    std::unique_ptr<UIButton> liveButton_;
+    bool liveWorldVisible_ = false;
     bool sessionVisible_ = false;
     std::unique_ptr<UIButton> apply_, add_, spawn_, erase_, saveAsset_, actionsShortcut_;
     std::vector<std::string> locations_;
