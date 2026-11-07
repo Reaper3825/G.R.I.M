@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - System Information - Monitor 0",
+  "root": "plugin_system_info_monitor_0",
+  "entities": [
+    {
+      "id": "plugin_system_info_monitor_0",
+      "name": "Monitor 0",
+      "kind": "supporter",
+      "parent": "",
+      "description": "One enumerated monitor: desktop position, dimensions, and primary status. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "monitor_0"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.monitor_0",
+        "entity_id": "plugin_system_info_monitor_0",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

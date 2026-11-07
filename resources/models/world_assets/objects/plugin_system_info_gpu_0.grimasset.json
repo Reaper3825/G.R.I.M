@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - System Information - GPU 0",
+  "root": "plugin_system_info_gpu_0",
+  "entities": [
+    {
+      "id": "plugin_system_info_gpu_0",
+      "name": "GPU 0",
+      "kind": "supporter",
+      "parent": "",
+      "description": "One enumerated GPU: name, index, VRAM capacity, driver, and compute capabilities. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "gpu_0"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.gpu_0",
+        "entity_id": "plugin_system_info_gpu_0",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

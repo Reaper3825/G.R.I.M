@@ -95,7 +95,6 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `commands/commands_system.cpp`
 - `core/plugin_api_impl.cpp`
 - `core/grim_exports.hpp`
-- `hardware/resource_values.cpp`
 - `ui/ui_root.cpp`
 - `ui/ui_training_panel.cpp`
 - `perception/multi_monitor.hpp`

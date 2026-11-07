@@ -63,6 +63,10 @@ class PluginWorldAssetsTests(unittest.TestCase):
                     source = ROOT / "ui" / ("console_panel.cpp" if key == "console" else "ui_settings_menu.cpp")
                     self.assertRegex(source.read_text(encoding="utf-8"), r'UIPanel\("[^"]+", true, "' + key + r'"\)')
                     self.assertIsInstance(entity["initial_state"]["visible"], bool)
+            if room["plugin_binding"]["provider_name"] == "System Information Plugin":
+                self.assertEqual(keys, {("system_info.snapshot", key)
+                                       for key in ("system", "cpu", "memory", "gpu_0", "monitor_0")})
+                self.assertTrue(all(entity["initial_state"] == {} for entity in resources))
         self.assertEqual(used, set(objects))
 
 

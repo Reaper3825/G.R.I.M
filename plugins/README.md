@@ -211,19 +211,26 @@ Remove stale deployed `aliases_plugin.dll` files from plugin load directories.
 
 ## System information plugin
 
-`system_info_plugin` supplies `system_info` using API v3.4. It formats a full
+`system_info_plugin` supplies `system_info` using API v3.19. It formats a full
 snapshot from the existing host hardware detector. As before, each invocation
 detects fresh hardware; it does not substitute or overwrite the startup cache.
 Output text, ignored arguments, result fields, backend reporting, and error
 behavior are preserved. No host C++ symbols are imported by the plugin.
+It opts into host-owned, read-only `system_info.snapshot` objects for System
+(including Wi-Fi), CPU, Memory, and each GPU and Monitor. Objects are captured
+after provider commit and atomically refreshed by `system_info`. Audio devices,
+voice backend flags, and Whisper suggestions are excluded from resource data.
+Failed captures retain the last good objects with explicit stale/error state;
+unload/replacement removes the batch. The live world projects it automatically.
+See [System Information resources](../docs/SYSTEM_INFO_RESOURCES.md).
 
     cmake -S plugins/system_info_plugin -B .codex-build/system-info-plugin -G "Visual Studio 17 2022" -A x64
     cmake --build .codex-build/system-info-plugin --config Release --target system_info_plugin --parallel 2
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -SystemInfoPluginDirectory .codex-build/system-info-plugin/plugins
 
 Deploy `.codex-build/system-info-plugin/plugins/system_info_plugin.dll` into
-GRIM's `plugins/` folder. Rebuild the host separately for API v3.4 and removal
-of the old registration. Earlier v3.x binaries remain supported by the new host.
+GRIM's `plugins/` folder. Rebuild the host separately for API v3.19.
+Earlier v3.x plugin binaries remain supported by the new host.
 The tool requires system-information permission, is informational, and does not
 require confirmation. The shared snapshot codec is
 `MMO/Core/HardwareInventoryJson.hpp`.
@@ -232,6 +239,8 @@ Tests use controlled hardware fixtures, including GPU backend flags, monitor
 geometry, audio/network/voice fields, timestamps, detection errors, fresh reads,
 and startup-cache isolation. They also test exact command results and DLL removal,
 without probing actual hardware or starting the application.
+For an isolated fixture build and resource lifecycle tests, run
+`tests/run_plugin_shutdown.ps1 -BuildSystemInfoFixture`.
 
 ## Timers and memory plugins
 

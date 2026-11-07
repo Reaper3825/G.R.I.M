@@ -23,19 +23,91 @@
       }
     },
     {
-      "id": "plugin_system_info_hardware",
-      "name": "System information",
+      "id": "plugin_system_info_system",
+      "name": "System",
       "kind": "supporter",
       "parent": "plugin_system_info",
-      "description": "Host hardware snapshot. No machine-specific readings are stored in this template.",
+      "description": "OS, architecture, Wi-Fi status, device counts, and virtual desktop geometry. No machine-specific readings are stored in this template.",
       "state": "open",
       "resource_binding": {
         "type": "system_info.snapshot",
-        "key": "hardware"
+        "key": "system"
       },
       "asset_source": {
-        "asset_id": "grim.resource.system_info.hardware",
-        "entity_id": "plugin_system_info_hardware",
+        "asset_id": "grim.resource.system_info.system",
+        "entity_id": "plugin_system_info_system",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_system_info_cpu",
+      "name": "CPU",
+      "kind": "supporter",
+      "parent": "plugin_system_info",
+      "description": "CPU core count. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "cpu"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.cpu",
+        "entity_id": "plugin_system_info_cpu",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_system_info_memory",
+      "name": "Memory",
+      "kind": "supporter",
+      "parent": "plugin_system_info",
+      "description": "Total system RAM in MB. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "memory"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.memory",
+        "entity_id": "plugin_system_info_memory",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_system_info_gpu_0",
+      "name": "GPU 0",
+      "kind": "supporter",
+      "parent": "plugin_system_info",
+      "description": "One enumerated GPU: name, index, VRAM capacity, driver, and compute capabilities. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "gpu_0"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.gpu_0",
+        "entity_id": "plugin_system_info_gpu_0",
+        "version": 1
+      },
+      "initial_state": {}
+    },
+    {
+      "id": "plugin_system_info_monitor_0",
+      "name": "Monitor 0",
+      "kind": "supporter",
+      "parent": "plugin_system_info",
+      "description": "One enumerated monitor: desktop position, dimensions, and primary status. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "monitor_0"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.monitor_0",
+        "entity_id": "plugin_system_info_monitor_0",
         "version": 1
       },
       "initial_state": {}

@@ -9,7 +9,6 @@
 #include "primitives/ui_label.hpp"
 #include "primitives/ui_scrollbox.hpp"
 #include "../MMO/Shared/MMD.hpp"
-#include "../hardware/resource_values.hpp"
 #include <memory>
 #include <string>
 #include <vector>

@@ -113,6 +113,9 @@ struct PluginContext {
     std::vector<std::string> pendingPanels;
     bool applicationCatalogRequested = false;
     std::unique_ptr<GRIM::Applications::Catalog> applicationCatalog;
+    bool hardwareResourceRequested = false; // Immutable after initialization.
+    std::mutex hardwareMutex;
+    nlohmann::json lastHardware = nullptr;
     std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
         std::make_shared<GRIM::UI::ProviderPanelLease>();
     std::mutex panelRequestsMutex;
@@ -944,19 +947,117 @@ static const char* api_flush_memory_record_if_present(const GrimPluginAPI* self,
     });
 }
 
+static GrimResult api_register_hardware_resource(const GrimPluginAPI* self) noexcept {
+    PluginContext* context = nullptr;
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        context = &owner;
+        std::lock_guard lock(owner.gate->mutex);
+        if (!owner.gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
+            if (owner.staging) owner.registration_failed = true;
+            return GRIM_ERROR_PERMISSION_DENIED;
+        }
+        if (!owner.staging) return GRIM_ERROR_UNSUPPORTED;
+        if (owner.hardwareResourceRequested) return GRIM_ERROR_ALREADY_EXISTS;
+        owner.hardwareResourceRequested = true;
+        return GRIM_OK;
+    } catch (...) {
+        if (context && context->staging) context->registration_failed = true;
+        return GRIM_ERROR_INVALID_PARAM;
+    }
+}
+
+// Caller holds hardwareMutex. The response describes this attempt; resource
+// state retains the last successful capture when this attempt fails.
+static nlohmann::json captureHardware(PluginContext& owner, bool publish) {
+    nlohmann::json response{{"format", "grim-hardware-snapshot"}, {"version", 1},
+        {"hardware", nullptr}, {"error", nullptr}};
+    try {
+        response["hardware"] = GRIM::MMO::hardwareInventoryJson(GRIM::MMO::detectHardware());
+    } catch (const std::exception& error) {
+        response["error"] = {{"kind", "exception"}, {"message", error.what()}};
+    } catch (...) {
+        response["error"] = {{"kind", "unknown"}, {"message", ""}};
+    }
+    if (publish) {
+        if (response["error"].is_null()) owner.lastHardware = response["hardware"];
+        std::vector<GRIM::MMO::ResourceDescriptor> resources;
+        const auto add = [&](const std::string& id, const std::string& component,
+                             const std::string& name, nlohmann::json data) {
+            GRIM::MMO::ResourceDescriptor resource;
+            resource.provider_name = owner.name;
+            resource.provider_instance = owner.instance;
+            resource.resource_id = id;
+            resource.kind = "system_info.snapshot";
+            resource.name = name;
+            // Identity includes resource_id; each object has one logical lifetime
+            // within this provider generation, independent of changing readings.
+            resource.runtime_id = 1;
+            resource.state = {{"format", "grim-system-info-resource"}, {"version", 1},
+                {"component", component}, {"data", std::move(data)},
+                {"capture_time_ns", owner.lastHardware.is_null() ? nlohmann::json(nullptr) :
+                    owner.lastHardware.at("capture_time_ns")},
+                {"error", response["error"]}, {"stale", !response["error"].is_null()}};
+            resources.push_back(std::move(resource));
+        };
+        const auto& h = owner.lastHardware;
+        if (h.is_null()) {
+            // Always expose the fixed objects, even if the first probe failed.
+            // Device objects require a successful enumeration.
+            add("system", "system", "System", nullptr);
+            add("cpu", "cpu", "CPU", nullptr);
+            add("memory", "memory", "Memory", nullptr);
+        } else {
+            // Explicit field selection keeps audio and voice/model policy out of
+            // the public objects while preserving the host inventory ABI.
+            add("system", "system", "System", {{"os_name", h.at("os_name")},
+                {"arch", h.at("arch")}, {"wifi_connected", h.at("wifi_connected")},
+                {"gpu_count", h.at("gpu_count")}, {"monitor_count", h.at("monitor_count")},
+                {"desktop", {{"origin_x", h.at("virtual_origin_x")},
+                    {"origin_y", h.at("virtual_origin_y")},
+                    {"width", h.at("virtual_desktop_w")}, {"height", h.at("virtual_desktop_h")}}}});
+            add("cpu", "cpu", "CPU", {{"cpu_cores", h.at("cpu_cores")}});
+            add("memory", "memory", "Memory", {{"ram_total_mb", h.at("ram_total_mb")}});
+            for (const auto& gpu : h.at("gpus")) {
+                const auto index = std::to_string(gpu.at("device_index").get<int>());
+                add("gpu_" + index, "gpu", "GPU " + index + ": " + gpu.at("name").get<std::string>(),
+                    {{"device_index", gpu.at("device_index")}, {"name", gpu.at("name")},
+                     {"vram_mb", gpu.at("vram_mb")}, {"driver_version", gpu.at("driver_version")},
+                     {"has_cuda", gpu.at("has_cuda")}, {"has_metal", gpu.at("has_metal")},
+                     {"has_rocm", gpu.at("has_rocm")}});
+            }
+            size_t index = 0;
+            for (const auto& monitor : h.at("monitors")) {
+                const auto slot = std::to_string(index++);
+                add("monitor_" + slot, "monitor", "Monitor " + slot,
+                    {{"monitor_index", index - 1}, {"x", monitor.at("x")}, {"y", monitor.at("y")},
+                     {"width", monitor.at("width")}, {"height", monitor.at("height")},
+                     {"is_primary", monitor.at("is_primary")}});
+            }
+        }
+        // Replace the whole capture atomically, removing devices no longer present.
+        // Generation checks reject a retired provider's in-flight capture.
+        GRIM::MMO::ToolRegistry::instance().replaceResources(
+            {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
+            "system_info.snapshot", resources);
+    }
+    return response;
+}
+
 static const char* api_get_hardware_snapshot(const GrimPluginAPI* self) noexcept {
     try {
         if (!checkPermission(self, GRIM_PERM_SYSTEM)) return nullptr;
-        nlohmann::json response{{"format", "grim-hardware-snapshot"}, {"version", 1},
-            {"hardware", nullptr}, {"error", nullptr}};
-        try {
-            response["hardware"] = GRIM::MMO::hardwareInventoryJson(GRIM::MMO::detectHardware());
-        } catch (const std::exception& error) {
-            response["error"] = {{"kind", "exception"}, {"message", error.what()}};
-        } catch (...) {
-            response["error"] = {{"kind", "unknown"}, {"message", ""}};
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        ActiveCall active(owner.gate);
+        if (!active.entered) return nullptr;
+        bool publish;
+        {
+            std::lock_guard lock(owner.gate->mutex);
+            publish = owner.hardwareResourceRequested && owner.gate->published;
         }
-        return allocateString(response.dump());
+        std::lock_guard lock(owner.hardwareMutex);
+        return allocateString(captureHardware(owner, publish).dump());
     } catch (...) { return nullptr; }
 }
 
@@ -1742,6 +1843,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.input_service = api_input_service;
     api.register_ui_panel = api_register_ui_panel;
     api.register_application_catalog = api_register_application_catalog;
+    api.register_hardware_resource = api_register_hardware_resource;
     api.application_service = api_application_service;
     
     auto* result = &api;
@@ -1777,6 +1879,14 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
         throw;
     }
     if (!committed) { owner.staging = true; return false; }
+    if (owner.hardwareResourceRequested) {
+        // Only a committed provider can own a resource. A capture failure is
+        // represented in state and must not roll back an already committed DLL.
+        try {
+            std::lock_guard lock(owner.hardwareMutex);
+            captureHardware(owner, true);
+        } catch (const std::exception& e) { LOG_ERROR("Hardware", e.what()); }
+    }
     if (owner.applicationCatalog) {
         // Discovery is host-only and starts after successful provider publication.
         // Failure leaves the provider usable for explicit refresh; never rolls back a committed DLL.

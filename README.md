@@ -390,7 +390,7 @@ This format is non-negotiable for training debugging — you cannot argue with h
 - **HardwareInventory** — Immutable boot snapshot (CPUs, GPUs with VRAM/driver/CUDA detection, monitors, audio devices)
 - **ResourceSignal** — Live utilization sampler (CPU, RAM, per-GPU metrics at 500ms intervals with adaptive pressure-based polling)
 - **ResourceCoordinator** — Admission control with claim/eviction protocol for all model loads, plugin loads, and perception captures
-- **ResourceMonitor** — Process-level CPU and GPU usage tracking
+- **Hardware inventory** — Host-owned topology and capability snapshots exposed through the System Information plugin
 
 ### Networking
 - WebSocket server for remote control and logging

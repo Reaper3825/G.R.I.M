@@ -2,6 +2,7 @@
 #include "live_world.hpp"
 #include "MMO/Core/ToolRegistry.hpp"
 #include "MMO/Core/ToolDescriptorJson.hpp"
+#include "resource_inspection.hpp"
 #include <sstream>
 
 namespace GRIM::WorldLab {
@@ -22,12 +23,14 @@ public:
         const auto previousTools = catalogTools();
         const auto previousResources = world_.registry().resources;
         const auto changes = world_.reconcile(registry_.snapshot());
+        resourceInspection_ = nullptr;
         if (!changes.empty()) record("Providers changed", changes + describe());
         else if (previousTools != catalogTools()) record("Tools changed", describe());
         else if (previousResources != world_.registry().resources) record("Resources changed", describe());
     }
     void command(const std::string& command) {
         synchronize();
+        resourceInspection_ = nullptr;
         try {
             if (command == "look" || command == "tools" || command == "resources") record(command, describe());
             else if (command == "inventory") record(command, "You are carrying: Tool catalog (tool_catalog). Use open tool_catalog to read it.");
@@ -42,16 +45,29 @@ public:
             } else if (command.starts_with("inspect-resource ")) {
                 const auto id = command.substr(17);
                 for (const auto& r : world_.resourcesHere()) if (r.resource_id == id) {
-                    record(command, nlohmann::json(r).dump(2)); return;
+                    inspectResource(command, r); return;
                 }
                 throw std::runtime_error("Resource is unavailable in the current provider room");
             } else if (command.starts_with("inspect ")) {
                 const auto id = command.substr(8);
-                for (const auto& tool : inspectableTools()) if (tool.tool_id == id) {
-                    record(command, nlohmann::json(tool).dump(2)); return;
+                const auto resources = world_.resourcesHere();
+                const auto tools = inspectableTools();
+                const MMO::ResourceDescriptor* selected = nullptr;
+                for (const auto& resource : resources)
+                    if (folded(resource.resource_id) == folded(id) || folded(resource.name) == folded(id)) {
+                        if (selected) throw std::runtime_error("Ambiguous object; use inspect-resource <resource_id>");
+                        selected = &resource;
+                    }
+                const MMO::ToolDescriptor* selectedTool = nullptr;
+                for (const auto& tool : tools) if (tool.tool_id == id) selectedTool = &tool;
+                if (selected && selectedTool)
+                    throw std::runtime_error("Object/tool name collision; use inspect-resource <resource_id> for the object");
+                if (selected) { inspectResource(command, *selected); return; }
+                if (selectedTool) {
+                    record(command, nlohmann::json(*selectedTool).dump(2)); return;
                 }
-                throw std::runtime_error("Tool unavailable here; open tool_catalog to inspect tools across providers");
-            } else throw std::runtime_error("Use look, inventory, open tool_catalog, close tool_catalog, tools, resources, go <path>, back, inspect <tool_id>, or inspect-resource <resource_id>");
+                throw std::runtime_error("Object or tool unavailable here; open tool_catalog to inspect tools across providers");
+            } else throw std::runtime_error("Use look, inventory, open tool_catalog, close tool_catalog, tools, resources, go <path>, back, inspect <object name, resource_id, or tool_id>, or inspect-resource <resource_id>");
         } catch (const std::exception& error) { record(command, std::string("Action rejected: ") + error.what()); }
     }
     nlohmann::json observation() const {
@@ -68,6 +84,12 @@ public:
         auto resources = nlohmann::json::array();
         for (const auto& r : world_.resourcesHere()) {
             resources.push_back(r); commands.push_back("inspect-resource " + r.resource_id);
+            bool collision = false;
+            for (const auto& tool : inspectableTools()) collision |= tool.tool_id == r.resource_id;
+            for (const auto& other : world_.resourcesHere())
+                collision |= other.resource_id != r.resource_id &&
+                    (folded(other.resource_id) == folded(r.resource_id) || folded(other.name) == folded(r.resource_id));
+            if (!collision) commands.push_back("inspect " + r.resource_id);
         }
         auto state = nlohmann::json{{"room_id", world_.location()}, {"location_path", world_.document().roomPath(world_.location())},
             {"session_id", world_.document().environmentId}, {"world_revision", world_.revision()},
@@ -78,6 +100,7 @@ public:
             {"entity_id", "tool_catalog"}, {"name", "Tool catalog"}, {"kind", "container"},
             {"state", catalogOpen_ ? "open" : "closed"}, {"open_provider", "tool_catalog"}}});
         if (catalogOpen_) state["tool_catalog"] = {{"entity_id", "tool_catalog"}, {"tools", catalogTools()}};
+        if (!resourceInspection_.is_null()) state["resource_inspection"] = resourceInspection_;
         return state;
     }
     std::string describe() const {
@@ -96,7 +119,7 @@ public:
                 if (r.state.contains("visible")) text << (r.state.at("visible").get<bool>() ? " - visible" : " - hidden");
                 text << '\n';
             }
-            text << "Use inspect-resource <resource_id> for current state and operations.\n";
+            text << "Use inspect <object name or resource_id> for its readings; inspect-resource <resource_id> selects an object explicitly.\n";
             const auto tools = world_.toolsHere();
             text << "Available model tools: " << tools.size() << '\n';
             for (const auto& t : tools) text << t.tool_id << " - " << (t.short_description.empty() ? t.description : t.short_description) << '\n';
@@ -106,6 +129,15 @@ public:
         return text.str();
     }
 private:
+    static std::string folded(std::string value) {
+        for (auto& c : value) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+        return value;
+    }
+    void inspectResource(const std::string& command, const MMO::ResourceDescriptor& resource) {
+        const auto feedback = resourceInspectionFeedback(resource);
+        resourceInspection_ = resource;
+        record(command, feedback);
+    }
     std::vector<MMO::ToolDescriptor> inspectableTools() const {
         if (!catalogOpen_) return world_.toolsHere();
         std::vector<MMO::ToolDescriptor> result;
@@ -140,6 +172,7 @@ private:
     LiveWorld world_;
     uint64_t moves_ = 0;
     bool catalogOpen_ = false;
+    nlohmann::json resourceInspection_ = nullptr;
     std::vector<Entry> history_;
 };
 }

@@ -16,6 +16,84 @@ ToolRegistration tool(const ProviderDescriptor& p, const std::string& id, ToolUs
 }
 int main() try {
     {
+        auto& registry = ToolRegistry::instance();
+        const ProviderDescriptor provider{ToolProviderType::Plugin, "Hardware fixture", "hardware-1", ""};
+        check(registry.publishProvider(provider, {tool(provider, "cpu.tool")}), "hardware inspection provider");
+        ResourceDescriptor resource;
+        resource.provider_name = provider.name; resource.provider_instance = provider.instance;
+        resource.resource_id = "cpu"; resource.name = "CPU";
+        resource.kind = "system_info.snapshot"; resource.runtime_id = 1;
+        resource.state = {{"format", "grim-system-info-resource"}, {"version", 1}, {"component", "cpu"},
+            {"data", {{"cpu_cores", 12}}}, {"capture_time_ns", 123000000000LL},
+            {"stale", false}, {"error", nullptr}};
+        check(registry.publishResource(resource), "publish CPU fixture");
+        LiveWorldSession session(registry);
+        session.command("inspect CPU");
+        check(session.history().back().feedback.starts_with("Action rejected") &&
+              !session.observation().contains("resource_inspection"), "remote resource inspection bypassed room access");
+        session.command("go " + session.world().providerPath(providerKey(provider)));
+        session.command("inspect CPU");
+        check(session.history().back().feedback == "CPU\nLogical cores: 12\nStatus: Current",
+              "CPU inspection did not return the agreed readable format");
+        check(session.history().back().state.at("resource_inspection") == nlohmann::json(resource),
+              "Inspection lost structured state, identity, or capture metadata");
+        const auto historyState = session.history().back().state;
+        const auto commands = session.observation().at("admissible_commands").get<std::vector<std::string>>();
+        check(std::find(commands.begin(), commands.end(), "inspect cpu") != commands.end(),
+              "Resource inspect action missing");
+        session.command("inspect-resource cpu");
+        check(session.history().back().feedback == "CPU\nLogical cores: 12\nStatus: Current", "legacy inspection format differs");
+        resource.state["stale"] = true;
+        resource.state["error"] = {{"kind", "exception"}, {"message", "Fixture capture failed"}};
+        check(registry.publishResource(resource), "publish stale CPU");
+        session.synchronize();
+        check(!session.observation().contains("resource_inspection"), "Refresh retained an outdated inspection");
+        session.command("inspect cpu");
+        check(session.history().back().feedback ==
+              "CPU\nLogical cores: 12\nStatus: Stale - latest capture failed.\nCapture error: Fixture capture failed",
+              "Stale inspection hid readings or capture failure");
+        check(session.history().back().state.at("resource_inspection").at("state").at("capture_time_ns") == 123000000000LL &&
+              historyState.at("resource_inspection").at("state").at("stale") == false,
+              "Inspection changed capture provenance or historical state");
+        resource.state["data"] = nullptr; resource.state["capture_time_ns"] = nullptr;
+        check(registry.publishResource(resource), "publish unavailable CPU");
+        session.command("inspect CPU");
+        check(session.history().back().feedback.find("CPU information unavailable") != std::string::npos &&
+              session.history().back().feedback.find("Logical cores") == std::string::npos,
+              "Unavailable CPU inspection fabricated a core count");
+        session.command("look");
+        check(!session.observation().contains("resource_inspection"), "Unrelated action retained inspection result");
+        resource.state["component"] = "memory"; resource.state["data"] = {{"ram_total_mb", 32768}};
+        check(resourceInspectionFeedback(resource).find("Total RAM: 32768 MB") != std::string::npos, "Memory formatting lost units");
+        resource.state["component"] = "system";
+        resource.state["data"] = {{"os_name", "Windows"}, {"arch", "x86_64"}, {"wifi_connected", true},
+            {"gpu_count", 1}, {"monitor_count", 1}, {"desktop", {{"origin_x", -1920}, {"origin_y", 0}, {"width", 3840}, {"height", 1080}}}};
+        check(resourceInspectionFeedback(resource).find("Wi-Fi: Connected") != std::string::npos &&
+              resourceInspectionFeedback(resource).find("at (-1920, 0)") != std::string::npos, "System formatting lost Wi-Fi or signed geometry");
+        resource.state["component"] = "gpu";
+        resource.state["data"] = {{"device_index", 0}, {"name", "Fixture GPU"}, {"vram_mb", 8192},
+            {"driver_version", ""}, {"has_cuda", true}, {"has_metal", false}, {"has_rocm", false}};
+        check(resourceInspectionFeedback(resource).find("Total VRAM: 8192 MB") != std::string::npos &&
+              resourceInspectionFeedback(resource).find("Driver: Unavailable") != std::string::npos, "GPU formatting lost capacity or unknown driver");
+        resource.state["component"] = "monitor";
+        resource.state["data"] = {{"monitor_index", 0}, {"x", -1920}, {"y", -200}, {"width", 1920}, {"height", 1080}, {"is_primary", false}};
+        check(resourceInspectionFeedback(resource).find("Position: (-1920, -200)") != std::string::npos &&
+              resourceInspectionFeedback(resource).find("Primary: No") != std::string::npos, "Monitor formatting lost topology");
+        // A display name cannot redirect a command to a different object.
+        auto duplicate = resource; duplicate.resource_id = "other";
+        check(registry.publishResource(duplicate), "publish ambiguous fixture");
+        session.command("inspect CPU");
+        check(session.history().back().feedback.starts_with("Action rejected: Ambiguous"), "Ambiguous object name was guessed");
+        session.command("inspect-resource cpu");
+        check(session.observation().at("resource_inspection").at("resource_id") == "cpu", "Explicit object ID did not resolve ambiguity");
+        session.command("inspect cpu.tool");
+        check(session.history().back().feedback.find("cpu.tool") != std::string::npos, "Resource route broke tool inspection");
+        registry.unregisterInstance(provider.name, provider.instance);
+        session.command("inspect cpu");
+        check(session.history().back().feedback.starts_with("Action rejected") &&
+              !session.observation().contains("resource_inspection"), "Unloaded object remained inspectable");
+    }
+    {
         LiveWorld world;
         const ProviderDescriptor builtin{ToolProviderType::Builtin, "builtin", "", ""};
         const ProviderDescriptor ui{ToolProviderType::Plugin, "UI Plugin", "ui-1", ""};

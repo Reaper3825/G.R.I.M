@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - System Information - CPU",
+  "root": "plugin_system_info_cpu",
+  "entities": [
+    {
+      "id": "plugin_system_info_cpu",
+      "name": "CPU",
+      "kind": "supporter",
+      "parent": "",
+      "description": "CPU core count. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "cpu"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.cpu",
+        "entity_id": "plugin_system_info_cpu",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

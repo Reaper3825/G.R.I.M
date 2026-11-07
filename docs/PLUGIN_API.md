@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.18.0**. Updated November 6, 2026.
+API version: **3.19.0**. Updated November 7, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -724,9 +724,10 @@ plugins must check v3.4 before reading `get_hardware_snapshot(self)`.
 
 This service requires `GRIM_PERM_SYSTEM` and calls the existing `detectHardware()`
 on each request, matching the former command rather than substituting the cached
-startup inventory. Loading/unloading the plugin performs no detection; requesting
-a fresh snapshot does not replace `g_hardwareInventory`. Existing `get_system_info`
-behavior remains unchanged.
+startup inventory. Since v3.19, the plugin opts into hardware objects and the
+host captures once after successful provider commit. Unload performs no detection;
+requesting a fresh snapshot does not replace `g_hardwareInventory`. Existing
+`get_system_info` behavior remains unchanged.
 
 The service returns host-owned JSON, released with `string_free`:
 
@@ -996,3 +997,17 @@ callers cannot nominate another provider. Host active-call accounting protects
 service lifetime during unload. Registry generation checks prevent stale publication.
 See [Application discovery](APPLICATION_DISCOVERY.md) for schemas, native backend
 coverage, generation guards and refresh behavior.
+
+## Hardware resource opt-in (v3.19)
+
+`register_hardware_resource(self)` requires SYSTEM and is initialization-only.
+After provider commit the host publishes read-only `system_info.snapshot`
+objects: `system` (including Wi-Fi), `cpu`, `memory`, one `gpu_<device_index>` per
+GPU, and one `monitor_<index>` per monitor. Their `grim-system-info-resource` v1
+states contain component data and shared capture/error/stale metadata, excluding
+audio devices, voice backend flags, and Whisper suggestions. Later
+`get_hardware_snapshot` calls from that provider atomically refresh the batch,
+retaining the last good objects with explicit stale/error state on failure.
+Unload/replacement removes the owning generation's objects. The new
+function uses one reserved pointer slot without changing table size or prior
+offsets. See [System Information resources](SYSTEM_INFO_RESOURCES.md).

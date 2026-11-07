@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - System Information - System",
+  "root": "plugin_system_info_system",
+  "entities": [
+    {
+      "id": "plugin_system_info_system",
+      "name": "System",
+      "kind": "supporter",
+      "parent": "",
+      "description": "OS, architecture, Wi-Fi status, device counts, and virtual desktop geometry. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "system"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.system",
+        "entity_id": "plugin_system_info_system",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

@@ -479,7 +479,7 @@ Today’s `detectSystem()` / `SystemInfo` already approximates part of this for 
 
 ### 2. Live resource signal loop
 
-Separate from the static inventory, the body should run a long-lived **ResourceSignalLoop** / **ResourceMonitor** that periodically samples what is currently in use and what is still available.
+Separate from the static inventory, the body should run a long-lived **ResourceSignalLoop** that periodically samples what is currently in use and what is still available.
 
 Minimum useful live signals:
 

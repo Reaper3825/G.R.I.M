@@ -52,14 +52,23 @@ hidden. These operations preserve session identity, movement count and history.
 ## Actions and scope
 
 Supported commands: `look`, `tools`, `go /builtin`, `back`, and
-`inspect <canonical_tool_id>`. Inspection uses the current provider generation and
+`inspect <canonical_tool_id>`, `inspect <object name or resource_id>`, and
+`inspect-resource <resource_id>`. Resource inspection is restricted to the current
+provider room and reconciles current registry state first. Unique exact resource
+names are ASCII case insensitive; ambiguous names or tool-ID collisions require
+the explicit `inspect-resource` route. System Information resources produce
+readable name/fields/capture-status feedback, preserving their structured descriptor
+in `state.resource_inspection`. Resource tile previews use the same formatter.
+See [System Information resources](SYSTEM_INFO_RESOURCES.md) for examples.
+Tool inspection uses the current provider generation and
 only Loaded, Model-classified tools. Invalid or stale selections produce rejected
 action entries. Tool contracts are copied from ToolDescriptor, including argument
 schema, permissions, confirmation metadata, and bindings.
 
-This foundation never executes provider tools. It does not project live resource
-objects, provide sandbox transitions, or generate verified TextWorld witnesses.
-Those require explicit resource/action adapters and policy checks. The existing
+This foundation projects registered resource objects and never executes provider
+tools. Inspection reads published state without triggering capture or mutation.
+It does not provide sandbox mutations or generate verified TextWorld witnesses.
+Those require explicit action adapters and policy checks. The existing
 compiled TextWorld backend remains the authored-world playtest path. The live
 canvas uses the existing document renderer in selection-only mode; its topology
 is owned by the live session, not by editor gestures or undo history.

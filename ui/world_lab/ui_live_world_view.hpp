@@ -31,7 +31,7 @@ public:
             return true;
         };
         transcript_.setReadOnly(true);
-        command_.setPlaceholder("look, tools, resources, inspect-resource <id>");
+        command_.setPlaceholder("look, tools, resources, inspect <object>");
         command_.OnTextSubmitted.Bind([this](const std::string&) { submit(); });
         commands_ = std::make_unique<UIDropdown>("", std::vector<std::string>{"Available actions"}, 0,
             [this](int i, const std::string&) {
@@ -127,7 +127,7 @@ private:
             grid_->addWidget(std::make_shared<ResourceTile>(resource->name, [this, key = resource->resource_id] {
                 for (const auto& item : session_.world().registry().resources) {
                     if (item.resource_id == key && session_.world().roomId({item.provider_type, item.provider_name}) == gridRoom_) {
-                        transcript_.setText(nlohmann::json(item).dump(2));
+                        transcript_.setText(GRIM::WorldLab::resourceInspectionFeedback(item));
                         transcript_.scrollToTop();
                         break;
                     }

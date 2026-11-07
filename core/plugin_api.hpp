@@ -22,7 +22,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 18
+#define GRIM_API_VERSION_MINOR 19
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -384,6 +384,7 @@ typedef struct GrimPluginAPI {
     // Host-owned JSON {format:"grim-hardware-snapshot",version:1,hardware:...,
     // error:null|{kind,message}}. Release with string_free. Null = API failure
     // or denied permission. The cached startup inventory is not modified.
+    // v3.19: also refreshes the caller's opted-in, published hardware objects.
     const char* (*get_hardware_snapshot)(const GrimPluginAPI* self);
     // v3.5: host-owned user timer queue (SYSTEM) and manual memory services
     // (MEMORY). JSON envelope: {format:"grim-runtime-service",version:1,
@@ -443,7 +444,13 @@ typedef struct GrimPluginAPI {
     // Host-owned grim-application-result v1 JSON; release with string_free.
     const char* (*application_service)(const GrimPluginAPI* self, const char* operation,
         const char* arguments, size_t arguments_size);
-    void* reserved[13];
+    // v3.19: SYSTEM permission. Initialization-only opt-in to a host-owned
+    // system_info.snapshot objects (system, cpu, memory, gpu_<index>, monitor_<index>).
+    // Capture starts after commit; subsequent get_hardware_snapshot calls refresh
+    // the batch. Provider retirement removes it. No plugin callbacks or C++
+    // objects cross this boundary.
+    GrimResult (*register_hardware_resource)(const GrimPluginAPI* self);
+    void* reserved[12];
     
 } GrimPluginAPI;
 

@@ -1,0 +1,26 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Resource - System Information - Memory",
+  "root": "plugin_system_info_memory",
+  "entities": [
+    {
+      "id": "plugin_system_info_memory",
+      "name": "Memory",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Total system RAM in MB. No machine-specific readings are stored in this template.",
+      "state": "open",
+      "resource_binding": {
+        "type": "system_info.snapshot",
+        "key": "memory"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.system_info.memory",
+        "entity_id": "plugin_system_info_memory",
+        "version": 1
+      },
+      "initial_state": {}
+    }
+  ]
+}

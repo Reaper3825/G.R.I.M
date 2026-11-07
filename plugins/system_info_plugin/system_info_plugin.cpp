@@ -21,7 +21,7 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
-        !api->get_hardware_snapshot) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->get_hardware_snapshot || !api->register_hardware_resource) return GRIM_ERROR_API_VERSION_MISMATCH;
     hostHardware::host = api;
     grim::plugin::setLoggingAPI(api);
     GrimToolRegistration tool;
@@ -38,7 +38,8 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     d.is_informational = 1;
     const char* examples[] = {"system_info"};
     d.examples = {examples, 1};
-    return api->register_tools(api, &tool, 1);
+    const auto registered = api->register_tools(api, &tool, 1);
+    return registered == GRIM_OK ? api->register_hardware_resource(api) : registered;
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     grim::plugin::setLoggingAPI(nullptr);

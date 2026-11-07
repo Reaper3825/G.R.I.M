@@ -83,6 +83,18 @@ void runLiveWorldUITests() {
           "Resource divider right-click did not restore its default height");
     click(liveFixtureTileLabel.x + 2, liveFixtureTileLabel.y + 2);
     check(renderedTestText.find("\"kind\": \"application\"") != std::string::npos, "Grid tile failed to inspect previewed resource");
+    auto cpu = item;
+    cpu.resource_id = "app:0"; cpu.name = "Fixture app 0"; cpu.runtime_id = 1;
+    cpu.kind = "system_info.snapshot";
+    cpu.state = {{"format", "grim-system-info-resource"}, {"version", 1}, {"component", "cpu"},
+        {"data", {{"cpu_cores", 12}}}, {"capture_time_ns", 123000000000LL}, {"stale", false}, {"error", nullptr}};
+    check(registry.publishResource(cpu), "Publish CPU tile fixture failed");
+    frame({});
+    click(liveFixtureTileLabel.x + 2, liveFixtureTileLabel.y + 2);
+    check(renderedTestText.find("Logical cores: 12") != std::string::npos &&
+          renderedTestText.find("Status: Current") != std::string::npos &&
+          renderedTestText.find("\"cpu_cores\"") == std::string::npos,
+          "Hardware tile showed raw JSON instead of readable inspection");
     const auto path = view.session().world().providerPath(GRIM::WorldLab::providerKey(provider));
     const auto actions = view.session().observation().at("admissible_commands").get<std::vector<std::string>>();
     const auto actionIndex = std::find(actions.begin(), actions.end(), "go " + path) - actions.begin();
