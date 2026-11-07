@@ -11,6 +11,7 @@
 #include <memory>
 #include "ui/primitives/ui_grid.hpp"
 #include "ui/primitives/ui_scrollbox.hpp"
+#include "ui/primitives/ui_split_pane.hpp"
 
 // Separate live view keeps the authored document independent of live topology.
 class UILiveWorldView {
@@ -18,6 +19,8 @@ public:
     UILiveWorldView() {
         canvas_.selectionOnly = true;
         canvas_.radialPaths = true;
+        canvas_.showRoomLabels = false;
+        canvas_.nodeStyle.titleSize = 18.f;
         grid_->setAutoColumns(165);
         grid_->setSpacing(6, 6);
         grid_->setRowHeight(32);
@@ -57,7 +60,12 @@ public:
         auto* expanded = commands_->isExpanded() ? commands_.get() : nullptr;
         if (expanded) expanded->update(clipped, dt);
         if (commands_.get() != expanded) commands_->update(clipped, dt);
-        for (auto* w : widgets()) if (w != commands_.get()) w->update(clipped, dt);
+        resourceSplit_.update(clipped, dt);
+        layout(area);
+        previewSplit_.update(clipped, dt);
+        layout(area);
+        for (auto* w : widgets())
+            if (w != commands_.get() && w != &previewSplit_ && w != &resourceSplit_) w->update(clipped, dt);
     }
     void draw(OverlayRenderer& renderer, const PanelRect& area) {
         layout(area);
@@ -65,6 +73,8 @@ public:
         renderer.drawText({area.origin.x + 10, area.origin.y + 12}, "Live System World", UITheme::Colors::TextPrimary, 16);
         canvas_.drawOverlay(renderer, {});
         transcript_.drawOverlay(renderer, {});
+        previewSplit_.drawOverlay(renderer, {});
+        resourceSplit_.drawOverlay(renderer, {});
         renderer.drawText({scroll_.getPosition().x, scroll_.getPosition().y - 18},
             gridTitle_, UITheme::Colors::TextPrimary, 14);
         scroll_.drawOverlay(renderer, {});
@@ -170,7 +180,7 @@ private:
         }
     }
     std::vector<Widget*> widgets() {
-        return {commands_.get(), send_.get(), exit_.get(), fit_.get(), &command_, &transcript_, &canvas_, &scroll_};
+        return {commands_.get(), send_.get(), exit_.get(), fit_.get(), &command_, &transcript_, &canvas_, &scroll_, &previewSplit_, &resourceSplit_};
     }
     static void place(Widget& w, float x, float y, float width, float height = 28) {
         w.setPosition(x, y); w.setSize(std::max(1.f, width), std::max(1.f, height));
@@ -179,11 +189,21 @@ private:
         const float x = a.origin.x + 10, y = a.origin.y, w = a.size.x - 20;
         place(*exit_, x + w - 120, y + 6, 120);
         place(*commands_, x, y + 80, w - 65); place(*fit_, x + w - 55, y + 80, 55);
-        const float left = w * .45f, height = a.size.y - 180;
-        const float mapHeight = std::max(1.f, height * .60f - 12);
-        place(canvas_, x, y + 118, left, mapHeight);
-        place(transcript_, x + left + 10, y + 118, w - left - 10, mapHeight);
-        place(scroll_, x, y + 118 + mapHeight + 22, w, height - mapHeight - 22);
+        const float height = std::max(0.f, a.size.y - 180);
+        resourceSplit_.setPosition(x, y + 118);
+        resourceSplit_.setSize(std::max(0.f, w), height);
+        resourceSplit_.setMinimumSizes(140, 100);
+        resourceSplit_.setDefaultSecondSize(height * .40f);
+        const auto preview = resourceSplit_.firstRect(), resources = resourceSplit_.secondRect();
+        previewSplit_.setPosition(preview.origin);
+        previewSplit_.setSize(preview.size);
+        previewSplit_.setMinimumSizes(160, 200);
+        previewSplit_.setDefaultSecondSize(std::max(0.f, w - 12) * .55f);
+        const auto map = previewSplit_.firstRect(), viewer = previewSplit_.secondRect();
+        canvas_.setPosition(map.origin); canvas_.setSize(map.size);
+        transcript_.setPosition(viewer.origin); transcript_.setSize(viewer.size);
+        scroll_.setPosition(resources.origin.x, resources.origin.y + std::min(22.f, resources.size.y));
+        scroll_.setSize(resources.size.x, std::max(0.f, resources.size.y - 22));
         grid_->setSize(std::max(1.f, w - 16), scroll_.getSize().y);
         grid_->layout();
         const float content = grid_->getContentHeight();
@@ -194,6 +214,8 @@ private:
     GRIM::WorldLab::LiveWorldSession session_;
     GRIM::WorldLab::Editor editor_;
     UIWorldCanvas canvas_{editor_};
+    UISplitPane previewSplit_{UISplitPane::Axis::Horizontal};
+    UISplitPane resourceSplit_{UISplitPane::Axis::Vertical};
     UITextArea transcript_{"", "", {}};
     UIInputBox command_;
     UIScrollBox scroll_;

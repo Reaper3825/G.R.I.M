@@ -43,6 +43,7 @@ Vec2 UIWorldCanvas::port(const std::string& id,const std::string& dir) const {
 }
 UINode UIWorldCanvas::roomNode(const std::string& id) const {
     UINode node;
+    node.style=nodeStyle;
     node.bounds=roomRect(id);
     if(const auto* entity=editor_.document().find(id)) node.title=entity->name;
     node.style.border=playRoom_==id?UITheme::Colors::Success:
@@ -185,8 +186,10 @@ void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
         const auto at=rect.origin;
         roomNode(p.id).draw(*this,r);
         r.pushClipRect(worldToScreen({at.x+8,at.y+2}),{(width-16)*getZoom(),(rect.size.y-4)*getZoom()});
-        const auto label=playRoom_==p.id?"PLAYTEST LOCATION":d.spawn==p.id?"PLAYER START":"ROOM";
-        drawWorldText(r,{at.x+12,at.y+28},d.paths.empty()?label:d.roomPath(p.id)+"  "+label,d.spawn==p.id || playRoom_==p.id?Success:TextMuted,10);
+        if(showRoomLabels) {
+            const auto label=playRoom_==p.id?"PLAYTEST LOCATION":d.spawn==p.id?"PLAYER START":"ROOM";
+            drawWorldText(r,{at.x+12,at.y+28},d.paths.empty()?label:d.roomPath(p.id)+"  "+label,d.spawn==p.id || playRoom_==p.id?Success:TextMuted,10);
+        }
         const auto children=rows(p.id);
         if(children.empty() && !selectionOnly) drawWorldText(r,{at.x+12,at.y+header},"Select room to add objects",TextMuted,12);
         for(size_t i=0;i<children.size();++i) {

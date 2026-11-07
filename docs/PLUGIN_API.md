@@ -685,18 +685,13 @@ rich snapshots, alias lookup, preserved results, statistics parsing, 70-KB
 entries, metadata updates/removals, and DLL removal. See the
 [plugin instructions](../plugins/README.md#tool-inspection-plugin).
 
-### Application alias migration (v3.3)
+### Retained application alias services (v3.3)
 
-`aliases_plugin` supplies the existing canonical command IDs `alias list`,
-`alias info`, and `alias refresh`. These application aliases are separate from
-ToolRegistry command aliases. The host keeps ownership of `aliases.cpp`, loaded
-user/auto data, persistence, normalization, lookup, scanning, and refresh lifecycle.
-The plugin owns command formatting, metadata, and results. Loading or unloading
-the plugin does not initialize, clear, scan, or otherwise change the host store.
-
-API v3.3 consumes two more reserved slots while retaining table size and earlier
-service offsets. Existing v3.0/v3.1/v3.2 binaries remain supported. The alias
-plugin requires v3.3 before reading either new function pointer.
+The redundant Aliases plugin and its three tools have been removed. Application
+discovery uses the Application plugin. The host retains `aliases.cpp`, its cached
+user/auto data, and these API v3.3 slots for compatibility. These application
+aliases remain separate from ToolRegistry command aliases. Removing the plugin
+does not clear the cache consumed by the application's legacy-aliases backend.
 
 - `get_alias_snapshot(self, key)` returns host-owned version-1 JSON:
   `{"format":"grim-alias-snapshot","version":1,"entries":[],"info":""}`.
@@ -712,20 +707,10 @@ plugin requires v3.3 before reading either new function pointer.
   standard exception produces `completed:false` with error text. Null means API
   failure. No registered command is dispatched by this service.
 
-The old command wrappers' behavior is intentionally retained: list/refresh ignore
-arguments; an empty info argument fails; a missing name normally succeeds with
-the host's nonempty "not found in aliases" text. Only empty host info uses the
-configured `ERR_ALIAS_NOT_FOUND` message. Refresh reports its original fixed
-success result whenever the host function returns, including its busy or failed
-status returns, and preserves the original failure response on standard exceptions.
-The service does not repair or replace the existing host refresh implementation.
-
-The optional `-AliasesPluginDirectory` test argument loads the real DLL against
-a controlled alias-store/scanner fixture. It checks every result field, host
-iteration order and live data, lookup argument handling, permissions, refresh
-normal/busy/failed/exception outcomes, large listings, and removal without clearing
-host aliases. No live application-directory scan or alias database write occurs.
-See [build and deployment instructions](../plugins/README.md#aliases-plugin).
+Host alias service tests run in the plugin API ownership suite using a controlled
+store/scanner fixture. They cover permissions, snapshots, lookup, and refresh
+normal/busy/failed/exception outcomes without scanning application folders or
+writing the real alias database.
 
 ### System information migration (v3.4)
 

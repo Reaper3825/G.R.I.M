@@ -4,6 +4,7 @@
 #include "core/input_parser.hpp"
 #include <thread>
 #include <iostream>
+#include <cmath>
 
 extern std::string renderedTestText;
 extern Vec2 liveFixtureRoomLabel, liveFixtureTileLabel;
@@ -35,6 +36,20 @@ void runLiveWorldUITests() {
     frame({});
     check(view.session().world().document().entities.size() == initialRooms + 1, "Published provider room did not appear automatically");
     check(renderedTestText.find("Live UI fixture") != std::string::npos, "Automatic provider room not drawn");
+    const auto originalLabel = liveFixtureRoomLabel;
+    const float dividerX = 10 + (area.size.x - 20 - 12) * .45f + 6;
+    InputState resize;
+    resize.mousePos = {dividerX, 220}; resize.mousePressed[0] = resize.mouseDown[0] = true; frame(resize);
+    resize.mousePressed[0] = false; resize.mousePos.x += 80; frame(resize);
+    resize.mouseDown[0] = false; resize.mouseReleased[0] = true; frame(resize);
+    click(950, 94); // Refit to the enlarged map viewport.
+    check(std::abs(liveFixtureRoomLabel.x - originalLabel.x) > 1,
+          "Live preview divider did not resize the map beside the viewer");
+    InputState resetSplit;
+    resetSplit.mousePos = {dividerX + 80, 220}; resetSplit.mousePressed[1] = resetSplit.mouseDown[1] = true; frame(resetSplit);
+    frame({}); click(950, 94);
+    check(std::abs(liveFixtureRoomLabel.x - originalLabel.x) < 1,
+          "Live preview divider right-click did not restore its default split");
     ResourceDescriptor item;
     item.provider_name = provider.name;
     item.provider_instance = provider.instance;
@@ -51,6 +66,21 @@ void runLiveWorldUITests() {
     check(view.session().world().location() == "system_hub" &&
           renderedTestText.find("Live UI fixture  (60 resources)") != std::string::npos &&
           renderedTestText.find("Fixture app 0") != std::string::npos, "Room click failed to preview its resource grid");
+    const auto originalTile = liveFixtureTileLabel;
+    const float resourceDividerY = 118 + (area.size.y - 180) * .60f - 6;
+    InputState resizeResources;
+    resizeResources.mousePos = {700, resourceDividerY};
+    resizeResources.mousePressed[0] = resizeResources.mouseDown[0] = true; frame(resizeResources);
+    resizeResources.mousePressed[0] = false; resizeResources.mousePos.y -= 60; frame(resizeResources);
+    resizeResources.mouseDown[0] = false; resizeResources.mouseReleased[0] = true; frame(resizeResources);
+    check(std::abs(liveFixtureTileLabel.y - (originalTile.y - 60)) < 1,
+          "Resource divider did not enlarge the bottom viewer");
+    InputState resetResources;
+    resetResources.mousePos = {700, resourceDividerY - 60};
+    resetResources.mousePressed[1] = resetResources.mouseDown[1] = true; frame(resetResources);
+    frame({});
+    check(std::abs(liveFixtureTileLabel.y - originalTile.y) < 1,
+          "Resource divider right-click did not restore its default height");
     click(liveFixtureTileLabel.x + 2, liveFixtureTileLabel.y + 2);
     check(renderedTestText.find("\"kind\": \"application\"") != std::string::npos, "Grid tile failed to inspect previewed resource");
     const auto path = view.session().world().providerPath(GRIM::WorldLab::providerKey(provider));

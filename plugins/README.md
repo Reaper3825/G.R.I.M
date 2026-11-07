@@ -201,31 +201,13 @@ metadata, and folder removal. API v3.2 permits result messages up to 16 MiB so
 catalog listings can exceed 64 KiB; other result field limits stay unchanged.
 World Lab object population remains a separate integration step.
 
-## Aliases plugin
+## Removed Aliases plugin
 
-`aliases_plugin` supplies `alias list`, `alias info`, and `alias refresh` using
-API v3.3. It accesses the existing host application-alias store; it does not
-create a second store, scanner, persistence layer, or background refresh thread.
-These aliases are separate from ToolRegistry's command aliases.
-
-    cmake -S plugins/aliases_plugin -B .codex-build/aliases-plugin -G "Visual Studio 17 2022" -A x64
-    cmake --build .codex-build/aliases-plugin --config Release --target aliases_plugin --parallel 2
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -AliasesPluginDirectory .codex-build/aliases-plugin/plugins
-
-Deploy `.codex-build/aliases-plugin/plugins/aliases_plugin.dll` into GRIM's
-`plugins/` folder. Rebuild the host separately for API v3.3 and removal of the
-old command registrations. Earlier v3.x plugin binaries remain supported by the
-new host. The plugin imports no host C++ symbols and only refresh requires
-filesystem permission and confirmation metadata.
-
-Original messages, error codes, categories, voice, colors, and argument behavior
-remain unchanged. In particular, unknown alias info normally succeeds with a
-"not found in aliases" message. Refresh retains the existing wrapper's fixed
-success response when the host refresh function returns normally, even for busy
-or failed returned statuses; thrown standard exceptions produce the original
-failure result. Tests exercise these behaviors using a controlled host fixture,
-without scanning actual application folders or writing the real alias database.
-Unloading the DLL removes its commands and leaves host alias state intact.
+The redundant Aliases plugin and its `alias list`, `alias info`, and `alias refresh`
+tools have been removed. Use the Application plugin's `applications.*` tools for
+application discovery and inspection. The host alias cache remains an additional
+application-discovery source; API v3.3 alias service slots remain compatible.
+Remove stale deployed `aliases_plugin.dll` files from plugin load directories.
 
 ## System information plugin
 

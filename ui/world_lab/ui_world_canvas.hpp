@@ -11,6 +11,8 @@ public:
     std::string selected;
     bool selectionOnly = false; // Asset preview: select contents without changing topology.
     bool radialPaths = false; // Live hub: connect facing card edges rather than south/north ports.
+    bool showRoomLabels = true;
+    UINodeStyle nodeStyle;
     std::function<bool(const std::string&)> onSelect;
     std::function<void(const std::string&)> onError;
     std::function<void()> onChanged;

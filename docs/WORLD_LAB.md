@@ -721,6 +721,12 @@ cards move apart. Adding/removing providers or contents recomputes spacing;
 state-only updates retain positions. Reflow is immediate, with the viewer's
 existing automatic fit. Authored-world positions remain manually controlled.
 
+The live canvas and side viewer share a `UISplitPane`. Drag the divider to resize
+their widths; right-click it to restore the default split. Custom widths remain
+when leaving and returning to the live view. Use Fit to reframe the map after resizing.
+The bottom resource viewer uses a second, vertical `UISplitPane`: drag its divider
+up or down to adjust its height, or right-click to restore the default height.
+
 The live viewer consumes provider-owned resource descriptors alongside tools.
 All nine standard panels appear as resources in the UI provider room after
 host factory creation: console, settings, training_control, data_hub, storage,
