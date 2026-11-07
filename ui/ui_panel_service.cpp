@@ -1,7 +1,70 @@
 #include "ui_panel_service.hpp"
 #include "ui_root.hpp"
+#include <exception>
+#include <utility>
 
 namespace GRIM::UI {
+void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
+                            std::vector<std::string> implementations) {
+    UIRoot::get().postTask([lease, implementations = std::move(implementations)] {
+        std::lock_guard lock(lease->mutex);
+        if (lease->retired) return;
+        auto& root = UIRoot::get();
+        try {
+            lease->panels.reserve(implementations.size());
+            for (const auto& implementation : implementations) {
+                // Allocate the identity slot before creating a live panel.
+                lease->panels.emplace_back();
+                auto& identity = lease->panels.back();
+                auto panel = root.createPanelFromFactory(implementation);
+                try {
+                    identity = {panel->getPanelKey(), panel->getPanelID()};
+                } catch (...) {
+                    root.removePanel(panel->getPanelKey());
+                    throw;
+                }
+                LOG_DEBUG("UIPanelService", lease->owner + " created panel: " + identity.first);
+            }
+            for (const auto& [key, runtime] : lease->panels)
+                root.bindPanelResource(key, runtime, lease->providerName, lease->owner);
+        } catch (...) {
+            const auto failure = std::current_exception();
+            // A provider's panel batch is all-or-nothing on the UI thread.
+            for (const auto& [key, runtime] : lease->panels) {
+                auto panel = root.getPanelByKey(key);
+                if (panel && panel->getPanelID() == runtime) root.removePanel(key);
+            }
+            lease->panels.clear();
+            try { std::rethrow_exception(failure); }
+            catch (const std::exception& error) {
+                LOG_ERROR("UIPanelService", lease->owner + " panel activation failed: " + error.what());
+            } catch (...) {
+                LOG_ERROR("UIPanelService", lease->owner + " panel activation failed: unknown exception");
+            }
+        }
+    });
+}
+
+void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
+    {
+        std::lock_guard lock(lease->mutex);
+        if (lease->retired) return;
+        lease->retired = true;
+    }
+    UIRoot::get().postTask([lease] {
+        std::lock_guard lock(lease->mutex);
+        auto& root = UIRoot::get();
+        for (const auto& [key, runtime] : lease->panels) {
+            auto panel = root.getPanelByKey(key);
+            if (panel && panel->getPanelID() == runtime) {
+                root.removePanel(key);
+                LOG_DEBUG("UIPanelService", lease->owner + " removed panel: " + key);
+            }
+        }
+        lease->panels.clear();
+    });
+}
+
 namespace {
 nlohmann::json metadata(const UIPanelInfo& panel) {
     return {{"panel_id", panel.key}, {"title", panel.title}, {"runtime_id", panel.runtimeId},

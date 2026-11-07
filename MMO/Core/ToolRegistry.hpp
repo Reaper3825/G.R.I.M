@@ -9,6 +9,7 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+#include <tuple>
 
 struct CommandResult;
 
@@ -43,6 +44,13 @@ public:
     bool publishProvider(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
                          const std::string& old_instance = {});
     ToolRegistrySnapshot snapshot() const;
+    // Host publication only. Resource changes do not invalidate tool selections.
+    bool publishResource(const ResourceDescriptor& resource);
+    // Atomically replace one resource kind for an exact provider generation.
+    bool replaceResources(const ProviderDescriptor& provider, const std::string& kind,
+                          const std::vector<ResourceDescriptor>& resources);
+    void removeResource(const ResourceDescriptor& resource);
+    uint64_t resourceVersion() const;
     // Atomically replace one loaded generation, including removing vanished tools.
     bool replaceProvider(const std::string& provider, const std::string& old_instance,
                          const std::vector<ToolRegistration>& tools,
@@ -102,6 +110,10 @@ private:
     std::map<std::pair<ToolProviderType, std::string>, ProviderDescriptor> providers_;
     Aliases alias_index_;
     uint64_t version_ = 0;
+    uint64_t resourceVersion_ = 0;
+    using ResourceKey = std::tuple<ToolProviderType, std::string, std::string>;
+    std::map<ResourceKey, ResourceDescriptor> resources_;
+    void pruneResourcesLocked();
     std::vector<ToolRegistryListener*> listeners_;
 };
 } // namespace GRIM::MMO

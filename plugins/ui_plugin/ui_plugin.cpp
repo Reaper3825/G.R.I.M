@@ -84,7 +84,7 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        !api->ui_panel_service) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->ui_panel_service || !api->register_ui_panel) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
     GrimToolRegistration tools[6];
     const char* ids[] = {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front", "ui.poll"};
@@ -138,6 +138,17 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             if (i == 2 || i == 3) d.argument_schema_json = R"({"type":"object","properties":{"panel_id":{"type":"string","minLength":1,"maxLength":256},"expected_runtime_id":{"type":"integer","minimum":1}},"required":["panel_id"],"additionalProperties":false})";
         }
     }
-    return api->register_tools(api, tools, 6);
+    const auto result = api->register_tools(api, tools, 6);
+    if (result != GRIM_OK) return result;
+    const char* implementations[] = {
+        "ui.console", "ui.settings", "ui.training_control", "ui.data_hub",
+        "ui.storage", "ui.calendar", "ui.geospatial", "ui.physical_environment",
+        "ui.digital_environment"
+    };
+    for (const auto* implementation : implementations) {
+        const auto registered = api->register_ui_panel(api, implementation);
+        if (registered != GRIM_OK) return registered;
+    }
+    return GRIM_OK;
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }

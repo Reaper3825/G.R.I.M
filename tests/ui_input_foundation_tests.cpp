@@ -27,11 +27,23 @@ void OverlayRenderer::drawGlassPanel(const Vec2&, const Vec2&, float, uint32_t, 
 void logDebug(const std::string&, const std::string&) {}
 void logError(const std::string&, const std::string&) {}
 void OverlayRenderer::drawRect(const Vec2&, const Vec2&, uint32_t) {}
-void OverlayRenderer::drawRoundedRect(const Vec2&, const Vec2&, uint32_t, float) {}
+float lastTestRoundedRadius = 0;
+void OverlayRenderer::drawRoundedRect(const Vec2&, const Vec2&, uint32_t, float radius) { lastTestRoundedRadius = radius; }
 void OverlayRenderer::drawRoundedBorder(const Vec2&, const Vec2&, uint32_t, float, float) {}
 std::string renderedTestText;
-void OverlayRenderer::drawText(const Vec2&, const std::string& text, uint32_t, float) { renderedTestText += text + "\n"; }
-float OverlayRenderer::measureTextWidth(const std::string& text, float) const { return static_cast<float>(text.size()) * 8; }
+Vec2 liveFixtureRoomLabel{}, liveFixtureTileLabel{};
+Vec2 lastTestTextPosition{};
+std::string lastTestText;
+float lastTestTextSize = 0;
+void OverlayRenderer::drawText(const Vec2& position, const std::string& text, uint32_t, float size) {
+    lastTestTextPosition = position; lastTestText = text; lastTestTextSize = size;
+    renderedTestText += text + "\n";
+    if (text == "Fixture app 0" && position.y > 350) liveFixtureTileLabel = position;
+    if (text == "Live UI fixture" && position.x < 450) liveFixtureRoomLabel = position;
+}
+float OverlayRenderer::measureTextWidth(const std::string& text, float size) const {
+    return static_cast<float>(text.size()) * 8 * size / UITheme::Typography::BodySize;
+}
 std::vector<std::string> OverlayRenderer::wrapText(const std::string& text, float, float) const { return {text}; }
 void OverlayRenderer::drawLine(const Vec2&, const Vec2&, uint32_t, float) {}
 void OverlayRenderer::pushClipRect(const Vec2&, const Vec2&) {}

@@ -1,4 +1,5 @@
 #include "ui/primitives/ui_canvas.hpp"
+#include "ui/primitives/ui_node.hpp"
 #include "ui/primitives/ui_button.hpp"
 #include "ui/primitives/ui_scrollbox.hpp"
 #include "ui/input/ui_input_router.hpp"
@@ -7,6 +8,10 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+
+extern Vec2 lastTestTextPosition;
+extern std::string lastTestText;
+extern float lastTestTextSize, lastTestRoundedRadius;
 
 namespace {
 void require(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
@@ -19,6 +24,34 @@ void frame(UICanvas& canvas, const InputState& input, bool cancel = false) {
 }
 }
 void runCanvasTests() {
+    // Generic nodes have no World Lab dependency and use canvas transforms for rendering.
+    {
+        UICanvas viewport;
+        viewport.setPosition(50,30); viewport.setSize(800,600); viewport.setView({10,20},2);
+        UINode node;
+        node.bounds={{30,40},{200,80}}; node.title="Node";
+        require(node.contains({130,80}) && !node.contains({30,40}) && !node.contains({230,80}),
+                "Rounded node hit testing included an empty corner or outside edge");
+        require(closeEnough(node.anchor(UINodeSide::North),{130,40}) &&
+                closeEnough(node.anchor(UINodeSide::East),{230,80}) &&
+                closeEnough(node.anchor(UINodeSide::South),{130,120}) &&
+                closeEnough(node.anchor(UINodeSide::West),{30,80}), "Node side anchors");
+        require(closeEnough(node.anchorToward({530,80}),{230,80}) &&
+                closeEnough(node.anchorToward({130,80}),{130,80}), "Node directional anchors");
+        OverlayRenderer renderer;
+        node.draw(viewport,renderer);
+        const auto center=viewport.worldToScreen({130,40});
+        require(lastTestText=="Node" && closeEnough(lastTestTextPosition.x + renderer.measureTextWidth("Node",30)/2,center.x) &&
+                closeEnough(lastTestTextSize,30) && closeEnough(lastTestRoundedRadius,20),
+                "Node title centering or zoom scaling");
+        node.bounds.size.x=100; node.style.titlePadding=0;
+        node.title="\xE7\x8C\xAB\xE7\x8C\xAB\xE7\x8C\xAB\xE7\x8C\xAB\xE7\x8C\xAB";
+        node.draw(viewport,renderer);
+        require(lastTestText=="\xE7\x8C\xAB\xE7\x8C\xAB...", "Node ellipsis split a UTF-8 codepoint");
+        node.bounds.origin={10000,10000}; node.title="Offscreen";
+        node.draw(viewport,renderer);
+        require(lastTestText!="Offscreen", "Node ignored canvas visibility");
+    }
     UICanvas canvas;
     canvas.setPosition(100,50); canvas.setSize(400,300);
     canvas.setView({-20,40}, 2);

@@ -1,5 +1,12 @@
 # Native GRIM tool plugins
 
+API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
+declares all nine standard panels; bootstrap registers host factories without
+creating their instances. Rebuild the host and UI plugin together for this
+migration. Older UI DLLs do not declare the full panel set. Dynamic surfaces
+and OSINT panels retain their current paths.
+See [provider panel lifecycle](../docs/PLUGIN_API.md#provider-panel-lifecycle-v317).
+
 API v3.14 adds guarded hide (`GRIM_UI_HIDE_CURRENT`). Like `ui.show`, `ui.hide`
 accepts optional `expected_runtime_id`; World Lab supplies it automatically when
 resolving an observed panel. Existing unguarded hide JSON remains supported.
@@ -456,3 +463,14 @@ It requires SYSTEM and FILESYSTEM permissions and calls the host-owned shared
 schedule_service. See [tool contract](../docs/SCHEDULING_TOOLS.md). Standalone
 and optional host CMake builds include the plugin; deploy through the existing
 plugin deployment mechanism. No built-in duplicate registrations are added.
+
+## Application discovery (API v3.18)
+
+The Application plugin now also supplies applications.list, applications.refresh,
+applications.inspect and applications.launch. It declares a host application catalog
+at initialization; native discovery publishes resources into its provider room.
+It requires SYSTEM + FILESYSTEM + PROCESS permissions. Existing open/search retain
+their original behavior. Rebuild the host and Application plugin together before
+using these services; older hosts reject this newer plugin API version.
+See [Application discovery](../docs/APPLICATION_DISCOVERY.md) for backend boundaries,
+resource identities, guarded launch arguments, testing and platform limitations.

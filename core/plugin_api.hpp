@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.16
+// G.R.I.M Plugin API v3.18
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -22,7 +22,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 16
+#define GRIM_API_VERSION_MINOR 18
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -430,7 +430,20 @@ typedef struct GrimPluginAPI {
     // JSON object input <=64 KiB; host-owned JSON result, release with string_free.
     const char* (*schedule_service)(const GrimPluginAPI* self, const char* operation,
         const char* arguments, size_t arguments_size);
-    void* reserved[16];
+    // v3.17: UI permission. Initialization-only declaration of a host panel
+    // implementation (1-256 bytes). Copied and staged until provider commit.
+    // GRIM_OK accepts the declaration; UI-thread creation is asynchronous.
+    // The host owns the instance and removes it when this provider retires.
+    GrimResult (*register_ui_panel)(const GrimPluginAPI* self, const char* implementation_key);
+    // v3.18: SYSTEM + FILESYSTEM. Initialization-only opt-in to host application
+    // discovery. Resources belong to this provider generation and retire with it.
+    GrimResult (*register_application_catalog)(const GrimPluginAPI* self);
+    // SYSTEM + FILESYSTEM; launch additionally requires PROCESS. Published providers only.
+    // Operations: list, refresh, inspect, launch. JSON object <=64 KiB, copied synchronously.
+    // Host-owned grim-application-result v1 JSON; release with string_free.
+    const char* (*application_service)(const GrimPluginAPI* self, const char* operation,
+        const char* arguments, size_t arguments_size);
+    void* reserved[13];
     
 } GrimPluginAPI;
 

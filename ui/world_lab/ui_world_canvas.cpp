@@ -1,4 +1,5 @@
 #include "ui_world_canvas.hpp"
+#include "world_card_layout.hpp"
 #include "core/input_parser.hpp"
 #include "ui/overlay_renderer.hpp"
 #include <algorithm>
@@ -6,8 +7,7 @@
 
 using namespace GRIM::WorldLab;
 namespace {
-constexpr float width=230, header=44, rowHeight=25;
-bool inside(Vec2 p, CanvasRect r) { return p.x>=r.origin.x && p.y>=r.origin.y && p.x<r.origin.x+r.size.x && p.y<r.origin.y+r.size.y; }
+constexpr float width=CardLayout::width, header=CardLayout::header, rowHeight=CardLayout::rowHeight;
 float distance(Vec2 a,Vec2 b) { return std::hypot(a.x-b.x,a.y-b.y); }
 const std::vector<std::string> directions{"north","east","south","west"};
 float segmentDistance(Vec2 p,Vec2 a,Vec2 b) {
@@ -32,19 +32,26 @@ CanvasRect UIWorldCanvas::roomRect(const std::string& id) const {
     const auto* p=editor_.document().position(id); if(!p) return {};
     Vec2 at{p->x,p->y};
     if(drag_==id && direction_.empty() && moved_) {at.x+=pointer_.x-start_.x; at.y+=pointer_.y-start_.y;}
-    return {at,{width,header+std::max(1.f,static_cast<float>(rows(id).size()))*rowHeight+12}};
+    return {at,{width,CardLayout::height(rows(id).size())}};
 }
 Vec2 UIWorldCanvas::port(const std::string& id,const std::string& dir) const {
-    const auto r=roomRect(id); Vec2 p{r.origin.x+r.size.x/2,r.origin.y+r.size.y/2};
-    if(dir=="north") p.y=r.origin.y;
-    if(dir=="south") p.y+=r.size.y/2;
-    if(dir=="east") p.x+=r.size.x/2;
-    if(dir=="west") p.x=r.origin.x;
-    return p;
+    const auto node=roomNode(id);
+    if(dir=="north") return node.anchor(UINodeSide::North);
+    if(dir=="south") return node.anchor(UINodeSide::South);
+    if(dir=="east") return node.anchor(UINodeSide::East);
+    return node.anchor(UINodeSide::West);
+}
+UINode UIWorldCanvas::roomNode(const std::string& id) const {
+    UINode node;
+    node.bounds=roomRect(id);
+    if(const auto* entity=editor_.document().find(id)) node.title=entity->name;
+    node.style.border=playRoom_==id?UITheme::Colors::Success:
+        selected==id?UITheme::Colors::BorderFocus:UITheme::Colors::BorderPrimary;
+    return node;
 }
 std::string UIWorldCanvas::hitRoom(Vec2 p) const {
     const auto& layout=editor_.document().layout;
-    for(auto it=layout.rbegin();it!=layout.rend();++it) if(inside(p,roomRect(it->id))) return it->id;
+    for(auto it=layout.rbegin();it!=layout.rend();++it) if(roomNode(it->id).contains(p)) return it->id;
     return {};
 }
 std::string UIWorldCanvas::hitEntity(Vec2 p) const {
@@ -161,15 +168,10 @@ void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
     const auto& d=editor_.document();
     for(const auto& p:d.paths)if(!p.parent.empty()) {
         if(!radialPaths) {drawWorldLine(r,port(p.parent,"south"),port(p.id,"north"),Primary,2.f);continue;}
-        const auto parent=roomRect(p.parent), child=roomRect(p.id);
-        const Vec2 a{parent.origin.x+parent.size.x/2,parent.origin.y+parent.size.y/2};
-        const Vec2 b{child.origin.x+child.size.x/2,child.origin.y+child.size.y/2};
-        const auto edge=[](Vec2 center,Vec2 target,CanvasRect rect) {
-            const float dx=target.x-center.x,dy=target.y-center.y;
-            const float extent=std::max(std::abs(dx)/(rect.size.x/2),std::abs(dy)/(rect.size.y/2));
-            return extent>0?Vec2{center.x+dx/extent,center.y+dy/extent}:center;
-        };
-        drawWorldLine(r,edge(a,b,parent),edge(b,a,child),Primary,2.f);
+        const auto parent=roomNode(p.parent), child=roomNode(p.id);
+        const Vec2 a{parent.bounds.origin.x+parent.bounds.size.x/2,parent.bounds.origin.y+parent.bounds.size.y/2};
+        const Vec2 b{child.bounds.origin.x+child.bounds.size.x/2,child.bounds.origin.y+child.bounds.size.y/2};
+        drawWorldLine(r,parent.anchorToward(b),child.anchorToward(a),Primary,2.f);
     }
     for(const auto& edge:d.passages) {
         const auto a=port(edge.from,edge.direction),b=port(edge.to,opposite(edge.direction));
@@ -180,15 +182,13 @@ void UIWorldCanvas::drawCanvasContent(OverlayRenderer& r) {
     }
     for(const auto& p:d.layout) {
         const auto rect=roomRect(p.id); if(!isWorldRectVisible(rect)) continue;
-        const auto* e=d.find(p.id); const auto at=rect.origin;
-        drawWorldRect(r,rect,playRoom_==p.id?Success:selected==p.id?BorderFocus:BorderPrimary);
-        drawWorldRect(r,{{at.x+1,at.y+1},{rect.size.x-2,rect.size.y-2}},CardSurface);
+        const auto at=rect.origin;
+        roomNode(p.id).draw(*this,r);
         r.pushClipRect(worldToScreen({at.x+8,at.y+2}),{(width-16)*getZoom(),(rect.size.y-4)*getZoom()});
-        drawWorldText(r,{at.x+12,at.y+9},e->name,TextPrimary,15);
         const auto label=playRoom_==p.id?"PLAYTEST LOCATION":d.spawn==p.id?"PLAYER START":"ROOM";
         drawWorldText(r,{at.x+12,at.y+28},d.paths.empty()?label:d.roomPath(p.id)+"  "+label,d.spawn==p.id || playRoom_==p.id?Success:TextMuted,10);
         const auto children=rows(p.id);
-        if(children.empty()) drawWorldText(r,{at.x+12,at.y+header},"Select room to add objects",TextMuted,12);
+        if(children.empty() && !selectionOnly) drawWorldText(r,{at.x+12,at.y+header},"Select room to add objects",TextMuted,12);
         for(size_t i=0;i<children.size();++i) {
             const auto* child=d.find(children[i].id); const float y=at.y+header+i*rowHeight;
             if(selected==child->id) drawWorldRect(r,{{at.x+4,y-2},{width-8,rowHeight}},RowSelected);

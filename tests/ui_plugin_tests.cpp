@@ -23,6 +23,26 @@ nlohmann::json take(const GrimPluginAPI* api, const char* value) {
 }
 namespace GRIM::UI {
 // Controlled host boundary: the API/loader/plugin are real, no native UI is started.
+// Keep the host-service mock linkable as the production boundary grows. These
+// substitutes do not exercise native factory construction or rendering.
+void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
+                            std::vector<std::string> implementations) {
+    uiTasks.push_back([lease, implementations = std::move(implementations)] {
+        std::lock_guard lock(lease->mutex);
+        if (lease->retired) return;
+        for (const auto& implementation : implementations)
+            lease->panels.emplace_back(implementation, 1);
+    });
+}
+void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
+    std::lock_guard lock(lease->mutex);
+    if (lease->retired) return;
+    lease->retired = true;
+    uiTasks.push_back([lease] {
+        std::lock_guard lock(lease->mutex);
+        lease->panels.clear();
+    });
+}
 PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key, uint64_t expectedRuntimeId) {
     auto promise = std::make_shared<std::promise<nlohmann::json>>();
     auto cancel = std::make_shared<std::atomic<bool>>(false);

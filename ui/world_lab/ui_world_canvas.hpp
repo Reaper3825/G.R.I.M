@@ -1,5 +1,6 @@
 #pragma once
 #include "ui/primitives/ui_canvas.hpp"
+#include "ui/primitives/ui_node.hpp"
 #include "world_document.hpp"
 #include <functional>
 #include <map>
@@ -30,6 +31,7 @@ private:
     struct Row { std::string id; int depth; };
     std::vector<Row> rows(const std::string& room) const;
     CanvasRect roomRect(const std::string& id) const;
+    UINode roomNode(const std::string& id) const;
     Vec2 port(const std::string& room, const std::string& direction) const;
     std::string hitRoom(Vec2 p) const;
     std::string hitEntity(Vec2 p) const;

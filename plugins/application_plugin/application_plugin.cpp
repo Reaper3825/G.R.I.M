@@ -1,4 +1,5 @@
 #include "core/plugin_api.hpp"
+#include "application_tools.hpp"
 #include <string>
 #include <stdexcept>
 
@@ -68,12 +69,14 @@ GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, voi
 
 extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
     static const GrimPluginInfo info{GRIM_API_VERSION, "Application Plugin", "1.0.0",
-        "GRIM Project", "Application/file opening and browser search", GRIM_PERM_PROCESS};
+        "GRIM Project", "Application discovery, resources, opening and browser search",
+        GRIM_PERM_PROCESS | GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM};
     return &info;
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
-        !api->get_user_error_message || !api->open_target) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->get_user_error_message || !api->open_target || !api->register_application_catalog ||
+        !api->application_service) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
     GrimToolRegistration tools[2];
     tools[0].handler = openApplication;
@@ -108,6 +111,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.parameters = &parameters[i];
         d.parameter_count = 1;
     }
-    return api->register_tools(api, tools, 2);
+    const auto result = api->register_tools(api, tools, 2);
+    return result == GRIM_OK ? registerApplicationTools(api) : result;
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }

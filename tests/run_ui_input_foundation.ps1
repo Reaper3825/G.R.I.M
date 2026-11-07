@@ -12,18 +12,18 @@ $sources = @('tests/ui_input_foundation_tests.cpp','ui/primitives/ui_inputbox.cp
 $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $sources += 'ui/primitives/ui_panel.cpp', 'ui/primitives/ui_split_pane.cpp', 'tests/ui_split_pane_tests.cpp'
 $sources += 'ui/ui_root_panels.cpp', 'ui/ui_panel_service.cpp', 'ui/dynamic_surface_panel.cpp', 'ui/ui_surface_renderer_bridge.cpp', 'MMO/UI/UISurfaceRegistry.cpp', 'MMO/UI/UISurfaceSpec.cpp', 'tests/ui_panel_operations_tests.cpp'
-$sources += 'ui/primitives/ui_canvas.cpp', 'tests/ui_canvas_tests.cpp'
+$sources += 'ui/primitives/ui_canvas.cpp', 'ui/primitives/ui_node.cpp', 'tests/ui_canvas_tests.cpp'
+$sources += 'MMO/Core/ToolRegistry.cpp' # Panel resource publication is now a base UI dependency.
 if ($Tools) {
-    $sources += 'ui/training_panel/ui_training_tools_view.cpp', 'MMO/Core/ToolRegistry.cpp', 'tests/ui_training_tools_tests.cpp'
+    $sources += 'ui/training_panel/ui_training_tools_view.cpp', 'tests/ui_training_tools_tests.cpp'
     $arguments += '/DGRIM_TOOLS_VIEW_TESTS'
 }
 if ($WorldLab -or $TextWorld) {
-    if (-not $Tools) { $sources += 'MMO/Core/ToolRegistry.cpp' }
     $sources += 'ui/world_lab/world_actions.cpp', 'ui/world_lab/ui_world_actions.cpp'
     $sources += 'resources/models/GRIM-text/Shared/Environment/EnvironmentInput.cpp'
     $sources += 'ui/world_lab/world_asset.cpp', 'ui/world_lab/ui_world_assets_view.cpp', 'ui/world_lab/world_document.cpp', 'ui/world_lab/ui_world_canvas.cpp', 'ui/world_lab/ui_world_lab_view.cpp', 'ui/world_lab/ui_world_session.cpp', 'ui/world_lab/textworld_client.cpp', 'tests/world_lab_tests.cpp', 'tests/world_asset_tests.cpp'
     $arguments += '/DGRIM_WORLD_LAB_TESTS'
-    $sources += 'tests/live_world_ui_tests.cpp'
+    $sources += 'tests/live_world_ui_tests.cpp', 'ui/primitives/ui_grid.cpp'
 }
 if ($TextWorld) {
     $sources += 'tests/world_lab_client_tests.cpp'

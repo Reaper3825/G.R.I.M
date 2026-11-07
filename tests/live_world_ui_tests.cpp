@@ -6,6 +6,7 @@
 #include <iostream>
 
 extern std::string renderedTestText;
+extern Vec2 liveFixtureRoomLabel, liveFixtureTileLabel;
 
 namespace {
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
@@ -34,6 +35,24 @@ void runLiveWorldUITests() {
     frame({});
     check(view.session().world().document().entities.size() == initialRooms + 1, "Published provider room did not appear automatically");
     check(renderedTestText.find("Live UI fixture") != std::string::npos, "Automatic provider room not drawn");
+    ResourceDescriptor item;
+    item.provider_name = provider.name;
+    item.provider_instance = provider.instance;
+    item.kind = "application";
+    for (int i = 0; i < 60; ++i) {
+        item.resource_id = "app:" + std::to_string(i);
+        item.name = "Fixture app " + std::to_string(i);
+        item.runtime_id = i + 1;
+        check(registry.publishResource(item), "Fixture resource publication failed");
+    }
+    frame({});
+    check(renderedTestText.find("Fixture app 0") == std::string::npos, "Unselected room leaked resources onto the map");
+    click(liveFixtureRoomLabel.x + 2, liveFixtureRoomLabel.y + 2);
+    check(view.session().world().location() == "system_hub" &&
+          renderedTestText.find("Live UI fixture  (60 resources)") != std::string::npos &&
+          renderedTestText.find("Fixture app 0") != std::string::npos, "Room click failed to preview its resource grid");
+    click(liveFixtureTileLabel.x + 2, liveFixtureTileLabel.y + 2);
+    check(renderedTestText.find("\"kind\": \"application\"") != std::string::npos, "Grid tile failed to inspect previewed resource");
     const auto path = view.session().world().providerPath(GRIM::WorldLab::providerKey(provider));
     const auto actions = view.session().observation().at("admissible_commands").get<std::vector<std::string>>();
     const auto actionIndex = std::find(actions.begin(), actions.end(), "go " + path) - actions.begin();
@@ -43,6 +62,10 @@ void runLiveWorldUITests() {
         "Expanded action menu did not draw navigation options");
     click(100, 108 + static_cast<float>(actionIndex + 1) * 25 + 12);
     check(view.session().world().location() != "system_hub", "Available action did not enter provider room");
+    check(renderedTestText.find("Live UI fixture  (60 resources)") != std::string::npos, "Entered room grid missing");
+    registry.removeResource(item);
+    frame({});
+    check(renderedTestText.find("Live UI fixture  (59 resources)") != std::string::npos, "Grid missed resource removal");
     const auto identity = view.session().observation().at("session_id");
     const auto history = view.session().history().size();
     view.hide();

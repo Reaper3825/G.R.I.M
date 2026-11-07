@@ -526,7 +526,7 @@ message(STATUS "[GRIM] Build configuration complete.")
 # Note: core_plugin is built directly into GRIM.exe, not as a hot-reloadable DLL
 # Only independent plugins with minimal dependencies should be hot-reloadable
 if(WIN32)
-  target_link_libraries(GRIM PRIVATE shell32)
+  target_link_libraries(GRIM PRIVATE shell32 ole32 uuid)
   add_subdirectory(plugins/osint_plugin)
   add_subdirectory(plugins/network_test_plugin)
   add_subdirectory(plugins/filesystem_plugin)

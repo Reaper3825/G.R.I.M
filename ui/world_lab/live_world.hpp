@@ -1,5 +1,6 @@
 #pragma once
 #include "world_document.hpp"
+#include "world_card_layout.hpp"
 #include "MMO/Core/ProviderDescriptor.hpp"
 #include <map>
 #include <set>
@@ -111,9 +112,10 @@ private:
                 changes += providerRoomName(p.name) + " registered: room added.\n";
             }
         }
+        const bool resourcesChanged = snapshot.resources != snapshot_.resources;
         snapshot_ = std::move(snapshot);
         rebuild();
-        if (!changes.empty()) ++revision_;
+        if (!changes.empty() || resourcesChanged) ++revision_;
         return changes;
     }
 public:
@@ -143,6 +145,16 @@ public:
         }
         return result;
     }
+    std::vector<MMO::ResourceDescriptor> resourcesHere() const {
+        std::vector<MMO::ResourceDescriptor> result;
+        for (const auto& r : snapshot_.resources) {
+            const ProviderKey key{r.provider_type, r.provider_name};
+            const auto* p = provider(key);
+            if (p && p->instance == r.provider_instance && roomId(key) == location_)
+                result.push_back(r);
+        }
+        return result;
+    }
 private:
     void rebuild() {
         Document next = document_;
@@ -162,6 +174,18 @@ private:
             next.paths.push_back({id, "system_hub", segments_.at(key)});
             ++index;
         }
+        CardLayout::separate(next); // The live map displays room headers only.
+        for (const auto& r : snapshot_.resources) {
+            const ProviderKey key{r.provider_type, r.provider_name};
+            const auto* p = provider(key);
+            if (!p || p->instance != r.provider_instance) continue;
+            const auto identity = std::make_pair(key, r.resource_id);
+            auto [it, inserted] = resourceIds_.try_emplace(identity);
+            if (inserted) it->second = "resource_" + std::to_string(nextResourceId_++);
+            Entity entity{it->second, r.name, "object", roomId(key), "Live " + r.kind + " resource"};
+            entity.resourceBinding = ResourceBinding{r.kind, r.resource_id};
+            next.entities.push_back(std::move(entity));
+        }
         next.validate();
         document_ = std::move(next);
     }
@@ -170,6 +194,8 @@ private:
     std::set<ProviderKey> connections_;
     std::map<ProviderKey, std::string> ids_;
     std::map<ProviderKey, std::string> segments_;
+    std::map<std::pair<ProviderKey, std::string>, std::string> resourceIds_;
+    uint64_t nextResourceId_ = 1;
     std::string location_ = "system_hub";
     uint64_t revision_ = 0, nextId_ = 1;
 };

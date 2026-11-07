@@ -52,9 +52,18 @@ int main() try {
     const auto sessionId = session.observation().at("session_id");
     check(session.world().document().entities.size() == 3 && session.world().location() == "system_hub", "providers did not automatically populate");
     check(session.world().registry().providers.size() == 2, "zero-tool provider not discoverable");
+    check(session.observation().at("inventory").at(0).at("entity_id") == "tool_catalog", "catalog missing from inventory");
+    check(!session.observation().contains("tool_catalog"), "closed catalog exposes contents");
+    session.command("inventory");
+    check(session.history().back().feedback.find("Tool catalog") != std::string::npos, "inventory command missing catalog");
+    session.command("open tool_catalog");
+    check(session.observation().at("tool_catalog").at("tools").size() == 1, "catalog model filtering");
+    session.command("inspect alpha.read");
+    check(!session.history().back().feedback.starts_with("Action rejected"), "inventory catalog inspection from hub failed");
     const auto room = session.world().roomId(providerKey(alpha));
     check(session.world().providerPath(providerKey(alpha)) == "/Alpha", "Provider path does not use its name");
     session.command("go /Alpha");
+    check(session.observation().at("inventory").at(0).at("state") == "open", "navigation lost inventory state");
     check(session.world().location() == room && session.world().toolsHere().size() == 1, "navigation/model filtering");
     session.command("inspect alpha.read");
     check(session.history().back().feedback.find("alpha.read") != std::string::npos, "tool inspection");
@@ -71,6 +80,7 @@ int main() try {
     session.synchronize();
     check(session.world().location() == room && session.world().roomId(providerKey(alpha)) == room, "replacement changed room/location");
     check(session.world().toolsHere().at(0).tool_id == "alpha.new", "replacement catalog stale");
+    check(session.observation().at("tool_catalog").at("tools").dump().find("alpha.read") == std::string::npos, "inventory retained replaced tool");
     check(registry.invokeModel("alpha.new", "", revision).errorCode == "ERR_TOOL_STALE", "stale revision accepted");
     registry.unregisterInstance(alpha.name, alpha.instance);
     check(registry.getTool("alpha.new").has_value(), "old-generation cleanup removed replacement");
@@ -91,6 +101,10 @@ int main() try {
     session.synchronize();
     check(session.world().document().entities.size() == 1, "Unloading all providers must retain System Hub");
     check(registry.snapshot().providers.empty(), "provider cleanup retained zero-tool record");
+    check(session.observation().at("tool_catalog").at("tools").empty(), "catalog retained unloaded tools");
+    check(session.observation().at("inventory").size() == 1, "provider unload removed carried catalog");
+    session.command("close tool_catalog");
+    check(!session.observation().contains("tool_catalog"), "closing catalog retained contents");
 
     // Reader must never see a provider generation paired with another generation's tools.
     auto p = alpha; p.instance = "0";

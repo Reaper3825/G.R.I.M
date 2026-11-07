@@ -1,10 +1,23 @@
 #include "commands_training.hpp"
 #include "logger.hpp"
 #include "ui/ui_training_panel.hpp"
+#include "ui/ui_root.hpp"
 #include <memory>
 
-// External reference to the training panel instance
-extern std::shared_ptr<UITrainingPanel> g_trainingPanel;
+namespace {
+void openModelConfig() {
+    UIRoot::get().postTask([] {
+        auto panel = std::dynamic_pointer_cast<UITrainingPanel>(
+            UIRoot::get().getPanelByKey("training_control"));
+        if (!panel) {
+            LOG_ERROR("Training", "Training panel is unavailable; UI provider may be unloaded");
+            return;
+        }
+        panel->setView(TrainingPanelTab::ModelConfig);
+        UIRoot::get().setVisible("training_control", true);
+    });
+}
+}
 
 namespace GRIM {
 namespace Training {
@@ -12,25 +25,13 @@ namespace Training {
 void startTraining() {
     LOG_DEBUG("Training", "Local training is disabled; opening model config creator");
     
-    if (!g_trainingPanel) {
-        LOG_ERROR("Training", "Training panel not initialized");
-        return;
-    }
-    
-    g_trainingPanel->setView(TrainingPanelTab::ModelConfig);
-    g_trainingPanel->setVisible(true);
+    openModelConfig();
 }
 
 void stopTraining() {
     LOG_DEBUG("Training", "Local training controls are not available in the HPC workflow");
     
-    if (!g_trainingPanel) {
-        LOG_ERROR("Training", "Training panel not initialized");
-        return;
-    }
-    
-    g_trainingPanel->setView(TrainingPanelTab::ModelConfig);
-    g_trainingPanel->setVisible(true);
+    openModelConfig();
 }
 
 } // namespace Training

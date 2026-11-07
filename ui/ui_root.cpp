@@ -47,8 +47,13 @@ void UIRoot::shutdown()
     LOG_DEBUG("UIRoot", "Shutting down UIRoot");
     
     // Clear all panels
+    for (const auto& panel : snapshotPanels())
+        if (!panel->getPanelKey().empty()) removePanel(panel->getPanelKey());
     m_panels.clear();
     m_panelKeyMap.clear();
+    m_panelFactories.clear();
+    m_panelCleanups.clear();
+    synchronizePanelResources(); // Remove resources now that panel instances are gone.
     { std::lock_guard lock(m_taskMutex); m_pendingTasks.clear(); }
     
     // Shutdown renderer
@@ -151,6 +156,7 @@ void UIRoot::update(const InputState& input, float dt)
             m_panels.push_back(clickedPanel);
         }
     }
+    synchronizePanelResources();
 }
 
 void UIRoot::updateOverlayInteraction(const InputState& input)

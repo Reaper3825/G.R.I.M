@@ -13,6 +13,7 @@
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
 #include "shell_open.hpp"
+#include "applications/application_catalog.hpp"
 #include "aliases.hpp"
 #include "commands/commands_timers.hpp"
 #include "memory/command_memory_services.hpp"
@@ -109,6 +110,11 @@ struct PluginContext {
     bool staging = false;
     bool registration_failed = false;
     std::vector<GRIM::MMO::ToolRegistration> pending;
+    std::vector<std::string> pendingPanels;
+    bool applicationCatalogRequested = false;
+    std::unique_ptr<GRIM::Applications::Catalog> applicationCatalog;
+    std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
+        std::make_shared<GRIM::UI::ProviderPanelLease>();
     std::mutex panelRequestsMutex;
     std::unordered_map<uint64_t, GRIM::UI::PanelServiceRequest> panelRequests;
 };
@@ -353,6 +359,77 @@ static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRe
         if (owner && owner->staging) owner->registration_failed = true;
         return GRIM_ERROR_INVALID_PARAM;
     }
+}
+
+static GrimResult api_register_ui_panel(const GrimPluginAPI* self, const char* implementation_key) noexcept {
+    PluginContext* owner = nullptr;
+    try {
+        owner = const_cast<PluginContext*>(&pluginContext(self));
+        std::lock_guard lock(owner->gate->mutex);
+        if (!owner->gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!checkPermission(self, GRIM_PERM_UI)) {
+            owner->registration_failed = true;
+            return GRIM_ERROR_PERMISSION_DENIED;
+        }
+        if (!owner->staging) return GRIM_ERROR_UNSUPPORTED;
+        const auto key = copyText(implementation_key, true, 256);
+        if (key.find_first_of("\r\n") != std::string::npos || owner->pendingPanels.size() >= 64)
+            throw std::invalid_argument("Invalid panel implementation declaration");
+        for (const auto& existing : owner->pendingPanels)
+            if (existing == key) {
+                owner->registration_failed = true;
+                return GRIM_ERROR_ALREADY_EXISTS;
+            }
+        owner->pendingPanels.push_back(key);
+        return GRIM_OK;
+    } catch (...) {
+        if (owner && owner->staging) owner->registration_failed = true;
+        return GRIM_ERROR_INVALID_PARAM;
+    }
+}
+
+static GrimResult api_register_application_catalog(const GrimPluginAPI* self) noexcept {
+    PluginContext* context = nullptr;
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        context = &owner;
+        std::lock_guard lock(owner.gate->mutex);
+        if (!owner.gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!checkPermission(self, GRIM_PERM_SYSTEM) || !checkPermission(self, GRIM_PERM_FILESYSTEM)) {
+            if (owner.staging) owner.registration_failed = true;
+            return GRIM_ERROR_PERMISSION_DENIED;
+        }
+        if (!owner.staging) return GRIM_ERROR_UNSUPPORTED;
+        if (owner.applicationCatalogRequested) return GRIM_ERROR_ALREADY_EXISTS;
+        owner.applicationCatalog = std::make_unique<GRIM::Applications::Catalog>(
+            GRIM::MMO::ProviderDescriptor{GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
+            GRIM::Applications::systemBackends(), GRIM::Applications::launchNative);
+        owner.applicationCatalogRequested = true;
+        return GRIM_OK;
+    } catch (...) {
+        if (context && context->staging) context->registration_failed = true;
+        return GRIM_ERROR_UNKNOWN;
+    }
+}
+
+static const char* api_application_service(const GrimPluginAPI* self, const char* operation,
+                                          const char* arguments, size_t size) noexcept {
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        ActiveCall active(owner.gate, true);
+        if (!active.entered || !owner.applicationCatalog || !operation || size > 65536 ||
+            (size && !arguments) || !checkPermission(self, GRIM_PERM_SYSTEM) ||
+            !checkPermission(self, GRIM_PERM_FILESYSTEM)) return nullptr;
+        const auto op = copyText(operation, true, 32);
+        if (op == "launch" && !checkPermission(self, GRIM_PERM_PROCESS)) return nullptr;
+        nlohmann::json response{{"format", "grim-application-result"}, {"version", 1}, {"success", false}};
+        try {
+            const auto args = size ? nlohmann::json::parse(arguments, arguments + size) : nlohmann::json::object();
+            response["value"] = owner.applicationCatalog->request(op, args);
+            response["success"] = true;
+        } catch (const std::exception& e) { response["error"] = e.what(); }
+        return allocateString(response.dump());
+    } catch (...) { return nullptr; }
 }
 
 static GrimResult api_unregister_command(const GrimPluginAPI* self, const char* command_name) {
@@ -1558,6 +1635,8 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
         throw std::invalid_argument("Invalid replacement identity");
     auto context = std::make_unique<PluginContext>();
     context->instance = plugin_name + "#" + std::to_string(s_next_instance++);
+    context->panelLease->owner = context->instance;
+    context->panelLease->providerName = plugin_name;
     context->name = plugin_name;
     context->path = plugin_path;
     context->permissions = permissions;
@@ -1661,6 +1740,9 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.voice_service = api_voice_service;
     api.ui_panel_service = api_ui_panel_service;
     api.input_service = api_input_service;
+    api.register_ui_panel = api_register_ui_panel;
+    api.register_application_catalog = api_register_application_catalog;
+    api.application_service = api_application_service;
     
     auto* result = &api;
     auto instance = context->instance;
@@ -1695,6 +1777,17 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
         throw;
     }
     if (!committed) { owner.staging = true; return false; }
+    if (owner.applicationCatalog) {
+        // Discovery is host-only and starts after successful provider publication.
+        // Failure leaves the provider usable for explicit refresh; never rolls back a committed DLL.
+        try { owner.applicationCatalog->request("refresh", nlohmann::json::object()); }
+        catch (const std::exception& e) { LOG_ERROR("Applications", e.what()); }
+    }
+    // Queue retirement before replacement creation. Generation-specific leases
+    // prevent a later shutdown of the old DLL from removing its replacement.
+    if (replacing) GRIM::UI::retireProviderPanels(pluginContext(replacing).panelLease);
+    if (!owner.pendingPanels.empty())
+        GRIM::UI::activateProviderPanels(owner.panelLease, std::move(owner.pendingPanels));
     if (replacing) {
         const auto& old = pluginContext(replacing);
         std::lock_guard lock(old.gate->mutex);
@@ -1713,6 +1806,7 @@ void beginPluginShutdown(const GrimPluginAPI* api) {
         owner.gate->accepting = false;
     }
     GRIM::MMO::ToolRegistry::instance().unregisterInstance(owner.name, owner.instance);
+    GRIM::UI::retireProviderPanels(owner.panelLease);
     std::unique_lock lock(owner.gate->mutex);
     owner.gate->idle.wait(lock, [&]{ return owner.gate->active == 0; });
     lock.unlock();

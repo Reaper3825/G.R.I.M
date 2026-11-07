@@ -4,6 +4,92 @@
 #include "MMO/UI/UISurfaceRegistry.hpp"
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
+#include "MMO/Core/ToolRegistry.hpp"
+
+void UIRoot::bindPanelResource(const std::string& key, uint64_t runtime,
+                              const std::string& provider, const std::string& instance) {
+    if (!isUIThread()) throw std::logic_error("Panel resource binding requires the UI thread");
+    const auto panel = getPanelByKey(key);
+    if (!panel || panel->getPanelID() != runtime || m_panelResources.count(key))
+        throw std::logic_error("Panel resource identity is missing, stale, or already bound");
+    GRIM::MMO::ResourceDescriptor r;
+    r.provider_name = provider; r.provider_instance = instance;
+    r.resource_id = "panel:" + key; r.kind = "ui.panel";
+    r.name = panel->getTitle(); r.runtime_id = runtime;
+    r.operations = {"ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front"};
+    m_panelResources.emplace(key, std::move(r));
+    synchronizePanelResources();
+}
+
+void UIRoot::synchronizePanelResources() {
+    auto& registry = GRIM::MMO::ToolRegistry::instance();
+    for (auto it = m_panelResources.begin(); it != m_panelResources.end();) {
+        auto panel = getPanelByKey(it->first);
+        auto& r = it->second;
+        if (!panel || panel->getPanelID() != r.runtime_id) {
+            registry.removeResource(r); it = m_panelResources.erase(it); continue;
+        }
+        r.name = panel->getTitle();
+        const auto position = panel->getPosition(), size = panel->getSize();
+        r.state = {{"visible", panel->isVisible()}, {"minimized", panel->isMinimized()},
+            {"maximized", panel->isMaximized()}, {"position", {{"x", position.x}, {"y", position.y}}},
+            {"size", {{"width", size.x}, {"height", size.y}}}, {"z_order", panel->getZOrder()}};
+        if (!registry.publishResource(r)) { it = m_panelResources.erase(it); continue; }
+        ++it;
+    }
+}
+
+void UIRoot::registerPanelFactory(const std::string& implementationKey,
+                                  const std::string& panelKey, PanelFactory factory,
+                                  PanelCleanup cleanup)
+{
+    if (!isUIThread()) throw std::logic_error("Panel factories must be registered on the UI thread");
+    const auto validKey = [](const std::string& key) {
+        return !key.empty() && key.size() <= 256 &&
+            key.find_first_of("\r\n\0", 0, 3) == std::string::npos;
+    };
+    if (!validKey(implementationKey) || !validKey(panelKey) || !factory)
+        throw std::invalid_argument("Panel factory requires valid implementation and panel keys and a constructor");
+    if (m_panelFactories.count(implementationKey))
+        throw std::logic_error("Duplicate panel implementation: " + implementationKey);
+    for (const auto& entry : m_panelFactories)
+        if (entry.second.panelKey == panelKey)
+            throw std::logic_error("Panel key already assigned to a factory: " + panelKey);
+    m_panelFactories.emplace(implementationKey, PanelFactoryEntry{panelKey, std::move(factory), std::move(cleanup)});
+}
+
+std::shared_ptr<UIPanel> UIRoot::createPanelFromFactory(
+    const std::string& implementationKey, bool initiallyVisible)
+{
+    if (!isUIThread()) throw std::logic_error("Panel construction must run on the UI thread");
+    const auto found = m_panelFactories.find(implementationKey);
+    if (found == m_panelFactories.end())
+        throw std::invalid_argument("Unknown panel implementation: " + implementationKey);
+    // Copy before invoking host code: construction must not retain a map iterator.
+    const auto entry = found->second;
+    if (getPanelByKey(entry.panelKey))
+        throw std::logic_error("Panel already exists: " + entry.panelKey);
+    auto panel = entry.construct();
+    try {
+        if (!panel || panel->getPanelKey() != entry.panelKey)
+            throw std::logic_error("Panel factory returned a null panel or an unexpected key: " + implementationKey);
+        panel->setVisible(initiallyVisible);
+        if (entry.cleanup) m_panelCleanups.emplace(entry.panelKey, entry.cleanup);
+        addPanel(panel);
+        if (getPanelByKey(entry.panelKey) != panel)
+            throw std::runtime_error("Could not attach factory panel: " + entry.panelKey);
+    } catch (...) {
+        m_panelCleanups.erase(entry.panelKey);
+        if (entry.cleanup) {
+            try { entry.cleanup(panel); }
+            catch (...) { LOG_ERROR("UIRoot", "Factory rollback cleanup failed: " + entry.panelKey); }
+        }
+        if (panel && getPanelByKey(entry.panelKey) == panel) removePanel(entry.panelKey);
+        throw;
+    }
+    return panel;
+}
 
 void UIRoot::addPanel(const std::shared_ptr<UIPanel>& panel)
 {
@@ -41,9 +127,22 @@ void UIRoot::removePanel(const std::string& name)
     auto task = [this, name]() {
         auto panel = getPanel(name);
         if (!panel) return;
+        // Stop native attachments and panel-owned activity before detaching.
+        // Cleanup runs on the UI thread, outside the panel collection lock.
+        panel->setVisible(false);
+        auto cleanup = m_panelCleanups.extract(panel->getPanelKey());
+        if (!cleanup.empty()) {
+            try { cleanup.mapped()(panel); }
+            catch (...) { LOG_ERROR("UIRoot", "Panel cleanup failed: " + panel->getPanelKey()); }
+        }
         std::unique_lock lock(m_panelMutex);
         GRIM::UI::InputRouter::get().forgetPanel(panel->getPanelID());
         m_panelKeyMap.erase(panel->getPanelKey());
+        const auto resource = m_panelResources.find(panel->getPanelKey());
+        if (resource != m_panelResources.end()) {
+            GRIM::MMO::ToolRegistry::instance().removeResource(resource->second);
+            m_panelResources.erase(resource);
+        }
 
         for (auto it = m_panels.begin(); it != m_panels.end(); ++it) {
             if (*it == panel) {

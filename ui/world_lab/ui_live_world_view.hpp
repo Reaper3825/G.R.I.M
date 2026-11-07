@@ -9,6 +9,8 @@
 #include "ui/primitives/ui_panel.hpp"
 #include "core/input_parser.hpp"
 #include <memory>
+#include "ui/primitives/ui_grid.hpp"
+#include "ui/primitives/ui_scrollbox.hpp"
 
 // Separate live view keeps the authored document independent of live topology.
 class UILiveWorldView {
@@ -16,8 +18,17 @@ public:
     UILiveWorldView() {
         canvas_.selectionOnly = true;
         canvas_.radialPaths = true;
+        grid_->setAutoColumns(165);
+        grid_->setSpacing(6, 6);
+        grid_->setRowHeight(32);
+        scroll_.addChild(grid_);
+        canvas_.onSelect = [this](const std::string& id) {
+            if (!editor_.document().find(id)) return false;
+            showRoom(id);
+            return true;
+        };
         transcript_.setReadOnly(true);
-        command_.setPlaceholder("look, tools, back, go /builtin, inspect <tool_id>");
+        command_.setPlaceholder("look, tools, resources, inspect-resource <id>");
         command_.OnTextSubmitted.Bind([this](const std::string&) { submit(); });
         commands_ = std::make_unique<UIDropdown>("", std::vector<std::string>{"Available actions"}, 0,
             [this](int i, const std::string&) {
@@ -41,6 +52,7 @@ public:
         if (fitPending_) { canvas_.fitWorld(); fitPending_ = false; }
         const auto clipped = input.clipped(area.origin, area.size);
         for (auto* w : widgets()) w->setPanelID(panel);
+        grid_->setPanelID(panel);
         // Dropdowns own popup input before controls beneath them.
         auto* expanded = commands_->isExpanded() ? commands_.get() : nullptr;
         if (expanded) expanded->update(clipped, dt);
@@ -53,11 +65,15 @@ public:
         renderer.drawText({area.origin.x + 10, area.origin.y + 12}, "Live System World", UITheme::Colors::TextPrimary, 16);
         canvas_.drawOverlay(renderer, {});
         transcript_.drawOverlay(renderer, {});
+        renderer.drawText({scroll_.getPosition().x, scroll_.getPosition().y - 18},
+            gridTitle_, UITheme::Colors::TextPrimary, 14);
+        scroll_.drawOverlay(renderer, {});
         command_.drawOverlay(renderer, {});
         for (auto* b : {send_.get(), exit_.get(), fit_.get()}) b->drawOverlay(renderer, {});
         commands_->drawOverlay(renderer, {});
         renderer.drawText({area.origin.x + 10, area.origin.y + 50},
-            std::to_string(session_.world().registry().providers.size()) + " provider rooms - populated automatically", UITheme::Colors::TextMuted, 13);
+            std::to_string(session_.world().registry().providers.size()) + " providers - " +
+            std::to_string(session_.world().registry().resources.size()) + " live resources", UITheme::Colors::TextMuted, 13);
         renderer.drawText({area.origin.x + 10, area.origin.y + area.size.y - 22}, status_, UITheme::Colors::TextMuted, 12);
         // Dropdown headers and popup lists have separate render passes. Draw
         // expanded options last so the canvas/transcript cannot cover them.
@@ -66,9 +82,50 @@ public:
     }
     void hide() {
         for (auto* w : widgets()) w->cancelInput();
+        grid_->cancelInput();
         commands_->collapse();
     }
 private:
+    class ResourceTile : public UIButton {
+    public:
+        using UIButton::UIButton;
+        void drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) override {
+            renderer.pushClipRect(getPosition(), getSize());
+            UIButton::drawOverlay(renderer, panelPos);
+            renderer.popClipRect();
+        }
+    };
+    void showRoom(const std::string& id) {
+        const auto& world = session_.world();
+        const bool moved = id != gridRoom_;
+        gridRoom_ = id;
+        std::vector<const GRIM::MMO::ResourceDescriptor*> resources;
+        for (const auto& resource : world.registry().resources) {
+            if (world.roomId({resource.provider_type, resource.provider_name}) == id)
+                resources.push_back(&resource);
+        }
+        std::sort(resources.begin(), resources.end(), [](const auto* a, const auto* b) {
+            return std::tie(a->name, a->resource_id) < std::tie(b->name, b->resource_id);
+        });
+        std::vector<std::pair<std::string, std::string>> tiles;
+        for (const auto* item : resources) tiles.emplace_back(item->resource_id, item->name);
+        if (!moved && tiles == gridTiles_) return;
+        gridTiles_ = std::move(tiles);
+        gridTitle_ = world.document().find(id)->name + "  (" + std::to_string(resources.size()) + " resources)";
+        grid_->clearWidgets();
+        for (const auto* resource : resources) {
+            grid_->addWidget(std::make_shared<ResourceTile>(resource->name, [this, key = resource->resource_id] {
+                for (const auto& item : session_.world().registry().resources) {
+                    if (item.resource_id == key && session_.world().roomId({item.provider_type, item.provider_name}) == gridRoom_) {
+                        transcript_.setText(nlohmann::json(item).dump(2));
+                        transcript_.scrollToTop();
+                        break;
+                    }
+                }
+            }));
+        }
+        if (moved) scroll_.scrollTo(0);
+    }
     void submit() { run([&] { session_.command(command_.getText()); command_.clear(); }); }
     template<class F> void run(F operation) {
         try { operation(); refresh(); }
@@ -77,14 +134,24 @@ private:
     void refresh() {
         const auto& world = session_.world();
         if (!shownDocument_.is_null() && historySize_ == session_.history().size() &&
-            shownRegistry_ == world.registry().revision) return;
+            shownRegistry_ == world.registry().revision && shownResources_ == world.registry().resource_revision) return;
+        const bool resourcesChanged = shownResources_ != world.registry().resource_revision;
         shownRegistry_ = world.registry().revision;
-        const auto document = world.document().json();
+        shownResources_ = world.registry().resource_revision;
+        // The editor-backed canvas gets a room-only copy. Full resources stay in the live world.
+        auto map = world.document();
+        std::erase_if(map.entities, [](const auto& entity) { return entity.kind != "room"; });
+        const auto document = map.json();
         if (document != shownDocument_) {
-            editor_.reset(world.document()); shownDocument_ = document;
-            if (!world.document().find(canvas_.selected)) canvas_.selected = world.location();
+            editor_.reset(map);
+            shownDocument_ = document;
             fitPending_ = true;
         }
+        if (lastLocation_ != world.location() || !map.find(gridRoom_)) {
+            lastLocation_ = world.location();
+            canvas_.selected = lastLocation_;
+            showRoom(lastLocation_);
+        } else if (resourcesChanged) showRoom(gridRoom_);
         const auto observation = session_.observation();
         canvas_.setPlayState(observation);
         const auto actions = observation.at("admissible_commands").get<std::vector<std::string>>();
@@ -103,7 +170,7 @@ private:
         }
     }
     std::vector<Widget*> widgets() {
-        return {commands_.get(), send_.get(), exit_.get(), fit_.get(), &command_, &transcript_, &canvas_};
+        return {commands_.get(), send_.get(), exit_.get(), fit_.get(), &command_, &transcript_, &canvas_, &scroll_};
     }
     static void place(Widget& w, float x, float y, float width, float height = 28) {
         w.setPosition(x, y); w.setSize(std::max(1.f, width), std::max(1.f, height));
@@ -113,7 +180,15 @@ private:
         place(*exit_, x + w - 120, y + 6, 120);
         place(*commands_, x, y + 80, w - 65); place(*fit_, x + w - 55, y + 80, 55);
         const float left = w * .45f, height = a.size.y - 180;
-        place(canvas_, x, y + 118, left, height); place(transcript_, x + left + 10, y + 118, w - left - 10, height);
+        const float mapHeight = std::max(1.f, height * .60f - 12);
+        place(canvas_, x, y + 118, left, mapHeight);
+        place(transcript_, x + left + 10, y + 118, w - left - 10, mapHeight);
+        place(scroll_, x, y + 118 + mapHeight + 22, w, height - mapHeight - 22);
+        grid_->setSize(std::max(1.f, w - 16), scroll_.getSize().y);
+        grid_->layout();
+        const float content = grid_->getContentHeight();
+        grid_->setSize(std::max(1.f, w - 16), std::max(content, scroll_.getSize().y));
+        scroll_.setContentHeight(content);
         place(command_, x, y + a.size.y - 54, w - 75); place(*send_, x + w - 65, y + a.size.y - 54, 65);
     }
     GRIM::WorldLab::LiveWorldSession session_;
@@ -121,12 +196,17 @@ private:
     UIWorldCanvas canvas_{editor_};
     UITextArea transcript_{"", "", {}};
     UIInputBox command_;
+    UIScrollBox scroll_;
+    std::shared_ptr<UIGrid> grid_ = std::make_shared<UIGrid>();
+    std::string gridRoom_, gridTitle_, lastLocation_;
+    std::vector<std::pair<std::string, std::string>> gridTiles_;
     std::unique_ptr<UIDropdown> commands_;
     std::unique_ptr<UIButton> send_, exit_, fit_;
     std::vector<std::string> actions_;
     nlohmann::json shownDocument_;
     size_t historySize_ = 0;
     uint64_t shownRegistry_ = 0;
+    uint64_t shownResources_ = 0;
     bool fitPending_ = true;
     std::string status_;
 };

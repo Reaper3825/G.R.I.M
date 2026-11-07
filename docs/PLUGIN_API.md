@@ -1,6 +1,6 @@
 # G.R.I.M Plugin API v3
 
-API version: **3.14.0**. Updated November 2, 2026.
+API version: **3.18.0**. Updated November 6, 2026.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -938,3 +938,76 @@ release via string_free. Null means unavailable/denied/malformed API input.
 No plugin callback survives the call. Durable records remain host-owned on unload.
 The Model-classified schedule_plugin exports the six matching schedule.* tools.
 See [scheduling contract](SCHEDULING_TOOLS.md).
+
+## Provider panel lifecycle (v3.17)
+
+`GrimResult register_ui_panel(self, implementation_key)` consumes one reserved
+API table slot, preserving table size and earlier member offsets. It requires
+UI permission and is supported only during staged plugin initialization.
+The host copies a nonempty implementation key of at most 256 bytes, rejects
+duplicate declarations, and limits each provider to 64 declarations.
+
+`GRIM_OK` means the declaration was staged, not that a panel exists. A failed
+plugin initialization discards the declarations. Successful provider publication
+queues host-only construction on the UI thread. Startup loads plugins before UI
+bootstrap; the first UI task pump runs after bootstrap registers the factories.
+Factories must be available at that point. Unknown implementations and factory
+failures are reported in `UIPanelService` logs; the panel batch is rolled back,
+while the provider and its tools remain loaded. There is no automatic retry or
+panel-activation status API in this stage.
+
+Each provider generation owns a host lease containing the created panels' stable
+keys and runtime IDs. Retirement cancels pending creation immediately and queues
+removal on the UI thread. Removal checks runtime identity. Replacement queues old
+panel removal before new construction; panels are recreated hidden with a new
+runtime ID. Failed plugin initialization before commit preserves the old panel.
+An activation failure after replacement commit does not restore the old panel.
+Shutdown can discard queued cleanup because `UIRoot::shutdown` destroys all panels.
+
+The UI plugin declares nine host implementations: `ui.console`, `ui.settings`,
+`ui.training_control`, `ui.data_hub`, `ui.storage`, `ui.calendar`, `ui.geospatial`,
+`ui.physical_environment`, and `ui.digital_environment`. Bootstrap registers
+factories and host dependencies, but creates no instances of these panels.
+Dynamic surfaces and OSINT panels have not migrated. Host factories contain no
+DLL callbacks. Rebuild both host and UI plugin: an older UI plugin remains
+ABI-compatible but does not declare this full panel set.
+
+Factories may register a host-only cleanup callback, invoked on removal, host
+shutdown, or failure after construction. GeoSpatial uses this to disconnect its
+native viewport, clear input callbacks via the runtime, release the clear pass,
+and mark the viewport unavailable. Its runtime remains host-owned and continues
+its existing lifecycle. Storage uses the host device server; perception services
+remain host-owned. Training UI commands resolve the live panel on the UI thread
+instead of holding a global owning pointer. Reloading the UI provider destroys
+and recreates the training panel, including its World Lab/live viewer session;
+unsaved panel-local state is not preserved by this migration. Runtime registration/removal APIs,
+widget parenting, and state persistence across replacement are subsequent stages.
+
+After construction the host binds each panel to a `ResourceDescriptor` owned by
+the calling provider generation. `ToolRegistrySnapshot.resources` contains live
+descriptors; `resource_revision` advances independently of the tool revision.
+Provider replacement/unload removes old-generation descriptors under the registry
+lock, and stale generations cannot republish them. Runtime-ID checks protect
+removal. UI-thread frame sampling publishes actual title, visibility, minimized/
+maximized state, position, size, and z-order, including direct mouse interaction.
+Unchanged samples do not advance the resource revision. Panel removal and UI
+shutdown withdraw bindings. `parent_id` is reserved and must currently be empty.
+
+Each migrated panel publishes `panel:<stable-key>` of kind `ui.panel`, with the existing
+inspect/show/hide/bring-to-front tool IDs as supported operations. This metadata
+does not itself dispatch tools or bypass their argument and permission checks.
+
+## Application catalog (v3.18)
+
+Two reserved function slots become `register_application_catalog` and
+`application_service`; table size and previous field offsets remain unchanged.
+Registration requires SYSTEM + FILESYSTEM and is initialization-only. The host
+creates a catalog for the calling provider and scans only after successful commit.
+The service accepts list/refresh/inspect/launch plus a JSON object (maximum 64 KiB),
+requires a published, accepting provider with a registered catalog, and returns
+host-owned `grim-application-result` v1 JSON released with `string_free`.
+Launch additionally requires PROCESS. Ownership is inferred from the API object;
+callers cannot nominate another provider. Host active-call accounting protects
+service lifetime during unload. Registry generation checks prevent stale publication.
+See [Application discovery](APPLICATION_DISCOVERY.md) for schemas, native backend
+coverage, generation guards and refresh behavior.

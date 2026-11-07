@@ -1,6 +1,7 @@
 #include "core/plugin_manager.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "core/shell_open.hpp"
+#include "core/applications/application_catalog.hpp"
 #include "MMO/Core/ToolRegistry.hpp"
 #include "error_manager.hpp"
 #include <chrono>
@@ -15,6 +16,12 @@ namespace {
 std::string lastTarget, errorPrefix = "configured:";
 int64_t nativeStatus = 33;
 int launches = 0;
+int applicationLaunches = 0;
+int discoveryCalls = 0;
+}
+namespace GRIM::Applications {
+Backend nativeBackend() { return {"fixture", [] { ++discoveryCalls; return std::vector<Application>{{"fixture", "editor", "Test editor", "fixture", "editor", ""}}; }}; }
+void launchNative(const Application&) { ++applicationLaunches; }
 }
 int64_t shellOpenTarget(const std::string& target) { lastTarget = target; ++launches; return nativeStatus; }
 std::string ErrorManager::getUserMessage(const std::string& code) { return errorPrefix + code; }
@@ -30,6 +37,8 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     auto* denied = PluginAPI::createPluginAPI("launch-denied", "", 0);
     int64_t status = -1;
     const auto beforeDenied = launches;
+    check(denied->register_application_catalog(denied) == GRIM_ERROR_PERMISSION_DENIED, "discovery registration bypassed permission");
+    check(!denied->application_service(denied, "refresh", "{}", 2), "discovery service bypassed permission");
     check(denied->open_target(denied, "fixture", &status) == GRIM_ERROR_PERMISSION_DENIED && status == 0 && launches == beforeDenied,
           "open_target bypassed PROCESS permission");
     check(denied->launch_app(denied, "fixture") == GRIM_ERROR_PERMISSION_DENIED, "Legacy launch permission changed");
@@ -47,6 +56,24 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     check(allowed->launch_app(allowed, "fixture") == GRIM_OK, "Legacy launch success changed");
     PluginAPI::cleanupPluginContext(allowed);
 
+    auto* discoveryOnly = PluginAPI::createPluginAPI("discovery-only", "", GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM, true);
+    const auto beforeDiscovery = discoveryCalls;
+    check(discoveryOnly->register_application_catalog(discoveryOnly) == GRIM_OK, "Cannot stage application catalog");
+    check(discoveryCalls == beforeDiscovery && !discoveryOnly->application_service(discoveryOnly, "list", "{}", 2),
+          "Staged catalog scanned or served before commit");
+    check(PluginAPI::commitPluginTools(discoveryOnly), "Catalog provider commit failed");
+    check(discoveryCalls == beforeDiscovery + 1, "Commit did not discover applications");
+    check(!discoveryOnly->application_service(discoveryOnly, "launch", "{}", 2), "Launch bypassed PROCESS permission");
+    PluginAPI::beginPluginShutdown(discoveryOnly);
+    check(!discoveryOnly->application_service(discoveryOnly, "refresh", "{}", 2), "Retired catalog served a refresh");
+    PluginAPI::cleanupPluginContext(discoveryOnly);
+
+    auto* abandoned = PluginAPI::createPluginAPI("abandoned-catalog", "", GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM, true);
+    check(abandoned->register_application_catalog(abandoned) == GRIM_OK, "Cannot stage abandoned catalog");
+    const auto beforeAbandon = discoveryCalls;
+    PluginAPI::cleanupPluginContext(abandoned);
+    check(discoveryCalls == beforeAbandon, "Failed initialization scanned applications");
+
     const auto folder = fs::temp_directory_path() / ("grim-application-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check(fs::create_directory(folder), "Cannot create application test folder");
@@ -61,7 +88,20 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     } cleanup{folder};
     fs::copy_file(pluginDirectory / "application_plugin.dll", folder / "application_plugin.dll");
     PluginManager::initialize(folder.string());
-    check(registry.toolCount() == baseline + 2, "Application plugin did not publish two tools");
+    check(registry.toolCount() == baseline + 6, "Application plugin did not publish six tools");
+    auto catalogResult = registry.invoke("applications.list", "{}");
+    check(catalogResult.success, "Application list failed");
+    auto apps = nlohmann::json::parse(catalogResult.structuredOutputJson).at("value").at("applications");
+    check(apps.size() == 1 && registry.snapshot().resources.size() >= 1, "Application resources not published at plugin commit");
+    const auto app = apps.at(0);
+    const auto applicationId = app.at("resource_id");
+    check(registry.invoke("applications.inspect", nlohmann::json{{"resource_id", applicationId}}.dump()).success, "Application inspection failed");
+    auto launchArgs = nlohmann::json{{"resource_id", applicationId}, {"provider_instance", app.at("provider_instance")}, {"runtime_id", app.at("runtime_id")}};
+    check(registry.invoke("applications.launch", launchArgs.dump()).success && applicationLaunches == 1, "Application launch service failed");
+    launchArgs["provider_instance"] = "retired";
+    check(!registry.invoke("applications.launch", launchArgs.dump()).success && applicationLaunches == 1, "Stale application reached launcher");
+    check(registry.invoke("applications.refresh", "{}").success, "Application refresh failed");
+    check(!registry.invoke("applications.inspect", "{}").success, "Malformed inspect accepted");
     for (const auto* id : {"open", "search"}) {
         const auto tool = registry.getTool(id);
         const bool search = std::string(id) == "search";
@@ -95,6 +135,8 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     errorPrefix = "configured:";
     fs::remove(folder / "application_plugin.dll");
     PluginManager::checkForHotReload();
+    for (const auto& r : registry.snapshot().resources)
+        check(r.provider_name != "Application Plugin", "DLL removal retained application resources");
     check(registry.toolCount() == baseline && !registry.isRegistered("open") && !registry.isRegistered("search"), "DLL removal retained application tools");
     std::cout << "Application plugin exact results, native launch boundaries, permissions, and removal tests passed\n";
 }

@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "", [switch]$BuildUIFixture)
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$AliasesPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "", [switch]$BuildUIFixture, [switch]$BuildApplicationFixture)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -60,7 +60,7 @@ $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
 $apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/aliases_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','tests/voice_plugin_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/aliases_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','tests/voice_plugin_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/applications/application_catalog.cpp','core/applications/application_backends.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
@@ -80,6 +80,15 @@ $registryArgs = $common + '/DGRIM_BUILD_HOST'
 $registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/ToolGapPlanner.cpp','commands/command_dispatch.cpp','core/plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
+if ($BuildApplicationFixture) {
+    $applicationFixture = Join-Path $output 'application-fixture'
+    New-Item -ItemType Directory -Force -Path $applicationFixture | Out-Null
+    $ApplicationPluginDirectory = $applicationFixture
+    $applicationArgs = $common + @('/LD', '/DGRIM_BUILD_PLUGIN', '/utf-8')
+    $applicationArgs += @('plugins/application_plugin/application_plugin.cpp', 'plugins/application_plugin/application_tools.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+    $applicationArgs += '/Fe:application-fixture/application_plugin.dll'
+    Set-Content -LiteralPath (Join-Path $output 'application-fixture.rsp') -Value $applicationArgs -Encoding ascii
+}
 $pluginTestCommand = 'plugin_api_ownership_tests.exe integration integration-rejected replacement'
 foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $AliasesPluginDirectory, $SystemInfoPluginDirectory, $TimersPluginDirectory, $MemoryPluginDirectory, $PerceptionPluginDirectory, $VoicePluginDirectory, $UIPluginDirectory, $InputPluginDirectory)) {
     $resolvedTestDirectory = if ($testDirectory) { (Resolve-Path -LiteralPath $testDirectory).Path } else { '' }
@@ -110,6 +119,10 @@ Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encodi
 if ($BuildUIFixture) {
     $insert = @('cl @ui-fixture.rsp', 'if errorlevel 1 exit /b %errorlevel%')
     $commands = $commands[0..2] + $insert + $commands[3..($commands.Length - 1)]
+    Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
+}
+if ($BuildApplicationFixture) {
+    $commands = $commands[0..2] + @('cl @application-fixture.rsp', 'if errorlevel 1 exit /b %errorlevel%') + $commands[3..($commands.Length - 1)]
     Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
 }
 Push-Location $output

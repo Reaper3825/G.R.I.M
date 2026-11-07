@@ -371,7 +371,10 @@ is a single per-user snapshot, not a multi-process document library.
 
 - `ui/world_lab/world_document.*`: renderer-independent document, validation,
   transactional snapshot history, persistence.
-- `ui/world_lab/ui_world_canvas.*`: room and object presentation, hit testing,
+- `ui/primitives/ui_node.*`: generic canvas-space node geometry, rounded surfaces,
+  centered titles with UTF-8-safe ellipsis, hit testing, and connection anchors.
+  Nodes draw through any `UICanvas`; their owner supplies input routing and graph behavior.
+- `ui/world_lab/ui_world_canvas.*`: maps rooms to generic nodes and owns object presentation, hit testing,
   drag previews, compass connections, selection, canvas shortcuts.
 - `ui/world_lab/ui_world_lab_view.*`: inspector, toolbar, recovery and lifecycle.
 - `ui/ui_training_panel.*`: World Lab registration and Goal database callbacks.
@@ -709,3 +712,46 @@ implemented. TextWorld still validates playable names and nesting at compilation
 The host-only UI test command above also covers asset round trips, invalid
 references, repeated insertion, unique names/IDs, failed placement rollback,
 atomic undo, saving, library selection, dirty-edit protection and recoverable deletion.
+
+## Live provider resources
+
+Live provider cards automatically separate using their rendered width and full
+content height, leaving a 36-world-pixel gap. The hub stays fixed while provider
+cards move apart. Adding/removing providers or contents recomputes spacing;
+state-only updates retain positions. Reflow is immediate, with the viewer's
+existing automatic fit. Authored-world positions remain manually controlled.
+
+The live viewer consumes provider-owned resource descriptors alongside tools.
+All nine standard panels appear as resources in the UI provider room after
+host factory creation: console, settings, training_control, data_hub, storage,
+calendar, geospatial, physical_environment, and digital_environment. Their
+references use the `panel:` prefix, such as `panel:calendar`.
+Hidden panels remain registered objects; hiding does not destroy a resource.
+
+Enter the UI provider room, use `resources` or `look`, then
+`inspect-resource panel:calendar` to read its current state, runtime ID, provider
+generation, and supported operations. These are read-only commands; panel control
+still uses the existing UI tools. The action dropdown includes resource inspection.
+The canvas shows the resource under its provider without requiring `ui.list`.
+
+Resource revisions and room observations update as the actual panel changes.
+Mouse changes are sampled each UI frame and may reach the live view on its next
+update. Tool registry revisions remain independent. Unloading the provider removes
+its resources; reloading preserves the stable reference with a new runtime ID.
+Dynamic surfaces, OSINT panels, widgets, and authored TextWorld episodes have
+not migrated. Reloading the UI provider also recreates the training panel that
+contains this viewer. Reopen World Lab after reload; its manual session restarts.
+Provider unload removes the standard UI panels, so reload must be triggered
+through host/plugin management rather than a removed panel.
+
+### Live inventory tool catalog
+The live session carries a Tool catalog (tool_catalog) in its inventory from startup. Use inventory, open tool_catalog, and close tool_catalog from any room. An open catalog lists all loaded model-facing tools across providers and enables inspect <tool_id> for their contracts. Its contents refresh with registry changes; navigation and provider unload do not remove the carried catalog. Room-local tools remain separate. Catalog inspection does not execute tools. This inventory belongs to the live session, independently of authored TextWorld episodes.
+
+### Application provider resources
+
+API v3.18 lets the Application plugin opt into native application discovery.
+Its discovered applications appear as resources in its provider room after commit;
+`applications.refresh` updates them and provider unload removes them. The carried
+tool catalog exposes applications.list/refresh/inspect/launch. The live viewer
+continues to inspect resources rather than execute production tool handlers.
+See [Application discovery](APPLICATION_DISCOVERY.md) for architecture and coverage.

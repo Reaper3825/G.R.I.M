@@ -17,6 +17,7 @@
 
 // Include plugin.hpp for GRIM_HOST_API macro
 #include "core/plugin.hpp"
+#include "MMO/Core/ResourceDescriptor.hpp"
 
 struct InputState; // Forward declaration
 
@@ -49,6 +50,20 @@ public:
     void draw();
 
     void addPanel(const std::shared_ptr<UIPanel>& panel);
+    // Host-only factories. Registering an implementation does not create a panel.
+    // Both calls require the UI thread. Factories must return a fresh, unattached
+    // panel with the declared key; native callbacks never cross the plugin ABI.
+    // Optional cleanup releases external attachments on removal/shutdown or
+    // post-construction failure. Constructors must roll back their own failures.
+    using PanelFactory = std::function<std::shared_ptr<UIPanel>()>;
+    using PanelCleanup = std::function<void(const std::shared_ptr<UIPanel>&)>;
+    void registerPanelFactory(const std::string& implementationKey,
+                              const std::string& panelKey, PanelFactory factory,
+                              PanelCleanup cleanup = {});
+    std::shared_ptr<UIPanel> createPanelFromFactory(
+        const std::string& implementationKey, bool initiallyVisible = false);
+    void bindPanelResource(const std::string& key, uint64_t runtime,
+                           const std::string& provider, const std::string& instance);
     void removePanel(const std::string& name);
     std::shared_ptr<UIPanel> getPanel(const std::string& name);
     // Exact stable-key lookup, never falls back to a display title.
@@ -112,6 +127,16 @@ private:
     uint32_t m_height = 0;
     std::vector<std::shared_ptr<UIPanel>> m_panels;
     std::unordered_map<std::string, std::shared_ptr<UIPanel>> m_panelKeyMap;
+    struct PanelFactoryEntry {
+        std::string panelKey;
+        PanelFactory construct;
+        PanelCleanup cleanup;
+    };
+    // UI-thread-owned implementation catalog; cleared at host shutdown.
+    std::unordered_map<std::string, PanelFactoryEntry> m_panelFactories;
+    std::unordered_map<std::string, PanelCleanup> m_panelCleanups;
+    std::unordered_map<std::string, GRIM::MMO::ResourceDescriptor> m_panelResources;
+    void synchronizePanelResources();
     OverlayRenderer m_renderer;  // Changed from UIRenderer to OverlayRenderer
     static constexpr int m_activePanelIndex = -1;  // Active panel always has zOrder = -1
     
