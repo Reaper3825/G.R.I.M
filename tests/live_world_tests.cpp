@@ -38,6 +38,38 @@ int main() try {
         check(session.history().back().state.at("resource_inspection") == nlohmann::json(resource),
               "Inspection lost structured state, identity, or capture metadata");
         const auto historyState = session.history().back().state;
+        // UI panels publish geometry/state every frame. These refreshes must not
+        // append full room snapshots or displace unrelated inspection evidence.
+        auto panel = resource;
+        panel.resource_id = "panel:fixture"; panel.name = "Fixture panel"; panel.kind = "ui.panel";
+        panel.state = {{"visible", true}, {"position", {{"x", 0}, {"y", 0}}}};
+        check(registry.publishResource(panel), "publish refresh regression fixture");
+        session.synchronize();
+        check(session.history().back().action == "Resources changed" &&
+              session.history().back().feedback == "Added: Hardware fixture / Fixture panel (panel:fixture)\n",
+              "Resource addition repeated the complete room description");
+        const auto refreshHistory = session.history().size();
+        for (int frame = 1; frame <= 100; ++frame) {
+            panel.state["position"]["x"] = frame;
+            check(registry.publishResource(panel), "publish animated panel state");
+            session.synchronize();
+            check(session.history().size() == refreshHistory &&
+                  session.observation().at("resource_inspection") == nlohmann::json(resource),
+                  "Frame refresh duplicated history or invalidated unrelated inspection");
+        }
+        check(session.world().registry().resources.back().state == panel.state,
+              "Silent refresh failed to update live resource state");
+        const auto stableRevision = registry.resourceVersion();
+        for (int frame = 0; frame < 10; ++frame) {
+            check(registry.publishResource(panel), "republish unchanged panel state");
+            session.synchronize();
+        }
+        check(session.history().size() == refreshHistory && registry.resourceVersion() == stableRevision,
+              "Unchanged publication created history or resource revision churn");
+        registry.removeResource(panel); session.synchronize();
+        check(session.history().size() == refreshHistory + 1 &&
+              session.history().back().feedback == "Removed: Hardware fixture / Fixture panel (panel:fixture)\n",
+              "Resource removal was missed or repeated the room snapshot");
         const auto commands = session.observation().at("admissible_commands").get<std::vector<std::string>>();
         check(std::find(commands.begin(), commands.end(), "inspect cpu") != commands.end(),
               "Resource inspect action missing");

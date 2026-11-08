@@ -133,7 +133,7 @@ Use `--monitor-index N` for a selected monitor.
 
 The host input consumer now uses fresh active-window capture and these structured
 OCR/native-control bounds for `click_on`, outside the primitive providers and
-background loop. See [click targeting](../../docs/CLICK_ON_TARGETING.md) for exact
+background loop. See [click targeting](../../docs/input/TOOLS.md#grounded-dispatch) for exact
 matching, coordinate conversion, failures, and input-delivery semantics.
 
 The next semantic layer should merge overlapping OCR regions and native controls

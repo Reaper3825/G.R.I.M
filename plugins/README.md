@@ -429,7 +429,7 @@ cover metadata, permissions, exact arguments/results, failure/exception handling
 active-call draining, and folder removal. No real pointer/key events, desktop
 capture, model execution, application build, or package installation occurs.
 See [API details](../docs/PLUGIN_API.md#input-tool-migration-v39) and
-[grounded targeting](../docs/CLICK_ON_TARGETING.md).
+[grounded targeting](../docs/input/TOOLS.md#grounded-dispatch).
 
 ### Remaining host tools
 

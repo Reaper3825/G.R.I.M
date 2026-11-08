@@ -95,6 +95,16 @@ void runLiveWorldUITests() {
           renderedTestText.find("Status: Current") != std::string::npos &&
           renderedTestText.find("\"cpu_cores\"") == std::string::npos,
           "Hardware tile showed raw JSON instead of readable inspection");
+    const auto inspectionHistorySize = view.session().history().size();
+    for (int refresh = 1; refresh <= 10; ++refresh) {
+        cpu.state["capture_time_ns"] = 123000000000LL + refresh;
+        check(registry.publishResource(cpu), "Publish refreshed CPU reading failed");
+        frame({});
+        check(view.session().history().size() == inspectionHistorySize &&
+              renderedTestText.find("Logical cores: 12") != std::string::npos &&
+              renderedTestText.find("> Resources changed") == std::string::npos,
+              "Live refresh duplicated resource history or replaced the inspection preview");
+    }
     const auto path = view.session().world().providerPath(GRIM::WorldLab::providerKey(provider));
     const auto actions = view.session().observation().at("admissible_commands").get<std::vector<std::string>>();
     const auto actionIndex = std::find(actions.begin(), actions.end(), "go " + path) - actions.begin();

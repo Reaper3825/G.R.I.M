@@ -84,8 +84,10 @@ strings as `Unavailable`.
 The session observation and history entry retain the complete resource descriptor
 under `resource_inspection`, including its original structured `state`, provider
 generation, runtime identity, and capture timestamp. This field is cleared on the
-next command or registry/resource reconciliation; prior history entries retain
-their original evidence. Human feedback does not serialize that host envelope.
+next command or when its inspected resource changes or disappears; unrelated
+refreshes retain it. Prior history entries retain their original evidence.
+State refreshes update the projection without appending repeated room snapshots.
+Human feedback does not serialize that host envelope.
 Non-hardware resources retain their existing inspection presentation.
 
 Authored room and

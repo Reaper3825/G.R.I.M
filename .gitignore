@@ -217,6 +217,8 @@ venv_rl/*
 out/*
 osint/*
 osint/
+!docs/osint/
+!docs/osint/*.md
 venv_rl/
 out/build/
 out/build/

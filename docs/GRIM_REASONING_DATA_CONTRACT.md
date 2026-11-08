@@ -1093,7 +1093,7 @@ arithmetic authoring currently emits `<TOOL>expression</TOOL> -> ${destination}`
 its generator, validators, and affected data must migrate before being used with
 the new parser. The current TOOL atom recognition alone does not implement this
 dispatch behavior. See the
-[grammar and insertion map](GRIM_SELF_CORRECTION_RL_GRAMMAR_AND_INSERTION_MAP.md)
+[grammar and insertion map](model/plans/RL_GRAMMAR.md)
 for implementation ownership.
 
 ### 4.12 Update — commit the transition result to state

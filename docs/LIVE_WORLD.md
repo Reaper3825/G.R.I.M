@@ -49,6 +49,15 @@ player returns to System Hub with an explicit history event. A subsequent load a
 session room identity. Reconciliation on reopening handles changes made while the view was
 hidden. These operations preserve session identity, movement count and history.
 
+Resource state refreshes update the live projection silently, including panel
+geometry, visibility, and hardware capture timestamps. They do not append room
+snapshots to history or reset its scroll position. Resource additions, removals,
+and identity/name/operation changes in the current room produce concise per-object
+change entries; other rooms still update without unsolicited transcript entries.
+Unchanged publications produce no additional entries. An existing inspection
+remains valid through unrelated resource refreshes; changes to the inspected
+resource invalidate its current structured result while preserving past history.
+
 ## Actions and scope
 
 Supported commands: `look`, `tools`, `go /builtin`, `back`, and

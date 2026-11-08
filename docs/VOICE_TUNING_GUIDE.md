@@ -1,151 +1,93 @@
-# Voice Recognition Tuning Guide
+# Speech Recognition and Selected TTS Provider
 
-## Problem: Whisper Hallucinations
+Source-verified November 8, 2026. Whisper recognition and CosyVoice synthesis
+are separate paths; TTS engine selection does not tune recognition.
 
-Whisper sometimes adds extra words or misinterprets short commands:
-- **Input**: "open notepad"
-- **Heard**: "She's open now, pal."
+## Current source: recognition
 
-This happens because Whisper tries to create grammatically correct sentences.
+[Voice::captureAndTranscribeSpeech](../voice/voice.cpp#L124) captures mono 16 kHz
+audio and reads the following settings:
 
-## Solution: Optimized Parameters
+| Config field | Actual use |
+|---|---|
+| `voice.input_device_index` | Capture device selection. |
+| `voice.silence_threshold` | RMS silence gate; not the duplicated `whisper.silence_threshold` field. |
+| `voice.silence_timeout_ms` | End-of-speech timeout. |
+| `whisper.min_speech_ms`, `min_silence_ms` | Speech/silence duration checks. |
+| `whisper.max_listening_ms` | No-speech listening deadline; not a hard maximum for ongoing speech. |
+| `whisper.language`, `temperature`, `max_len`, `suppress_blank`, `no_speech_threshold`, `initial_prompt` | Passed into one-shot decoder parameters. |
+| `whisper.beam_size` | Assigned to the beam substructure, but one-shot decoding initializes **GREEDY**, not beam search. |
 
-### Key Settings (in `voice.cpp`)
+The one-shot path does **not** select beam search from
+`whisper.sampling_strategy`. Entropy/log-probability thresholds are hardcoded
+there rather than read from the similarly named config fields.
+`max_len = 1` is not a one-word or one-token transcript guarantee.
 
-```cpp
-wparams.temperature = 0.0f;  // Most important! Reduces creativity/hallucinations
-wparams.max_len = 1;         // Prefer shorter outputs
-wparams.suppress_blank = true;  // Skip blank/silence segments
-wparams.initial_prompt = "Voice commands: open notepad, close window, show time";
-```
+[VoiceStream](../voice/voice_stream.cpp#L434) also initializes greedy decoding
+and uses its own language/token limits. Its ambient-noise calibration is not
+proof that one-shot capture automatically calibrates.
 
-### What Each Parameter Does:
+## Tuning checklist
 
-1. **`temperature = 0.0`** (was 0.2)
-   - **Lower = more deterministic** (less creative, more accurate)
-   - Range: 0.0 to 1.0
-   - **Recommendation**: 0.0 for commands, 0.2-0.4 for dictation
+Compare captured transcripts with the intended words before diagnosing model
+tool selection. Inspect the chosen microphone, RMS gate, capture endpoint, and
+speech cutoffs. Change one consumed field at a time and compare recorded cases;
+temperature/prompt changes cannot guarantee elimination of hallucinations.
+Settings → Audio exposes recognition controls
+([createAudioWidgets](../ui/ui_settings_menu.cpp#L611)); exposed labels alone do
+not establish decoder strategy or GPU acceleration. The host requests GPU use,
+but actual backend execution needs separate runtime evidence.
 
-2. **`max_len = 1`**
-   - Limits output length (fewer hallucinated words)
-   - Forces Whisper to be concise
+## Current source: synthesis and command limits
 
-3. **`suppress_blank = true`**
-   - Skips segments that are just silence
-   - Reduces "[BLANK_AUDIO]" artifacts
+[initTTS](../voice/voice_speak.cpp#L531) selects the provider from `voice.engine`;
+the checked-in choice is `cosyvoice`.
+[CosyVoiceProvider::capabilities](../voice/cosyvoice_provider.cpp#L75) advertises
+voice selection/cloning, language selection, and rate; pitch/emphasis are not
+advertised. Local initialization currently requires Windows, model assets,
+reference audio, and matching reference text.
 
-4. **`initial_prompt`**
-   - Guides Whisper toward command-style speech
-   - Examples should match your use case
-   - Update this with your common commands!
+[voice_plugin registrations](../plugins/voice_plugin/voice_plugin.cpp#L19)
+retain legacy debug commands: `test_tts` calls Coqui, `list_voices` lists Coqui
+config or Windows SAPI voices, and `tts_device` queries the SAPI device.
+`test_sapi` plays an existing test WAV. These are not CosyVoice readiness tests.
+`nevermind` and `create_embedding` remain acknowledgment placeholders, not
+implemented playback cancellation/embedding submission.
 
-## Additional Tuning Options
+No speech/model performance table or current runtime certification is claimed.
 
-### In `ai_config.json`:
+## Voice Settings UI
 
-```json
-{
-  "whisper": {
-    "sampling_strategy": "greedy",  // or "beam_search" for better quality
-    "temperature": 0.0,
-    "min_speech_ms": 500,    // Minimum speech duration
-    "min_silence_ms": 1200   // How long to wait for more speech
-  },
-  "silence_threshold": 0.02,  // Lower = more sensitive
-  "silence_timeout_ms": 4000  // Time before cutting off
-}
-```
+This section owns the voice-specific Settings integration previously documented
+separately from recognition/provider behavior.
 
-### Tuning Tips:
+- [createVoiceWidgets](../ui/ui_settings_menu.cpp#L473) creates Voice Engine
+  and Speaker cycle buttons, a Voice Mode dropdown, and speed/confidence
+  controls. Speaker is not a Coqui-only embedding dropdown.
+- [cycleSpeaker](../ui/ui_settings_menu.cpp#L164) uses
+  `voice.available_speakers` when present; otherwise it scans embedding names
+  and records the resulting list in pending config.
+- [scanSpeakerEmbeddings](../settings/settings_apply.cpp#L59) supplies
+  `default` plus `.npz` stems from the resource embeddings directory.
+  Retaining this scanner does not mean CosyVoice consumes XTTS embeddings.
+- [saveRuntimeAiConfig](../settings/runtime_ai_config.cpp#L66) persists edits;
+  [applyRuntimeSideEffects](../settings/settings_apply.cpp#L13) calls
+  `Voice::setSpeaker` and applies selected host UI/perception settings.
+  It does not reinitialize every provider setting.
 
-**If Whisper adds extra words:**
-- ? Lower `temperature` (try 0.0)
-- ? Add common commands to `initial_prompt`
-- ? Use smaller model (base.en instead of medium)
+Open Settings through the [Console](ui/CONSOLE.md), configured shortcut, or
+[generic panel service](ui/PANEL_OPERATIONS.md) using the stable `settings`
+key. Poll pending panel operations; acceptance is not completion.
+The retired `settings` agent wrapper is not the Settings panel.
 
-**If Whisper cuts off mid-sentence:**
-- ? Increase `min_silence_ms` (1500-2000)
-- ? Increase `silence_timeout_ms` (5000-6000)
+Save & Close persists the selected controls, but a saved speaker label is not
+proof of new voice cloning or immediate provider reconfiguration.
+The selected provider uses its configured reference audio/text, speaker,
+language, and rate. Retained `create_embedding` and legacy test commands do not
+provide a CosyVoice acceptance workflow.
 
-**If Whisper triggers on background noise:**
-- ? Increase `silence_threshold` (0.03-0.05)
-- ? Run calibration first (happens automatically)
-
-**If recognition is too slow:**
-- ? Use smaller model (`ggml-tiny.en.bin` or `ggml-base.en.bin`)
-- ? Enable GPU acceleration (already enabled)
-
-## Testing Workflow
-
-1. **Test a command**: Say "open notepad"
-2. **Check logs**: Look for `[Voice] Heard speech: "..."`
-3. **If hallucinated**:
-   - Lower temperature
-   - Update initial_prompt with that command
-4. **Repeat** until accuracy improves
-
-## Model Selection
-
-| Model | Size | Speed | Accuracy | Best For |
-|-------|------|-------|----------|----------|
-| `tiny.en` | 75MB | Very Fast | Lower | Quick testing |
-| `base.en` | 142MB | Fast | Good | **Commands** ? |
-| `small.en` | 466MB | Medium | Better | Mixed use |
-| `medium.en` | 1.5GB | Slow | Best | Dictation |
-
-**Recommendation**: Use `base.en` for voice commands. It's fast and accurate enough.
-
-## Example Custom Prompts
-
-### For Home Automation:
-```cpp
-wparams.initial_prompt = "Voice commands: turn on lights, set temperature, lock door";
-```
-
-### For PC Control:
-```cpp
-wparams.initial_prompt = "Commands: open app, close window, screenshot, volume up";
-```
-
-### For GRIM:
-```cpp
-wparams.initial_prompt = "Voice commands: open notepad, close window, show time, search google";
-```
-
-## Advanced: Beam Search
-
-For higher accuracy (slower):
-```cpp
-whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
-wparams.beam_search.beam_size = 5;  // Higher = more accurate but slower
-wparams.temperature = 0.0f;
-```
-
-Only use for dictation/transcription, not real-time commands.
-
-## Troubleshooting
-
-### Still Getting Hallucinations?
-
-1. **Check microphone quality** - Background noise causes errors
-2. **Speak clearly** - Mumbling confuses Whisper
-3. **Use keywords** - Say "open notepad" not "could you open notepad"
-4. **Update prompt** - Add problematic phrases to `initial_prompt`
-5. **Try smaller model** - Sometimes less is more
-
-### Command Not Recognized?
-
-1. **Check NLP rules** - Command might be filtered
-2. **Check aliases** - App name might be wrong
-3. **Add to prompt** - Guide Whisper toward that command
-4. **Check logs** - See what Whisper actually heard
-
-## Summary
-
-**Best Settings for Commands:**
-- Temperature: `0.0`
-- Model: `base.en`
-- Prompt: Add your common commands
-- Silence threshold: `0.02` (calibrate first)
-
-This should eliminate most hallucinations! ??
+Historical XTTS UI/embedding instructions remain under
+[legacy/SPEAKER_UI_SETTINGS.md](legacy/SPEAKER_UI_SETTINGS.md),
+[legacy/SPEAKER_EMBEDDINGS.md](legacy/SPEAKER_EMBEDDINGS.md), and
+[legacy/EMBEDDINGS_QUICKSTART.md](legacy/EMBEDDINGS_QUICKSTART.md).
+Retained multi-command controls do not restore the old host execution workflow.

@@ -21,7 +21,7 @@ Normal inspection below still uses cached inference.
 JSON adapter preserves exact finite FP32 values and accepts older complete
 matrices without output-dimension metadata. Partial unlabeled matrices remain
 invalid. Capture checks the final-layer identity row and zero at other source
-positions. See `docs/UI_OBSERVATORY.md` for controls, wire fields and memory
+positions. See `docs/ui/OBSERVATORY.md` for controls, wire fields and memory
 limits. The existing `JacobianIdentity` readout remains an implicit LM-head
 control.
 

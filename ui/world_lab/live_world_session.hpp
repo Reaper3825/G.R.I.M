@@ -3,7 +3,9 @@
 #include "MMO/Core/ToolRegistry.hpp"
 #include "MMO/Core/ToolDescriptorJson.hpp"
 #include "resource_inspection.hpp"
+#include <map>
 #include <sstream>
+#include <tuple>
 
 namespace GRIM::WorldLab {
 // A persistent manual live session, independent of compiled TextWorld episodes.
@@ -23,10 +25,20 @@ public:
         const auto previousTools = catalogTools();
         const auto previousResources = world_.registry().resources;
         const auto changes = world_.reconcile(registry_.snapshot());
-        resourceInspection_ = nullptr;
+        // Frame-level state publication is observation refresh, not a user action.
+        // Keep an inspection valid when only unrelated resources changed.
+        if (!resourceInspection_.is_null()) {
+            bool retained = false;
+            for (const auto& resource : world_.registry().resources)
+                if (nlohmann::json(resource) == resourceInspection_) { retained = true; break; }
+            if (!retained) resourceInspection_ = nullptr;
+        }
         if (!changes.empty()) record("Providers changed", changes + describe());
         else if (previousTools != catalogTools()) record("Tools changed", describe());
-        else if (previousResources != world_.registry().resources) record("Resources changed", describe());
+        else {
+            const auto resourceChanges = describeResourceChanges(previousResources, world_.registry().resources);
+            if (!resourceChanges.empty()) record("Resources changed", resourceChanges);
+        }
     }
     void command(const std::string& command) {
         synchronize();
@@ -129,6 +141,35 @@ public:
         return text.str();
     }
 private:
+    std::string describeResourceChanges(const std::vector<MMO::ResourceDescriptor>& before,
+                                       const std::vector<MMO::ResourceDescriptor>& after) const {
+        using Key = std::tuple<MMO::ToolProviderType, std::string, std::string>;
+        std::map<Key, const MMO::ResourceDescriptor*> previous, current;
+        const auto visible = [&](const MMO::ResourceDescriptor& r) {
+            return world_.roomId({r.provider_type, r.provider_name}) == world_.location();
+        };
+        for (const auto& r : before) if (visible(r)) previous.emplace(Key{r.provider_type, r.provider_name, r.resource_id}, &r);
+        for (const auto& r : after) if (visible(r)) current.emplace(Key{r.provider_type, r.provider_name, r.resource_id}, &r);
+        std::ostringstream text;
+        const auto line = [&](const char* change, const MMO::ResourceDescriptor& r) {
+            text << change << ": " << providerRoomName(r.provider_name) << " / " << r.name
+                 << " (" << r.resource_id << ")\n";
+        };
+        for (const auto& [key, r] : current) {
+            const auto old = previous.find(key);
+            if (old == previous.end()) line("Added", *r);
+            else {
+                const auto& p = *old->second;
+                // State (including capture timestamps and animated panel geometry)
+                // stays live in the projection without flooding session history.
+                if (p.provider_instance != r->provider_instance || p.runtime_id != r->runtime_id ||
+                    p.name != r->name || p.kind != r->kind || p.parent_id != r->parent_id || p.operations != r->operations)
+                    line("Updated", *r);
+            }
+        }
+        for (const auto& [key, r] : previous) if (!current.count(key)) line("Removed", *r);
+        return text.str();
+    }
     static std::string folded(std::string value) {
         for (auto& c : value) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
         return value;

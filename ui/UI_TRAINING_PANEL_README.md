@@ -87,7 +87,7 @@ by these stable-key operations. Surface create/destroy and OSINT remain in the h
 
 Application panels now have stable keys and a host foundation for generic
 discovery, inspection, visibility, and bring-to-front operations. See
-[UI panel operations](../docs/UI_PANEL_OPERATIONS.md) for the keys, completion
+[UI panel operations](../docs/ui/PANEL_OPERATIONS.md) for the keys, completion
 semantics, and remaining plugin migration boundary.
 
 Focused host-only validation:

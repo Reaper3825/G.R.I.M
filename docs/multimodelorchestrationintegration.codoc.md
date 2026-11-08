@@ -24,19 +24,45 @@ Minimum required update each time:
 
 If a refactor changes code but not this document, the refactor is incomplete.
 
-## Section 47 - GRIM-text LoRA Support Map (design only)
+## Current source map — supersedes the historical ledger below
+
+Source inspection, not a build/deployment certification. Earlier ledger entries
+record changes at their original revision; their old “current consumers,”
+“status,” CLI, seeding, compatibility, and shadow-dispatch statements are not
+current APIs or permission to restore removed paths. Use this map and the
+section-local corrections below for present ownership.
+
+| Status | Current owner and concrete surface | Future boundary |
+| --- | --- | --- |
+| Implemented configuration | [train_gpu.cu](../resources/models/GRIM-text/training/train_gpu.cu) calls `loadAiConfigSnapshot()` → `finalizeAiConfigSnapshot()` in [HyperParameters_GPU.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp); the actual snapshot combines `ai_config.json` runtime policy with selected compiled `model.grimcfg` semantics/geometry. [HyperparameterGroupings.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperparameterGroupings.hpp) provides read views only. | No launcher overrides or sidecar config/policy. |
+| Implemented host registry/process | [ModelRegistry.cpp](../MMO/Core/ModelRegistry.cpp) owns host model metadata and rejects sub-model LoRA/hard-copy fields; [ProcessManager.cpp](../MMO/Core/ProcessManager.cpp) launches model-keyed bridge processes with config-derived ports. | Router metadata does not load or publish an inference adapter. |
+| Implemented bridge/worker boundary | [grim_text_server.cpp](../resources/models/GRIM-text/GRIM/grim_text_server.cpp) accepts `--public-port`, `--worker-port`, `--worker-exe` and proxies worker HTTP. [grim_text_server_api.hpp](../core/grim_text_server_api.hpp) owns HTTP constants; the bridge does not own model startup. | Personalized readiness/reload remains separate. |
+| Implemented LoRA ownership/registration | [ParameterRegistry.hpp](../resources/models/GRIM-text/training/Phases/Startup/Model/ParameterRegistry.hpp) owns five layer-local A/B classes; [ParameterGroupRegistration.cu](../resources/models/GRIM-text/training/Phases/Startup/Model/ParameterGroupRegistration.cu) freezes base owners and registers enabled A/B only. | Do not create the old second adapter registry. |
+| Implemented low-rank math | [ModelForward_GPU.cu](../resources/models/GRIM-text/Shared/Forward/ModelForward_GPU.cu) binds QKV, O, FFN gate/up/down; [LoRALinear.cu](../resources/models/GRIM-text/Shared/TensorContract/LoRALinear.cu) computes unmerged factored deltas. | Model math is not a host personalization lifecycle. |
+| Implemented training checkpoint lifecycle | [LoRATrainingCheckpoint.hpp](../resources/models/GRIM-text/Common/LoRATrainingCheckpoint.hpp), [grim_lora_training_checkpoint.fbs](../resources/models/GRIM-text/training/schemas/grim_lora_training_checkpoint.fbs), and [LoRACheckpointLifecycle.cu](../resources/models/GRIM-text/training/LoRACheckpointLifecycle.cu) implement strict immutable `.grimlorackpt` training save/resume in the selected model store. Phase 1 initializes/restores; [Phase3_Cleanup.cu](../resources/models/GRIM-text/training/Phases/Phase3_Cleanup.cu) saves training boundaries and skips base save. | Inference-only artifact export, active-path publication, manifest accounting, and adapter-aware reload are pending. |
+| Implemented RL environment path | [Phase1_Startup.cu](../resources/models/GRIM-text/training/Phases/Phase1_Startup.cu) → [EnvironmentReady.cu](../resources/models/GRIM-text/training/Phases/Startup/EnvironmentReady.cu) prepares scheduled frozen Goals; `ready_for_environment` dispatches to [Phase2_EnvironmentLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_EnvironmentLoop.cu), executing textual commands at Execute close and grading at Answer close. | Not removed neural register-machine execution, TOOL/READ assignment, retry collection, or optimization. |
+| Implemented observation append | [RuntimeContextAppend.cu](../resources/models/GRIM-text/Shared/InferenceState/RuntimeContextAppend.cu) validates/remaps atoms and appends runtime context for resume. | [Phase2_RLTrainingLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_RLTrainingLoop.cu) remains an always-throwing, unbuilt/undispatched scoring/loss/update scaffold. |
+| Implemented host request routing | [ai.cpp](../ai/ai.cpp) uses direct `grim_native` / `ollama` paths and an orchestrator path for other enabled configurations. [Orchestrator.cpp](../MMO/Core/Orchestrator.cpp) owns route/sub-model/synthesis orchestration. | Plan's universal enforced single-path rule is not current source behavior. Historical `ai_interpret()` action wiring is not the active call surface. |
+| Implemented session state | [SessionContextManager.hpp](../MMO/Core/SessionContextManager.hpp) / [`.cpp`](../MMO/Core/SessionContextManager.cpp) own history, supplied reasoning state, referents, pending interactions, and snapshots; `beginTurn(session_id, turn_id, raw, normalized)` returns void. `clearHistory()` clears; `trimHistory()` caps messages. | Permanent-session token retirement/capsules and the personalization queue are pending, not implied by the session owner. |
+| Implemented sole tool store | [ToolRegistry.hpp](../MMO/Core/ToolRegistry.hpp) publishes metadata and handlers together (`registerTool`, `registerBatch`, provider-generation publication/replacement); [command_dispatch.cpp](../commands/command_dispatch.cpp) delegates explicit dispatch to `invoke()`. `invokeModel()` checks a caller-supplied revision/classification; policy remains caller-owned. | No `commandMap`/`CommandRegistry` metadata mirror or seeding bridge. Registry primitives do not prove end-to-end autonomous gated execution. |
+| Implemented plugin-owned surfaces | [input_plugin.cpp](../plugins/input_plugin/input_plugin.cpp) owns input tool registration over API v3.9 host services; [ui_plugin.cpp](../plugins/ui_plugin/ui_plugin.cpp) owns generic panel tools. [core_plugin.cpp](../plugins/core_plugin.cpp) retains surface create/destroy and OSINT UI registration. | No duplicate built-in input/panel registration; host perception/input/UI services remain host-owned. |
+| Implemented retirement | [RETIRED_AGENT_TOOLS.md](RETIRED_AGENT_TOOLS.md) and `core_plugin.cpp` describe eleven removed AI/NLP/admin tool registrations. | Retained handlers, conversation, routing, grammar, and session services are not deletion or migration targets. |
+| Implemented bootstrap systems | [bootstrap.cpp](../bootstrap/bootstrap.cpp) wires hardware inventory, resource signal/coordinator, model registry/loader/process/orchestrator, session state, and UI surface lifecycle in named phases. | No claim that every optional integration or planned resource lease is wired. |
+| Implemented data/memory primitives | [CorrectionTuple.cpp](../MMO/Core/CorrectionTuple.cpp), [ToolTrainingParser.cpp](../MMO/Core/ToolTrainingParser.cpp), [MemoryFacade.cpp](../memory/MemoryFacade.cpp), and [memory_buffer_rotation.cpp](../memory/memory_buffer_rotation.cpp) supply host records/retrieval/staging. | These are not a completed rolling-session training dataset/queue or policy optimizer. |
+
+## Section 47 - GRIM-text LoRA Support Map (model implemented; body lifecycle future)
 
 **What changed**
 
-- Added `docs/GRIM_TEXT_LORA_SUPPORT_PLAN.md`, a repository-grounded implementation map for the router-only personalization adapter.
+- Added `docs/model/plans/LORA_PERSONALIZATION.md`, a repository-grounded implementation map for the router-only personalization adapter.
 - Linked the map from `docs/multimodelorchestrationintegration.md`.
-- Selected attention-only V1 targets matching the live GRIM-text tensor layout: fused per-layer `W_qkv` and `W_o`.
+- The old attention-only target proposal is superseded by five implemented classes: fused QKV, O, and FFN gate/up/down.
 - Defined a separate FlatBuffers LoRA artifact, base-checkpoint fingerprint binding, separate adapter tensor registry, Phase 1 load/handoff, forward application points, adapter-aware readiness, process-restart reload, separate trainer boundary, and verification gates.
-- Resolved the startup mismatch: `train_gpu` remains authoritative for model/vocabulary fields from canonical `ai_config.json`; launchers pass only named public/worker ports; MMO launches run from the GRIM root; and `/api/status` reports the worker's actual config/model/vocabulary identity.
+- Resolved startup ownership: `train_gpu` consumes the finalized runtime snapshot plus selected compiled model facts; launchers pass only named public/worker ports; MMO launches run from the GRIM root; and `/api/status` reports the worker's actual config/model/vocabulary identity.
 - Refined the trainer design for frequent local micro-training: durable 1-10 sequence queue, hourly/size triggers, immutable run manifests, A/B-only optimizer groups, persistent LoRA-only optimizer state, tiny-dataset replay/canary gates, ResourceCoordinator leasing, and exclusive-GPU drain/train/restart as the V1 default.
 - Defined the upstream personalization boundary: GRIM has one process-lifetime conversation, `SessionContextManager` is Buffer 1 (active short-term context), and token-pressure retirement emits an immutable boundary artifact to both memory consolidation and the near-term 1-10 sequence LoRA queue. Context compaction commits independently so inference never waits for adapter training.
 - `MMO/Core/ProcessManager.cpp` now removes ignored positional model/vocabulary arguments, validates config-owned ports, launches from the GRIM root, and avoids mutex re-entry while checking an existing server.
-- `ai/grim_text_server_manager.cpp` now passes only config-derived public/worker ports on the legacy direct launch path.
+- `ai/grim_text_server_manager.cpp` is a separate direct-launch host surface, not a competing model-config owner.
 - `resources/models/GRIM-text/GRIM/grim_text_server.cpp` now parses named process arguments and proxies `/api/status`.
 - `resources/models/GRIM-text/training/train_gpu.cu` now reports canonical config source, configured model path, actual loaded checkpoint path, and vocabulary path from the inference owner.
 
@@ -47,8 +73,8 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 **Does not own**
 
-- Runtime adapter loading or inference math; these remain unimplemented.
-- LoRA training; the map specifies the near-term separate trainer target but does not implement it.
+- Model-side tensor allocation/registration, low-rank math, and training save/resume; these are implemented in the source map above, not owned by this document.
+- The future separate body-approved micro-trainer/queue, inference artifact publication, and personalized readiness/reload.
 - MMO route/synthesize endpoint implementation.
 - Base checkpoint serialization, which remains separate and immutable.
 
@@ -56,16 +82,16 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 - `ModelRegistry` / `ProcessManager` for router-only configuration and startup handoff.
 - `train_gpu --inference` Phase 1 for verified adapter loading.
-- A new `LoraParameterRegistry` alongside `StartupParameterRegistry` for separate tensor ownership.
-- `EncoderSelfAttention_GPU.cu` full and cached paths for QKV/output low-rank deltas.
+- Existing registry-owned `LoRALayerParameterPairs` and A/B-only optimizer groups; no second registry.
+- Existing full/cached attention and FFN low-rank call sites; future artifact loading must reuse them.
 - Adapter-aware status for readiness.
 - `AtomicWriter`-style publication plus coordinated router restart/rollback.
 
 **Status**
 
-- Design mapped. Canonical startup prerequisite implemented; LoRA artifact/runtime/trainer work not started.
+- Model ownership/math/training registration/checkpoint lifecycle implemented. Rolling-session retirement, durable queue/manifests, inference artifact export/publication, adapter-aware status, and coordinated reload remain future designs.
 
-## Current implemented refactors
+## Historical refactor snapshots (superseded by current source map)
 
 ### 1. Static hardware inventory
 
@@ -402,7 +428,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 | Model lifecycle / residency | `ModelLoader` | `ensureLoaded()` / `markInUse()` / `markIdle()` / `tickIdleTimers()` |
 | Request orchestration | `Orchestrator` | `generate(RequestContext)` |
 | Backend dispatch | `IGenerationBackend` impls | `Orchestrator::callBackend()` → `backends_[model_id]->generate()` |
-| Memory retrieval / write surface | `MemoryFacade` | `MemoryFacade::instance()` |
+| Memory retrieval / write surface | constructed `memory/MemoryFacade.*` | `retrieveForPrompt()`, `recordInteraction(UnifiedMemoryObject)` |
 | Session interaction state | `SessionContextManager` | `SessionContextManager::instance()` |
 | Unified tool registry | `ToolRegistry` | `ToolRegistry::instance()` |
 | Action policy / Training Wheels | `ActionPolicyRegistry` | `ActionPolicyRegistry::instance().evaluate()` |
@@ -463,7 +489,14 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `commands_question.cpp` and `commands_system.cpp` fully migrated to `ToolRegistry::instance()`
 - Only remaining code usage: `bootstrap.cpp` line 241 — `CommandRegistry::getAllTools()` at startup to seed ToolRegistry (intentional)
 
-### 9. MemoryFacade (`MMO/Core/MemoryFacade.hpp`, `MMO/Core/MemoryFacade.cpp`)
+### 9. Historical MemoryFacade introduction (current owner: `memory/MemoryFacade.*`)
+
+Current `MemoryFacade(UnifiedMemoryStorage&)` is a constructed adapter, not a
+singleton. `Orchestrator::buildRouterScope()` calls `retrieveForPrompt()`, which
+queries canonical storage and snapshots the default SessionContextManager
+session. `recordInteraction`/`storeLongTerm`/`storeShortTerm` take
+`UnifiedMemoryObject`, not key/value or role/content pairs. The old API sketch
+below is superseded; richer per-request-session retrieval is not implied.
 
 **What changed**
 - New system implemented
@@ -509,6 +542,10 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 ### 10. SessionContextManager (`MMO/Core/SessionContextManager.hpp`, `MMO/Core/SessionContextManager.cpp`)
 
+Current correction: this is a session-keyed owner, not an enforced permanent
+rolling conversation. The lifecycle and Buffer 1 retirement contract below is
+future design. Current API signatures/clear semantics are in the source map.
+
 **What changed**
 - New system implemented
 - Added `ChatMessage` struct (`role`, `content`) and conversation history API
@@ -518,7 +555,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 **Owns**
 - Session-scoped interaction state: turn records, referent bindings, pending interactions, action episodes
 - Session-scoped conversation history (`ChatMessage` log per session)
-- One canonical GRIM session spans the process lifetime; idle time, topic changes, completed tasks, context compaction, model switches, and LoRA revisions do not create a new chat.
+- Future design: one canonical GRIM session spans the process lifetime; idle time, topic changes, completed tasks, context compaction, model switches, and LoRA revisions do not create a new chat.
 - Append-only `TurnRecord` log with NLP summary and outcome tracking
 - `ReferentBinding` — entity tracking for pronoun/deictic resolution ("it", "that file", "the app")
 - `PendingInteraction` — unified pending state replacing fragmented globals
@@ -527,7 +564,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `VisualContext` — separate `DigitalVisual` (active window/selection) + `PhysicalVisual` (camera/gesture/gaze)
 - `ContextSnapshotV2` — rich projection for router/classifier/policy consumers
 - Turn lifecycle: `beginTurn()` / `setNlpSummary()` / `setTurnTags()` / `recordOutcome()` / `tick()`
-- Process lifecycle: create the canonical session during bootstrap and reserve `destroySession()` for shutdown/tests.
+- Future process-lifetime policy: create a canonical session at bootstrap and reserve destruction for shutdown/tests; current source exposes session management.
 
 **Does not own**
 - Memory persistence (delegated to `MemoryFacade`)
@@ -537,8 +574,8 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 **Canonical hook points**
 - `SessionContextManager::instance()` — singleton
-- `beginTurn(session_id)` → returns `turn_id` string
-- `setNlpSummary(session_id, turn_id, summary)` — attach NLP parse result to turn
+- `beginTurn(session_id, turn_id, raw_input, normalized_input)` → void; caller supplies turn identity
+- `setNlpSummary(session_id, summary)` — attach NLP summary to the session's current turn
 - `setTurnTags(session_id, turn_id, tags)` — attach classification tags
 - `recordOutcome(session_id, turn_id, outcome)` — mark how turn ended
 - `addReferent(session_id, referent)` / `resolveReference(session_id, phrase)` — entity tracking
@@ -579,6 +616,10 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 ### 11. ToolRegistry (`MMO/Core/ToolRegistry.hpp`, `MMO/Core/ToolRegistry.cpp`)
 
+This section's original metadata-only registry design is superseded: the sole
+registry owns metadata **and callable execution bindings**. No bootstrap
+CommandRegistry import or separate command map remains.
+
 **What changed**
 - New system implemented
 
@@ -594,29 +635,28 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `ToolRegistryListener` observer interface for registry changes
 
 **Does not own**
-- Command execution (dispatched by `dispatchCommand()` in `commands_core.cpp`)
+- Action policy evaluation; execution bindings themselves are registry-owned, and `command_dispatch.cpp` delegates explicit dispatch to `invoke()`
 - Action policy evaluation (delegated to `ActionPolicyRegistry`)
 - Plugin lifecycle management (future plugin manager)
 - Session context (delegated to `SessionContextManager`)
 
 **Canonical hook points**
 - `ToolRegistry::instance()` — singleton
-- `registerTool(descriptor)` / `registerSimple(tool_id, desc, cat)` — registration
+- `registerTool(descriptor, handler)` / `registerSimple(tool_id, desc, cat, handler)` — atomic metadata/callable registration
 - `unregisterTool(tool_id)` — removal
 - `registerBatch(plugin_name, tools)` / `unregisterByProvider(plugin_name)` — atomic plugin operations
 - `getTool(tool_id)` / `getAllTools()` / `getByCategory(cat)` / `getByCapabilityTag(tag)` — queries
 - `resolveAlias(alias)` — alias resolution
 - `generateCompactPrompt()` / `generateFullPrompt()` — model-facing prompt text
 - `version()` — monotonic prompt invalidation counter
-- `recordSuccess(tool_id)` / `recordFailure(tool_id)` — analytics
+- `invoke()` / `invokeModel()` — registered execution; invocation owns result statistics, model policy remains caller-owned
 - `addListener(listener)` / `removeListener(listener)` — observer pattern
 
 **Config contract**
-- No dedicated config — populated at bootstrap from `CommandRegistry::getAllTools()`
-- Future: plugin-contributed tools registered via `registerBatch()`
+- Built-ins publish `ToolRegistration` batches; plugins publish descriptor/handler pairs through the host API. There is no CommandRegistry seeding.
 
 **Current consumers**
-- `bootstrap/bootstrap.cpp` — imports all `CommandRegistry` tools into `ToolRegistry` at startup
+- `plugins/core_plugin.cpp` and `core/plugin_api_impl.cpp` — sole registry publication, with provider identity/generation for dynamic tools
 - `ai/ai.cpp` — `ai_interpret()` uses `generateCompactPrompt()` for model context, `recordSuccess/recordFailure` for analytics
 - `ActionPolicyRegistry` — queries `getTool()` for risk derivation and tool existence checks
 - Future: `Orchestrator` context composition, plugin hot-swap manager
@@ -954,6 +994,11 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 ### 14. Plugin → ToolRegistry sync (Phase 0.25)
 
+Historical dual-store synchronization is superseded. Current
+`core/plugin_api_impl.cpp` publishes descriptor/callable pairs and provider
+generations to the sole `ToolRegistry`; unload/replacement invalidates that
+generation. Do not restore `s_commands`/`commandMap` publication or a metadata mirror.
+
 **What changed**
 - `core/plugin_api_impl.cpp` now includes `MMO/Core/ToolRegistry.hpp`
 - `api_register_command()` — after registering in `s_commands` and `commandMap`, also builds a `ToolDescriptor` (provider_type=Plugin, provider_name=plugin_name, permission_bits from plugin context) and registers in `ToolRegistry::instance()`
@@ -1192,6 +1237,11 @@ When refactoring a system, append or update the relevant section in this file wi
 
 ### 26. Config loading from ai_config.json (Phase 3 wiring)
 
+Historical host-config change log, not the model-config ownership contract.
+Host MMO config and model runtime config are separate consumers of the actual
+configuration; model finalization applies selected compiled facts as documented
+in the current source map, without sidecar policy.
+
 **What changed**
 - `ai_config.json` — added `mmo.model_loader` section (load_timeout_ms, idle_ttl_ms, hot_ttl_cap_ms, use_degrade_step_ms)
 - `ai_config.json` — added `mmo.orchestrator` section (route_timeout_ms, generate_timeout_ms, synthesize_timeout_ms, max_submodels_per_request)
@@ -1407,7 +1457,7 @@ When refactoring a system, append or update the relevant section in this file wi
 
 **Does not own**
 - Model load/unload state machine (owned by `ModelLoader`)
-- Config loading — receives `ModelInfo` which already has paths/ports populated
+- Model configuration finalization — worker-owned; ProcessManager consumes host `ModelInfo` plus canonical configured process ports, not model/vocab/LoRA overrides
 - Backend logic — only manages the OS process; backends are registered separately
 - Non-GrimTextServer backends (Ollama, LlamaCpp, External) — marked as running but not process-managed
 
@@ -1426,7 +1476,12 @@ When refactoring a system, append or update the relevant section in this file wi
 **Status**
 - Implemented; replaces singleton delegation in MMO path; legacy `stopGRIMTextServer()` fallback calls deleted from `main.cpp`
 
-### 33. Legacy path purge — no backwards compatibility
+### 33. Historical path purge (superseded call routing)
+
+Historical deletion record, not a current orchestrator-only guarantee.
+Current `callAIAsync()` has explicit direct `grim_native`/`ollama` branches
+and separate MMO routing; `ai_interpret()` is not the active action boundary.
+Do not treat this old purge or its shadow statements as a current cutover plan.
 
 **What changed**
 - `resolveBackendURL()` deleted from `ai/ai.cpp`, `ai/ai.hpp`, `core/grim_exports.hpp`
@@ -1468,7 +1523,7 @@ When refactoring a system, append or update the relevant section in this file wi
 - All `ai_process_stream` references eliminated
 - All `warmupOllamaModel` references eliminated
 - All `stopGRIMTextServer` legacy fallback calls eliminated
-- CommandRegistry → ToolRegistry seeding bridge retained (data sync, not compat shim)
+- Historical seeding was subsequently removed: current publication is directly into the sole metadata/callable ToolRegistry.
 
 **Remaining gaps**
 - `warmupAI()` in `ai/ai.cpp` still exists as a minimal hello-world warmup — delegates through `callAIAsync` → orchestrator, so it's clean
@@ -1477,6 +1532,10 @@ When refactoring a system, append or update the relevant section in this file wi
 ---
 
 ## §34 — Config hardening + ContextSnapshotV2 wiring + ToolGapPlanner integration + MMD.cpp
+
+Historical snapshot. Current `callAIAsync()`/session signatures and config
+owners are in the source map; old `ai_interpret()` consumers and projection
+migration steps below are not a future/current compatibility route.
 
 **What changed**
 
@@ -1737,6 +1796,10 @@ When refactoring a system, append or update the relevant section in this file wi
 
 ## §36 — Correction Loop Wiring, EPC Consumer, UISurfaceSpec, Shadow Mode
 
+Historical snapshot: the `ai_interpret()` shadow/action path recorded here
+does not describe current `callAIAsync()` dispatch or establish enforced mode.
+Correction artifacts are not an implemented LoRA queue/training pipeline.
+
 **What changed**
 
 1. **Correction loop fully wired** — `processFeedbackResponse()` in `commands_feedback.cpp` now calls `SessionContextManager::recordUserResponse()` on all feedback paths (positive confirmation, negative rejection, low-confidence correction). `CorrectionTupleCollector::markConfirmed()` is called on positive feedback using the current turn_id from snapshot. `ai_interpret()` now calls `SessionContextManager::recordProposal()` when policy requires verification, so the `ActionEpisode` exists for subsequent correction tuple collection on rejection.
@@ -1829,6 +1892,12 @@ When refactoring a system, append or update the relevant section in this file wi
 
 ## §38 — UI tools registered in ToolRegistry
 
+Superseded registration snapshot. Current built-ins publish surface
+create/destroy and OSINT UI directly with handlers. `ui.show_surface` /
+`ui.hide_surface` are retired registrations; generic `ui.list`, `ui.inspect`,
+`ui.show`, `ui.hide`, `ui.bring_to_front`, and `ui.poll` belong to `ui_plugin`.
+Host panel/surface services remain host-owned; do not duplicate their tools.
+
 **What changed**
 
 - `bootstrap/bootstrap.cpp` — After `UISurfaceRegistry` is alive in `bootstrapMMOLayer()`, 4 UI tool descriptors are registered in `ToolRegistry`:
@@ -1865,6 +1934,12 @@ When refactoring a system, append or update the relevant section in this file wi
 ---
 
 ## §39 — UI tool command handlers wired to dispatch
+
+Historical four-wrapper/commandMap wiring is superseded by the sole callable
+registry and plugin-owned panel surface described in §38/current source map.
+`dispatchCommand()` now delegates in `commands/command_dispatch.cpp`; retained
+surface handlers are not proof of registered show/hide tools or an active
+`ai_interpret()` policy pipeline.
 
 **What changed**
 
@@ -2008,7 +2083,7 @@ When refactoring a system, append or update the relevant section in this file wi
 
 - CorrectionTuples capture **user corrections** (negative signal with corrected tool_id)
 - ToolTrainingExamples capture **all interactions** (positive signal from successes, negative from failures/gaps/denials, neutral from conversations)
-- Together they provide a complete LoRA fine-tuning dataset
+- Together they provide source records for a future LoRA dataset builder, not a completed rolling-session manifest, queue, or training pipeline.
 
 **Status**
 
@@ -2061,6 +2136,10 @@ All UIRoot mutations routed through `UIRoot::get().postTask()` since `SurfaceCha
 ---
 
 ## §44 — 3-Buffer Memory Rotation + Atomic Writes
+
+Implemented memory staging primitives, not the future tokenizer-pressure
+Buffer 1 retirement/capsule transaction. LoRA candidates/publication do not
+follow merely from `MemoryBufferRotation` or `AtomicWriter`.
 
 **What changed**
 
@@ -2134,6 +2213,10 @@ EPC VoiceParams.pitch → speakWorker effectivePitch → coquiSpeak(pitch) → J
 ---
 
 ## §46 — MemoryBufferRotation Consumer Wiring
+
+Historical consumer wiring snapshot; it does not implement permanent-session
+token compaction, a personalization queue, or adapter reload. Retired command
+registrations do not delete their retained host handlers/services.
 
 **What changed**
 

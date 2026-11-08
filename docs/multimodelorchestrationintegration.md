@@ -9,11 +9,17 @@ isProject: false
 
 > Living refactor companion: [`multimodelorchestrationintegration.codoc.md`](multimodelorchestrationintegration.codoc.md)
 >
-> GRIM-text LoRA and permanent rolling-session implementation map: [`GRIM_TEXT_LORA_SUPPORT_PLAN.md`](GRIM_TEXT_LORA_SUPPORT_PLAN.md)
+> GRIM-text LoRA and permanent rolling-session implementation map: [`model/plans/LORA_PERSONALIZATION.md`](model/plans/LORA_PERSONALIZATION.md)
 >
 > When MMO-related systems are refactored, split, renamed, replaced, or deleted, update the companion doc in the same change so ownership boundaries and hook points stay explicit.
 
 ## Invariants (non-negotiable)
+
+These are selected **MMO target requirements**, not claims that every deployed
+router already satisfies them. Model LoRA is implemented; permanent rolling
+personalization, enforced universal routing, and artifact publication remain
+separate work. The source-verified boundary below overrides stale implementation
+assumptions in earlier plan revisions.
 
 - **Base model weights are never modified.** No code ever touches the model’s internal (base) weights. All user- and environment-specific adaptation is done **only** via a **LoRA file**.
 - **LoRA is the personalization bridge.** The LoRA file is trained/updated using GRIM’s **memory** and **RL weighting** system. It is the single bridge of personalization between GRIM and the user. Inference always runs base model + LoRA; training/update of the LoRA happens in a separate pipeline (e.g. train_gpu or a dedicated LoRA trainer) that writes the LoRA file; the runtime only loads it.
@@ -64,26 +70,29 @@ Each command/plugin has its own signature, args, and (where applicable) sandbox/
 
 - Only after all checks pass does the body **invoke** the command or plugin via the existing command/plugin system. If the model emitted a tool-gap proposal instead, the body stays in the user-facing tool-gap flow and does **not** invoke anything. The model never emits shell strings or "run this"; it only contributes registry-bounded semantic intent.
 
-### Blocking issue in current code
+### Current execution boundary and remaining hardening
 
-- The current `ai_interpret()` flow in `ai/ai.cpp` can execute `ActionExecutor::executeAction(...)` or `dispatchCommand(...)` directly from model output. MMO enablement is blocked until that path is removed or routed through a single **ActionPolicy + Training Wheels** gate.
+- Current `handleCommand()` sends raw input to `ai_process()`; explicit selected-tool dispatch is `command_dispatch.cpp` → `ToolRegistry::invoke()`. The registry also exposes revision-checked `invokeModel()`, but policy remains caller-owned. The historical `ai_interpret()` action path is not the current entrypoint; complete model selection → policy/Training Wheels → invocation integration must be verified independently.
 - The existing plugin API already has permission bits (`GRIM_PERM_FILESYSTEM`, `GRIM_PERM_PROCESS`, etc. in `core/plugin_api.hpp`). MMO should reuse those as baseline policy inputs instead of inventing a second permission model.
 
 ## Tool registry and hot-swappable command/plugin system
 
 This should become the **primary action path**. Commands and plugins are not separate worlds from the model’s point of view — they are all **tools** exposed through one body-owned registry.
 
-The good news: the repo already has the beginnings of this.
+The canonical metadata/callable store is already implemented:
 
-- `commands/command_registry.*` already defines `ToolMetadata`, AI prompt generation, persistence, and usage analytics.
+- `MMO/Core/ToolRegistry.*` owns descriptors and execution bindings together, model-filtered discovery, aliases, provider generations, prompt versioning, and invocation statistics.
 - `core/plugin_manager.*` already supports DLL discovery and hot reload by file change.
 - `core/plugin_api.hpp` already exposes command registration, permissions, and reload hooks for plugins.
 
-The bad news: these pieces are **not yet one authoritative system**. A hardened MMO plan needs one canonical **ToolRegistry** that the model, action policy, hot-swap manager, and training pipeline all share.
+There is no remaining `CommandRegistry` metadata mirror or `commandMap` seeding
+contract. Future RL and policy adapters must use the sole ToolRegistry, not
+rebuild the retired dual-store system.
 
 ### Unified ToolRegistry (commands + plugins)
 
-The ToolRegistry should unify:
+The implemented ToolRegistry unifies metadata and registered callables; the
+requirements below remain the desired policy/training-facing semantics:
 
 - built-in commands,
 - plugin-provided commands/tools,
@@ -110,7 +119,8 @@ Minimum useful descriptor fields:
 - `hot_swap_state = loaded | loading | unloading | unavailable`
 - `success_stats` / reward stats
 
-Current `CommandRegistry::ToolMetadata` is the seed of this system, but it needs to become the **canonical registry contract**, not just a helper prompt generator.
+Current `ToolDescriptor` plus `ToolRegistration` is the canonical publication
+contract. Metadata alone does not register an executable tool.
 
 ### Hot-swappable tool rules
 
@@ -123,7 +133,9 @@ Hot-swapping is a first-class capability, not a dev-only afterthought.
 - A hot reload must invalidate model-visible cached tool prompts / compact tool summaries so the router does not reason over stale tool surfaces.
 - If a plugin unloads, its tools immediately become unavailable for new selection.
 
-Current `PluginManager::checkForHotReload()` is a strong starting point, but MMO needs registry synchronization and version-aware execution semantics on top of it.
+Provider-generation replacement and revision-checked model invocation already
+exist. MMO policy/rollout integration must preserve those boundaries and handle
+stale selections explicitly; no second synchronization store is needed.
 
 ### Training-driven tool semantics
 
@@ -305,29 +317,30 @@ Orchestration flow: **Body** → precomposed metadata + context → **grim-text 
 
 **Ownership: body writes, model reads.** The model (grim-text router and sub-models) **never writes to memory**. All memory storage, routing, indexing, decay, and sync operations are performed by the body (GRIM). The model receives a **read-only precomposed memory context** as part of its input.
 
-### Canonical memory façade (required)
+### Canonical memory façade (implemented owner; future rolling integration)
 
-The current codebase has both `memory/memory_storage.hpp` and `memory/unified_memory.hpp`, while `ContextManager` still depends on the older `MemoryStorage` surface. MMO must not talk to both storage APIs directly. Add a single body-side `MemoryFacade` / adapter that is the only interface the orchestrator uses for:
+`memory/MemoryFacade.*` already supplies the body-side retrieval/write boundary
+over the storage layers. `SessionContextManager`, not the removed
+`memory/context_manager.*`, owns session state. Future rolling-context consumers
+must use these existing owners rather than query two storage APIs independently:
 
 - retrieval (`search`, `getByTag`, `getByTags`, semantic retrieval),
-- current-session snapshot (`ContextManager::getSnapshot()`),
+- current-session snapshot (`SessionContextManager::snapshot()`),
 - post-response writes,
 - post-action reward / memory updates.
 
 If both memory backends are queried independently from orchestration code, relevance ranking and post-action writes will drift.
 
-### ContextManager redesign: the session-state authority
+### SessionContextManager: implemented state authority; future rolling design
 
-This is arguably the **most important body-side component** in MMO. Right now the code has pieces of context, but not a real context authority:
-
-- `memory/context_manager.cpp` keeps static process-wide state (`recentContext`, one `PendingIntent`, and a raw `MemoryStorage*`).
-- `ContextSnapshot` only exposes a tiny projection: recent intents, recent commands, mood, conversation depth, `lastNlpCategory`, consecutive commands, and last command time.
-- `commands_feedback.cpp` separately owns `g_pendingClarifyCmd` and `g_pendingFeedbackCmd`, so clarification/confirmation state is split away from the main context system.
-- `commands/commands_core.cpp` still resolves references with hardcoded cases like `"that app"` / `"it"`, which means referent tracking is not truly centralized.
-- `ai/fast_classifier.cpp` only gets `lastNlpCategory`, which is too lossy to represent real conversational/task context.
-- There is also a separate `PerceptionContextManager`, so the current name `ContextManager` is already overloaded and easy to misread.
-
-For MMO, `ContextManager` should become the body’s **session-scoped interaction state authority**. It may be worth renaming it to `SessionContextManager` or `InteractionContextManager` during migration to avoid confusion with `PerceptionContextManager`, but regardless of the final name, there should be **one canonical owner** of live conversational/task context.
+`MMO/Core/SessionContextManager.*` already owns session-keyed history, reasoning
+state, turn records, referents, pending interactions, action records, and
+`ContextSnapshotV2`. It is distinct from the host perception manager. Do not
+recreate the deleted static ContextManager or scattered pending-state globals.
+Current history clearing/trimming remains explicit and message-count based;
+permanent-session tokenizer accounting, pinned tails, compression frontiers,
+boundary artifacts, and the personalized adapter queue remain future design
+in [the LoRA map](model/plans/LORA_PERSONALIZATION.md).
 
 #### What the ContextManager must own
 
@@ -409,7 +422,9 @@ Minimum useful fields:
 - current mood, compact perception summary, and resource summary
 - risk summary for the current turn
 
-`lastNlpCategory` alone is not enough. That field can remain as a temporary compatibility projection, but it should be derived from the richer annotation state, not treated as the real context model.
+`lastNlpCategory` alone is not the context authority. New consumers must use
+the rich session snapshot directly; this plan does not introduce a temporary
+projection/migration path.
 
 #### Turn lifecycle owned by ContextManager
 
@@ -448,12 +463,16 @@ So long-term memory is: (1) the LoRA file (adaptation weights), (2) the hard cop
 
 ### Memory context retrieval (body to router)
 
-The body uses the existing 3-tiered memory system (`UnifiedMemoryStorage` in [memory/unified_memory.hpp](memory/unified_memory.hpp), `MemoryStorage` in [memory/memory_storage.hpp](memory/memory_storage.hpp), `ContextManager` in [memory/context_manager.hpp](memory/context_manager.hpp)) to **find memories relevant to the current context and user input**. In MMO, this should be driven by the richer session-state model above, not only by the current thin snapshot. Retrieval is done entirely by the body before calling the router:
+The body uses [MemoryFacade.cpp](../memory/MemoryFacade.cpp),
+[UnifiedMemoryStorage](../memory/unified_memory.hpp), and
+[SessionContextManager](../MMO/Core/SessionContextManager.hpp) for retrieval and
+session projection. Retrieval is body-owned; future rolling capsules do not
+replace exact storage or make the model a memory writer:
 
-1. **Query**: Body takes the user's input + current `ContextSnapshotV2` (or a compatibility projection of it from `ContextManager::getSnapshot()`) and queries memory via `UnifiedMemoryStorage::search(query)`, `getByTag(tag)`, `getByTags(tags)`, or `semanticSearch(query)` (when implemented).
-2. **Filter**: Results are filtered by relevance (text match, tag match, recency, confidence score). The existing `MemoryRouter::evaluate()` priority scoring (in [memory/memory_router.hpp](memory/memory_router.hpp)) can be reused for ranking.
-3. **Compose**: Found memories are serialized into a **precomposed memory context** payload (e.g. JSON with relevant memory entries, retrieval breadcrumbs, context tags, environment tags, current confidence state from `Confidence::GC` in [Reward_Learning/grim_confidence.hpp](Reward_Learning/grim_confidence.hpp), the active referent/interaction summary from `ContextSnapshotV2`, and a split `visual_context` containing both physical visual semantics and digital visual input summaries). This payload is sent to the router model alongside the user's input/metadata.
-4. **Read-only contract**: The router receives this payload as context. It uses it for routing decisions and composed generation. It **never returns memory-write instructions**; the body handles all memory mutations post-response (e.g. storing the interaction, updating confidence, RL feedback via `GRIM::RL::processCommandResult` in [ai/ai_rl.hpp](ai/ai_rl.hpp)).
+1. **Query**: Body takes user input and `ContextSnapshotV2` through the existing façade; use only actual storage methods, not a proposed parallel retrieval API.
+2. **Filter**: Rank by relevance, tags, recency, and confidence through existing body retrieval policy, including [MemoryRouter](../memory/memory_router.hpp).
+3. **Compose**: Found memories are serialized into a **precomposed memory context** payload (e.g. JSON with relevant memory entries, retrieval breadcrumbs, context tags, environment tags, current confidence state from `Confidence::GC` in [Reward_Learning/grim_confidence.hpp](../Reward_Learning/grim_confidence.hpp), the active referent/interaction summary from `ContextSnapshotV2`, and a split `visual_context` containing both physical visual semantics and digital visual input summaries). This payload is sent to the router model alongside the user's input/metadata.
+4. **Read-only contract**: The router receives this payload as context. It uses it for routing decisions and composed generation. It **never returns memory-write instructions**; the body handles all memory mutations post-response (e.g. storing the interaction, updating confidence, RL feedback via `GRIM::RL::processCommandResult` in [ai/ai_rl.hpp](../ai/ai_rl.hpp)).
 
 ---
 
@@ -718,15 +737,17 @@ flowchart TD
 
 ## UI layer and runtime-togglable emotions
 
-The body already owns real UI surfaces today (`WindowManager`, unified overlay, `UIRoot`, built-in panels, and a separate popup UI). The plan should harden that into a **modular UI layer** and a separate **runtime-togglable emotion presentation layer**.
+The body owns the UI host, surface registry/specs, and emotion presentation
+controller. Requirements below describe extension semantics, not missing
+foundational classes.
 
 ### Current repo reality
 
-- `main.cpp` currently creates the overlay window, initializes `UIRoot`, manually instantiates built-in panels (`ConsolePanel`, `UISettingsMenu`, `UITrainingPanel`, `UIDataCollectionPanel`), and launches a separate popup UI.
+- Host `main.cpp` / `UIRoot` own rendering/lifecycle; `ui_plugin` registers generic panels/operations, while core surface create/destroy remain built-in.
 - `ui/ui_root.hpp` already provides a usable host shell with named panels, z-order, visibility control, queued tasks, renderer access, and input routing.
 - `ui/ui_panel.hpp` already provides a reusable panel base with chrome, dragging/resizing, and overlay drawing hooks.
-- The **emotion** concept is not yet a dedicated layer. Today it mostly appears as `ContextSnapshot.currentMood` and optional mood-based reward shaping in `ai/ai_reward.cpp`.
-- `ai_config.json` currently has only a minimal `ui` section, so the UI layer exists in code but is not yet expressed as a clean runtime contract.
+- `MMO/UI/EmotionPresentationController.*` supplies the outward presentation layer; mood/reward state is not an execution authority.
+- `UISurfaceSpec` / `UISurfaceRegistry` and host panel services are implemented contracts; extra layout/channel policy below is future design.
 
 ### Internal affect vs external presentation
 
@@ -739,7 +760,8 @@ This split matters because the user must be able to turn the **presentation** on
 
 ### Emotion presentation controller
 
-Add a body-owned `EmotionPresentationController` (or equivalent) with runtime modes such as:
+Use the existing body-owned `EmotionPresentationController`; the following
+mode/channel requirements do not imply a second controller:
 
 - `disabled` — no emotion-driven UI styling, avatar expression, voice affect modulation, or expressive overlays
 - `passive` — subtle expression only
@@ -883,49 +905,42 @@ stateDiagram-v2
 
 ## Current State
 
-- **Body backend selection** — `[ai/ai.cpp](ai/ai.cpp)`: `resolveBackendURL()` returns one backend; `callAIAsync()` branches on it. In the `grim_native` branch it posts directly to `grim_text_url`; it does **not** go through an MMO orchestrator today.
-- **Bootstrap today is mixed-concern startup glue.** `runBootstrapChecks()` in `[bootstrap/bootstrap.cpp](bootstrap/bootstrap.cpp)` currently bundles config bootstrap, aliases init, font lookup, system detection, voice init, RL bridge startup, GRIM-text server startup, model warmup, and Whisper preload into one function.
-- **Bootstrap duplication already exists.** `[main.cpp](main.cpp)` calls `runBootstrapChecks(...)` and then separately calls `aliases::init()` again, which is a concrete sign that bootstrap responsibilities are not yet cleanly partitioned.
-- **Body → grim-text** — `[MMO/Backends/GrimNativeBackend.cpp](../MMO/Backends/GrimNativeBackend.cpp)`: active HTTP client wrapper used by direct and orchestrated GRIM-text calls. `[ai/grim_text_server_manager.cpp](../ai/grim_text_server_manager.cpp)`: starts/stops a **single** `grim_text_server.exe`.
-- **UI shell exists, but it is manually assembled.** `[main.cpp](main.cpp)` creates the overlay, initializes `UIRoot`, manually adds a fixed set of panels, and launches a separate popup UI. The rendering shell is real, but it is not yet expressed as a modular surface registry.
-- **Emotion is only a thin signal today.** `[memory/context_manager.hpp](memory/context_manager.hpp)` exposes `currentMood` in `ContextSnapshot`, and `[ai/ai_reward.cpp](ai/ai_reward.cpp)` applies small mood-based reward adjustments, but there is no dedicated runtime-togglable emotion presentation controller.
-- **MMO stubs** — `[MMO/Shared/MMD.hpp](MMO/Shared/MMD.hpp)`: `MMD::ModelInfo` (ID, name, Version, Subject, model_path, SubjectTags, Usage_Weight). `getSubjectTags(RawInput)` declared. `[MMO/Router/ModelRouter.hpp](MMO/Router/ModelRouter.hpp)`: empty.
-- **Call sites** — `callAIAsync` used from: `[ai/ai.cpp](ai/ai.cpp)` (chat, interpret, process, warmup), `[ai/task_planner.cpp](ai/task_planner.cpp)`, `[ai/lm_intent.cpp](ai/lm_intent.cpp)`, `[voice/voice_speak.cpp](voice/voice_speak.cpp)`. All use the single resolved backend.
-- **Brain** — One model per server process; current GRIM-text server exposes `/api/generate` and `/api/chat`, not route/synthesize endpoints. `[ScratchBlockPool_GPU.hpp](resources/models/GRIM-text/Shared/ScratchBlock/ScratchBlockPool_GPU.hpp)` mentions multi-model for buffer sharing but no higher-level orchestration.
-- **System detection is static, not live.** `[system_detect.cpp](system_detect.cpp)` / `[system_detect.hpp](system_detect.hpp)` currently produce one `SystemInfo` snapshot (OS/arch, CPU, RAM, GPU, monitors, audio output, Wi-Fi/location), but there is no long-lived resource signal loop tracking current usage/availability.
-- **Tool metadata registry exists, but is not yet authoritative.** `[commands/command_registry.hpp](commands/command_registry.hpp)` / `.cpp` already define `ToolMetadata`, AI prompt generation, persistence, and basic analytics.
-- **Plugin hot reload exists, but it is not yet unified with tool metadata.** `[core/plugin_manager.hpp](core/plugin_manager.hpp)` / `.cpp` already scan DLLs and support file-change reload via `checkForHotReload()`.
-- **Plugin commands currently bypass the metadata registry.** `[core/plugin_api_impl.cpp](core/plugin_api_impl.cpp)` registers plugin commands directly into `commandMap`; it does not currently populate `CommandRegistry`, even though `ToolMetadata` already has `fromPlugin` / `pluginName` fields.
-- **Context state today is fragmented** — `[memory/context_manager.cpp](memory/context_manager.cpp)` keeps static `recentContext` + one `PendingIntent`, `[commands/commands_feedback.cpp](commands/commands_feedback.cpp)` separately stores pending clarification/feedback, `[commands/commands_core.cpp](commands/commands_core.cpp)` still hardcodes referent resolution for strings like `"that app"`, and `[ai/fast_classifier.cpp](ai/fast_classifier.cpp)` only consumes `lastNlpCategory` as its context signal.
-- **Visual context today is mostly digital.** `[perception/perception_context.hpp](perception/perception_context.hpp)` already exposes `VisualContext` for monitor/window/OCR/object/scene state, but the MMO payload should reserve a separate branch for future or optional **physical visual semantic input** instead of stuffing everything into one undifferentiated visual blob.
+Source-verified boundaries; this is not runtime/build certification.
+
+| Status | Current source owner / call surface | Not implied / future |
+| --- | --- | --- |
+| Implemented model config | [train_gpu.cu](../resources/models/GRIM-text/training/train_gpu.cu) loads the actual snapshot then calls `finalizeAiConfigSnapshot()` in [HyperParameters_GPU.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp). Runtime/training policy is from `ai_config.json`; immutable semantics/geometry and selected model-store facts are from compiled `model.grimcfg`. [HyperparameterGroupings.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperparameterGroupings.hpp) supplies read views. | No sidecar policy or launcher reconstruction. |
+| Implemented host registry/process | [ModelRegistry.cpp](../MMO/Core/ModelRegistry.cpp) owns host model metadata and rejects sub-model adapter/hard-copy paths. [ProcessManager.cpp](../MMO/Core/ProcessManager.cpp) owns model-keyed process lifecycle with config-derived public/worker ports. | Host `lora_path` metadata does not activate/publish an adapter. |
+| Implemented HTTP bridge | [grim_text_server.cpp](../resources/models/GRIM-text/GRIM/grim_text_server.cpp) accepts `--public-port`, `--worker-port`, `--worker-exe`; [grim_text_server_api.hpp](../core/grim_text_server_api.hpp) owns HTTP constants. Model startup is worker-owned, not bridge-owned. | Personalized adapter identity/readiness and reload are pending. |
+| Implemented model LoRA | [ParameterRegistry.hpp](../resources/models/GRIM-text/training/Phases/Startup/Model/ParameterRegistry.hpp) owns A/B for QKV, O, FFN gate/up/down; [ParameterGroupRegistration.cu](../resources/models/GRIM-text/training/Phases/Startup/Model/ParameterGroupRegistration.cu) freezes base tensors and registers A/B-only training groups. [ModelForward_GPU.cu](../resources/models/GRIM-text/Shared/Forward/ModelForward_GPU.cu) binds factored low-rank projections. | Not a deployed rolling-personalization router or a second adapter registry. |
+| Implemented LoRA persistence | [LoRATrainingCheckpoint.hpp](../resources/models/GRIM-text/Common/LoRATrainingCheckpoint.hpp), [grim_lora_training_checkpoint.fbs](../resources/models/GRIM-text/training/schemas/grim_lora_training_checkpoint.fbs), and [LoRACheckpointLifecycle.cu](../resources/models/GRIM-text/training/LoRACheckpointLifecycle.cu) provide strict immutable `.grimlorackpt` training save/resume under selected model `lora_checkpoints`; Phase 1 initializes/restores, Phase 3 saves boundaries without base save in LoRA mode. | Inference artifact export/publication, durable queue/manifests, canary gates, and coordinated adapter reload remain future. |
+| Implemented RL environment | [Phase1_Startup.cu](../resources/models/GRIM-text/training/Phases/Phase1_Startup.cu) → [EnvironmentReady.cu](../resources/models/GRIM-text/training/Phases/Startup/EnvironmentReady.cu) prepares scheduled Goals without SFT/optimizer/epoch setup. `ready_for_environment` dispatches to [Phase2_EnvironmentLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_EnvironmentLoop.cu): textual Execute commands, Answer grading, schedule iteration. | Not removed neural register-machine execution or an RL update. |
+| Implemented append, future optimization | [RuntimeContextAppend.cu](../resources/models/GRIM-text/Shared/InferenceState/RuntimeContextAppend.cu) validates/remaps atom context for resume. [Phase2_RLTrainingLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_RLTrainingLoop.cu) always throws and is unbuilt/undispatched. | Policy/reference scoring, scored-group payloads, retries, loss/backward/optimizer, EMA, and receipts remain pending. |
+| Implemented request paths | [ai.cpp](../ai/ai.cpp) has direct `grim_native` and `ollama` paths; other enabled configurations use [Orchestrator.cpp](../MMO/Core/Orchestrator.cpp). | The universal enforced single-path requirement above is not implemented; old `resolveBackendURL()`/`ai_interpret()` descriptions are superseded. |
+| Implemented tool authority | [ToolRegistry.hpp](../MMO/Core/ToolRegistry.hpp) owns metadata/callables/provider generations; [command_dispatch.cpp](../commands/command_dispatch.cpp) delegates to `invoke()`. Revision-checked `invokeModel()` leaves policy caller-owned. [plugin_api_impl.cpp](../core/plugin_api_impl.cpp) publishes dynamic tools into that sole store. | No CommandRegistry/commandMap mirror or seeding migration; a registry primitive is not an RL tool collector. |
+| Implemented plugin ownership | [input_plugin.cpp](../plugins/input_plugin/input_plugin.cpp) supplies input tools over API v3.9 host services; [ui_plugin.cpp](../plugins/ui_plugin/ui_plugin.cpp) supplies generic panel operations; [core_plugin.cpp](../plugins/core_plugin.cpp) retains surface create/destroy and OSINT UI registration. | Do not duplicate built-ins or restore retired UI show/hide wrappers. |
+| Implemented retirement | [RETIRED_AGENT_TOOLS.md](RETIRED_AGENT_TOOLS.md) identifies eleven removed AI/NLP/admin registrations. | Host handlers, conversation, model routing, grammar, and session services remain; these are not pending tool migrations. |
+| Implemented session/bootstrap owners | [SessionContextManager.cpp](../MMO/Core/SessionContextManager.cpp) owns history, supplied reasoning state, pending interactions, and rich snapshots; history remains message-trimmed/explicitly cleared. [bootstrap.cpp](../bootstrap/bootstrap.cpp) wires named phases and resource/model/UI services. | Permanent-session token retirement, capsules, and personalization queue are future, not guarantees supplied by existing state owners. |
+| Implemented host records/memory | [CorrectionTuple.cpp](../MMO/Core/CorrectionTuple.cpp), [ToolTrainingParser.cpp](../MMO/Core/ToolTrainingParser.cpp), [MemoryFacade.cpp](../memory/MemoryFacade.cpp), and [memory_buffer_rotation.cpp](../memory/memory_buffer_rotation.cpp) provide source records and memory staging/retrieval. | Not a complete LoRA micro-training dataset/publication lifecycle. |
 
 
 ---
 
-## Critical gaps to close before coding
+## Remaining integration gaps (do not recreate implemented foundations)
 
-- **Direct model-to-action execution exists today.** `ai_interpret()` can call `ActionExecutor::executeAction(...)` or `dispatchCommand(...)` directly. This must be replaced by a single gated action path before MMO is trusted.
-- **Conversation history is global.** `g_conversationHistory` in `ai/ai.cpp` is process-global and not session-safe; MMO needs request/session-scoped history.
-- **Bootstrap concerns are not separated yet.** Config loading, hardware detection, subsystem init, model/server startup, and warmup are mixed in one startup path rather than split into phased bootstrap responsibilities.
-- **There is no central hardware inventory authority yet.** `SystemInfo` is a useful start, but it is still a thin one-shot structure rather than the canonical machine/topology record for the run.
-- **There is no live resource signal service yet.** Current code detects hardware once, but does not maintain a shared loop for CPU/GPU/RAM/process usage and availability.
-- **There is no shared resource coordinator for model/tool loading yet.** Resource-sensitive actions risk becoming independent per-use checks instead of going through one admission/reservation authority.
-- **The UI is not yet modular at the architecture level.** `UIRoot` and panels exist, but panel registration is still hardcoded in startup rather than driven through a canonical surface registry/spec model.
-- **There is no runtime-togglable emotion presentation layer yet.** Mood exists as a small signal, but there is no dedicated controller that can turn outward expression on/off without affecting core behavior.
-- **There is no validated UI-tool contract yet.** The plan has tool creation, but not yet a specific registry-backed path for grim to create, update, and destroy UI through validated surface specs.
-- **The server manager is single-instance.** `GRIMTextServerManager` manages one `grim_text_server.exe`; resource-aware multi-model loading needs a model-keyed process manager.
-- **The server contract is too thin.** `grim_text_server.cpp` only supports Ollama-style `/api/generate` and `/api/chat`; MMO needs explicit route and synthesize contracts with schema validation.
-- **The memory layer is split.** `ContextManager` still uses the older `MemoryStorage` surface while the newer `UnifiedMemoryStorage` exists separately. Orchestration must sit on a single façade.
-- **The context layer is fragmented and too thin.** `ContextManager` is currently static/global, stores one `PendingIntent`, and exposes a tiny snapshot; `commands_feedback.cpp` owns separate pending states; `commands_core.cpp` still does ad-hoc pronoun resolution. MMO needs one session-scoped interaction context authority.
-- **There is no unified authoritative ToolRegistry yet.** Built-in tool metadata lives in `CommandRegistry`, while plugin commands register straight into `commandMap`; the model-facing tool surface is therefore split.
-- **Hot reload is not yet model-aware.** Plugins can reload at the DLL level, but registry updates, cached AI tool prompts, version pinning, and action-policy synchronization are not formalized.
-- **There is no explicit training parser for tool semantics.** The repo does not yet parse training data into structured tool exemplars / affordance-token mappings.
+- **Enforced routing:** current direct backend paths do not meet the universal single-path target; make any future cutover explicit rather than reviving deleted routing helpers.
+- **Model-selected actions:** use existing registry revision/provider checks and caller-owned policy/Training Wheels; verify the entire selection-to-invocation path, not historical `ai_interpret()` wiring.
+- **Rolling personalization:** tokenizer-measured retirement, immutable boundary/candidate manifests, durable queue, bounded training/evaluation, inference artifact export/publication, adapter identity health, and coordinated reload remain future.
+- **RL optimization:** scheduled environment interaction is implemented, but policy/reference replay, retries, group loss/backward/update, and EMA/receipt publication are not.
 - **There is no guarded tool-creation pipeline yet.** The repo can hot-load DLL plugins, but it does not yet have a body-owned ToolSpec → scaffold → build → load flow for user-approved tool creation.
-- **Current stubs are not implementation-ready.** `MMO/Shared/MMD.hpp` and `MMO/Router/ModelRouter.hpp` need to become clean contract/types first, not just placeholders.
+- **Existing contracts are not endpoint certification.** MMD, ModelRouter, and Contracts are implemented; verify actual worker route/synthesis handlers before claiming the model serves that contract.
 
 ## NLP overhaul: tagger-first, not decider
 
-The current NLP stack is still partly a **decision system**: it helps classify intent, learns executable patterns, biases command routing, and indirectly participates in action execution. In the MMO architecture that is too much authority in the wrong layer. NLP should remain, but its role changes from **hardcoded command chooser** to **annotation and metadata producer**.
+`NlpAnnotation` and `RouterMetadataBuilder` already provide the annotation path.
+Current raw input enters `handleCommand()` → `ai_process()`, not a grammar
+command parser. Retain host NLP tagging/prior services without giving them
+authority to select executable actions.
 
 ### What NLP keeps doing
 
@@ -944,14 +959,12 @@ The current NLP stack is still partly a **decision system**: it helps classify i
 - It must **not** be the authoritative arbiter for routing, memory writes, or command execution.
 - It must **not** encode executable policy in ad-hoc regex patterns that the rest of the system silently treats as truth.
 
-### Current coupling that must be unwound
+### Current annotation boundary
 
-- `ai/ai.cpp` currently calls `g_nlp.learnPattern(input, suggested)` after AI-suggested actions/commands, which turns model output into future executable matching behavior.
-- `commands/commands_core.cpp` still uses `g_nlp.parse(...)` as part of dispatch routing, so NLP is in the execution path instead of the annotation path.
-- `ai/fast_classifier.cpp` uses `NLPGrammarProvider`, so the classifier derives routing weights from executable grammar/rule definitions.
-- `memory/context_manager.cpp` only carries forward a narrow `lastNlpCategory`, extracted from command tags rather than a richer annotation payload.
-- `nlp/nlp.cpp` has stubbed `loadLearnedRules(...)` / `saveLearnedRules(...)`, which means memory integration is conceptually present but not trustworthy yet.
-- `nlp/grammar_parser.cpp` still has placeholder template matching, so the grammar system is not strong enough to own hard decisions even if we wanted it to.
+- `callAIAsync()` conditionally builds annotations and rich session metadata for MMO; explicit direct backend paths remain separate.
+- `commands_core.cpp::handleCommand()` treats raw input as model input. `command_dispatch.cpp` is explicit selected-tool invocation.
+- `SessionContextManager` owns rich session state; the old static ContextManager owner is removed.
+- Retired NLP/admin registrations do not remove host grammar handlers/services or make them model training.
 
 ### Target NLP outputs
 
@@ -980,7 +993,7 @@ NLP is especially important on the memory boundary.
 
 - On **memory ingress**, the body tags every stored memory item with `memory_tags`, entities, references, and risk/context tags.
 - On **memory retrieval**, the body derives query tags and entity filters from the current `NlpAnnotation` before searching.
-- `ContextManager` should evolve from storing mainly recent commands + `lastNlpCategory` to storing the latest **annotation summaries, referents, pending interaction state, and action episodes** relevant to routing.
+- Use existing SessionContextManager annotation summaries, referents, pending interactions, and action records; extend the actual owner only where required.
 - Learned NLP state should be about **tagging quality** and **annotation accuracy**, not executable aliasing.
 - Memory should store both the raw utterance and the annotation output that justified retrieval or action gating.
 
@@ -1026,7 +1039,7 @@ NLP should inform action policy, not replace it.
   - `nlp/MemoryTagger.hpp` / `.cpp`
   - `nlp/RouterMetadataBuilder.hpp` / `.cpp`
   - `nlp/UtterancePriorClassifier.hpp` / `.cpp` (can wrap the current fast classifier / intent gate behavior)
-- `Intent` can remain as a compatibility type for older code during migration, but the long-term contract should be `NlpAnnotation`.
+- New annotation consumers use `NlpAnnotation`; do not add an interim legacy execution bridge.
 - `learnPattern(...)` should migrate toward learning **tagging patterns** or annotation hints, not executable intents.
 - Add a training-data parser for explicit tool exemplars / affordance-token mappings so NLP hints and model-learned tool use share the same symbolic vocabulary.
 
@@ -1038,7 +1051,7 @@ NLP should inform action policy, not replace it.
   - `annotation consumer`
   - `prior consumer`
   - `legacy execution consumer` (must be removed)
-- The first migration milestone is: **NLP output is consumed by memory and router metadata even if command execution still temporarily uses legacy paths**.
+- Annotation/router metadata foundations are implemented; new consumers use their current typed boundary, not an interim legacy execution route.
 - The second migration milestone is: **all execution paths use policy + registry-backed tool decisions, while NLP only supplies metadata and priors**.
 
 ## Goals for MMO
@@ -1100,48 +1113,45 @@ flowchart LR
 
 ---
 
-## Phase 0: Hardening before implementation
+## Phase 0: Implemented foundations; remaining hardening
 
-- Clean up `MMO/Shared/MMD.hpp` and `MMO/Router/ModelRouter.hpp` into compilable, minimal contract types. Add `MMO/Core/Contracts.hpp` for route/synthesize/sub-model request/response envelopes plus validators.
-- Add `MMO/Core/RequestContext.hpp` containing `request_id`, `session_id`, `turn_id`, timeout/deadline, and session-scoped history handles. The orchestrator receives this on every call.
-- Add `MMO/Core/MemoryFacade.hpp/.cpp` to unify `MemoryStorage`, `UnifiedMemoryStorage`, `ContextManager`, and `MemoryRouter` behind one retrieval/write surface.
-- Add `MMO/Core/HardwareInventory.hpp/.cpp` plus a richer bootstrap-owned inventory contract that extends today’s `SystemInfo` into the canonical machine snapshot for the run.
-- Add `MMO/Core/ResourceSignal.hpp/.cpp` and `MMO/Core/ResourceCoordinator.hpp/.cpp` so bootstrap can start a live resource loop and expose one admission/reservation authority for model loading, tool loading, process startup, and perception capture.
-- Add `MMO/UI/UISurfaceSpec.hpp/.cpp`, `MMO/UI/UISurfaceRegistry.hpp/.cpp`, and `MMO/UI/EmotionPresentationController.hpp/.cpp` so UI surfaces and emotion presentation become first-class runtime contracts rather than ad-hoc startup wiring.
-- Rework `memory/context_manager.*` into the session-scoped interaction authority (or rename it to `SessionContextManager`), with `TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, and `ContextSnapshotV2`. Keep `getSnapshot()` as a compatibility projection during migration.
-- Define the context payload contract so `ContextSnapshotV2` and router metadata include both `visual_context.physical_semantics` and `visual_context.digital_visual`, with current repo support coming primarily from the digital side (`PerceptionContextManager::VisualContext`).
-- Add `MMO/Core/ToolRegistry.hpp/.cpp` as the canonical registry over built-in commands and plugin tools, replacing the current split between `CommandRegistry` metadata and plugin direct registration.
-- Add `MMO/Core/ToolTrainingParser.hpp/.cpp` (or equivalent offline pipeline) to parse explicit tool-usage training data into symbolic exemplars / affordance-token mappings.
-- Add `MMO/Core/ToolGapPlanner.hpp/.cpp` for structured tool-gap proposals and user-approved tool creation flow.
-- Add registry-backed UI tools (e.g. `ui.create_surface`, `ui.update_surface`, `ui.show_surface`, `ui.hide_surface`, `ui.destroy_surface`) so grim can request UIs through validated specs rather than raw rendering commands.
-- Add `MMO/Core/ActionPolicyRegistry.hpp/.cpp` mapping command/plugin → risk, confirmation rule, permission bits, argument validator, and sandbox policy. All AI-proposed actions must go through this before Training Wheels.
-- Add `nlp/NlpAnnotation.hpp/.cpp` and `nlp/RouterMetadataBuilder.hpp/.cpp` so the new NLP contract exists before routing code starts depending on it.
-- Refactor `bootstrap/bootstrap.cpp` into explicit phases: config bootstrap, hardware inventory capture, resource signal start, subsystem registration, and optional warmup scheduling. It should stop acting as an all-in-one startup catch-all.
-- Extend `GRIMTextServerManager` into a model-keyed process manager. Startup is invalid if two models claim the same port, executable, or identity.
-- Generalize `core/plugin_manager.*` so DLL hot reload is synchronized with ToolRegistry updates and model-visible tool-surface invalidation.
-- Add `mmo.mode = "shadow" | "enforced"`. Shadow mode may log routing/synthesis decisions for comparison, but it must never execute shadow actions or mutate memory/LoRA differently from the live path.
+The earlier add/rework checklist is superseded by the actual owners:
+
+- Existing `MMD`, thin `ModelRouter`, `Contracts` validators, and `RequestContext` identities/envelopes.
+- Existing `MemoryFacade` and session-scoped `SessionContextManager` turn/history/referent/pending/action state; no temporary ContextManager projection migration.
+- Existing bootstrap-owned `HardwareInventory`, `ResourceSignal`, and `ResourceCoordinator`; future micro-training leases use this authority.
+- Existing `UISurfaceSpec`, `UISurfaceRegistry`, and `EmotionPresentationController`; host rendering and plugin generic panel operations retain separate owners.
+- Existing sole metadata/callable `ToolRegistry`, provider-generation publication/replacement, `ToolTrainingParser` examples, and `ToolGapPlanner` proposals. A guarded autonomous tool creation pipeline remains pending.
+- Existing core surface create/destroy; generic `ui.list`/`inspect`/`show`/`hide`/`bring_to_front`/`poll` belong to `ui_plugin`. Retired surface show/hide wrappers are not a migration route.
+- Existing `ActionPolicyRegistry`, `NlpAnnotation`, and `RouterMetadataBuilder`; verify the full model selection/policy/Training Wheels/invocation path separately.
+- Existing named bootstrap phases and model-keyed `ProcessManager`; worker model config finalization is not a launcher responsibility.
+- Existing `mmo.mode` selector does not establish universal enforced routing or shadow action/memory isolation.
+
+Remaining work preserves the selected rich physical/digital context, frozen-brick,
+strict envelope, unified verification, and router-only personalization semantics.
+Do not recreate removed registries, legacy execution bridges, or source owners.
 
 ---
 
-## Phase 1: Body – Backend abstraction and registry
+## Phase 1: Existing body contracts; future personalized endpoint integration
 
 **1.1 Unified backend interface (body)**  
 
-- Add `ai/backends/IGenerationBackend.hpp`: interface with `generate(prompt, max_tokens, options)`, `generateWithHistory(prompt, history, max_tokens)`, `isAvailable()`, `getBackendId()`. All backends are read-only from the model’s perspective (no weight writes; LoRA loading is separate).
+- Existing `ai/backends/IGenerationBackend.hpp` owns backend generation/history/availability transport; use its actual `GenerationOptions`/result signatures, not illustrative pseudocode as a new API.
 - The generation options passed through this interface should already contain the body-built `nlp_annotation`, the router metadata envelope, the split visual-context payload (`physical_semantics` + `digital_visual`), and a compact ToolRegistry/tool-surface summary.
 - Implement:
-  - **Router backend** (grim-text): `GrimNativeRouterBackend` – HTTP to grim_text_url; sends **precomposed metadata and context**; expects response with **routing decision** (sub-model id) and **composed generation** for that sub-model. Uses existing grim_text_server_manager. Router runs base + LoRA (LoRA path from config); server loads LoRA, never writes base weights.
+  - **Router backend**: existing `GrimNativeRouterBackend` carries native/MMO HTTP transport. Model-side low-rank math exists; loading host `mmo.router.lora_path`, personalized readiness, and serving route/synthesis end-to-end remain separate integration work.
   - **Sub-model backends**: e.g. grim-text sub-model server or Ollama/LocalAI. They expose `generate(composed_prompt_only, ...)` – they **receive only the generation**, not raw user context.
-- LoRA path and hard-copy path in config; inference only loads LoRA; training/update of LoRA is a separate pipeline (memory + RL → trainer → writes LoRA file only).
+- Router LoRA/hard-copy metadata exists. The future memory/RL → micro-trainer → inference-artifact pipeline reuses model LoRA/training checkpoints; it is not currently connected.
 
 **1.2 Model registry and config**  
 
-- Implement `MMO/Core/ModelRegistry.hpp/.cpp`: load **router** (single) and **sub-models** (list), each with `MMD::ModelInfo` plus backend type, URL/path, and subject tags. `lora_path` / `hard_copy_path` are router-only fields.
+- Existing `MMO/Core/ModelRegistry.*` loads router/sub-model metadata, backend type, URL/path, and subject tags, with router-only LoRA/hard-copy fields.
 - Extend `ai_config.json`: `mmo`, `router`, `sub_models`, `routing`, `model_loader`, and `action_policy`. When `mmo.enabled=true`, missing `router` or empty `sub_models` is a startup error. Sub-model entries must not accept `lora_path`.
 - Add NLP config sections for annotation and tagging, e.g. `nlp.annotation`, `nlp.memory_tags`, `nlp.router_tags`, `nlp.priors`, and `nlp.risk_tags`. These are configuration for metadata generation, not command execution.
 - Add UI and emotion config sections so modular UI surfaces and runtime presentation toggles are body-owned runtime settings instead of hardcoded startup behavior.
 - Add tool-system config sections such as `tools.registry`, `tools.hot_reload`, `tools.learning`, and `tools.creation` for registry persistence, hot-swap policy, explicit training parser inputs, and user-approved tool creation workflow.
-- Implement `MMD::getSubjectTags` in `MMO/Shared/MMD.cpp`: keyword/tag extraction for subject-based routing.
+- Existing `MMD::getSubjectTags` in `MMO/Shared/MMD.cpp` extracts subject tags.
 
 **1.3 Router and synthesizer API (body → grim-text)**  
 
@@ -1213,18 +1223,23 @@ sequenceDiagram
 
 ---
 
-## Phase 2: Body – Resource-aware loader, orchestrator, memory integration
+## Phase 2: Existing body orchestration; remaining lifecycle/cutover design
+
+ModelLoader, Orchestrator, and bootstrap/process wiring exist. The detailed
+flow below is the selected contract and remaining integration work, not a list
+of classes to recreate or a claim that personalized model endpoints are serving.
 
 **2.1 Resource-aware model loader (use-degrading state machine)**  
 
-- Add `MMO/Core/ModelLoader.hpp/.cpp`: per-model state machine **unloaded → loading → loaded → in_use → idle → evict_eligible → unloading → unloaded**. Resource-aware transitions (e.g. do not load if GPU memory above threshold without evicting). **Use-degrading**: longer or more recent use keeps model in GPU longer (e.g. last-use timestamp + session-use counter; evict_eligible only after idle timeout that increases with recent use). Orchestrator requests “router” or “sub_model_id” from loader; loader returns handle and marks in_use; caller signals when done so loader can transition to idle.
+- Existing `MMO/Core/ModelLoader.*` owns model residency and use-degrading state. Resource-aware transitions (e.g. do not load if GPU memory above threshold without evicting). **Use-degrading**: longer or more recent use keeps model in GPU longer (e.g. last-use timestamp + session-use counter; evict_eligible only after idle timeout that increases with recent use). Orchestrator requests “router” or “sub_model_id” from loader; loader returns handle and marks in_use; caller signals when done so loader can transition to idle.
 - Router (grim-text) and each sub-model are tracked by the loader. Sub-models may be separate processes (e.g. grim_text_server per port) or one server with model id; “load”/“unload” means ensure this model is in GPU / eligible for eviction.
 - Loader behavior must be request-safe: deduplicate concurrent loads for the same model, reject invalid state transitions, attach request IDs to load/unload logs, and use the shared ResourceCoordinator rather than re-running full hardware availability checks at each decision point.
 
 **2.2 MMO orchestrator**  
 
-- Add `MMO/Core/Orchestrator.hpp/.cpp`: owns registry, **router backend** (grim-text), **sub-model backends** (map sub_model_id → backend; all **frozen**), and **ModelLoader**.  
-- API: `generate(prompt, options)` with precomposed **metadata and context** in options. Flow: (1) Build precomposed payload from prompt + options. (2) Get router from loader; call router backend with precomposed metadata + context. (3) Parse response → sub_model_id + composed_generation. (4) Get that sub-model from loader; call sub-model backend with **only** composed_generation (frozen brick). (5) **Pass sub-model output(s) back to grim-text** (synthesize call). (6) grim-text returns **final structured response**; orchestrator returns that to the body/user. No weight writes in this path. User never sees raw sub-model output; they see grim-text’s synthesized response.
+- Existing `MMO/Core/Orchestrator.*`: uses registry, **router backend** (grim-text), **sub-model backends** (map sub_model_id → backend; all **frozen**), and **ModelLoader**.
+- Current API: `generate(const RequestContext&)`. The following flow is contract
+pseudocode, not an alternate callable API, with precomposed **metadata and context** in options. Flow: (1) Build precomposed payload from prompt + options. (2) Get router from loader; call router backend with precomposed metadata + context. (3) Parse response → sub_model_id + composed_generation. (4) Get that sub-model from loader; call sub-model backend with **only** composed_generation (frozen brick). (5) **Pass sub-model output(s) back to grim-text** (synthesize call). (6) grim-text returns **final structured response**; orchestrator returns that to the body/user. No weight writes in this path. User never sees raw sub-model output; they see grim-text’s synthesized response.
 - **3-buffer memory**: Working, preprocessing, and sync-and-clear buffers live in the body (e.g. memory/ or MMO/memory). Precomposed context is built from working + preprocessing; after sync phase, short-term syncs to long-term (hard copy / LoRA training input) and sync-and-clear is cleared. Orchestrator receives “current context” from the body; it does not implement buffers. Long-term = **LoRA file** + **hard copy** (config paths); only the training pipeline writes them; orchestrator only reads.
 - The orchestrator validates **every** boundary: route response schema, `sub_model_id` registry membership, sub-model output schema, synthesize response schema, and request/session correlation IDs.
 - Before route invocation, the orchestrator should call the new NLP annotation pipeline so the router always receives structured body-side metadata instead of relying on ad-hoc parsing in downstream components.
@@ -1233,22 +1248,27 @@ sequenceDiagram
 **2.3 Lifecycle**  
 
 - Orchestrator init in bootstrap: after config bootstrap, hardware inventory capture, and resource signal startup, build registry (router + sub_models), create router backend, register sub-model backends, and bind loader/process management to the shared ResourceCoordinator. Start grim-text router server if config uses it. Loader starts with all models unloaded; router may be preloaded or loaded on first use.
-- Shutdown: stopGRIMTextServer(); loader unloads all models; orchestrator destructor clears backends.
+- Shutdown uses model-keyed ProcessManager/loader teardown; do not restore singleton stop fallback into MMO.
 
 **2.4 Replace direct backend use with orchestrator**  
 
-- Replace `resolveBackendURL()` + branching in `callAIAsync` with: build precomposed metadata + context (from 3-buffer / memory), then orchestrator.generate(prompt, options). Same for ai_interpret, ai_process, warmup – pass intent/role in options. Sub-models receive only composed_generation.
-- `ai_interpret()` must stop executing model-suggested actions directly. In MMO mode it may only return structured intent to the action gate.
+- Future enforced cutover must reconcile current direct `grim_native`/`ollama` branches with the existing orchestrator path: build precomposed metadata + context (from 3-buffer / memory), then orchestrator.generate(prompt, options). Use current ai_process/callAIAsync/warmup consumers; do not restore ai_interpret. Sub-models receive only composed_generation.
+- Do not restore historical `ai_interpret()` action parsing. Keep raw model input and explicit selected-tool invocation distinct, with policy/Training Wheels caller-owned.
 
 ---
 
-## Phase 3: Config, routing response contract, and observability
+## Phase 3: Config and endpoint integration requirements
+
+The schema/envelope examples below are the selected contract, not a complete
+inventory of accepted current keys or a deployed endpoint guarantee. Runtime
+model policy remains on the finalized snapshot plus selected compiled facts;
+host registry/process/session policy remains with its existing owners.
 
 **3.1 Config schema**  
 
 - Document in `ai_config.json` (and in docs):
   - **mmo**: `{ "enabled", "mode", "schema_version" }` where `mode` is `shadow` or `enforced`.
-  - **nlp**: annotation-focused config only. Examples: `entity_extractors`, `memory_tag_rules`, `router_tag_rules`, `risk_tag_rules`, `prior_classifier`, `compat_legacy_intent_bridge`.
+  - **nlp**: annotation-focused config only. Examples: `entity_extractors`, `memory_tag_rules`, `router_tag_rules`, `risk_tag_rules`,   `prior_classifier`; no legacy intent bridge.
   - **router**: `{ "id", "backend", "url", "lora_path", "hard_copy_path" }` – single router model (grim-text). Base weights never written; only LoRA (and hard copy for training input) are user-specific.
   - **sub_models**: array of `{ "id", "name", "backend", "url"|"path", "subject_tags" }`. Sub-models are **frozen** (no `lora_path`). They receive only **composed_generation** (strict template); they must return **machine-parseable** output (JSON or tagged sections per OUTPUT_SCHEMA). Their output feeds back into grim-text for synthesis.
   - **routing**: `{ "max_submodels_per_request", "route_timeout_ms", "synthesize_timeout_ms" }`. For v1, `max_submodels_per_request = 1`. Missing or unknown `sub_model_id` is an error, not a default route.
@@ -1419,9 +1439,9 @@ flowchart TD
 
 ## Phase 5: Brain-side options (optional / later)
 
-**5.1 Router and synthesizer (grim-text)**: LoRA-only, no weight writes  
+**5.1 Future personalized router and synthesizer serving**: LoRA-only, no weight writes
 
-- grim_text_server loads **base model (read-only) + LoRA file**. All personalization is in the LoRA; base weights are never written. LoRA file path from config; updates to LoRA come from a **separate training pipeline** (GRIM memory + RL weighting → trainer → writes LoRA file only). Optionally server reads **hard copy** for context; hard copy is written by the body/training pipeline, not by inference.
+- Future inference artifact integration makes the worker load **base model (read-only) + LoRA file**; the bridge owns HTTP/process lifecycle, not model startup. All personalization is in the LoRA; base weights are never written. LoRA file path from config; updates to LoRA come from a **separate training pipeline** (GRIM memory + RL weighting → trainer → writes LoRA file only). Optionally server reads **hard copy** for context; hard copy is written by the body/training pipeline, not by inference.
 - **Route endpoint**: Accepts precomposed metadata + context (including found memories); returns `{ "sub_model_id", "composed_generation", "confidence_correctness", "confidence_user_intent" }`. Routing logic lives inside grim-text.
 - **Synthesize endpoint**: Accepts **parsed sub-model output(s)** (JSON or tagged sections per composed_generation’s OUTPUT_SCHEMA). Grim-text produces the **final structured response**. When the response includes an action, grim-text may emit either a **ToolRegistry-backed `tool_id` selection** or a structured **tool-gap proposal**; the body then resolves the selected tool through ToolRegistry / ActionPolicy / Training Wheels. Optional weak confidence fields feed body-side calibration; body owns the action gate. No action JSON. Sub-models never return freeform-only blobs; output must be parseable for reliable synthesis.
 
@@ -1430,7 +1450,7 @@ flowchart TD
 - Sub-models can be multiple grim-text or Ollama/LocalAI instances. They are **frozen** (no LoRA, no adaptation). Body starts sub-model servers via extended server manager; **ModelLoader** controls load/unload (use-degrading). Each sub-model: base only, **no weight writes**. Output is returned to the body, which passes it back to grim-text for synthesis.
 - Config: per sub_model id, port/url; no lora_path. Router selects sub_model_id; body invokes that sub-model with only composed_generation; body then sends sub-model output to grim-text synthesize endpoint.
 
-**5.3 Long-term memory and LoRA training**  
+**5.3 Future long-term memory and LoRA micro-training**
 
 - **LoRA file** and **hard copy** are the two long-term structure points. Hard copy is the persistent store the LoRA is trained on (environment + user adaptation). A separate pipeline (not in the inference path) runs training: reads from memory + RL signals (including Training Wheels reward/punishment signals and correction tuples) and hard copy, **writes only the LoRA file**. Inference path only **loads** LoRA and optionally reads hard copy for context; it never writes base or LoRA weights.
 
@@ -1439,8 +1459,8 @@ flowchart TD
 ## File and dependency summary
 
 - **Contracts** — `MMO/Core/Contracts.hpp`, `MMO/Core/Contracts.cpp` (route/synthesize/sub-model envelopes, schema validation, structured errors).
-- **Request context** — `MMO/Core/RequestContext.hpp`, `MMO/Core/RequestContext.cpp` (`request_id`, `session_id`, `turn_id`, deadlines, session-scoped history).
-- **Session/interaction context** — rework `memory/context_manager.hpp/.cpp` (or rename to `MMO/Core/SessionContextManager.*`) so it owns `TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, and `ContextSnapshotV2`, with a compatibility bridge for existing `getSnapshot()` consumers.
+- **Request context** — existing `MMO/Core/RequestContext.hpp` (`request_id`, `session_id`, `turn_id`, deadlines, request envelope).
+- **Session/interaction context** — existing `MMO/Core/SessionContextManager.*`; future tokenizer-pressure retirement/capsules extend that owner, not deleted ContextManager.
 - **Hardware inventory** — `MMO/Core/HardwareInventory.hpp`, `MMO/Core/HardwareInventory.cpp` (canonical immutable machine/topology snapshot for the current run; extends today’s `SystemInfo`).
 - **Resource signal / coordinator** — `MMO/Core/ResourceSignal.hpp`, `MMO/Core/ResourceSignal.cpp`, `MMO/Core/ResourceCoordinator.hpp`, `MMO/Core/ResourceCoordinator.cpp` (live resource loop, pressure evaluation, reservations/claims, and admission hooks for model/tool/process loading).
 - **UI surface model** — `MMO/UI/UISurfaceSpec.hpp`, `MMO/UI/UISurfaceSpec.cpp`, `MMO/UI/UISurfaceRegistry.hpp`, `MMO/UI/UISurfaceRegistry.cpp` (validated UI surface contract + runtime registry over overlay/popup/modal/tool surfaces).
@@ -1450,25 +1470,25 @@ flowchart TD
 - **Tool gap planner** — `MMO/Core/ToolGapPlanner.hpp`, `MMO/Core/ToolGapPlanner.cpp` (structured tool-gap proposals, user-confirmed tool creation flow, and retry semantics).
 - **NLP annotation core** — `nlp/NlpAnnotation.hpp`, `nlp/NlpAnnotation.cpp` (canonical annotation payload shared by memory + router metadata).
 - **NLP metadata builder** — `nlp/RouterMetadataBuilder.hpp`, `nlp/RouterMetadataBuilder.cpp` (builds router-facing metadata from annotations + context).
-- **NLP taggers** — `nlp/EntityTagger.*`, `nlp/MemoryTagger.*`, and compatibility wrappers around current `nlp/nlp.*`, `ai/intent_gate.*`, and `ai/fast_classifier.*`.
+- **NLP taggers** — existing annotation/grammar/prior services; additional EntityTagger/MemoryTagger decomposition is optional future design, not a legacy wrapper.
 - **Backend interface** — `ai/backends/IGenerationBackend.hpp`, router backend (precomposed in → route response; synthesize(sub_model_outputs) → final structured response), sub-model backends (frozen bricks, composed_generation in only).
 - **MMD** — `MMO/Shared/MMD.hpp` (existing), `MMO/Shared/MMD.cpp` (`getSubjectTags`).
 - **Registry** — `MMO/Core/ModelRegistry.hpp`, `MMO/Core/ModelRegistry.cpp` (router + sub_models, router-only `lora_path` / `hard_copy_path`).
 - **Router (thin)** — `MMO/Router/ModelRouter.hpp`, `MMO/Router/ModelRouter.cpp` (parse grim-text router response).
 - **ModelLoader** — `MMO/Core/ModelLoader.hpp`, `MMO/Core/ModelLoader.cpp` (use-degrading state machine, resource-aware load/unload driven by ResourceCoordinator).
-- **Process manager** — Generalize `ai/grim_text_server_manager.*` into a model-keyed process manager for router + sub-model servers.
-- **Bootstrap / detection** — refactor `bootstrap/bootstrap.cpp` into phased startup orchestration and evolve `system_detect.hpp/.cpp` into the static hardware inventory detector rather than the entire resource story.
+- **Process manager** — existing `MMO/Core/ProcessManager.*`; direct-launch host services are separate and do not finalize model configuration.
+- **Bootstrap / detection** — existing named phases in `bootstrap/bootstrap.cpp`, static inventory capture, live ResourceSignal, and shared ResourceCoordinator; future consumers use those owners.
 - **UI host** — refactor `ui/ui_root.*`, `ui/ui_panel.*`, and `popup_ui/*` so built-in panels and popup windows register into one modular UI-surface model instead of staying as manual startup wiring.
-- **Plugin manager** — generalize `core/plugin_manager.*` so DLL hot reload is synchronized with ToolRegistry updates and tool-surface invalidation.
+- **Plugin manager** — current `core/plugin_manager.*` / `plugin_api_impl.cpp` publish/replace provider generations in the sole registry; future collectors preserve exact revision/identity.
 - **Orchestrator** — `MMO/Core/Orchestrator.hpp`, `MMO/Core/Orchestrator.cpp` (memory retrieval + precompose, including split physical/digital visual context → router → sub-model with only composed_generation → synthesize).
-- **Memory façade** — `MMO/Core/MemoryFacade.hpp`, `MMO/Core/MemoryFacade.cpp` (adapter over `MemoryStorage`, `UnifiedMemoryStorage`, `ContextManager`, `MemoryRouter`).
-- **Memory retrieval** — Body-side: uses existing `UnifiedMemoryStorage::search/getByTag/getByTags/semanticSearch`, `ContextSnapshotV2` (with compatibility via `ContextManager::getSnapshot()` during migration), and `MemoryRouter::evaluate()` for relevance. Composes found memories plus retrieval breadcrumbs and split visual context into the precomposed payload. Model never writes.
+- **Memory façade** — existing `memory/MemoryFacade.*` over UnifiedMemoryStorage, rich session snapshots, and MemoryRouter. `Orchestrator::buildRouterScope()` calls `retrieveForPrompt()`.
+- **Memory retrieval** — existing façade/storage search/tag methods plus `ContextSnapshotV2`; current façade snapshots the default session and uses text/tag retrieval. Full per-request-session and richer semantic retrieval are not implied by that implementation. Model never writes.
 - **Perception / visual context** — `perception/perception_context.hpp/.cpp` currently provides the digital visual side (`VisualContext`: monitor, window, OCR, scene, detected objects, AI description). The MMO context contract should add a parallel branch for physical visual semantic input.
-- **NLP compatibility bridge** — compatibility layer so legacy `Intent` consumers keep working while new orchestration consumes `NlpAnnotation`.
+- **NLP annotation boundary** — new consumers use `NlpAnnotation` and rich session metadata directly; no new legacy bridge.
 - **Action policy** — `MMO/Core/ActionPolicyRegistry.hpp`, `MMO/Core/ActionPolicyRegistry.cpp` (command/plugin risk, permission bits, arg validation, sandbox policy).
 - **Action/tool boundary** — model chooses registry-backed tools (or emits tool-gap proposals), not freeform commands. NLP may suggest affordance tokens, but ToolRegistry + ActionPolicy remain canonical.
 - **UI/tool boundary** — if grim creates or changes UI, it does so through registry-backed UI tools and validated `UISurfaceSpec`s; it does not directly emit arbitrary rendering code.
-- **Training Wheels** — `MMO/Core/TrainingWheels.hpp`, `MMO/Core/TrainingWheels.cpp`: compute `GC_action_risk` and `GC_action_confidence`; if `risk >= threshold || confidence <= floor` (or equivalently `confidence_gap >= threshold`), verify with the user; otherwise continue. Router confidence stays bucket-calibrated from RL, and knowledge gaps are represented as low confidence / high confidence-gap rather than a separate branch.
+- **Future Training Wheels integration** — proposed standalone `TrainingWheels.*` files do not exist; reuse current policy/context/calibration owners for the unified gate: compute `GC_action_risk` and `GC_action_confidence`; if `risk >= threshold || confidence <= floor` (or equivalently `confidence_gap >= threshold`), verify with the user; otherwise continue. Router confidence stays bucket-calibrated from RL, and knowledge gaps are represented as low confidence / high confidence-gap rather than a separate branch.
 - **Action boundary** — **Commands and plugin system** are the hook for model semantic actions. Body resolves intent to registered command/plugin (allowlist), validates sandbox/preconditions, Training Wheels gate, then invokes. No action JSON; no freeform shell or "run this".
 - **Sub-model contract** — **composed_generation**: strict template (TASK, SCOPE, ALLOWED_ASSUMPTIONS, OUTPUT_SCHEMA, REFUSE_IF, STYLE, MAX_LENGTH); grim-text fills it. Sub-model output: machine-parseable (JSON or tagged sections). Parser/schema in router-synthesizer path.
 - **3-buffer memory** — Body memory module (working, preprocessing, sync-and-clear); long-term = LoRA file + hard copy; orchestrator receives context, does not implement buffers.
@@ -1482,12 +1502,12 @@ flowchart TD
 
 ## Implementation order (suggested)
 
-1. **Phase 0** – Contracts and safety rails first: `Contracts`, `RequestContext`, `MemoryFacade`, `HardwareInventory`, `ResourceSignal`, `ResourceCoordinator`, the session-scoped `ContextManager` redesign (`TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, `ContextSnapshotV2`), `UISurfaceSpec`, `UISurfaceRegistry`, `EmotionPresentationController`, `ToolRegistry`, `ToolGapPlanner`, `ActionPolicyRegistry`, `NlpAnnotation`, `RouterMetadataBuilder`, and model-keyed process management.
+1. **Phase 0 foundations implemented; integration verification remains** – `Contracts`, `RequestContext`, `MemoryFacade`, `HardwareInventory`, `ResourceSignal`, `ResourceCoordinator`, the session-scoped `ContextManager` redesign (`TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, `ContextSnapshotV2`), `UISurfaceSpec`, `UISurfaceRegistry`, `EmotionPresentationController`, `ToolRegistry`, `ToolGapPlanner`, `ActionPolicyRegistry`, `NlpAnnotation`, `RouterMetadataBuilder`, and model-keyed process management.
 2. **Phase 0.1** – Bootstrap separation: split startup into config bootstrap, static hardware inventory capture, live resource-signal startup, subsystem registration, and coordinator-driven warmup scheduling.
-3. **Phase 0.25** – Tool-surface unification: merge `CommandRegistry` + plugin-registered commands into one authoritative ToolRegistry with atomic hot-reload semantics.
+3. **Phase 0.25 foundation implemented** – sole metadata/callable ToolRegistry with provider-generation publication; future policy/rollouts must not restore dual stores.
 4. **Phase 0.5** – NLP decoupling: stop teaching executable actions into NLP, classify legacy NLP consumers, keep `IntentGate` / `FastClassifier` as priors only, and add candidate tool-token / tool-context outputs.
-5. **Phase 0.75** – Context migration: move pending clarification/feedback/confirmation/correction state out of `commands_feedback.cpp` globals and ad-hoc command handlers into the session context authority; keep `ContextManager::getSnapshot()` as a compatibility projection while migrating call sites.
-6. **Phase 1.0** – Tool-learning pipeline: implement explicit training-data parsing for tool exemplars / affordance-token mappings and align that symbolic vocabulary with NLP v2 outputs.
+5. **Phase 0.75 foundation implemented** – SessionContextManager owns history/pending state; future rolling token retirement/capsules extend it directly.
+6. **Phase 1.0 records implemented; dataset integration future** – reuse ToolTrainingParser records, normalize approved examples/manifests, and align symbolic vocabulary with annotation outputs.
 7. **Phase 1.1** – Backend interface: router backend (precomposed in → route response with **structured composed_generation** per template; synthesize(parsed sub-model outputs) → final response) and sub-model backend (receives only composed_generation; returns machine-parseable output). No weight writes.
 8. **Phase 1.2** – ModelRegistry + config: `mmo`, `router`, `sub_models`, router-only `lora_path` / `hard_copy_path`, loader/action policy config, NLP annotation config, context-manager config, UI/emotion config, tool config, and explicit physical/digital visual payload flags.
 9. **Phase 1.3** – Thin ModelRouter: parse router response → sub_model_id + composed_generation + confidence scores.

@@ -438,7 +438,7 @@ enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, an
 `ui.destroy_surface` remain host-owned lifecycle tools, and OSINT is unchanged.
 `ui.create_surface` is currently classified Ignore and excluded from model discovery;
 its host handler remains available for explicit host/developer dispatch.
-See [UI panel operations](UI_PANEL_OPERATIONS.md) for stable keys and examples.
+See [UI panel operations](ui/PANEL_OPERATIONS.md) for stable keys and examples.
 
 ## Input tool migration (v3.9)
 
@@ -484,7 +484,7 @@ handling. The four direct input commands retain their existing void host input
 interfaces and success reporting; this migration does not add OS-delivery checks
 to them, validate all key/button names, or change platform stubs. `click_on`
 retains its separately implemented checked targeting/delivery contract. See
-[click targeting](CLICK_ON_TARGETING.md).
+[click targeting](input/TOOLS.md#grounded-dispatch).
 
 All five tools are state-changing and carry confirmation metadata. As elsewhere,
 direct registry calls do not enforce that metadata, and native plugin code is
