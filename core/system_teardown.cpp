@@ -1,9 +1,7 @@
 #include "system_teardown.hpp"
 
 #include "../MMO/UI/UISurfaceRegistry.hpp"
-#include "../ai/ai_rl.hpp"
 #include "../ai/grim_text_server_manager.hpp"
-#include "../ai/training_server_manager.hpp"
 #include "../bootstrap/bootstrap.hpp"
 #include "../control/devices/server/device_comm_server.hpp"
 #include "../logger.hpp"
@@ -154,11 +152,9 @@ void shutdownApplication(
     }
 
     stopGRIMTextServer();
-    stopTrainingServer();
 
     Voice::shutdownQueue();
     Voice::shutdownTTS();
-    RL::shutdown();
     Perception::Digital::ShutdownDigitalPerceptionPrimitives();
     Perception::Digital::ShutdownDigitalEnvironment();
     Perception::Digital::ShutdownDigitalContextProjector();

@@ -585,9 +585,12 @@ G.R.I.M/
 | Bridge | Library | Purpose |
 |--------|---------|---------|
 | `coqui_bridge.py` | Coqui XTTS v2 | Text-to-speech with voice cloning |
-| `mistral_bridge.py` | Ollama | Intent classification via local LLM |
-| `rl_bridge.py` | Stable-Baselines3 | PPO reinforcement learning |
 | `sherlock_sensitive_scanner.py` | Sherlock | OSINT username search and PII detection |
+
+The standalone [intent bridge script](resources/python/mistral_bridge.py) and
+[PPO bridge script](resources/python/rl_bridge.py) remain on disk, but their
+disconnected host adapters were removed. GRIM no longer starts the PPO bridge
+at bootstrap. See [host cleanup boundaries](docs/RETIRED_AGENT_TOOLS.md#removed-disconnected-host-paths).
 
 ---
 

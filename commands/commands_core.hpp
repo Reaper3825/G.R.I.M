@@ -33,11 +33,3 @@ void ensureCorePluginsRegistered();
 // ====================================================
 std::string normalizeWord(const std::string& word);
 std::string normalizeLine(const std::string& line);
-
-// ====================================================
-// Legacy exports (for backward compatibility)
-// ====================================================
-
-// Check if feedback is currently pending
-bool hasPendingFeedback();
-

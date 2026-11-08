@@ -18,8 +18,6 @@
 #include "ai/ai.hpp"
 #include "voice/voice.hpp"
 #include "bootstrap/bootstrap_config.hpp"
-#include "core/input_parser.hpp"
-#include "helpers/grim_input.hpp"
 
 // ==== PortAudio ====
 #include <portaudio.h>
@@ -252,60 +250,6 @@ void start()
                     LOG_DEBUG("WakeVoice", "handleCommand() returned successfully");
                 }
 
-                // ✅ ONLY wait for feedback if it was actually requested
-                if (hasPendingFeedback()) {
-                    LOG_DEBUG("WakeVoice", "Feedback prompt detected - waiting for response (max 15s)...");
-                    
-                    auto feedbackStart = std::chrono::steady_clock::now();
-                    const int maxFeedbackWaitMs = 15000; // 15 seconds for user to respond
-                    bool feedbackReceived = false;
-                    
-                    // ✅ Wait for user to start speaking, then capture with Whisper
-                    while (hasPendingFeedback() && !feedbackReceived &&
-                           std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now() - feedbackStart).count() < maxFeedbackWaitMs)
-                    {
-                        // Keep resetting timer while GRIM is speaking
-                        if (Voice::isSpeaking()) {
-                            feedbackStart = std::chrono::steady_clock::now();
-                            Pa_Sleep(100);
-                            continue;
-                        }
-                        
-                        // ✅ Just listen for speech with Whisper (don't use wake word stream)
-                        LOG_DEBUG("WakeVoice", "Listening for feedback response...");
-                        std::string follow = Voice::captureAndTranscribeSpeech(aiConfig);
-                        
-                        if (!follow.empty()) {
-                            std::string norm = GRIMInput::normalizeCommand(follow);
-                            if (norm == "[blank_audio]" || norm == "blank" || norm == "audio") {
-                                LOG_DEBUG("WakeVoice", "Ignoring blank/noise: " + follow);
-                                // Don't break - keep listening for actual response
-                                continue;
-                            }
-
-                            LOG_DEBUG("WakeVoice", "Follow-up speech: " + follow);
-                            handleCommand(follow);
-                            feedbackReceived = true;
-                            break; // Exit feedback loop after processing
-                        }
-                        
-                        // If no speech was detected, check if we should keep waiting
-                        if (!hasPendingFeedback()) {
-                            LOG_DEBUG("WakeVoice", "Feedback no longer pending (handled elsewhere)");
-                            break;
-                        }
-                    }
-                    
-                    if (hasPendingFeedback() && !feedbackReceived) {
-                        LOG_DEBUG("WakeVoice", "Feedback timeout - no response received");
-                    } else if (feedbackReceived) {
-                        LOG_DEBUG("WakeVoice", "Feedback received and processed");
-                    }
-                } else {
-                    LOG_DEBUG("WakeVoice", "No feedback requested - returning to wake word detection immediately");
-                }
-                
                 g_listening = false;
             }
         }

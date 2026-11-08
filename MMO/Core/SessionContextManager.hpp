@@ -3,7 +3,7 @@
 //
 // Replaces the fragmented context layer:
 //   - ContextManager static state (recentContext, pendingIntent)
-//   - commands_feedback.cpp globals (g_pendingClarifyCmd, g_pendingFeedbackCmd)
+//   - process-global pending clarification and confirmation state
 //   - hardcoded referent resolution in commands_core.cpp
 //
 // One canonical owner of live conversational/task context per session.

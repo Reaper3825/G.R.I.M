@@ -53,9 +53,9 @@ liveness, not successful tokenizer/model execution.
 
 [StatusFileMonitor::monitorLoop](../../control/training_control_server.cpp#L172)
 polls a status FlatBuffer file every 500 ms.
-[TrainingServerManager::checkHealth / start](../../ai/training_server_manager.cpp#L54)
-retain port-11436 health/process-management logic. Their presence or an include
-is not evidence that `UITrainingPanel` uses them.
+The uncalled host `TrainingServerManager` and `commands_training` adapters were
+removed on November 8, 2026, together with the manager's teardown hook. This does
+not remove the standalone control server or connect it to `UITrainingPanel`.
 
 The legacy server and current worker share **11436 as a default** but are
 different protocols/services; do not launch the legacy server alongside the

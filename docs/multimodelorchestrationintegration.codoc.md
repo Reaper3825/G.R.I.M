@@ -32,6 +32,28 @@ record changes at their original revision; their old “current consumers,”
 current APIs or permission to restore removed paths. Use this map and the
 section-local corrections below for present ownership.
 
+### November 8, 2026: disconnected host path removal
+
+The cleanup described in [RETIRED_AGENT_TOOLS.md](RETIRED_AGENT_TOOLS.md#removed-disconnected-host-paths)
+deleted the old feedback/learned-command/PPO island, uncalled local-training
+adapters, ActionExecutor, LM intent bridge, proactive dialogue, and unused
+command helpers/test/types. Bootstrap no longer starts the PPO bridge; teardown
+no longer stops that bridge or constructs the unused training-manager singleton.
+Wake capture no longer enters the orphan pending-feedback listening branch.
+
+Raw input is owned by [handleCommand](../commands/commands_core.cpp) and
+[ai_process](../ai/ai.cpp). Explicit tool invocation stays with
+[ToolRegistry](../MMO/Core/ToolRegistry.hpp), and input execution stays with
+[input_command_service.cpp](../perception/input_command_service.cpp).
+SessionContextManager, learned-memory storage, retained developer handlers,
+personality presentation, and model/configuration services remain.
+Historical ledger entries naming deleted files below are not current hook points.
+Action-policy enforcement and classifier weight initialization remain unwired
+integration questions, not features connected by this removal.
+
+Validation is scoped to focused click-target tests, production syntax checks,
+and deleted-reference checks; no host/model runtime build or deployment.
+
 | Status | Current owner and concrete surface | Future boundary |
 | --- | --- | --- |
 | Implemented configuration | [train_gpu.cu](../resources/models/GRIM-text/training/train_gpu.cu) calls `loadAiConfigSnapshot()` → `finalizeAiConfigSnapshot()` in [HyperParameters_GPU.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp); the actual snapshot combines `ai_config.json` runtime policy with selected compiled `model.grimcfg` semantics/geometry. [HyperparameterGroupings.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperparameterGroupings.hpp) provides read views only. | No launcher overrides or sidecar config/policy. |

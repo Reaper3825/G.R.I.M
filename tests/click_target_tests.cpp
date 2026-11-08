@@ -2,7 +2,6 @@
 #include "perception/perception_context.hpp"
 #include "commands/commands_perception.hpp"
 #include "core/input/checked_click.hpp"
-#include "ai/action_executor.hpp"
 #include "perception/input_command_service.hpp"
 #include <iostream>
 #include <limits>
@@ -37,15 +36,11 @@ ClickTargetResult PerceptionContextManager::clickOnText(const std::string& text,
 ClickTargetResult PerceptionContextManager::clickOnObject(const std::string& text, const std::string&) {
     ++commandCalls; commandTarget = text; commandKind = ClickTargetKind::Object; return commandResult;
 }
-VisualContext PerceptionContextManager::getCurrentContext(bool) {
-    VisualContext ctx; ctx.isValid = ctx.hasText = true; ctx.screenText = "Submit"; return ctx;
-}
 void PerceptionContextManager::typeText(const std::string& text, int delay) { ++unrelatedInputs; rawTyped = text; typingDelay = delay; }
 void PerceptionContextManager::tapKey(const std::string& key) { ++unrelatedInputs; keyUsed = key; }
 void PerceptionContextManager::pressKeyCombo(const std::vector<std::string>& keys) { ++unrelatedInputs; comboUsed = keys; }
 void PerceptionContextManager::moveMouseTo(int x, int y) { ++unrelatedInputs; movedX = x; movedY = y; }
 void PerceptionContextManager::clickMouse(const std::string& button) { ++unrelatedInputs; buttonUsed = button; }
-void PerceptionContextManager::scrollMouse(int) { ++unrelatedInputs; }
 }
 
 int main() try {
@@ -159,10 +154,15 @@ int main() try {
     commandResult = {false, "ERR_INPUT_TARGET_AMBIGUOUS", "Multiple matches"};
     check(!cmdInputClickOn("text Submit").success && cmdInputClickOn("text Submit").errorCode == commandResult.error,
           "Targeting failure was not propagated to command");
-    check(!GRIM::ActionExecutor::executeAction("click Submit").success,
-          "Action executor ignored targeted click failure");
-    check(!GRIM::ActionExecutor::executeAction("submit").success && unrelatedInputs == 0,
-          "Failed submit click became success or fell back to another input action");
+    for (const auto* error : {"ERR_INPUT_TARGET_AMBIGUOUS", "ERR_INPUT_STALE_TARGET", "ERR_INPUT_DISPATCH_FAILED"}) {
+        commandResult = {false, error, "Targeted click rejected"};
+        const int beforeCalls = commandCalls;
+        const auto rejected = ExecuteInputCommandService(GRIM_INPUT_CLICK_ON, "text Submit");
+        check(!rejected.success && rejected.errorCode == error && rejected.structuredOutputJson.empty(),
+              "Input service lost targeting failure or returned success-shaped output");
+        check(commandCalls == beforeCalls + 1 && unrelatedInputs == 0,
+              "Failed targeted click was retried or replaced with another input action");
+    }
     commandResult = {true, "", "Click input sent; response unverified", -1780, -150};
     auto command = cmdInputClickOn("  ObJeCt\tsave-button  ");
     check(command.success && commandTarget == "save-button" && commandKind == ClickTargetKind::Object,

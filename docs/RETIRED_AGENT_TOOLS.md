@@ -48,3 +48,28 @@ No replacement API services or plugin registrations were added for these eleven
 names. Existing learned routes or legacy grammar strings that refer to a retired
 name do not restore its registry handler. Any future reintroduction should define
 the intended consumer, actual metadata, state ownership, and side effects first.
+
+## Removed disconnected host paths
+
+On November 8, 2026, the separate dead-code cleanup removed 29 source/header
+files: the old feedback and command-execution adapters, host PPO/reward adapters,
+training-server manager and training-command adapters, ActionExecutor parser,
+LM intent bridge, proactive dialogue, unused grammar-test command and command
+helpers, style loader, orphan perception/capability types, and empty alerts files.
+
+Their PPO bootstrap/shutdown hooks, unused training-manager shutdown hook, and
+wake-voice pending-feedback capture branch were removed together. Normal wake
+capture still calls [handleCommand](../commands/commands_core.cpp); explicit
+tool dispatch remains in [command_dispatch.cpp](../commands/command_dispatch.cpp)
+and [ToolRegistry](../MMO/Core/ToolRegistry.hpp). Grounded click failure tests now
+exercise the [host input service](../perception/input_command_service.cpp).
+
+The eleven handlers listed above are unchanged. Underlying conversation,
+grammar, learned-memory storage, session context, configuration UI, input, and
+voice services remain. The exported [verification reward API](../ai/verification_reward.hpp)
+and standalone Python/control-server sources were not deletion targets.
+Action-policy enforcement and classifier initialization remain separate
+integration questions; this cleanup does not connect them.
+
+Only focused tests and static diagnostics validate this cleanup. The host
+executable and model/training runtimes are not rebuilt or deployed by it.

@@ -2,8 +2,6 @@
 //  GRIM-text Server Manager
 //  Manages lifecycle of grim_text_server.exe (INFERENCE ONLY)
 //  
-//  For training control, use training_server_manager.hpp
-//  
 //  Author: GRIM Development Team
 //  Date: November 7, 2025
 //  Version: 2.0.0 - Separated from training control

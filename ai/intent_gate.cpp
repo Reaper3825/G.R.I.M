@@ -1,6 +1,5 @@
 #include "intent_gate.hpp"
 #include "fast_classifier.hpp"
-#include "lm_intent.hpp"
 #include "logger.hpp"
 #include "memory/context_snapshot.hpp"
 #include "nlp/nlp.hpp"  // ? Access NLP for success rates
@@ -102,12 +101,10 @@ IntentResult IntentGate::decide(const std::string& line, const ContextSnapshot& 
         return result;
     }
     
-    // Ambiguous - use LM fallback (or just return low confidence command)
+    // Low-confidence classification
     LOG_DEBUG("IntentGate", "Confidence below threshold (" + std::to_string(fast.confidence) + 
              " < " + std::to_string(FAST_THRESHOLD) + "), defaulting to low-confidence command");
     
-    // For now, treat ambiguous as low-confidence command
-    // TODO: Integrate LM classifier when implemented
     IntentResult result = {fast.guess, fast.confidence * 0.5f, fast.reasoning + " [low-conf]"};
     cache(line, result);
     return result;

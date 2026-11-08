@@ -8,7 +8,6 @@
 #include "device_setups/audio_devices.hpp"
 #include "logger.hpp"
 #include "voice/voice.hpp"
-#include "ai/ai_rl.hpp"
 #include "ai/ai.hpp"
 #include "ai/grim_text_server_manager.hpp"  // For GRIM-text server
 #include "../MMO/Core/HardwareInventory.hpp"
@@ -360,15 +359,6 @@ static void bootstrapSubsystems() {
     } else {
         LOG_PHASE("Neural TTS skipped", true);
         LOG_DEBUG("Voice", "Skipping neural TTS init (engine=sapi only)");
-    }
-
-    LOG_DEBUG("RL", "Starting rl_bridge.py via unified BridgeManager...");
-    if (!GRIM::RL::init()) {
-        LOG_ERROR("RL", "Failed to start rl_bridge.py");
-        LOG_PHASE("RL Bridge init", false);
-    } else {
-        LOG_PHASE("RL Bridge init", true);
-        LOG_DEBUG("RL", "rl_bridge.py initialized and ready");
     }
 
     if (aiConfig.value("backend", "auto") == "grim_native") {

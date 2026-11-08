@@ -87,7 +87,6 @@ public:
     void setView(TrainingPanelTab tab);
     TrainingPanelTab currentView() const { return activeTab_; }
 
-    // --- Public training control (used by commands_training.cpp) ─
     // --- Knowledge gap intake -----------------------------------
     void pushKnowledgeGap(KnowledgeGapEntry entry);
     size_t pendingGapCount() const;

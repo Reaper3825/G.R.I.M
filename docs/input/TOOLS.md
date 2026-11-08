@@ -143,10 +143,10 @@ and `desktop_y`. Success means checked input acceptance, not a button's
 activation or completion of the larger task. Obtain a **fresh observation
 after dispatch** to verify the intended application effect.
 
-Retained [ActionExecutor text clicks](../../ai/action_executor.cpp#L123) and
-[targeted submit](../../ai/action_executor.cpp#L184) propagate this result.
-A failed targeted submit does not fall through to Enter. Its unrelated legacy
-no-target Enter path remains; that does not create a registered submit tool.
+The [host input command service](../../perception/input_command_service.cpp)
+propagates targeting errors without retrying or substituting another input
+action. The uncalled ActionExecutor text parser and submit/Enter shortcut were
+removed on November 8, 2026. Grounded clicks remain available through `click_on`.
 
 | Error | Meaning / next step |
 |---|---|

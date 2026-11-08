@@ -13,6 +13,13 @@ isProject: false
 >
 > When MMO-related systems are refactored, split, renamed, replaced, or deleted, update the companion doc in the same change so ownership boundaries and hook points stay explicit.
 
+The November 8, 2026 [host cleanup](RETIRED_AGENT_TOOLS.md#removed-disconnected-host-paths)
+removed disconnected feedback, PPO, action-parser, intent-bridge, and
+local-training adapters. References to those paths in historical revisions are
+not current integration points. The retained session, tool registry, memory,
+and model-routing owners remain; no new outcome-learning or policy-enforcement
+connection was added.
+
 ## Invariants (non-negotiable)
 
 These are selected **MMO target requirements**, not claims that every deployed
@@ -472,13 +479,13 @@ replace exact storage or make the model a memory writer:
 1. **Query**: Body takes user input and `ContextSnapshotV2` through the existing façade; use only actual storage methods, not a proposed parallel retrieval API.
 2. **Filter**: Rank by relevance, tags, recency, and confidence through existing body retrieval policy, including [MemoryRouter](../memory/memory_router.hpp).
 3. **Compose**: Found memories are serialized into a **precomposed memory context** payload (e.g. JSON with relevant memory entries, retrieval breadcrumbs, context tags, environment tags, current confidence state from `Confidence::GC` in [Reward_Learning/grim_confidence.hpp](../Reward_Learning/grim_confidence.hpp), the active referent/interaction summary from `ContextSnapshotV2`, and a split `visual_context` containing both physical visual semantics and digital visual input summaries). This payload is sent to the router model alongside the user's input/metadata.
-4. **Read-only contract**: The router receives this payload as context. It uses it for routing decisions and composed generation. It **never returns memory-write instructions**; the body handles all memory mutations post-response (e.g. storing the interaction, updating confidence, RL feedback via `GRIM::RL::processCommandResult` in [ai/ai_rl.hpp](../ai/ai_rl.hpp)).
+4. **Read-only contract**: The router receives this payload as context. It uses it for routing decisions and composed generation. It **never returns memory-write instructions**; the body handles memory mutations post-response. The disconnected host PPO feedback adapters were removed; their former entry points are not a current outcome-learning path.
 
 ---
 
 ## Bootstrap and resource signal
 
-The current bootstrap is usable, but it mixes too many concerns: config loading, alias init, hardware detection, voice/RL startup, model/server startup, and warmup. For MMO and hot-swappable tools, bootstrap needs a cleaner split.
+The current bootstrap is usable, but it mixes too many concerns: config loading, alias init, hardware detection, voice startup, model/server startup, and warmup. For MMO and hot-swappable tools, bootstrap needs a cleaner split.
 
 ### 1. Static hardware inventory at startup
 
@@ -1492,7 +1499,7 @@ flowchart TD
 - **Action boundary** — **Commands and plugin system** are the hook for model semantic actions. Body resolves intent to registered command/plugin (allowlist), validates sandbox/preconditions, Training Wheels gate, then invokes. No action JSON; no freeform shell or "run this".
 - **Sub-model contract** — **composed_generation**: strict template (TASK, SCOPE, ALLOWED_ASSUMPTIONS, OUTPUT_SCHEMA, REFUSE_IF, STYLE, MAX_LENGTH); grim-text fills it. Sub-model output: machine-parseable (JSON or tagged sections). Parser/schema in router-synthesizer path.
 - **3-buffer memory** — Body memory module (working, preprocessing, sync-and-clear); long-term = LoRA file + hard copy; orchestrator receives context, does not implement buffers.
-- **RL integration** — `Reward_Learning/grim_rl.hpp/.cpp` (existing), `ai/ai_rl.hpp` (existing) extended to accept Training Wheels confirmation/rejection/correction signals, including the `(rejected proposal → user correction → accepted action)` learning tuple.
+- **Future outcome-learning integration** — Training Wheels confirmation/rejection/correction signals, including the `(rejected proposal → user correction → accepted action)` tuple, need an explicit consumer. The old host PPO adapters were removed as disconnected code; they are not an integration point.
 - **Confidence** — `Reward_Learning/grim_confidence.hpp/.cpp` (existing) with router confidence scores integrated into gating only after calibration warm-up.
 - **Integration** — `ai/ai.cpp` (orchestrator.generate with precomposed context + memory), `bootstrap/bootstrap.cpp` (config bootstrap + hardware inventory + resource signal + orchestrator/loader/Training Wheels init), `main.cpp` (shutdown).
 - **Config** — `ai_config.json`: `mmo`, `router`, `sub_models`, `routing`, `model_loader`, `resource_monitor`, `ui`, `emotion_presentation`, `memory` (lora_path, hard_copy_path, buffer config), `training_wheels` (`risk_threshold`, `per_category_risk_thresholds`, `min_confidence_floor`, enabled, calibration), `action_policy`, `tools`, sandbox (paths).

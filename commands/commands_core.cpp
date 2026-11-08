@@ -1,6 +1,5 @@
 #include "commands_core.hpp"
 
-#include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
 #include "ai/ai.hpp"
 #include <mutex>
@@ -15,12 +14,6 @@ constexpr const char* kDefaultSession = "default";
 
 // Forward declaration (defined in core_plugin.cpp).
 extern void registerCorePlugin();
-
-bool hasPendingFeedback() {
-    return GRIM::MMO::SessionContextManager::instance()
-        .getPending(kDefaultSession)
-        .has_value();
-}
 
 void ensureCorePluginsRegistered() {
     static std::once_flag registered;
