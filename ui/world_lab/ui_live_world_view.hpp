@@ -16,7 +16,8 @@
 // Separate live view keeps the authored document independent of live topology.
 class UILiveWorldView {
 public:
-    UILiveWorldView() {
+    explicit UILiveWorldView(std::filesystem::path navigationPath = {})
+        : session_(GRIM::MMO::ToolRegistry::instance(), std::move(navigationPath)) {
         canvas_.selectionOnly = true;
         canvas_.radialPaths = true;
         canvas_.showRoomLabels = false;
@@ -85,6 +86,9 @@ public:
             std::to_string(session_.world().registry().providers.size()) + " providers - " +
             std::to_string(session_.world().registry().resources.size()) + " live resources", UITheme::Colors::TextMuted, 13);
         renderer.drawText({area.origin.x + 10, area.origin.y + area.size.y - 22}, status_, UITheme::Colors::TextMuted, 12);
+        if (!session_.navigationPersistenceError().empty())
+            renderer.drawText({area.origin.x + 10, area.origin.y + 66},
+                "Navigation snapshot: " + session_.navigationPersistenceError(), UITheme::Colors::Warning, 11);
         // Dropdown headers and popup lists have separate render passes. Draw
         // expanded options last so the canvas/transcript cannot cover them.
         commands_->drawExpandedList(renderer, {});

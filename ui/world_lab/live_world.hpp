@@ -1,5 +1,6 @@
 #pragma once
 #include "world_document.hpp"
+#include "live_world_navigation.hpp"
 #include "world_card_layout.hpp"
 #include "MMO/Core/ProviderDescriptor.hpp"
 #include <map>
@@ -42,6 +43,17 @@ public:
     const MMO::ToolRegistrySnapshot& registry() const { return snapshot_; }
     const std::string& location() const { return location_; }
     uint64_t revision() const { return revision_; }
+    LiveNavigationSnapshot navigation() const {
+        LiveNavigationSnapshot result{document_.environmentId, document_.spawn, {}};
+        for (const auto& path : document_.paths) {
+            const auto* entity = document_.find(path.id);
+            LiveNavigationRoom room{path.id, path.parent, entity->name, document_.roomPath(path.id), {}};
+            for (const auto& key : connections_)
+                if (roomId(key) == path.id) { room.provider = *provider(key); break; }
+            result.rooms.push_back(std::move(room));
+        }
+        return result;
+    }
     bool connected(const ProviderKey& key) const { return connections_.count(key) != 0; }
     std::string roomId(const ProviderKey& key) const {
         const auto it = ids_.find(key);

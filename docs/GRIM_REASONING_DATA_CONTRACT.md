@@ -1472,6 +1472,17 @@ there is no required cycle grouping or assumed 1:1 mapping.
 
 ### Standalone recurrent authoring examples
 
+`scripts/textworld/generate_navigation_course.py` consumes the live-world
+navigation snapshot to produce Goal-only ConceptBlocks under
+`DataCollection/curated/live_navigation_goals_v1`. One arrival assignment targets
+each provider from System Hub. Criteria omit optional evidence: live-world Goal
+binding/evaluation is not implemented, so these assignments are unverified.
+Durable provider type/name destinations and session-specific resolutions remain
+in the private authoring manifest, outside model-visible Goal text. The course
+environment ID stays empty; a live session ID is not a registered TextWorld
+environment. These assignments are not recurrent demonstrations or completed SFT
+examples and do not change existing training projection or curriculum loading.
+
 `scripts/textworld/generate_internal_demonstrations.py` replays the verified GRIM
 internal witnesses into `DataCollection/curated/grim_internal_state_v1/demonstrations`.
 These standalone `grim-recurrent-authoring-example` version-1 JSONL records have

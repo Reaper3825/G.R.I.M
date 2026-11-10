@@ -16,6 +16,64 @@ ToolRegistration tool(const ProviderDescriptor& p, const std::string& id, ToolUs
 }
 int main() try {
     {
+        const auto directory = std::filesystem::temp_directory_path() / makeEnvironmentId();
+        std::filesystem::create_directories(directory);
+        struct Cleanup {
+            std::filesystem::path directory;
+            ~Cleanup() { std::error_code ec; std::filesystem::remove_all(directory, ec); }
+        } cleanup{directory};
+        auto& registry = ToolRegistry::instance();
+        const auto file = directory / "live_navigation.json";
+        LiveWorldSession session(registry, file);
+        auto snapshot = loadJsonFile(file);
+        check(snapshot.at("format") == "grim-live-navigation-snapshot" &&
+              snapshot.at("rooms").size() == 1 && snapshot.at("hub_id") == "system_hub",
+              "Initial navigation snapshot missing hub");
+        const ProviderDescriptor provider{ToolProviderType::Plugin, "Navigation Plugin", "first", ""};
+        check(registry.publishProvider(provider, {}), "navigation fixture publication");
+        session.synchronize();
+        snapshot = loadJsonFile(file);
+        const auto room = snapshot.at("rooms").at(1);
+        check(room.at("provider").at("name") == provider.name &&
+              room.at("provider").at("type") == "plugin" && room.at("path") == "/Navigation" &&
+              room.at("parent_id") == "system_hub", "Navigation identity/path projection mismatch");
+        session.command("go /Navigation");
+        check(loadJsonFile(file) == snapshot, "Movement changed topology snapshot");
+        // Pin a known timestamp so the no-rewrite assertion does not depend on clock resolution.
+        const auto timestamp = std::filesystem::file_time_type::clock::now() - std::chrono::hours(1);
+        std::filesystem::last_write_time(file, timestamp);
+        session.synchronize();
+        check(std::filesystem::last_write_time(file) == timestamp, "Unchanged snapshot rewritten");
+        ResourceDescriptor resource;
+        resource.provider_name = provider.name; resource.provider_instance = provider.instance;
+        resource.resource_id = "navigation-fixture"; resource.name = "Fixture";
+        resource.kind = "ui.panel"; resource.runtime_id = 1;
+        resource.state = {{"visible", true}};
+        check(registry.publishResource(resource), "navigation resource fixture");
+        session.synchronize();
+        check(std::filesystem::last_write_time(file) == timestamp && loadJsonFile(file) == snapshot,
+              "Resource update rewrote navigation snapshot");
+        auto replacement = provider; replacement.instance = "second";
+        check(registry.publishProvider(replacement, {}, provider.instance), "navigation replacement");
+        session.synchronize();
+        snapshot = loadJsonFile(file);
+        check(snapshot.at("rooms").at(1).at("provider").at("instance") == "second" &&
+              snapshot.at("rooms").at(1).at("room_id") == room.at("room_id") &&
+              snapshot.at("session_id") == session.world().document().environmentId,
+              "Replacement lost navigation identity");
+        std::filesystem::remove(file);
+        session.synchronize();
+        check(loadJsonFile(file) == snapshot, "Deleted snapshot not restored");
+        registry.unregisterInstance(provider.name, replacement.instance);
+        session.synchronize();
+        check(loadJsonFile(file).at("rooms").size() == 1 && session.world().location() == "system_hub",
+              "Provider unload retained exported room");
+        LiveNavigationStore failing(directory); // A directory cannot be replaced by the JSON file.
+        failing.synchronize(session.world().navigation());
+        check(!failing.error().empty() && std::filesystem::is_directory(directory),
+              "Persistence failure was not isolated/reported");
+    }
+    {
         auto& registry = ToolRegistry::instance();
         const ProviderDescriptor provider{ToolProviderType::Plugin, "Hardware fixture", "hardware-1", ""};
         check(registry.publishProvider(provider, {tool(provider, "cpu.tool")}), "hardware inspection provider");

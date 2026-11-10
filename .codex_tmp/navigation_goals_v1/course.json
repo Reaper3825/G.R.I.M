@@ -1,0 +1,11 @@
+{
+  "concept_block_ids": [
+    "navigation_v1_ac3bf52653400e8c3728072b1bee8c80f734e530fc5a04e04f1604f3da304df1",
+    "navigation_v1_474d2b319a5834a22c0525a82a6f73b882667c99263e9aa89bcb5c777569244d",
+    "navigation_v1_5afc82f211327ff736e8c02526b41776692c5a00bbe715c768d510e019b52a98",
+    "navigation_v1_e695b753ec4b0bee0a17227c091c679912aafa035f2b6bc80dddc60ea35ba6af"
+  ],
+  "environment_id": "env-4056413a539c4244b300030bbd119462",
+  "id": "course_environment_navigate_v1",
+  "name": "Navigate"
+}

@@ -56,7 +56,7 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
         if(!apply())return;
         hide();
         if(!liveWorld_) {
-            liveWorld_=std::make_unique<UILiveWorldView>();
+            liveWorld_=std::make_unique<UILiveWorldView>(gamesDirectory_/"live_navigation.json");
             liveWorld_->onExit=[this]{liveWorld_->hide();liveWorldVisible_=false;};
         }
         liveWorldVisible_=true;

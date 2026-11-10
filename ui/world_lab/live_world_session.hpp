@@ -1,5 +1,6 @@
 #pragma once
 #include "live_world.hpp"
+#include "live_world_navigation_store.hpp"
 #include "MMO/Core/ToolRegistry.hpp"
 #include "MMO/Core/ToolDescriptorJson.hpp"
 #include "resource_inspection.hpp"
@@ -13,18 +14,26 @@ namespace GRIM::WorldLab {
 class LiveWorldSession {
 public:
     struct Entry { std::string action, feedback; nlohmann::json state; };
-    explicit LiveWorldSession(MMO::ToolRegistry& registry = MMO::ToolRegistry::instance()) : registry_(registry) {
+    explicit LiveWorldSession(MMO::ToolRegistry& registry = MMO::ToolRegistry::instance(),
+                              std::filesystem::path navigationPath = {})
+        : registry_(registry), navigationStore_(std::move(navigationPath)) {
         world_.reconcile(registry_.snapshot());
         record("Start", describe());
+        navigationStore_.synchronize(world_.navigation());
     }
     const LiveWorld& world() const { return world_; }
     const std::vector<Entry>& history() const { return history_; }
+    const std::string& navigationPersistenceError() const { return navigationStore_.error(); }
     void synchronize() {
         if (registry_.version() == world_.registry().revision &&
-            registry_.resourceVersion() == world_.registry().resource_revision) return;
+            registry_.resourceVersion() == world_.registry().resource_revision) {
+            navigationStore_.synchronize(world_.navigation());
+            return;
+        }
         const auto previousTools = catalogTools();
         const auto previousResources = world_.registry().resources;
         const auto changes = world_.reconcile(registry_.snapshot());
+        navigationStore_.synchronize(world_.navigation());
         // Frame-level state publication is observation refresh, not a user action.
         // Keep an inspection valid when only unrelated resources changed.
         if (!resourceInspection_.is_null()) {
@@ -86,8 +95,8 @@ public:
         auto commands = nlohmann::json::array({"look", "tools", "resources", "inventory", "open tool_catalog"});
         if (catalogOpen_) commands.push_back("close tool_catalog");
         if (world_.location() != "system_hub") commands.push_back("back");
-        else for (const auto& p : world_.document().paths)
-            if (!p.parent.empty()) commands.push_back("go " + world_.document().roomPath(p.id));
+        else for (const auto& room : world_.navigation().rooms)
+            if (!room.parentId.empty()) commands.push_back("go " + room.path);
         auto tools = nlohmann::json::array();
         for (const auto& t : world_.toolsHere()) {
             tools.push_back(t);
@@ -121,8 +130,8 @@ public:
         text << "Inventory: Tool catalog. Use open tool_catalog to read it.\n";
         if (world_.location() == "system_hub") {
             text << "Registered providers appear automatically. Choose a room to enter.\n";
-            for (const auto& p : world_.document().paths) if (!p.parent.empty())
-                text << world_.document().roomPath(p.id) << " - " << world_.document().find(p.id)->name << '\n';
+            for (const auto& room : world_.navigation().rooms) if (!room.parentId.empty())
+                text << room.path << " - " << room.name << '\n';
         } else {
             const auto resources = world_.resourcesHere();
             text << "Live resources: " << resources.size() << '\n';
@@ -210,6 +219,7 @@ private:
         history_.push_back({action, feedback, observation()});
     }
     MMO::ToolRegistry& registry_;
+    LiveNavigationStore navigationStore_;
     LiveWorld world_;
     uint64_t moves_ = 0;
     bool catalogOpen_ = false;

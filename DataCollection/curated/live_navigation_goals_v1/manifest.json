@@ -1,0 +1,209 @@
+{
+  "assignments": [
+    {
+      "destination_provider": {
+        "name": "builtin",
+        "type": "builtin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/builtin",
+      "snapshot_provider_instance": "",
+      "snapshot_room_id": "provider_1",
+      "source_id": "live_navigation_v1_e3bda652b7f1cb7c5edfcc8c08e04197e9a2c5d56dac504d69b65f2efb466d10",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Application Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Application",
+      "snapshot_provider_instance": "Application Plugin#1",
+      "snapshot_room_id": "provider_2",
+      "source_id": "live_navigation_v1_0a2c07338edd19f697c7c88fd9ea8e04244e5a2b838500618d0e6e1f7fa6f75f",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Calculator Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Calculator",
+      "snapshot_provider_instance": "Calculator Plugin#2",
+      "snapshot_room_id": "provider_3",
+      "source_id": "live_navigation_v1_2e17534b2d48ddfe68d1145004e5a7dccdecb7fca027a4ed41954c5503902b5c",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Filesystem Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Filesystem",
+      "snapshot_provider_instance": "Filesystem Plugin#3",
+      "snapshot_room_id": "provider_4",
+      "source_id": "live_navigation_v1_af0c028e16a90e6d0cb09e2ab1e3b94d8022d2914e091684a94d327696984323",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Input Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Input",
+      "snapshot_provider_instance": "Input Plugin#4",
+      "snapshot_room_id": "provider_5",
+      "source_id": "live_navigation_v1_15e7efc467ad98d35d160e454a72c4e1126729173f69efa0981ba51c8049685a",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Memory Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Memory",
+      "snapshot_provider_instance": "Memory Plugin#5",
+      "snapshot_room_id": "provider_6",
+      "source_id": "live_navigation_v1_cb27ffba36c6b02b74535d467a1e7fc7182d0caa1fca3981be748766de136814",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Network Test Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Network-Test",
+      "snapshot_provider_instance": "Network Test Plugin#6",
+      "snapshot_room_id": "provider_7",
+      "source_id": "live_navigation_v1_9a52b21230a48b869f179eb9751750521d348c6d8f7831bdd63a9b54111ad4e6",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "OSINT Self-Audit Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/OSINT-Self-Audit",
+      "snapshot_provider_instance": "OSINT Self-Audit Plugin#7",
+      "snapshot_room_id": "provider_8",
+      "source_id": "live_navigation_v1_e4bf18cefc0127535b9019b7648ed6e8bc8915bff3277b9bd6995f7114e6c052",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Perception Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Perception",
+      "snapshot_provider_instance": "Perception Plugin#8",
+      "snapshot_room_id": "provider_9",
+      "source_id": "live_navigation_v1_348feb9fd7188ae62c060075e7d2db4c37f5e7bb58c2214ab43c9b27f1322b60",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Schedule Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Schedule",
+      "snapshot_provider_instance": "Schedule Plugin#9",
+      "snapshot_room_id": "provider_10",
+      "source_id": "live_navigation_v1_5924b05779ac0834977b96487a30bff34406bcd0ffdda736bd36d6c4f873317c",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "System Information Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/System-Information",
+      "snapshot_provider_instance": "System Information Plugin#10",
+      "snapshot_room_id": "provider_11",
+      "source_id": "live_navigation_v1_a38d3ccc3d15fb2439ef061c2acae1efa8b256ea813a8e7e95d5cd7a861ae06c",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Timers Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Timers",
+      "snapshot_provider_instance": "Timers Plugin#11",
+      "snapshot_room_id": "provider_12",
+      "source_id": "live_navigation_v1_68dbfe112ecfcb64762ec3f5a3ff387a663a968ffc2b1c9553f92c45bb031358",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Tool Inspection Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Tool-Inspection",
+      "snapshot_provider_instance": "Tool Inspection Plugin#12",
+      "snapshot_room_id": "provider_13",
+      "source_id": "live_navigation_v1_a4851cc959d1e48345b17db306cd5b941fd6818b53dc277310558a72cca527fd",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "UI Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/UI",
+      "snapshot_provider_instance": "UI Plugin#13",
+      "snapshot_room_id": "provider_14",
+      "source_id": "live_navigation_v1_eabb60fc98394ff0afb6527f0f509c5540233e1ab916d71c2ab39162353a6dc1",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Utility Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Utility",
+      "snapshot_provider_instance": "Utility Plugin#14",
+      "snapshot_room_id": "provider_15",
+      "source_id": "live_navigation_v1_712917a6fc2a5b4703a7d43551542ec4b4103e374541a2fa8eb499761c74222c",
+      "start_room_id": "system_hub"
+    },
+    {
+      "destination_provider": {
+        "name": "Voice Plugin",
+        "type": "plugin"
+      },
+      "minimum_moves": 1,
+      "snapshot_path": "/Voice",
+      "snapshot_provider_instance": "Voice Plugin#15",
+      "snapshot_room_id": "provider_16",
+      "source_id": "live_navigation_v1_cd6dd15f8bd080658f8dacd4ebf9250898e542f9175c86e8f25946a513560636",
+      "start_room_id": "system_hub"
+    }
+  ],
+  "backend": "live_world",
+  "course_binding_status": "unbound: live sessions are not registered TextWorld environments",
+  "format": "grim-live-navigation-goal-set",
+  "goal_count": 16,
+  "hub_id": "system_hub",
+  "order": "provider type, then exact provider name",
+  "room_count": 17,
+  "snapshot_identity": "1bda4640cf49211a63715c8f6647040adcfb0c7040ac0772798377e48deaf04d",
+  "snapshot_session_id": "env-2dad5bf0e2e979e0cbe872a5d73a2429",
+  "source_snapshot": "D:\\G.R.I.M\\resources\\models\\games\\live_navigation.json",
+  "validation": "snapshot structure and hub adjacency; no runtime evaluation",
+  "verification_status": "unverified: live Goal binding/evaluation not implemented",
+  "version": 1
+}
