@@ -24,6 +24,9 @@ public:
 
     void startPipeline(PipelineMode mode);
     void stopPipeline();
+    void shutdown();
+    // Install before starting a run. Host routes final writes through its catalog.
+    void setDatasetWriter(PipelineContext::DatasetWriter writer);
     PipelineState currentState() const;
     float overallProgress() const;
 
@@ -52,6 +55,7 @@ private:
     mutable std::mutex mutex_;
 
     float overallProgress_ = 0.0f;
+    PipelineStats publishedStats_;
     std::string currentMessage_;
     ProgressCallback progressCallback_;
     std::chrono::steady_clock::time_point runStartTime_;

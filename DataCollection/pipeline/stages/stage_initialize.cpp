@@ -44,7 +44,7 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
         ctx.config.verifiedDir = resolveFromGrimRoot(grimTextPaths.at("verified").get<std::string>()).string();
     if (ctx.config.outputDir.empty()) {
         fs::path td = resolveFromGrimRoot(grimTextPaths.at("training_data").get<std::string>());
-        ctx.config.outputDir = td.parent_path().string();
+        ctx.config.outputDir = td.string();
     }
     std::cout << "[Initialize] Loaded paths from ai_config.json\n";
 

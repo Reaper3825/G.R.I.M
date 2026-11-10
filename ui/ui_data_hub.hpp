@@ -7,15 +7,13 @@
 //  current group and shows the next. Implementation
 //  is split across ui/data_hub/*.cpp for sanity.
 //
-//  UI owns layout + events only.  All logic lives in
-//  PipelineOrchestrator, HuggingFaceWebhook,
-//  DataStructurer, and DatasetTarget.
+//  Catalog authoring, generator jobs, and collection services are process-owned.
+//  This panel holds clients, drafts, and presentation state.
 //======================================================//
 
 #pragma once
 
 #include <atomic>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -39,7 +37,8 @@
 class OverlayRenderer;
 struct InputState;
 
-#include "DataCollection/dataset_target.hpp"
+#include "DataCollection/dataset_catalog.hpp"
+#include "DataCollection/dataset_creation_service.hpp"
 #include "DataCollection/data_structurer.hpp"
 #include "DataCollection/concept_generator.hpp"
 #include "DataCollection/concept_binding_adapter.hpp"
@@ -71,11 +70,6 @@ public:
 
     void        setView(DataHubView view);
     DataHubView currentView() const { return activeView_; }
-    std::vector<nlohmann::json> worldGoalSelections(const std::string& query) const;
-    nlohmann::json worldCurriculumRegistry() const;
-    nlohmann::json worldConceptBlock(const std::string& id) const;
-    std::string worldModelInputPreview(const nlohmann::json& input) const;
-    void importWorldGoal(const nlohmann::json& selection);
 
 private:
     // ═════════════════════════════════════════════════════
@@ -185,13 +179,18 @@ private:
     //  Backend services
     // ═════════════════════════════════════════════════════
 
-    std::unique_ptr<GRIM::Pipeline::PipelineOrchestrator> pipelineOrchestrator_;
-    std::unique_ptr<GRIM::DataCollection::HuggingFaceWebhook>    hfWebhook_;
-    std::unique_ptr<DatasetTarget>                               datasetTarget_;
-    bool worldGoalDatabaseReady_=false;
-    std::unique_ptr<GRIM::DataCollection::DataStructurer>        structurer_;
-    std::unique_ptr<GRIM::DataCollection::ConceptGenerator>      conceptGenerator_;
-    std::shared_ptr<GRIM::DataCollection::IConceptBindingAdapter> generatorAdapter_;
+    std::shared_ptr<GRIM::Pipeline::PipelineOrchestrator> pipelineOrchestrator_;
+    std::shared_ptr<GRIM::DataCollection::HuggingFaceWebhook>    hfWebhook_;
+    std::shared_ptr<GRIM::DataCollection::DatasetCatalog>        datasetTarget_;
+    uint64_t datasetRevision_ = 0;
+    uint64_t sequenceEditorRevision_ = 0;
+    uint64_t detailEditorRevision_ = 0;
+    uint64_t cbEditorRevision_ = 0;
+    std::string cbEditorBlockId_;
+    std::shared_ptr<GRIM::DataCollection::DataStructurer>        structurer_;
+    std::shared_ptr<const GRIM::DataCollection::ConceptGenerator> conceptGenerator_;
+    std::shared_ptr<GRIM::DataCollection::DatasetCreationService> creationService_;
+    uint64_t generatorStatusRevision_ = 0;
 
     // ═════════════════════════════════════════════════════
     //  Tab draw methods
@@ -373,21 +372,15 @@ private:
     bool        generatorRunning_        = false;
     bool        generatorPaused_         = false;
     uint64_t    generatorBaseSeed_       = 1337;
-    uint64_t    generatorIteration_      = 0;
     uint64_t    generatorGeneratedCount_ = 0;
     uint64_t    generatorAttemptCount_   = 0;
     uint64_t    generatorFailedCount_    = 0;
     uint64_t    generatorBatchCount_     = 25;
-    float       generatorLoopTimer_      = 0.0f;
     float       generatorLexiconScroll_  = 0.0f;
     float       generatorLexiconContentH_ = 0.0f;
     GRIM::DataCollection::GeneratedConceptFrame generatorLastFrame_;
-    std::vector<GRIM::ConceptBlock> generatorQueuedBlocks_;
+    size_t generatorQueuedCount_ = 0;
     GRIM::DataCollection::GeneratorBindingSet generatorLastBindings_;
-    GRIM::DataCollection::GeneratorDocument generatorPendingDocument_;
-    size_t      generatorPendingFrame_ = 0;
-    uint64_t    generatorPendingIteration_ = 0;
-    std::future<GRIM::DataCollection::GeneratorBindingSet> generatorFillFuture_;
     bool        generatorFillActive_ = false;
     std::string generatorCatalogStatus_;
     std::string generatorSourceStatus_;
@@ -572,7 +565,6 @@ private:
     void generateNextFrame();
     void saveGeneratorQueue();
     void requestGeneratorFill();
-    void completeGeneratorFill();
     void updateGeneratorLoop(float dt);
 
     // ── Curriculum view methods (Structurer sub-view) ───

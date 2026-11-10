@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <stdexcept>
 
 namespace GRIM {
 namespace Pipeline {
@@ -28,10 +29,19 @@ PipelineOrchestrator::PipelineOrchestrator() {
 }
 
 PipelineOrchestrator::~PipelineOrchestrator() {
+    shutdown();
+}
+
+void PipelineOrchestrator::shutdown() {
     stopPipeline();
     if (thread_ && thread_->joinable()) {
         thread_->join();
     }
+}
+
+void PipelineOrchestrator::setDatasetWriter(PipelineContext::DatasetWriter writer) {
+    if (getStatus().isRunning) throw std::runtime_error("Cannot replace an active pipeline writer");
+    context_.datasetWriter = std::move(writer);
 }
 
 std::vector<PipelineState> PipelineOrchestrator::stagesForMode(PipelineMode mode) const {
@@ -80,10 +90,17 @@ void PipelineOrchestrator::startPipeline(PipelineMode mode) {
     context_.chunkSize = 5000;
     context_.datasetIO.reset();
     context_.stopRequested.store(false);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        publishedStats_ = {};
+        overallProgress_ = 0.0f;
+        currentMessage_ = "Initializing pipeline";
+    }
 
     context_.onProgress = [this](PipelineState state, float progress, const std::string& msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         overallProgress_ = progress;
+        publishedStats_ = context_.stats;
         currentMessage_ = msg;
         if (progressCallback_) {
             progressCallback_(progress, msg);
@@ -116,7 +133,7 @@ PipelineOrchestrator::Status PipelineOrchestrator::getStatus() const {
     s.progress = overallProgress_;
     s.phase    = pipelineStateToString(s.state);
     s.message  = currentMessage_;
-    s.stats    = context_.stats;
+    s.stats    = publishedStats_;
     s.isRunning = (s.state != PipelineState::Idle &&
                    s.state != PipelineState::Complete &&
                    s.state != PipelineState::Error);
@@ -207,6 +224,7 @@ void PipelineOrchestrator::executionThread() {
     currentState_.store(PipelineState::Complete);
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        publishedStats_ = context_.stats;
         overallProgress_ = 100.0f;
         currentMessage_ = "Pipeline complete";
     }

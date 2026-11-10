@@ -16,70 +16,29 @@ uint64_t parseUnsignedOr(const std::string& text, uint64_t fallback) {
 }
 
 std::string generatorResourceRelativePath(const char* filename) {
-    return std::string("models/GRIM-text/training/data/") + filename;
-}
-
-std::filesystem::path generatorResourcePath(const char* filename) {
-    return std::filesystem::path(getResourcePath())
-        / "models" / "GRIM-text" / "training" / "data" / filename;
-}
-
-GRIM::DataCollection::GeneratorAdapterOptions generatorAdapterOptions(uint64_t seed) {
-    GRIM::DataCollection::GeneratorAdapterOptions options;
-    options.seed = seed;
-    if (aiConfig.contains("ollama_options") && aiConfig["ollama_options"].is_object()) {
-        const auto& ollama = aiConfig["ollama_options"];
-        options.temperature = ollama.value("temperature", 0.2f);
-        options.topP = ollama.value("top_p", 0.9f);
-        options.topK = ollama.value("top_k", 40);
-        options.maxTokens = ollama.value("num_predict", 2048);
-    }
-    if (aiConfig.contains("data_collection")
-        && aiConfig["data_collection"].contains("data_structuring")) {
-        options.timeoutMs = aiConfig["data_collection"]["data_structuring"]
-            .value("timeout_ms", 60000);
-    }
-    // Slot filling favors stable structure even when the global chat setting
-    // uses a more creative temperature.
-    options.temperature = std::min(options.temperature, 0.3f);
-    options.maxTokens = std::max(options.maxTokens, 1024);
-    return options;
+    return (std::filesystem::path(aiConfig.at("paths").at("grim_text").at("training_data")
+        .get<std::string>()) / filename).string();
 }
 
 } // namespace
 
 void UIDataHubPanel::refreshGeneratorState() {
-    if (!conceptGenerator_) return;
-
-    const auto catalogPath = generatorResourcePath("LexiconPieces.json");
-    const auto sourcePath = generatorResourcePath("GeneratorDataSource.json");
-    if (conceptGenerator_->loadCatalog(catalogPath)) {
-        generatorCatalogStatus_ = std::to_string(conceptGenerator_->groups().size())
-            + " language groups  |  "
-            + std::to_string(conceptGenerator_->frames().size()) + " recipe";
-        if (conceptGenerator_->frames().size() != 1) generatorCatalogStatus_ += "s";
-
-        std::vector<std::string> frameLabels;
-        for (const auto& frame : conceptGenerator_->frames()) frameLabels.push_back(frame.label);
-        if (genFrameDropdown_) genFrameDropdown_->setItems(frameLabels);
-        rebuildGeneratorGroupViews();
-    } else {
-        generatorCatalogStatus_ = conceptGenerator_->lastError();
-        if (genPreviewArea_) genPreviewArea_->setText(generatorCatalogStatus_);
-        addLog("Generator catalog failed to load: " + conceptGenerator_->lastError(), 2);
+    if (!creationService_) return;
+    const bool loaded = creationService_->reloadAssets();
+    conceptGenerator_ = creationService_->assets();
+    if (!loaded) addLog("Generator resources: " + creationService_->assetError(), 2);
+    if (!conceptGenerator_) {
+        generatorCatalogStatus_ = creationService_->assetError();
         return;
     }
-
-    if (conceptGenerator_->loadDataSource(sourcePath)) {
-        const size_t count = conceptGenerator_->documents().size();
-        generatorSourceStatus_ = count == 0
-            ? "0 documents — paste one below"
-            : std::to_string(count) + " raw document" + (count == 1 ? " loaded" : "s loaded");
-    } else {
-        generatorSourceStatus_ = conceptGenerator_->lastError();
-        addLog("Generator data source failed to load: " + conceptGenerator_->lastError(), 2);
-    }
-    if (generatorAdapter_) generatorAdapterStatus_ = generatorAdapter_->adapterId();
+    generatorCatalogStatus_ = std::to_string(conceptGenerator_->groups().size())
+        + " language groups | " + std::to_string(conceptGenerator_->frames().size()) + " recipes";
+    generatorSourceStatus_ = std::to_string(conceptGenerator_->documents().size()) + " raw documents";
+    std::vector<std::string> labels;
+    for (const auto& frame : conceptGenerator_->frames()) labels.push_back(frame.label);
+    if (genFrameDropdown_) genFrameDropdown_->setItems(labels);
+    rebuildGeneratorGroupViews();
+    updateGeneratorLoop(0.0f);
 }
 
 void UIDataHubPanel::rebuildGeneratorGroupViews() {
@@ -117,217 +76,81 @@ void UIDataHubPanel::rebuildGeneratorGroupViews() {
 }
 
 void UIDataHubPanel::startGeneratorRun() {
-    if (!conceptGenerator_ || conceptGenerator_->frames().empty()) {
-        addLog("Generator has no loaded recipe", 1);
-        return;
-    }
-    if (!generatorAdapter_) {
-        addLog("Generator adapter is unavailable: " + generatorAdapterStatus_, 2);
-        return;
-    }
-
-    const bool hasInlineDocument = genDocumentArea_ && !genDocumentArea_->getText().empty();
-    if (!hasInlineDocument && conceptGenerator_->documents().empty()) {
-        addLog("Paste a document or add raw documents to GeneratorDataSource.json", 1);
-        return;
-    }
-
-    if (generatorPaused_ && generatorAttemptCount_ > 0) {
-        generatorPaused_ = false;
-        generatorRunning_ = true;
-        if (btnGenRun_) btnGenRun_->setText(generatorFillActive_ ? "Working" : "Running");
-        return;
-    }
-
+    if (!creationService_) return;
+    if (creationService_->status().paused && creationService_->resume()) return;
     generatorBatchCount_ = std::clamp<uint64_t>(
-        parseUnsignedOr(genCountInput_ ? genCountInput_->getText() : "25", 25),
-        1, 100000);
+        parseUnsignedOr(genCountInput_ ? genCountInput_->getText() : "25", 25), 1, 100000);
     if (genCountInput_) genCountInput_->setText(std::to_string(generatorBatchCount_));
-
-    const bool autoSeed = !genSeedPolicyDropdown_
-        || genSeedPolicyDropdown_->getSelectedIndex() == 0;
-    if (autoSeed) {
-        generatorBaseSeed_ = static_cast<uint64_t>(
-            std::chrono::high_resolution_clock::now().time_since_epoch().count());
-    } else {
-        generatorBaseSeed_ = parseUnsignedOr(
-            genSeedInput_ ? genSeedInput_->getText() : "1337", 1337);
-    }
+    const bool autoSeed = !genSeedPolicyDropdown_ || genSeedPolicyDropdown_->getSelectedIndex() == 0;
+    generatorBaseSeed_ = autoSeed
+        ? static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count())
+        : parseUnsignedOr(genSeedInput_ ? genSeedInput_->getText() : "1337", 1337);
     if (genSeedInput_) genSeedInput_->setText(std::to_string(generatorBaseSeed_));
-
-    generatorIteration_ = 0;
-    generatorGeneratedCount_ = 0;
-    generatorAttemptCount_ = 0;
-    generatorFailedCount_ = 0;
-    generatorLoopTimer_ = 0.0f;
-    generatorPaused_ = false;
-
-    const int runMode = genRunModeDropdown_ ? genRunModeDropdown_->getSelectedIndex() : 0;
-    generatorRunning_ = runMode != 0;
     requestGeneratorFill();
-    addLog("Generator model-fill run started with seed "
-           + std::to_string(generatorBaseSeed_), 0);
 }
 
 void UIDataHubPanel::pauseGeneratorRun() {
-    if (!generatorRunning_ && !generatorFillActive_) return;
-    generatorRunning_ = false;
-    generatorPaused_ = true;
-    if (btnGenRun_) btnGenRun_->setText(generatorFillActive_ ? "Finishing" : "Resume");
-    addLog("Generator paused after " + std::to_string(generatorAttemptCount_)
-           + " attempts", 0);
+    if (creationService_) creationService_->pause();
 }
 
 void UIDataHubPanel::generateNextFrame() {
-    if (generatorFillActive_) return;
-    if (!generatorAdapter_ || !conceptGenerator_ || conceptGenerator_->frames().empty()) return;
-    const bool hasInlineDocument = genDocumentArea_ && !genDocumentArea_->getText().empty();
-    if (!hasInlineDocument && conceptGenerator_->documents().empty()) {
-        addLog("No raw document is available for model filling", 1);
-        return;
-    }
-    requestGeneratorFill();
+    if (!creationService_) return;
+    DatasetCreationService::Request request;
+    request.frameIndex = genFrameDropdown_ ? std::max(0, genFrameDropdown_->getSelectedIndex()) : 0;
+    request.seed = generatorBaseSeed_;
+    request.traversal = genTraversalDropdown_ && genTraversalDropdown_->getSelectedIndex() == 1
+        ? GeneratorTraversal::RoundRobin : GeneratorTraversal::SeededRandom;
+    if (genDocumentArea_) request.document = {"inline_document", "Inline Document", genDocumentArea_->getText(), ""};
+    if (!creationService_->start(request)) addLog("Generator is busy or its resources are unavailable", 1);
 }
 
 void UIDataHubPanel::saveGeneratorQueue() {
-    if (generatorFillActive_) {
-        addLog("Wait for the current model fill before saving the queue", 1);
-        return;
-    }
-    if (!datasetTarget_ || generatorQueuedBlocks_.empty()) {
-        addLog("Generator queue is empty", 1);
-        return;
-    }
-    const size_t queued = generatorQueuedBlocks_.size();
+    if (!creationService_) return;
     size_t added = 0;
-    if (!datasetTarget_->addConceptBlocks(generatorQueuedBlocks_, added)) {
-        addLog("Generator queue save failed; the queue was kept", 2);
+    if (!creationService_->saveQueue(added)) {
+        addLog("Generator queue save failed: " + datasetTarget_->lastError(), 2);
         return;
     }
-    generatorQueuedBlocks_.clear();
     cbFilterDirty_ = true;
-    addLog("Saved " + std::to_string(added) + " of " + std::to_string(queued)
-           + " queued ConceptBlocks (duplicates skipped)", 0);
+    addLog("Saved " + std::to_string(added) + " queued ConceptBlocks", 0);
+    updateGeneratorLoop(0.0f);
 }
 
 void UIDataHubPanel::requestGeneratorFill() {
-    if (generatorFillActive_ || !generatorAdapter_ || !conceptGenerator_) return;
-    const int selectedFrame = genFrameDropdown_
-        ? std::max(0, genFrameDropdown_->getSelectedIndex()) : 0;
-    if (selectedFrame >= static_cast<int>(conceptGenerator_->frames().size())) return;
-
-    GeneratorDocument document;
-    const std::string inlineText = genDocumentArea_ ? genDocumentArea_->getText() : "";
-    if (!inlineText.empty()) {
-        document.id = "inline_document";
-        document.title = "Inline Document";
-        document.text = inlineText;
-    } else if (!conceptGenerator_->documents().empty()) {
-        document = conceptGenerator_->documents()[
-            static_cast<size_t>(generatorIteration_ % conceptGenerator_->documents().size())];
-    } else {
-        return;
-    }
-
-    generatorPendingDocument_ = document;
-    generatorPendingFrame_ = static_cast<size_t>(selectedFrame);
-    generatorPendingIteration_ = generatorIteration_;
-    const auto recipe = conceptGenerator_->frames()[generatorPendingFrame_];
-    const uint64_t requestSeed = generatorBaseSeed_
-        + generatorPendingIteration_ * 0x9E3779B97F4A7C15ULL;
-    const auto options = generatorAdapterOptions(requestSeed);
-    const GeneratorMemoryContext memory; // Adaptation point for the memory system.
-    const auto adapter = generatorAdapter_;
-
-    generatorFillActive_ = true;
-    generatorAdapterStatus_ = adapter->adapterId() + " — filling " + document.id;
-    if (btnGenRun_) btnGenRun_->setText("Working");
-    generatorFillFuture_ = std::async(std::launch::async,
-        [adapter, document, recipe, memory, options]() mutable {
-            return adapter->fill(document, recipe, memory, options);
-        });
+    if (!creationService_) return;
+    DatasetCreationService::Request request;
+    request.frameIndex = genFrameDropdown_ ? std::max(0, genFrameDropdown_->getSelectedIndex()) : 0;
+    request.seed = generatorBaseSeed_;
+    const int mode = genRunModeDropdown_ ? genRunModeDropdown_->getSelectedIndex() : 0;
+    request.attempts = mode == 0 ? 1 : generatorBatchCount_;
+    request.continuous = mode == 2;
+    request.traversal = genTraversalDropdown_ && genTraversalDropdown_->getSelectedIndex() == 1
+        ? GeneratorTraversal::RoundRobin : GeneratorTraversal::SeededRandom;
+    if (genDocumentArea_) request.document = {"inline_document", "Inline Document", genDocumentArea_->getText(), ""};
+    if (!creationService_->start(request)) addLog("Generator is busy or its resources are unavailable", 1);
 }
 
-void UIDataHubPanel::completeGeneratorFill() {
-    if (!generatorFillActive_ || !generatorFillFuture_.valid()) return;
-    if (generatorFillFuture_.wait_for(std::chrono::milliseconds(0))
-        != std::future_status::ready) return;
-
-    GeneratorBindingSet bindings;
-    try {
-        bindings = generatorFillFuture_.get();
-    } catch (const std::exception& error) {
-        bindings.documentId = generatorPendingDocument_.id;
-        bindings.error = error.what();
+void UIDataHubPanel::updateGeneratorLoop(float) {
+    if (!creationService_) return;
+    const auto status = creationService_->status();
+    if (status.revision == generatorStatusRevision_) return;
+    generatorStatusRevision_ = status.revision;
+    generatorRunning_ = status.running;
+    generatorPaused_ = status.paused;
+    generatorFillActive_ = status.filling;
+    generatorAttemptCount_ = status.attempts;
+    generatorGeneratedCount_ = status.generated;
+    generatorFailedCount_ = status.failed;
+    generatorQueuedCount_ = status.queued;
+    generatorLastFrame_ = status.lastFrame;
+    generatorLastBindings_ = status.lastBindings;
+    generatorAdapterStatus_ = status.message;
+    if (btnGenRun_) btnGenRun_->setText(status.filling ? "Working" : (status.paused ? "Resume" : (status.running ? "Running" : "Run")));
+    if (genPreviewArea_ && !status.filling && status.attempts > 0) {
+        if (status.lastBindings.error.empty() && status.lastBindings.valid)
+            genPreviewArea_->setText(buildTrainingPreview(status.lastFrame.conceptBlock, true));
+        else genPreviewArea_->setText("BINDING ERROR\n" + status.message + "\n\n" + status.lastBindings.rawResponse);
     }
-    generatorFillActive_ = false;
-    ++generatorAttemptCount_;
-
-    bool valid = bindings.error.empty()
-        && generatorPendingFrame_ < conceptGenerator_->frames().size()
-        && conceptGenerator_->validateBindings(
-            generatorPendingDocument_,
-            conceptGenerator_->frames()[generatorPendingFrame_],
-            bindings);
-
-    if (valid) {
-        const auto traversal = genTraversalDropdown_
-            && genTraversalDropdown_->getSelectedIndex() == 1
-            ? GeneratorTraversal::RoundRobin
-            : GeneratorTraversal::SeededRandom;
-        generatorLastBindings_ = bindings;
-        generatorLastFrame_ = conceptGenerator_->assemble(
-            generatorPendingFrame_, bindings, generatorBaseSeed_,
-            generatorPendingIteration_, traversal);
-        generatorQueuedBlocks_.push_back(generatorLastFrame_.conceptBlock);
-        if (genPreviewArea_) {
-            genPreviewArea_->setText(
-                buildTrainingPreview(generatorLastFrame_.conceptBlock, true));
-        }
-        ++generatorGeneratedCount_;
-        generatorAdapterStatus_ = bindings.adapterId + " — valid bindings";
-    } else {
-        ++generatorFailedCount_;
-        generatorLastBindings_ = bindings;
-        generatorAdapterStatus_ = bindings.error.empty()
-            ? "Binding validation failed" : bindings.error;
-        if (genPreviewArea_) {
-            std::string preview = "BINDING ERROR\n" + generatorAdapterStatus_;
-            if (!bindings.rawResponse.empty()) preview += "\n\nRAW MODEL RESPONSE\n" + bindings.rawResponse;
-            genPreviewArea_->setText(preview);
-        }
-        addLog("Generator binding failed: " + generatorAdapterStatus_, 2);
-    }
-
-    ++generatorIteration_;
-    if (btnGenRun_) {
-        btnGenRun_->setText(generatorRunning_ ? "Running"
-            : (generatorPaused_ ? "Resume" : "Run"));
-    }
-}
-
-void UIDataHubPanel::updateGeneratorLoop(float dt) {
-    completeGeneratorFill();
-    if (generatorFillActive_ || !generatorRunning_ || generatorPaused_) return;
-
-    const int runMode = genRunModeDropdown_ ? genRunModeDropdown_->getSelectedIndex() : 0;
-    if (runMode == 0) {
-        generatorRunning_ = false;
-        if (btnGenRun_) btnGenRun_->setText("Run");
-        return;
-    }
-    if (runMode == 1 && generatorAttemptCount_ >= generatorBatchCount_) {
-        generatorRunning_ = false;
-        if (btnGenRun_) btnGenRun_->setText("Run");
-        addLog("Generator batch completed: " + std::to_string(generatorGeneratedCount_)
-               + " valid, " + std::to_string(generatorFailedCount_) + " failed", 0);
-        return;
-    }
-
-    generatorLoopTimer_ += dt;
-    if (generatorLoopTimer_ < 0.12f) return;
-    generatorLoopTimer_ = 0.0f;
-    requestGeneratorFill();
 }
 
 void UIDataHubPanel::drawGeneratorTab(OverlayRenderer& renderer,
@@ -479,7 +302,7 @@ void UIDataHubPanel::drawGeneratorTab(OverlayRenderer& renderer,
                       "ATTEMPTS  " + std::to_string(generatorAttemptCount_)
                       + "   VALID  " + std::to_string(generatorGeneratedCount_)
                       + "   FAILED  " + std::to_string(generatorFailedCount_)
-                      + "   QUEUED  " + std::to_string(generatorQueuedBlocks_.size()),
+                      + "   QUEUED  " + std::to_string(generatorQueuedCount_),
                       UITheme::Colors::TextSecondary);
     previewY += 26.0f;
     renderer.drawText({rightX + 12.0f, previewY}, "LEXICON SELECTIONS",

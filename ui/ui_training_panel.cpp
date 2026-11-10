@@ -6,8 +6,8 @@
 #include "training_panel/ui_training_tools_view.hpp"
 #include "resources.hpp"
 #include "ai/grim_text_server_manager.hpp"
-#include "ui_root.hpp"
-#include "ui_data_hub.hpp"
+#include "bootstrap/dataset_bootstrap.hpp"
+#include "resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp"
 
 using namespace GRIMText;
 using namespace UITheme;
@@ -68,16 +68,15 @@ UITrainingPanel::UITrainingPanel()
     });
     tabWorldLabBtn_->setSize(100.0f, 28.0f);
     worldLab_ = std::make_unique<UIWorldLabView>(std::filesystem::path{}, std::filesystem::path(getResourcePath()) / "models" / "games", std::filesystem::path(getResourcePath()) / "models" / "world_assets");
-    const auto dataHub=[] {
-        auto hub=std::dynamic_pointer_cast<UIDataHubPanel>(UIRoot::get().getPanel("DataHub"));
-        if(!hub)throw std::runtime_error("Open DataHub to access the ConceptBlock database");
-        return hub;
-    };
-    worldLab_->setGoalAccess({[dataHub](const std::string& query){return dataHub()->worldGoalSelections(query);},
-                            [dataHub](const nlohmann::json& value){dataHub()->importWorldGoal(value);},
-                            [dataHub]{return dataHub()->worldCurriculumRegistry();},
-                            [dataHub](const std::string& id){return dataHub()->worldConceptBlock(id);},
-                            [dataHub](const nlohmann::json& input){return dataHub()->worldModelInputPreview(input);},
+    const auto catalog = GRIM::DataCollection::runtimeDatasetCatalog();
+    worldLab_->setGoalAccess({[catalog](const std::string& query){return catalog->goalSelections(query);},
+                            [catalog](const nlohmann::json& value){catalog->importGoal(value);},
+                            [catalog]{return catalog->curriculumRegistry();},
+                            [catalog](const std::string& id){return catalog->conceptBlock(id);},
+                            [](const nlohmann::json& input){
+                                return GRIM::SpanText::renderInput(input, aiConfig.at("training").at("config")
+                                    .at("concept_spans").get<GRIM::NamedConceptSpanDefinitions>());
+                            },
                             [](std::string text) {
                                 const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
                                 return std::async(std::launch::async, [url, text = std::move(text)]() -> GRIM::WorldLab::PreviewTokenResult {

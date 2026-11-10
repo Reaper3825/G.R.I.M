@@ -1,4 +1,6 @@
 #include "system_teardown.hpp"
+#include "bootstrap/dataset_bootstrap.hpp"
+#include "bootstrap/dataset_services_bootstrap.hpp"
 
 #include "../MMO/UI/UISurfaceRegistry.hpp"
 #include "../ai/grim_text_server_manager.hpp"
@@ -113,6 +115,7 @@ void shutdownApplication(
     // Plugins may stop workers and use host services during shutdown. Unload
     // them before destroying memory, UI, voice, and orchestration services.
     PluginManager::unloadAll();
+    shutdownDatasetServices();
 
     Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
     Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
@@ -174,6 +177,7 @@ void shutdownApplication(
     PlatformClipboard::shutdown();
 
     UIRoot::get().shutdown();
+    shutdownDatasetSubsystem();
     WindowManager::shutdown();
 
     webSocketServer.stop();

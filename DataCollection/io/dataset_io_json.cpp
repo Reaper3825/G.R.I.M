@@ -1,4 +1,5 @@
 #include "dataset_io_json.hpp"
+#include "memory/atomic_writer.hpp"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -61,9 +62,12 @@ bool DatasetIOJson::loadAllEntries(const fs::path& datasetPath,
         if (line.empty()) continue;
         try {
             entries.push_back(parseTaggedEntry(json::parse(line)));
-        } catch (...) { continue; }
+        } catch (...) {
+            if (strict_) { entries.clear(); return false; }
+            continue;
+        }
     }
-    return true;
+    return !file.bad();
 }
 
 bool DatasetIOJson::saveAllEntries(const fs::path& datasetPath,
@@ -71,34 +75,25 @@ bool DatasetIOJson::saveAllEntries(const fs::path& datasetPath,
     std::error_code ec;
     fs::create_directories(datasetPath.parent_path(), ec);
 
-    // Atomic write via temp file
-    fs::path tmpPath = datasetPath;
-    tmpPath += ".tmp";
-    {
-        std::ofstream out(tmpPath, std::ios::trunc);
-        if (!out.is_open()) return false;
-        for (const auto& e : entries) {
-            out << taggedEntryToJson(e).dump() << "\n";
-        }
-        if (!out.good()) return false;
-    }
-    fs::rename(tmpPath, datasetPath, ec);
-    return !ec;
+    try {
+        GRIM::AtomicWriter::writeWith(datasetPath.string(), [&](std::ofstream& out) {
+            for (const auto& e : entries) out << taggedEntryToJson(e).dump() << "\n";
+        });
+        return true;
+    } catch (const std::exception&) { return false; }
 }
 
 bool DatasetIOJson::appendEntries(const fs::path& datasetPath,
                                   const std::vector<TaggedEntry>& entries) {
     if (entries.empty()) return true;
 
-    std::error_code ec;
-    fs::create_directories(datasetPath.parent_path(), ec);
-
-    std::ofstream out(datasetPath, std::ios::app);
-    if (!out.is_open()) return false;
-    for (const auto& e : entries) {
-        out << taggedEntryToJson(e).dump() << "\n";
+    std::vector<TaggedEntry> combined;
+    if (fs::exists(datasetPath)) {
+        DatasetIOJson strictReader(true);
+        if (!strictReader.loadAllEntries(datasetPath, combined)) return false;
     }
-    return out.good();
+    combined.insert(combined.end(), entries.begin(), entries.end());
+    return saveAllEntries(datasetPath, combined);
 }
 
 size_t DatasetIOJson::countEntries(const fs::path& datasetPath) {

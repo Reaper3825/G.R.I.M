@@ -354,6 +354,7 @@ void UIDataHubPanel::selectCurriculumRow(int row) {
 }
 
 void UIDataHubPanel::loadDetailForSequence(size_t seqIndex) {
+    detailEditorRevision_ = datasetTarget_ ? datasetTarget_->viewRevision() : 0;
     detailSeqIndex_ = seqIndex;
     if (!datasetTarget_ || seqIndex >= datasetTarget_->massDatasetSize()) return;
     auto seq = datasetTarget_->getSequence(seqIndex);
@@ -715,6 +716,7 @@ void UIDataHubPanel::populateModelDropdown() {
 void UIDataHubPanel::refreshStructurerState() {
     if (!datasetTarget_) return;
     datasetTarget_->loadMassDataset();
+    if (!datasetTarget_->ready()) return;
     totalSequences_ = datasetTarget_->massDatasetSize();
     assignedSequences_ = datasetTarget_->assignedCount();
     structuredCount_ = 0;
@@ -726,7 +728,8 @@ void UIDataHubPanel::refreshStructurerState() {
 }
 
 void UIDataHubPanel::loadCurrentSequence() {
-    if (!datasetTarget_ || datasetTarget_->massDatasetSize() == 0) {
+    sequenceEditorRevision_ = datasetTarget_ ? datasetTarget_->viewRevision() : 0;
+    if (!datasetTarget_ || !datasetTarget_->ready() || datasetTarget_->massDatasetSize() == 0) {
         if (rawTextArea_) rawTextArea_->setText("");
         if (structuredTextArea_) structuredTextArea_->setText("");
         return;

@@ -1,4 +1,6 @@
 #include "bootstrap.hpp"
+#include "dataset_bootstrap.hpp"
+#include "dataset_services_bootstrap.hpp"
 #include "../core/grim_text_server_api.hpp"
 #include "bootstrap_config.hpp"
 #include "resources.hpp"
@@ -920,6 +922,8 @@ void runBootstrapChecks(int argc, char** argv) {
     (void)argc;
     (void)argv;
     bootstrapConfigAndStatics();               // Phase 1: config and aliases
+    bootstrapDatasetSubsystem();               // Source catalog available before runtime/UI
+    bootstrapDatasetServices();                // Host-owned authoring and collection services
     bootstrapHardwareAndResources();            // Phase 2: inventory, signal, coordinator
     bootstrapSubsystems();                      // Phase 3: voice, RL, server
     bootstrapMMOLayer();                        // Phase 4: registry, loader, orchestrator, tools, policy

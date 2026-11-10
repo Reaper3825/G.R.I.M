@@ -131,7 +131,7 @@ public:
     // Stored in: model_store/<model_id>/<model_name>_configuration.json
 
     bool loadAssignments();
-    bool saveAssignments() const;
+    bool saveAssignments();
 
     // ── Structured output I/O ───────────────────────────
 
@@ -147,8 +147,8 @@ public:
 
     // ── ConceptBlock CRUD ────────────────────────────────
 
-    bool   loadConceptBlocks();
-    bool   saveConceptBlocks() const;
+    bool   loadConceptBlocks(bool migrate_legacy = true);
+    bool   saveConceptBlocks();
     size_t conceptBlockCount() const;
 
     GRIM::ConceptBlock getConceptBlock(size_t index) const;
@@ -170,7 +170,7 @@ public:
     // ── Curriculum registry CRUD ────────────────────────
 
     bool   loadCurriculumRegistry();
-    bool   saveCurriculumRegistry() const;
+    bool   saveCurriculumRegistry();
     size_t curriculumCount() const;
     const std::vector<GRIM::Curriculum>& getCurriculums() const;
 
@@ -208,7 +208,7 @@ public:
     // Contains the union of concept_block_ids from all assigned
     // curricula so the GRIM-text DataLoader can filter at load time.
 
-    bool exportCurriculumManifest() const;
+    bool exportCurriculumManifest();
 
 private:
     std::filesystem::path       modelStoreRoot_;

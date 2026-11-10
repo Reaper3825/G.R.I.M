@@ -87,7 +87,9 @@ StageResult StageWrite::execute(PipelineContext& ctx) {
 
     // On rebuild: overwrite the entire file; otherwise append
     bool writeOk;
-    if (ctx.config.forceRebuild) {
+    if (ctx.datasetWriter) {
+        writeOk = ctx.datasetWriter(ctx.run.massDatasetPath, newEntries, ctx.config.forceRebuild);
+    } else if (ctx.config.forceRebuild) {
         writeOk = ctx.datasetIO->saveAllEntries(ctx.run.massDatasetPath, newEntries);
         std::cout << "  Rebuild: wrote " << newEntries.size() << " entries (full rewrite)\n";
     } else {

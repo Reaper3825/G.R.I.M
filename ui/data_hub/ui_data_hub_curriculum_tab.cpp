@@ -631,6 +631,7 @@ void UIDataHubPanel::refreshCurriculumTabState() {
     if (!datasetTarget_) return;
     if (!datasetTarget_->loadCurriculumRegistry()) {
         addLog("Failed to reload curriculum registry", 2);
+        if (!datasetTarget_->ready()) return;
     }
     datasetTarget_->loadConceptBlocks();
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
@@ -650,8 +651,7 @@ void UIDataHubPanel::refreshCurriculumTabState() {
 }
 
 void UIDataHubPanel::rebuildFilteredCBList() {
-    size_t previousBlockIndex = SIZE_MAX;
-    const bool hadSelection = cbCurriculumRowToBlockIndex(selectedCBRow_, previousBlockIndex);
+    const bool hadSelection = selectedCBRow_ >= 0 && !cbEditorBlockId_.empty();
     cbFilterDirty_ = false;
     filteredCBIndices_.clear();
     if (!datasetTarget_) return;
@@ -683,7 +683,9 @@ void UIDataHubPanel::rebuildFilteredCBList() {
     }
 
     if (hadSelection) {
-        auto found = std::find(filteredCBIndices_.begin(), filteredCBIndices_.end(), previousBlockIndex);
+        auto found = std::find_if(filteredCBIndices_.begin(), filteredCBIndices_.end(), [this](size_t index) {
+            return datasetTarget_->getConceptBlock(index).id == cbEditorBlockId_;
+        });
         selectedCBRow_ = found == filteredCBIndices_.end() ? -1 :
             static_cast<int>(found - filteredCBIndices_.begin()) + (cbDraftPreviewActive_ ? 1 : 0);
     }
@@ -692,9 +694,11 @@ void UIDataHubPanel::rebuildFilteredCBList() {
 }
 
 void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
+    cbEditorRevision_ = datasetTarget_ ? datasetTarget_->viewRevision() : 0;
     if (!datasetTarget_) return;
     auto cb = datasetTarget_->getConceptBlock(cbIndex);
     if (cb.id.empty()) return;
+    cbEditorBlockId_ = cb.id;
 
     if (cbNameInput_)    cbNameInput_->setText(cb.name);
     if (cbPromptArea_) {
@@ -748,6 +752,8 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
 }
 
 void UIDataHubPanel::clearCBEditor() {
+    cbEditorBlockId_.clear();
+    cbEditorRevision_ = 0;
     if (cbNameInput_)    cbNameInput_->setText("");
     if (cbPromptArea_) cbPromptArea_->setText("");
     if (cbTargetStateArea_) cbTargetStateArea_->setText("");

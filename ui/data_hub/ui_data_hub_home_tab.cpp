@@ -370,7 +370,7 @@ void UIDataHubPanel::drawHomeTab(OverlayRenderer& renderer, const PanelRect& con
 // =========================================================
 
 void UIDataHubPanel::startCollection(const std::string& mode) {
-    if (collectionActive_) {
+    if (pipelineOrchestrator_ && pipelineOrchestrator_->getStatus().isRunning) {
         addLog("Collection already active", 1);
         return;
     }
@@ -405,6 +405,7 @@ void UIDataHubPanel::pollCollectionManager() {
     if (!pipelineOrchestrator_) return;
 
     auto status = pipelineOrchestrator_->getStatus();
+    if (status.isRunning) collectionActive_ = true;
     currentPhase_          = status.phase;
     currentProgress_       = status.progress;
     collectionMessage_     = status.message;

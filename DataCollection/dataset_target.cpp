@@ -460,7 +460,7 @@ bool DatasetTarget::loadAssignments() {
     }
 }
 
-bool DatasetTarget::saveAssignments() const {
+bool DatasetTarget::saveAssignments() {
     fs::path cfgPath = configFilePath();
     if (cfgPath.empty()) return false;
 
@@ -505,8 +505,7 @@ bool DatasetTarget::saveAssignments() const {
         out << j.dump(2) << "\n";
         if (!out.good()) return false;
     }
-    fs::rename(tmpPath, cfgPath, ec);
-    if (ec) return false;
+    if (!replaceFileAtomically(tmpPath, cfgPath, ec)) return false;
 
     // Keep curriculum manifest in sync with assignments.
     exportCurriculumManifest();
@@ -592,7 +591,7 @@ void DatasetTarget::rebuildCBIndex() {
         cbIdIndex_[conceptBlocks_[i].id] = i;
 }
 
-bool DatasetTarget::loadConceptBlocks() {
+bool DatasetTarget::loadConceptBlocks(bool migrate_legacy) {
     conceptBlocks_.clear();
     cbIdIndex_.clear();
     const fs::path path = conceptBlocksPath();
@@ -643,6 +642,8 @@ bool DatasetTarget::loadConceptBlocks() {
         }
     }
     rebuildCBIndex();
+    // Runtime snapshot readers must never rewrite source files while reloading.
+    if (!migrate_legacy) return true;
     if (!saveConceptBlocks()) {
         std::cerr << "[DatasetTarget] Failed to migrate " << legacy_path.string()
                   << " to " << path.string() << "\n";
@@ -653,7 +654,7 @@ bool DatasetTarget::loadConceptBlocks() {
     return true;
 }
 
-bool DatasetTarget::saveConceptBlocks() const {
+bool DatasetTarget::saveConceptBlocks() {
     std::string error;
     if (!GRIM::ConceptBlockIO::saveFlatBuffer(
             conceptBlocksPath(), conceptBlocks_, &error)) {
@@ -926,7 +927,7 @@ bool DatasetTarget::loadCurriculumRegistry() {
     }
 }
 
-bool DatasetTarget::saveCurriculumRegistry() const {
+bool DatasetTarget::saveCurriculumRegistry() {
     fs::path path = curriculumRegistryPath();
     std::error_code ec;
     fs::create_directories(path.parent_path(), ec);
@@ -1086,7 +1087,7 @@ const std::vector<std::string>& DatasetTarget::assignedCurriculumOrder() const {
 
 // ─── Curriculum manifest export ──────────────────────────
 
-bool DatasetTarget::exportCurriculumManifest() const {
+bool DatasetTarget::exportCurriculumManifest() {
     // Collect the union of concept_block_ids from all assigned curricula,
     // partitioned by format_as_concept flag.
     std::set<std::string> concept_set;

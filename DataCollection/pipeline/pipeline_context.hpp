@@ -112,6 +112,8 @@ struct PipelineContext {
     std::atomic<bool> stopRequested{false};
 
     std::shared_ptr<IDatasetIO> datasetIO;
+    using DatasetWriter = std::function<bool(const fs::path&, const std::vector<TaggedEntry>&, bool)>;
+    DatasetWriter datasetWriter;
 };
 
 } // namespace Pipeline

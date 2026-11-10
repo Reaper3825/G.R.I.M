@@ -24,6 +24,7 @@
 #include <mutex>
 #include <chrono>
 #include <fstream>
+#include <iostream>
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include <functional>

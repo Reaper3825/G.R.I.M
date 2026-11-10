@@ -1,53 +1,9 @@
 #include "ui_data_hub_internal.hpp"
+#include "bootstrap/dataset_bootstrap.hpp"
+#include "bootstrap/dataset_services_bootstrap.hpp"
 #include "ui/world_lab/environment_registry.hpp"
 
 using namespace UIDataHubDetail;
-
-std::string UIDataHubPanel::worldModelInputPreview(const nlohmann::json& input) const {
-    const auto definitions=aiConfig.at("training").at("config").at("concept_spans")
-        .get<GRIM::NamedConceptSpanDefinitions>();
-    return GRIM::SpanText::renderInput(input,definitions);
-}
-
-nlohmann::json UIDataHubPanel::worldCurriculumRegistry() const {
-    if(!datasetTarget_)throw std::runtime_error("ConceptBlock database is unavailable");
-    nlohmann::json result={{"curriculums",nlohmann::json::array()},{"courses",nlohmann::json::array()}};
-    for(const auto& curriculum:datasetTarget_->getCurriculums())
-        result["curriculums"].push_back({{"id",curriculum.id},{"name",curriculum.name},{"course_ids",curriculum.course_ids}});
-    for(const auto& course:datasetTarget_->getCourses())
-        result["courses"].push_back({{"id",course.id},{"name",course.name},{"concept_block_ids",course.concept_block_ids}});
-    return result;
-}
-nlohmann::json UIDataHubPanel::worldConceptBlock(const std::string& id) const {
-    if(!datasetTarget_ || !worldGoalDatabaseReady_)throw std::runtime_error("ConceptBlock database failed to load; reopen DataHub after migration");
-    const auto block=datasetTarget_->getConceptBlockById(id);
-    if(block.id.empty())throw std::runtime_error("Registered ConceptBlock is missing: "+id);
-    return {{"source_id",block.id},{"name",block.name},{"prompt",block.prompt},
-        {"goal",block.goal?GRIM::goalToJson(*block.goal):nlohmann::json(nullptr)}};
-}
-
-std::vector<nlohmann::json> UIDataHubPanel::worldGoalSelections(const std::string& query) const {
-    if(!datasetTarget_ || !worldGoalDatabaseReady_)throw std::runtime_error("ConceptBlock database failed to load. Migrate legacy evidence and reopen DataHub before selecting Goals.");
-    std::vector<nlohmann::json> result;
-    for(const auto& block:datasetTarget_->searchGoalConceptBlocks(query)){
-        if(block.goal)result.push_back({{"source_id",block.id},{"name",block.name},{"prompt",block.prompt},{"goal",GRIM::goalToJson(*block.goal)}});
-    }
-    return result;
-}
-void UIDataHubPanel::importWorldGoal(const nlohmann::json& selection) {
-    if(!datasetTarget_ || !worldGoalDatabaseReady_)throw std::runtime_error("ConceptBlock database failed to load; import cannot overwrite it. Migrate legacy evidence and reopen DataHub.");
-    GRIM::ConceptBlock block;block.id=selection.at("source_id").get<std::string>();
-    block.name=selection.value("name",block.id);block.goal=GRIM::goalFromJson(selection.at("goal"));
-    block.prompt="Play the selected TextWorld challenge.";
-    const auto previous=datasetTarget_->getConceptBlockById(block.id);
-    if(!previous.id.empty()){
-        if(!previous.goal || GRIM::goalToJson(*previous.goal)!=GRIM::goalToJson(*block.goal))throw std::runtime_error("Imported Goal ID already exists with different content");
-        return;
-    }
-    size_t added=0;
-    if(!datasetTarget_->addConceptBlocks({block},added))throw std::runtime_error("Failed to save imported ConceptBlock Goal; legacy world preserved");
-    cbFilterDirty_=true;
-}
 
 UIDataHubPanel::UIDataHubPanel()
     : UIPanel("DataHub", true, "data_hub")
@@ -286,14 +242,14 @@ UIDataHubPanel::UIDataHubPanel()
         std::string text = structuredTextArea_->getText();
         if (text.empty()) { addLog("Nothing to save", 1); return; }
         if (currentSequenceIndex_ < datasetTarget_->massDatasetSize()) {
-            if (datasetTarget_->writeStructuredOutput(currentSequenceIndex_, text)) {
+            if (datasetTarget_->writeStructuredOutput(currentSequenceIndex_, text, sequenceEditorRevision_)) {
                 structuredCount_ = 0;
                 for (size_t i = 0; i < datasetTarget_->massDatasetSize(); ++i)
                     if (datasetTarget_->getSequence(i).is_structured) structuredCount_++;
                 addLog("Saved structured output for sequence " + std::to_string(currentSequenceIndex_), 0);
                 loadCurrentSequence();
             } else {
-                addLog("Failed to save structured output", 2);
+                addLog("Failed to save structured output: " + datasetTarget_->lastError(), 2);
             }
         } else {
             std::string raw = rawTextArea_ ? rawTextArea_->getText() : "";
@@ -470,7 +426,8 @@ UIDataHubPanel::UIDataHubPanel()
     btnDetailSave_ = std::make_shared<UIButton>("Save", [this]() {
         if (!datasetTarget_ || detailSeqIndex_ == SIZE_MAX) return;
         std::string text = detailStructuredArea_ ? detailStructuredArea_->getText() : "";
-        if (datasetTarget_->writeStructuredOutput(detailSeqIndex_, text)) {
+        if (datasetTarget_->writeStructuredOutput(detailSeqIndex_, text, detailEditorRevision_)) {
+            detailEditorRevision_ = datasetTarget_->viewRevision();
             addLog("Saved structured output for sequence", 0);
             refreshStructurerState();
         } else {
@@ -842,15 +799,15 @@ UIDataHubPanel::UIDataHubPanel()
         cb.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
 
-        size_t existingIdx = 0;
-        if (cbCurriculumRowToBlockIndex(selectedCBRow_, existingIdx)) {
-            auto existing = datasetTarget_->getConceptBlock(existingIdx);
+        if (!cbEditorBlockId_.empty()) {
+            auto existing = datasetTarget_->getConceptBlockById(cbEditorBlockId_);
             cb.id = existing.id;
             cb.source_sequence_id = existing.source_sequence_id;
-            if (datasetTarget_->updateConceptBlock(cb.id, cb)) {
+            if (datasetTarget_->updateConceptBlock(cb.id, cb, cbEditorRevision_)) {
+                cbEditorRevision_ = datasetTarget_->viewRevision();
                 addLog("Updated ConceptBlock: " + cb.name, 0);
             } else {
-                addLog("Failed to update ConceptBlock", 2);
+                addLog("Failed to update ConceptBlock: " + datasetTarget_->lastError(), 2);
             }
         } else {
             std::string seed = cb.name + cb.prompt + std::to_string(cb.timestamp);
@@ -867,6 +824,8 @@ UIDataHubPanel::UIDataHubPanel()
             cb.id = oss.str();
 
             if (datasetTarget_->addConceptBlock(cb)) {
+                cbEditorBlockId_ = cb.id;
+                cbEditorRevision_ = datasetTarget_->viewRevision();
                 addLog("Created ConceptBlock: " + cb.name, 0);
                 cbDraftPreviewActive_ = false;
                 cbFilterDirty_         = true;
@@ -1068,45 +1027,13 @@ UIDataHubPanel::UIDataHubPanel()
 
     // ── Backend services ────────────────────────────────
 
-    pipelineOrchestrator_ = std::make_unique<GRIM::Pipeline::PipelineOrchestrator>();
-    hfWebhook_            = std::make_unique<GRIM::DataCollection::HuggingFaceWebhook>();
-    conceptGenerator_     = std::make_unique<GRIM::DataCollection::ConceptGenerator>();
-
-    {
-        namespace fs = std::filesystem;
-        fs::path modelStoreRoot = resolvePathFromGrimRoot(
-            aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
-
-        // DataHub operates on the source-data catalog, independently of the
-        // curriculum-specific GRMT artifacts used by training.
-        fs::path dataDirectory = resolvePathFromGrimRoot(
-            aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>());
-        fs::path massDatasetPath = dataDirectory / "mass_dataset.jsonl";
-
-        datasetTarget_ = std::make_unique<DatasetTarget>(modelStoreRoot, massDatasetPath);
-
-        GRIM::DataCollection::DataStructuringConfig structCfg;
-        if (aiConfig.contains("data_collection") && aiConfig["data_collection"].contains("data_structuring")) {
-            structCfg = GRIM::DataCollection::DataStructuringConfig::fromJson(
-                aiConfig["data_collection"]["data_structuring"]);
-        }
-        if (structCfg.ollama_model.empty()) structCfg.ollama_model = "llama3.1:8b";
-        structurer_ = std::make_unique<GRIM::DataCollection::DataStructurer>(structCfg);
-
-        GRIM::DataCollection::OllamaConceptBindingConfig adapterCfg;
-        adapterCfg.url = aiConfig.value("ollama_url", std::string("http://127.0.0.1:11434"));
-        adapterCfg.model = structCfg.ollama_model;
-        adapterCfg.maxInputChars = structCfg.max_input_chars;
-        try {
-            generatorAdapter_ = std::make_shared<GRIM::DataCollection::OllamaConceptBindingAdapter>(
-                std::move(adapterCfg));
-            generatorAdapterStatus_ = generatorAdapter_->adapterId();
-        } catch (const std::exception& error) {
-            generatorAdapterStatus_ = error.what();
-        }
-    }
-
-    // ── Load persisted state ────────────────────────────
+    const auto services = GRIM::DataCollection::runtimeDatasetServices();
+    datasetTarget_ = std::make_shared<GRIM::DataCollection::DatasetCatalog>(
+        GRIM::DataCollection::runtimeDatasetStream(), true);
+    pipelineOrchestrator_ = services->pipeline;
+    hfWebhook_ = services->huggingFace;
+    structurer_ = services->structurer;
+    creationService_ = services->creation;
 
     loadUIConfig();
     loadDirectoryCollectionPathFromConfig();
@@ -1118,8 +1045,7 @@ UIDataHubPanel::UIDataHubPanel()
     refreshStructurerState();
     refreshGeneratorState();
 
-    worldGoalDatabaseReady_ = datasetTarget_ && datasetTarget_->loadConceptBlocks();
-    if (datasetTarget_) datasetTarget_->loadCurriculumRegistry();
+    datasetRevision_ = datasetTarget_->viewRevision();
 
     addLog("DataHub initialized", 0);
     LOG_DEBUG("DataHub", "Panel initialized — 6 tabs ready");
@@ -1133,7 +1059,6 @@ UIDataHubPanel::~UIDataHubPanel() {
     saveUIConfig();
     if (sourcesDirty_) saveSourceCards();
     saveDownloadQueue();
-    if (pipelineOrchestrator_) pipelineOrchestrator_->stopPipeline();
     LOG_DEBUG("DataHub", "Panel destroyed — config saved");
 }
 
@@ -1190,6 +1115,21 @@ void UIDataHubPanel::setView(DataHubView view) {
 
 void UIDataHubPanel::update(const InputState& input, float dt) {
     if (!isVisible()) return;
+    if (datasetTarget_ && datasetTarget_->revision() != datasetRevision_) {
+        datasetTarget_->pinLatest();
+        datasetRevision_ = datasetTarget_->viewRevision();
+        selectedPoolRows_.clear();
+        selectedPoolRow_ = -1;
+        selectedCurrRow_ = -1;
+        totalSequences_ = datasetTarget_->massDatasetSize();
+        assignedSequences_ = datasetTarget_->assignedCount();
+        cbFilterDirty_ = true;
+        poolFilterDirty_ = true;
+        cbTotalCount_ = datasetTarget_->conceptBlockCount();
+        rebuildFilteredCBList();
+        populateCBCurriculumDropdown();
+        populateCBCourseDropdown();
+    }
     UIPanel::update(input, dt);
     // Cache edge-triggered click for directory file list (consumed in draw)
     if (input.mousePressed[0]) {
