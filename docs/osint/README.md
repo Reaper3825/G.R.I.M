@@ -22,7 +22,7 @@ osint_plugin registration → OSINT command handlers → runSelfAudit/cache
 found URLs → sensitive scanner → local JSONL → console / host results panel
 ```
 
-- [Registration](../../plugins/osint_plugin.cpp#L78) owns eight tools and two
+- [Registration](../../plugins/osint_plugin.cpp#L73) owns seven tools and two
   aliases. [Handlers](../../commands/commands_osint.cpp#L53) own scan jobs;
   [collector](../../external_collector/osit.cpp#L224) owns discovery/cache.
 - The actual filenames remain `external_collector\osit.cpp`, `osit.hpp`, and

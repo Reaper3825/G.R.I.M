@@ -7,10 +7,9 @@
 using namespace GRIM::MMO;
 using namespace GRIM::WorldLab;
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
-ToolRegistration tool(const ProviderDescriptor& p, const std::string& id, ToolUsage usage = ToolUsage::Model) {
+ToolRegistration tool(const std::string& id, ToolUsage usage = ToolUsage::Model) {
     ToolDescriptor d;
-    d.tool_id = d.display_name = id; d.provider_type = p.type; d.provider_name = p.name;
-    d.provider_instance = p.instance; d.provider_path = p.path; d.usage_type = usage;
+    d.tool_id = d.display_name = id; d.usage_type = usage;
     d.description = "Fixture tool";
     return {d, [](const std::string&) -> CommandResult { throw std::runtime_error("Discovery must never execute tools"); }};
 }
@@ -76,7 +75,7 @@ int main() try {
     {
         auto& registry = ToolRegistry::instance();
         const ProviderDescriptor provider{ToolProviderType::Plugin, "Hardware fixture", "hardware-1", ""};
-        check(registry.publishProvider(provider, {tool(provider, "cpu.tool")}), "hardware inspection provider");
+        check(registry.publishProvider(provider, {tool("cpu.tool")}), "hardware inspection provider");
         ResourceDescriptor resource;
         resource.provider_name = provider.name; resource.provider_instance = provider.instance;
         resource.resource_id = "cpu"; resource.name = "CPU";
@@ -212,7 +211,7 @@ int main() try {
     const ProviderDescriptor beta{ToolProviderType::Plugin, "Beta", "beta-1", "beta.dll"};
     LiveWorldSession session;
     check(session.world().document().entities.size() == 1, "Empty registry must leave only System Hub");
-    check(registry.publishProvider(alpha, {tool(alpha, "alpha.read"), tool(alpha, "alpha.debug", ToolUsage::Debug)}), "publish alpha");
+    check(registry.publishProvider(alpha, {tool("alpha.read"), tool("alpha.debug", ToolUsage::Debug)}), "publish alpha");
     check(registry.publishProvider(beta, {}), "zero-tool provider publication");
     session.synchronize();
     LiveWorldSession preloaded;
@@ -239,12 +238,12 @@ int main() try {
     check(session.world().location() == room && session.history().back().feedback.starts_with("Action rejected"), "nonadjacent move accepted");
     auto replacement = alpha; replacement.instance = "alpha-2";
     const auto revision = registry.version();
-    auto collision = tool(replacement, "alpha.new"); collision.descriptor.aliases = {"beta.tool"};
-    check(registry.registerBatch(beta.name, {tool(beta, "beta.tool")}), "late tool publication");
+    auto collision = tool("alpha.new"); collision.descriptor.aliases = {"beta.tool"};
+    check(registry.registerBatch(beta, {tool("beta.tool")}), "late tool publication");
     const auto beforeRejected = registry.snapshot();
     check(!registry.publishProvider(replacement, {collision}, alpha.instance), "collision accepted");
-    check(registry.version() == beforeRejected.revision && registry.getTool("alpha.read")->provider_instance == alpha.instance, "failed replacement changed registry");
-    check(registry.publishProvider(replacement, {tool(replacement, "alpha.new")}, alpha.instance), "replacement rejected");
+    check(registry.version() == beforeRejected.revision && registry.getTool("alpha.read")->provider.instance == alpha.instance, "failed replacement changed registry");
+    check(registry.publishProvider(replacement, {tool("alpha.new")}, alpha.instance), "replacement rejected");
     session.synchronize();
     check(session.world().location() == room && session.world().roomId(providerKey(alpha)) == room, "replacement changed room/location");
     check(session.world().toolsHere().at(0).tool_id == "alpha.new", "replacement catalog stale");
@@ -276,18 +275,18 @@ int main() try {
 
     // Reader must never see a provider generation paired with another generation's tools.
     auto p = alpha; p.instance = "0";
-    check(registry.publishProvider(p, {tool(p, "atomic.tool")}), "atomic fixture");
+    check(registry.publishProvider(p, {tool("atomic.tool")}), "atomic fixture");
     std::atomic<bool> finished = false, inconsistent = false;
     std::thread reader([&] {
         while (!finished) {
             const auto s = registry.snapshot();
-            if (s.providers.size() != 1 || s.tools.size() != 1 || s.providers[0].instance != s.tools[0].provider_instance) inconsistent = true;
+            if (s.providers.size() != 1 || s.tools.size() != 1 || s.providers[0].instance != s.tools[0].provider.instance) inconsistent = true;
         }
     });
     bool published = true;
     for (int i = 1; i <= 100; ++i) {
         const auto old = p.instance; p.instance = std::to_string(i);
-        published &= registry.publishProvider(p, {tool(p, "atomic.tool")}, old);
+        published &= registry.publishProvider(p, {tool("atomic.tool")}, old);
     }
     finished = true; reader.join();
     check(published && !inconsistent, "mixed provider/tool snapshot");

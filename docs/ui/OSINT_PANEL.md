@@ -1,22 +1,7 @@
 # OSINT UI Panel Guide
 
-## ?? Viewing Sensitive Findings in a Chart/Table
 
-Instead of scrolling through console text, you can now view sensitive data findings in a **beautiful, sortable, filterable UI panel**.
-
-## ?? Quick Start
-
-### Step 1: Run a Scan
-```sh
-osint_scan_secrets reaper3825
-```
-
-### Step 2: Open the UI Panel
-```sh
-osint_show_ui reaper3825
-```
-
-That's it! A visual panel will appear with all findings in a table.
+The findings panel remains in host code. Its command entry point has been removed.
 
 ## ?? UI Features
 
@@ -94,8 +79,7 @@ osint_status reaper3825
 # 3. Scan for sensitive data
 osint_scan_secrets reaper3825
 
-# 4. Open UI panel
-osint_show_ui reaper3825
+# 4. With the host findings panel open, review the results
 
 # 5. Use filter buttons to focus on critical issues
 #    Click: CRITICAL button
@@ -196,7 +180,7 @@ When you click a row, a detail panel appears showing **FULL VALUES**:
 - Copy-paste specific findings
 - Saving to log files
 
-### UI Panel (`osint_show_ui`)
+### Host UI Panel
 ? Good for:
 - Visual analysis
 - Comparing multiple findings
@@ -217,7 +201,6 @@ When you click a row, a detail panel appears showing **FULL VALUES**:
 | Command | Purpose |
 |---------|---------|
 | `osint_scan_secrets <username>` | Scan for sensitive data |
-| `osint_show_ui <username>` | Open visual UI panel |
 | `osint_show_secrets <username>` | Text-based view (console) |
 | `osint_show_secrets <username> --severity critical` | Filter text output |
 

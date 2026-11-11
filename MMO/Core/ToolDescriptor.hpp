@@ -32,14 +32,6 @@ constexpr const char* toolUsageName(ToolUsage usage) {
 }
 
 // =========================================================
-// ToolProviderType — who provides this tool
-// =========================================================
-enum class ToolProviderType : uint8_t {
-    Builtin,    // Compiled-in command
-    Plugin      // Hot-loadable DLL plugin
-};
-
-// =========================================================
 // ToolParameter — describes one parameter of a tool
 // =========================================================
 struct ToolParameter {
@@ -53,20 +45,15 @@ struct ToolParameter {
 // ToolDescriptor — the canonical per-tool record
 //
 // Fields from MMO plan Section "Unified ToolRegistry":
-//   tool_id, display_name, provider_type, provider_name, version,
+//   tool_id, display_name, version,
 //   description, usage, category, permission_bits,
 //   needs_confirmation, argument_schema, preconditions,
-//   context_requirements, affordance_tokens, aliases, keywords,
-//   capability_tags, success_stats.
+//   aliases, keywords, capability_tags, success_stats.
 // =========================================================
 struct ToolDescriptor {
     // Identity
     std::string           tool_id;          // stable canonical identifier
     std::string           display_name;
-    ToolProviderType      provider_type = ToolProviderType::Builtin;
-    std::string           provider_name;    // plugin name or "builtin"
-    std::string           provider_instance; // host-owned loaded generation
-    std::string           provider_path;    // host-owned plugin source file
     std::string           version;          // semver or monotonic counter
 
     // Documentation
@@ -92,9 +79,7 @@ struct ToolDescriptor {
     std::vector<ToolParameter> parameters;
     std::vector<std::string>   preconditions;
 
-    // Context / affordance
-    std::vector<std::string> context_requirements;  // e.g. "app:blender", "ui:selected_object"
-    std::vector<std::string> affordance_tokens;     // e.g. "<press_hold_drag>", "<open_app>"
+    // Lookup and discovery
     std::vector<std::string> aliases;
     std::vector<std::string> keywords;
     std::vector<std::string> capability_tags;

@@ -17,8 +17,8 @@ static GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration*
     for(size_t i=0;i<count;++i) {
         const auto& t=tools[i];assert(t.usage_type==GRIM_TOOL_USAGE_MODEL);
         auto schema=Json::parse(t.descriptor.argument_schema_json);assert(schema["type"]=="object" && schema["additionalProperties"]==false);
-        GRIM::MMO::ToolDescriptor d;d.tool_id=t.descriptor.tool_id;d.display_name=d.tool_id;d.provider_name="schedule_test";
-        d.provider_type=GRIM::MMO::ToolProviderType::Plugin;d.argument_format="json";d.argument_schema_json=t.descriptor.argument_schema_json;
+        GRIM::MMO::ToolDescriptor d;d.tool_id=t.descriptor.tool_id;d.display_name=d.tool_id;
+        d.argument_format="json";d.argument_schema_json=t.descriptor.argument_schema_json;
         d.description=t.descriptor.description;d.short_description=t.short_description;d.usage_type=GRIM::MMO::ToolUsage::Model;
         d.needs_confirmation=t.descriptor.needs_confirmation;d.is_informational=t.descriptor.is_informational;
         auto handler=t.handler;auto context=t.user_data;
@@ -27,7 +27,7 @@ static GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration*
             writer.complete=[](GrimToolResultWriter* w,const GrimToolResult* r){auto& value=*static_cast<CommandResult*>(w->host_context);
                 value.success=r->success;value.message=r->message;value.structuredOutputJson=r->structured_output_json;return GRIM_OK;};
             GrimToolCall request;request.arguments=args.data();request.arguments_size=args.size();assert(handler(&request,&writer,context)==GRIM_OK);return result;
-        }));
+        },false,{GRIM::MMO::ToolProviderType::Plugin,"schedule_test",{}, {}}));
     }
     return GRIM_OK;
 }

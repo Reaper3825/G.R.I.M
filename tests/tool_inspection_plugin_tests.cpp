@@ -47,7 +47,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     check(registry.toolCount() == baseline + 3, "Inspection plugin did not register three tools");
     for (const auto* id : {"list_tools", "tool_info", "tool_stats"}) {
         const auto d = registry.getTool(id);
-        check(d && d->provider_name == "Tool Inspection Plugin" && d->provider_type == ToolProviderType::Plugin &&
+        check(d && d->provider.name == "Tool Inspection Plugin" && d->provider.type == ToolProviderType::Plugin &&
               d->is_informational && !d->needs_confirmation && d->permission_bits == 0 && d->parameters.size() == 1,
               "Inspection tool metadata/provider/policy incorrect");
     }
@@ -66,9 +66,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     ToolDescriptor rich;
     rich.tool_id = "inspection_fixture";
     rich.display_name = "Fixture Display";
-    rich.provider_name = "inspection-fixtures";
-    rich.provider_instance = "fixture-generation";
-    rich.provider_path = "C:/fixture.dll";
+    const ProviderDescriptor owner{ToolProviderType::Builtin, "inspection-fixtures", "fixture-generation", "C:/fixture.dll"};
     rich.version = "9.8.7";
     rich.description = "Fixture description";
     rich.usage = "inspection_fixture {value}";
@@ -83,22 +81,26 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     rich.aliases = {"fixture_alias"};
     rich.keywords = {"first", "second"};
     rich.preconditions = {"ready"};
-    rich.context_requirements = {"context"};
-    rich.affordance_tokens = {"<fixture>"};
     rich.capability_tags = {"tag"};
     rich.usage_count = 100;
     rich.success_count = 75;
     rich.failure_count = 25;
     rich.success_rate = 0.75f;
     int fixtureCalls = 0;
-    registry.registerTool(rich, [&](const std::string&) { ++fixtureCalls; return CommandResult{}; });
+    registry.registerTool(rich, [&](const std::string&) { ++fixtureCalls; return CommandResult{}; }, false, owner);
     const auto encoded = snapshot("fixture_alias");
     check(encoded.size() == 1 && encoded[0].size() == 31 && encoded[0].at("usage_type") == 1 &&
           encoded[0].at("bindings").at("value") == "t" &&
           encoded[0].at("provider_instance") == "fixture-generation" &&
           encoded[0].at("argument_schema_json") == rich.argument_schema_json && encoded[0].at("success_count") == 75 &&
-          encoded[0].at("context_requirements")[0] == "context" && encoded[0].at("parameters")[0].at("required") == true,
+          encoded[0].at("parameters")[0].at("required") == true,
           "Snapshot omitted rich metadata");
+    check(encoded[0].at("context_requirements") == nlohmann::json::array() &&
+          encoded[0].at("affordance_tokens") == nlohmann::json::array(),
+          "Legacy context and affordance snapshot keys must be empty arrays");
+    const nlohmann::json descriptorJson = rich;
+    check(!descriptorJson.contains("context_requirements") && !descriptorJson.contains("affordance_tokens"),
+          "Tool descriptor JSON retained retired metadata");
     check(snapshot("Fixture Display") == encoded && snapshot("inspection_fixture") == encoded &&
           registry.getTool(rich.tool_id)->usage_count == 100 && fixtureCalls == 0, "Snapshot lookup mutated or invoked tool");
     const std::string info = "[Tool: inspection_fixture]\n\nDescription: Fixture description\nCategory   : fixture\n"

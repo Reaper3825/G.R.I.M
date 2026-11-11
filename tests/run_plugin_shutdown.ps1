@@ -39,7 +39,7 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     $folder = if ($fixture -in @('failed', 'legacy')) { 'integration-rejected' } else { 'integration' }
     $argsForFixture = $common + @('/LD','/DFIXTURE_TOOLS',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $folder + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
-    if ($fixture -eq 'legacy') { $argsForFixture += '/DFIXTURE_API_VERSION=131072' }
+    if ($fixture -eq 'legacy') { $argsForFixture += '/DFIXTURE_API_VERSION=201472' }
     Set-Content -LiteralPath (Join-Path $output ('integration-' + $fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
 }
 $variants = @{
@@ -47,7 +47,7 @@ $variants = @{
     new = @('/DFIXTURE_RESULT=\"new-result\"');
     failed = @('/DFIXTURE_FAIL_INIT', '/DFIXTURE_RESULT=\"failed-result\"');
     collision = @('/DFIXTURE_COLLISION');
-    legacy = @('/DFIXTURE_API_VERSION=131072')
+    legacy = @('/DFIXTURE_API_VERSION=201472')
 }
 foreach ($variant in $variants.Keys) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output ('replacement/' + $variant)) | Out-Null
@@ -64,7 +64,7 @@ $apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tes
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
-$syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/core_plugin.cpp','core/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','core/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($VoicePluginDirectory) { $syntaxArgs += '"' + (Join-Path $workspace 'voice/voice_platform_queries.cpp') + '"' }
 if ($PerceptionPluginDirectory) {
     $perceptionOpenCvInclude = Join-Path $workspace 'vcpkg_installed/x64-windows/include/opencv4'

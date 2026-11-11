@@ -120,8 +120,6 @@ Minimum useful descriptor fields:
 - `needs_confirmation` / risk defaults
 - `argument_schema`
 - `preconditions`
-- `context_requirements` — e.g. `app:blender`, `ui:selected_object`, `monitor:active`
-- `affordance_tokens` — symbolic tool markers such as `<press_hold_drag>`
 - `aliases`, `keywords`, `capability_tags`
 - `success_stats` / reward stats
 
@@ -924,7 +922,7 @@ Source-verified boundaries; this is not runtime/build certification.
 | Implemented append, future optimization | [RuntimeContextAppend.cu](../resources/models/GRIM-text/Shared/InferenceState/RuntimeContextAppend.cu) validates/remaps atom context for resume. [Phase2_RLTrainingLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_RLTrainingLoop.cu) always throws and is unbuilt/undispatched. | Policy/reference scoring, scored-group payloads, retries, loss/backward/optimizer, EMA, and receipts remain pending. |
 | Implemented request paths | [ai.cpp](../ai/ai.cpp) has direct `grim_native` and `ollama` paths; other enabled configurations use [Orchestrator.cpp](../MMO/Core/Orchestrator.cpp). | The universal enforced single-path requirement above is not implemented; old `resolveBackendURL()`/`ai_interpret()` descriptions are superseded. |
 | Implemented tool authority | [ToolRegistry.hpp](../MMO/Core/ToolRegistry.hpp) owns metadata/callables/provider generations; [command_dispatch.cpp](../commands/command_dispatch.cpp) delegates to `invoke()`. Revision-checked `invokeModel()` leaves policy caller-owned. [plugin_api_impl.cpp](../core/plugin_api_impl.cpp) publishes dynamic tools into that sole store. | No CommandRegistry/commandMap mirror or seeding migration; a registry primitive is not an RL tool collector. |
-| Implemented plugin ownership | [input_plugin.cpp](../plugins/input_plugin/input_plugin.cpp) supplies input tools over API v3.9 host services; [ui_plugin.cpp](../plugins/ui_plugin/ui_plugin.cpp) supplies generic panel operations; [core_plugin.cpp](../plugins/core_plugin.cpp) retains surface create/destroy and OSINT UI registration. | Do not duplicate built-ins or restore retired UI show/hide wrappers. |
+| Implemented plugin ownership | [input_plugin.cpp](../plugins/input_plugin/input_plugin.cpp) supplies input tools over API v3.9 host services; [ui_plugin.cpp](../plugins/ui_plugin/ui_plugin.cpp) supplies generic panel operations. | Surface lifecycle and OSINT UI handlers remain in the host. |
 | Implemented retirement | [RETIRED_AGENT_TOOLS.md](RETIRED_AGENT_TOOLS.md) identifies eleven removed AI/NLP/admin registrations. | Host handlers, conversation, model routing, grammar, and session services remain; these are not pending tool migrations. |
 | Implemented session/bootstrap owners | [SessionContextManager.cpp](../MMO/Core/SessionContextManager.cpp) owns history, supplied reasoning state, pending interactions, and rich snapshots; history remains message-trimmed/explicitly cleared. [bootstrap.cpp](../bootstrap/bootstrap.cpp) wires named phases and resource/model/UI services. | Permanent-session token retirement, capsules, and personalization queue are future, not guarantees supplied by existing state owners. |
 | Implemented host records/memory | [CorrectionTuple.cpp](../MMO/Core/CorrectionTuple.cpp), [ToolTrainingParser.cpp](../MMO/Core/ToolTrainingParser.cpp), [MemoryFacade.cpp](../memory/MemoryFacade.cpp), and [memory_buffer_rotation.cpp](../memory/memory_buffer_rotation.cpp) provide source records and memory staging/retrieval. | Not a complete LoRA micro-training dataset/publication lifecycle. |

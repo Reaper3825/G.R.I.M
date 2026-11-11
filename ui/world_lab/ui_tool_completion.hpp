@@ -18,7 +18,7 @@ class PanelRequestCompletion {
     }
 public:
     static Json complete(const std::string& id, const Json& args, uint64_t version,
-                         const MMO::ToolDescriptor& owner, const std::function<bool()>& cancelled) {
+                         const MMO::RegisteredTool& owner, const std::function<bool()>& cancelled) {
         auto poll = descriptor("ui.poll", version);
         require(sameProvider(poll, owner), "UI poll provider mismatch");
         require(!cancelled(), "UI action cancelled before submission");

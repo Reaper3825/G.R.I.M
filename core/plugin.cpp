@@ -11,7 +11,6 @@ void grim_register_command(const char* name, PluginCommandFunc func) {
     }
     GRIM::MMO::ToolDescriptor tool;
     tool.tool_id = tool.display_name = tool.usage = name;
-    tool.provider_name = "builtin";
     tool.description = std::string("Host command: ") + name;
     tool.category = "system";
     if (!GRIM::MMO::ToolRegistry::instance().registerTool(tool, func))

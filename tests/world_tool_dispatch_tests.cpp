@@ -1,4 +1,5 @@
 #include "ui/world_lab/world_tool_dispatch.hpp"
+#include "MMO/Core/ToolDescriptorJson.hpp"
 #include <iostream>
 
 using Json = nlohmann::json;
@@ -8,8 +9,8 @@ namespace {
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 ToolDescriptor tool(const std::string& id) {
     ToolDescriptor d;
-    d.tool_id = d.display_name = id; d.provider_name = "fixture";
-    d.provider_instance = "generation-1"; d.argument_format = "json";
+    d.tool_id = d.display_name = id;
+    d.argument_format = "json";
     if (id == "ui.inspect" || id == "ui.show" || id == "ui.hide") {
         d.usage = id + " {t}"; d.bindings = {{"t", "t"}};
         d.parameters = {{"panel_id", "string", "Panel key", true}};
@@ -69,10 +70,6 @@ int main() try {
         ProviderDescriptor provider{ToolProviderType::Plugin, "fixture", "generation-1", "fixture.dll"};
         auto retained = tool("retained_tool");
         auto retired = tool("retired_tool");
-        for (auto* descriptor : {&retained, &retired}) {
-            descriptor->provider_type = provider.type;
-            descriptor->provider_path = provider.path;
-        }
         retired.aliases = {"retired_alias"};
         const auto handler = [](const std::string&) { return response(Json::object()); };
         check(!registry.isExecutable(retained.tool_id), "Tool exposed before provider publication");
@@ -81,12 +78,16 @@ int main() try {
               "Provider publication did not expose its tools");
         const auto oldRevision = registry.version();
         const auto oldInstance = provider.instance;
-        provider.instance = retained.provider_instance = "generation-2";
+        const auto oldTool = *registry.getTool(retained.tool_id);
+        provider.instance = "generation-2";
         check(registry.publishProvider(provider, {{retained, handler}}, oldInstance),
               "Provider replacement failed");
         registry.unregisterInstance(provider.name, oldInstance);
         check(registry.getModelTools().size() == 1 && registry.isExecutable(retained.tool_id) &&
               !registry.isExecutable("retired_alias") &&
+              registry.getTool(retained.tool_id)->provider == provider &&
+              oldTool.provider.instance == oldInstance && !registry.updateMetadata(oldTool) &&
+              !Json(registry.getModelTools().front()).contains("provider_instance") &&
               registry.invokeModel(retained.tool_id, "", oldRevision).errorCode == "ERR_TOOL_STALE",
               "Replacement exposed retired tools or lost the new generation");
         registry.unregisterInstance(provider.name, provider.instance);
@@ -207,7 +208,7 @@ int main() try {
     check(rejected && resources.revision() == directoryRevision &&
           resources.resolve("panel:settings", registry.version()).runtime == runtime,
           "Rejected directory refresh replaced valid session resources");
-    registry.unregisterByProvider("fixture", ToolProviderType::Builtin);
+    registry.unregisterByProvider("builtin", ToolProviderType::Builtin);
     std::cout << "World tool discovery, resolution, dispatch, generation and cancellation tests passed\n";
     return 0;
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

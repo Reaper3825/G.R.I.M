@@ -37,8 +37,8 @@ the selected provider is preserved by identity, and a removed provider resets
 the dropdown to All plugins. Filtering out a selected tool clears its details.
 
 The selectable, copyable detail pane shows documentation, usage, parameters,
-provider/version, confirmation and permission metadata, context
-requirements, aliases, tags, and usage statistics. Missing fields display
+provider/version, confirmation and permission metadata, aliases, tags, and usage
+statistics. Missing fields display
 **Not documented**; an empty parameter list does not imply that no arguments are
 needed. Plugin tools appear while their provider generation is published.
 
@@ -48,9 +48,7 @@ registry coverage; legacy commands that bypass the registry are not added or
 inferred. It does not edit registrations, dispatch commands, or populate World
 Lab objects. The World Lab TextWorld Actions catalog remains separate.
 
-Remaining built-in commands (surface lifecycle and OSINT panel handling)
-publish handlers and metadata into the MMO registry. They appear alongside plugin
-tools, with provider **builtin**. Filesystem commands (`pwd`, `cd`, `ls`, `mkdir`,
+Filesystem commands (`pwd`, `cd`, `ls`, `mkdir`,
 and `rm`) are supplied by the separately deployed **Filesystem Plugin**. The
 `clean` and `help` commands are supplied by the **Utility Plugin**, retaining
 their original responses. `open` and `search` come from the **Application Plugin**
@@ -70,15 +68,10 @@ API v3.7, with capture, streaming, playback, configuration, and cache lifecycle
 remaining in the host. Existing cancellation/embedding placeholders are documented
 in the plugin README. The five input tools come from the **Input Plugin** using
 API v3.9; live capture, targeting, and mouse/keyboard services remain in the host.
-The `core_plugin.cpp` filename
-contains the host's built-in registration list; it does not mean those commands
-require a separately loaded plugin.
 
 The eleven legacy AI/NLP/settings command wrappers are no longer registered
 agent tools. Their implementations remain in the host source; see
-[retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md). The remaining
-fixed built-in migration scope is UI surface creation/destruction, with OSINT
-handling outside the current migration.
+[retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md).
 
 Generic panel discovery/inspection/visibility operations now come from the
 **UI Plugin** through API v3.8, with explicit request IDs and `ui.poll` completion.

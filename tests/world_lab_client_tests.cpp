@@ -45,7 +45,7 @@ void runTextWorldClientTests(){
     {
         auto& registry=GRIM::MMO::ToolRegistry::instance();
         GRIM::MMO::ToolDescriptor tool;
-        tool.tool_id="catalog_fixture";tool.provider_name="catalog-client-tests";
+        tool.tool_id="catalog_fixture";
         tool.short_description="Inspect information supplied by a selected entity";
         tool.description="Full documentation returned only by deeper inspection";
         tool.usage="catalog_fixture {t}";tool.bindings={{"t","t"}};
@@ -96,7 +96,7 @@ void runTextWorldClientTests(){
         std::atomic<bool> stall{false}, submitted{false}, released{false};
         for (const auto& id : {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.poll"}) {
             GRIM::MMO::ToolDescriptor tool;
-            tool.tool_id = tool.display_name = id; tool.provider_name = "world-ui-tests";
+            tool.tool_id = tool.display_name = id;
             tool.argument_format = "json";
             if (tool.tool_id == "ui.inspect" || tool.tool_id == "ui.show" || tool.tool_id == "ui.hide") {
                 tool.usage = tool.tool_id + " {t}"; tool.bindings = {{"t", "t"}};
@@ -162,7 +162,7 @@ void runTextWorldClientTests(){
         const auto cancelled = wait(uiClient);
         check(!cancelled.at("ok").get<bool>() && cancelled.at("transport_error").get<bool>() && released,
               "Stop during host dispatch did not cancel owned work and stop the worker");
-        registry.unregisterByProvider("world-ui-tests", GRIM::MMO::ToolProviderType::Builtin);
+        registry.unregisterByProvider("builtin", GRIM::MMO::ToolProviderType::Builtin);
     }
     example.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"examples/world_lab/locked_door.grimworld.json");
     const Document d=example.document();

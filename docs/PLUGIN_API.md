@@ -1,23 +1,24 @@
-# G.R.I.M Plugin API v3
+# G.R.I.M Plugin API v4
 
-API version: **3.19.0**. Updated November 7, 2026.
+API version: **4.0.0**.
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
 grim_plugin_init, and grim_plugin_shutdown.
 The loader rejects incompatible major versions and newer unsupported versions.
-Existing v1/v2 binaries must be rebuilt and migrated; they are not adapted.
+Version 4 removes `context_requirements` and `affordance_tokens` from
+`GrimToolDescriptor`, changing the layout of both the descriptor and its
+containing `GrimToolRegistration`. Rebuild existing plugins against the v4 header
+before loading them into a v4 host. The loader rejects v3 binaries before initialization.
 
 Version 3.1 consumes two of the function table's reserved pointer slots, retaining
-the table size and existing v3.0 service-field offsets. Existing v3.0 plugins remain supported
-by the new host. A plugin using the new services declares v3.1 and is rejected by
-an older host rather than reading unavailable function pointers.
+the table size and existing v3.0 service-field offsets at the time.
 
 ## Tool registration
 
 Version 3.8 adds nonblocking stable-key panel operations for the UI Plugin.
 It consumes one reserved function pointer slot, preserving the table size and
-existing service offsets. Earlier v3.x plugin binaries remain supported.
+existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 MMO::ToolRegistry is the authoritative store for metadata and executable
@@ -68,11 +69,6 @@ are Ignore.
 All alias and filesystem plugin tools are System.
 All input plugin tools are Debug.
 
-The function table and embedded `GrimToolDescriptor` layout are unchanged.
-v3.10 appends usage classification to `GrimToolRegistration`; plugins using it
-must declare v3.10. The host also accepts the exact v3.0-v3.9 registration prefix,
-walking batches by each record's declared size and defaulting legacy tools to
-Model. New plugins are rejected by older hosts through version negotiation.
 Invalid usage enum values reject the whole registration batch.
 
 Version-1 `grim-tool-snapshot` entries add numeric `usage_type` with the values
@@ -112,10 +108,7 @@ are introduced. Classification and model discovery remain unchanged.
 
 Native plugins provide a borrowed `GrimToolBinding` array and `binding_count` on
 `GrimToolRegistration`; the host copies it into the canonical descriptor. The
-v3.11 extension sits after the v3.10 registration prefix so the embedded
-`GrimToolDescriptor`, function table, and old field offsets stay unchanged. The
-host accepts exact v3.0-v3.9 and v3.10 strides, defaulting their bindings to empty.
-Plugins supplying bindings require v3.11; older hosts reject them by version.
+optional array defaults to empty.
 Arrays are limited to 256 entries. Names must be nonempty ASCII letters, digits,
 or underscores, occur as `{name}` in usage, and be unique within a tool. Invalid
 types, names, counts, or pointers reject the registration batch atomically.
@@ -135,10 +128,7 @@ summaries remain valid for legacy and third-party registrations; the catalog
 honestly displays `Short description unavailable for this registered tool`.
 Existing full descriptions and argument documentation remain separate.
 
-v3.12 appends the summary pointer after the v3.11 registration prefix. The host
-accepts exact v3.0-v3.9, v3.10, and v3.11 record strides with empty summaries.
-Embedded descriptors and the function table retain their layout. New plugins
-require v3.12. Version-1 snapshots add optional `short_description`, defaulting
+Version-1 snapshots add optional `short_description`, defaulting
 to empty when reading older snapshots. The host catalog projects only loaded
 Model tools using `getModelTools()` and never invokes their handlers.
 
@@ -172,7 +162,7 @@ description, usage, category, and argument format. They can additionally supply:
 - Named parameters with types, descriptions, and required flags.
 - Aliases, keywords, and capability tags. The legacy registration slot for
   examples is reserved for ABI compatibility.
-- Preconditions, context requirements, and affordance tokens.
+- Preconditions.
 - Required permission bits, informational/action classification, and a
   confirmation requirement.
 - An argument schema encoded as JSON.
@@ -197,8 +187,7 @@ pointer; the plugin must keep its pointee alive until shutdown after active
 calls have drained.
 
 Versioned registration, descriptor, parameter, call, result, and writer structures
-have struct_size; API v3 requires exact sizes except for the explicitly supported
-legacy `GrimToolRegistration` prefixes described above. `GrimToolBinding` is a
+have struct_size. API v4 requires exact sizes. `GrimToolBinding` is a
 pair of borrowed strings, supplied in a counted array.
 Flags use uint32_t with values 0 or 1. Each batch, list, or parameter array is
 limited to 256 entries. Strings are NUL-terminated, limited to 65,536 bytes,
@@ -435,10 +424,8 @@ callers must honor the documented lifecycle/service serialization requirements.
 `ui.bring_to_front`, and `ui.poll`, with JSON arguments and complete metadata.
 Mutations carry confirmation metadata; direct registry invocation does not
 enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, and
-`ui.hide_surface` registrations are removed. `ui.create_surface` and
-`ui.destroy_surface` remain host-owned lifecycle tools, and OSINT is unchanged.
-`ui.create_surface` is currently classified Ignore and excluded from model discovery;
-its host handler remains available for explicit host/developer dispatch.
+`ui.hide_surface` registrations are removed. Surface creation, destruction, and
+OSINT findings panel handlers remain host-owned after their tool registrations were removed.
 See [UI panel operations](ui/PANEL_OPERATIONS.md) for stable keys and examples.
 
 ## Input tool migration (v3.9)
@@ -449,7 +436,7 @@ and their live perception/input services; the plugin owns discovery metadata,
 registered callbacks, and copying complete results into the plugin result writer.
 
 API v3.9 consumes one reserved pointer slot, retaining table size and previous
-field offsets. Earlier v3.x binaries remain compatible with the new host. The
+field offsets at the time. The
 input plugin requires v3.9 before accessing `input_service`.
 
 `input_service(self, operation, arguments, arguments_size)` requires the new
@@ -522,10 +509,6 @@ Manual installation remains possible by copying a completed library; remove the
 deployed file to unload it. See [build instructions](../plugins/README.md).
 
 Logging passes through the plugin API using a private per-library bridge.
-The OSINT findings panel stays in the host as ui.show_osint_results; the
-osint_show_ui plugin tool delegates to that host tool via execute_command.
-This keeps host UI objects and their lifetime out of replaceable plugin DLLs.
-
 ## Verification
 
 Run the focused host-only suite with an existing MSVC installation:
@@ -650,7 +633,7 @@ invalid/out-of-range integer arguments become `ERR_CMD_EXCEPTION` at dispatch.
 No new trimming, sorting, or validation policy is introduced.
 
 API v3.2 consumes one additional reserved slot, preserving table size and earlier
-service offsets. Existing v3.0/v3.1 plugins remain supported. New plugins must
+service offsets. At the time, existing v3.0/v3.1 plugins remained supported. Plugins using the service had to
 check v3.2 before accessing `get_tool_snapshot(self, tool_id)`.
 
 This service returns a host-owned JSON string, released with `string_free`:
@@ -664,10 +647,10 @@ This service returns a host-owned JSON string, released with `string_free`:
 - A supplied string uses the registry's existing canonical-ID, display-name, and
   alias lookup. Missing tools yield an empty `tools` array; a null return means
   API failure. Plugin tools appear while their provider generation is published.
-- Each entry includes every field of `ToolDescriptor`: identity and provider
-  generation/source, documentation, arguments/schema/parameters, policy,
-  prerequisites/context/affordances, aliases/keywords/tags, and stats.
-  The legacy `examples` key is emitted as an empty array for version-1 readers.
+- Each entry combines tool metadata with the owning provider generation and source.
+  Tool metadata includes identity, documentation, arguments/schema/parameters, policy,
+  preconditions, aliases/keywords/tags, and stats. Version-1 snapshots emit
+  `examples`, `context_requirements`, and `affordance_tokens` as empty arrays for older readers.
   `provider_type` is numeric (0 built-in, 1 plugin). The legacy `swap_state` key
   is emitted as 0 (loaded) for version-1 readers. The codec lives in
   `MMO/Core/ToolDescriptorJson.hpp`.
@@ -721,7 +704,7 @@ ignored arguments, result/error fields, voice, color, GPU fallback behavior,
 and CUDA/Metal/ROCm reporting. The host no longer registers the command.
 
 API v3.4 consumes one reserved slot without changing table size or earlier
-service offsets. Existing v3.0-v3.3 plugin binaries remain supported. New
+service offsets. At the time, existing v3.0-v3.3 plugin binaries remained supported. New
 plugins must check v3.4 before reading `get_hardware_snapshot(self)`.
 
 This service requires `GRIM_PERM_SYSTEM` and calls the existing `detectHardware()`
@@ -764,7 +747,7 @@ or application/model execution. See the
 `timers_plugin` owns `set_timer`; `memory_plugin` owns `remember`, `recall`, and
 `forget`. The host no longer registers these commands. Four v3.5 services consume
 reserved slots without changing table size or earlier offsets. Existing v3.0-v3.4
-binaries remain supported. The new plugins require v3.5.
+binaries remained supported in v3.5.
 
 Each service returns a host-owned JSON string, released with `string_free`:
 
@@ -819,7 +802,7 @@ the host; the plugin introduces no capture thread, context cache, OpenCV object,
 model initialization, or external C++ symbol dependency.
 
 API v3.6 consumes one reserved slot, keeping table size and earlier offsets.
-Existing v3.0-v3.5 plugin binaries remain supported. The new plugin requires
+At the time, existing v3.0-v3.5 plugin binaries remained supported. The new plugin required
 v3.6 before accessing `query_perception(self, query)`.
 
 This service requires SYSTEM permission and accepts the typed query values
@@ -862,7 +845,7 @@ configuration, default-session history, Whisper context, streaming state, and
 cache lifecycle. The plugin imports no host C++ or native SAPI symbols.
 
 API v3.7 consumes one reserved slot without changing table size or earlier
-offsets. Existing v3.0-v3.6 binaries remain supported. The new plugin checks v3.7
+offsets. At the time, existing v3.0-v3.6 binaries remained supported. The new plugin checked v3.7
 before accessing `voice_service(self, operation, arguments_json)`.
 
 `GrimVoiceOperation` defines typed domain operations; this service does not

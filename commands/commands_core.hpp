@@ -25,9 +25,6 @@ CommandResult handleCommand(const std::string& line);
 CommandResult handleCommand(const std::string& line, const std::string& session_id,
                             std::optional<GRIM::ReasoningState> reasoning_state = std::nullopt);
 
-// Ensure that built-in / core plugins are registered
-void ensureCorePluginsRegistered();
-
 // ====================================================
 // NLP normalization helpers
 // ====================================================

@@ -17,7 +17,6 @@ tools, with raw-text arguments rather than JSON parameter objects:
 | `osint_clear_cache` | none | Removes the OSINT cache directory, including sensitive logs |
 | `osint_scan_secrets` | `<username>` | Obtains discovery results and scans found URLs for sensitive patterns |
 | `osint_show_secrets` | `<username> [--severity critical\|high\|medium\|low\|all]` | Reads existing JSONL with a minimum-severity filter |
-| `osint_show_ui` | `<username>` | Opens the host findings panel from an existing log |
 
 Aliases: **`sherlock` → `sherlock_sweep`**, **`osint` → `osint_report`**.
 There is no `profile_self` registration. All descriptors request FILESYSTEM,
@@ -33,7 +32,7 @@ Legacy NLP rules do not create registrations.
 
 Flags are handler-specific. Discovery/report parsers split on whitespace;
 `--export` reads one path token and does not implement shell-style quoting.
-`osint_status`, `osint_scan_secrets`, and `osint_show_ui` use the complete supplied
+`osint_status` and `osint_scan_secrets` use the complete supplied
 username string, whereas report/show-secrets parse its first token. Supply a
 consistent trusted single-token username, without path or shell syntax:
 the collector embeds it in filenames and a shell command without a general
@@ -51,7 +50,6 @@ osint_status myusername
 osint_report myusername --export my_audit.json
 osint_scan_secrets myusername
 osint_show_secrets myusername --severity high
-osint_show_ui myusername
 ```
 
 Wait for the background result before requesting downstream work. Alternatively,
@@ -125,8 +123,6 @@ storage, and redaction details. `osint_show_secrets --severity high` means
 ≥0. Values are lowercase; an unrecognized value retains threshold zero.
 Missing logs and skipped malformed JSONL can produce successful empty displays.
 
-`osint_show_ui` delegates to host `ui.show_osint_results`, which creates a panel
-from an existing findings log; it does not scan or subscribe to live updates.
 Use [OSINT panel](../ui/OSINT_PANEL.md) for presentation and
 [generic panel operations](../ui/PANEL_OPERATIONS.md) for UI ownership.
 No fixed scan duration, site count, response accuracy, export success, or

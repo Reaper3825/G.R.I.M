@@ -8,11 +8,11 @@ using Json = nlohmann::json;
 inline void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
-inline bool sameProvider(const MMO::ToolDescriptor& a, const MMO::ToolDescriptor& b) {
-    return a.provider_name == b.provider_name && a.provider_instance == b.provider_instance &&
-           a.provider_type == b.provider_type;
+inline bool sameProvider(const MMO::RegisteredTool& a, const MMO::RegisteredTool& b) {
+    return a.provider.type == b.provider.type && a.provider.name == b.provider.name &&
+           a.provider.instance == b.provider.instance;
 }
-inline MMO::ToolDescriptor descriptor(const std::string& id, uint64_t version) {
+inline MMO::RegisteredTool descriptor(const std::string& id, uint64_t version) {
     auto& registry = MMO::ToolRegistry::instance();
     const auto tool = registry.getTool(id);
     require(registry.version() == version && tool && tool->tool_id == id &&

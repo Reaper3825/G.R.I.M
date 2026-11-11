@@ -1,5 +1,5 @@
 #pragma once
-#include "ToolDescriptor.hpp"
+#include "RegisteredTool.hpp"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
@@ -11,10 +11,6 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     j = nlohmann::json::object();
     j["tool_id"] = t.tool_id;
     j["display_name"] = t.display_name;
-    j["provider_type"] = t.provider_type;
-    j["provider_name"] = t.provider_name;
-    j["provider_instance"] = t.provider_instance;
-    j["provider_path"] = t.provider_path;
     j["version"] = t.version;
     j["description"] = t.description;
     j["short_description"] = t.short_description;
@@ -30,8 +26,6 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     j["argument_schema_json"] = t.argument_schema_json;
     j["parameters"] = t.parameters;
     j["preconditions"] = t.preconditions;
-    j["context_requirements"] = t.context_requirements;
-    j["affordance_tokens"] = t.affordance_tokens;
     j["aliases"] = t.aliases;
     j["keywords"] = t.keywords;
     j["capability_tags"] = t.capability_tags;
@@ -45,10 +39,6 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
 inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
     j.at("tool_id").get_to(t.tool_id);
     j.at("display_name").get_to(t.display_name);
-    j.at("provider_type").get_to(t.provider_type);
-    j.at("provider_name").get_to(t.provider_name);
-    j.at("provider_instance").get_to(t.provider_instance);
-    j.at("provider_path").get_to(t.provider_path);
     j.at("version").get_to(t.version);
     j.at("description").get_to(t.description);
     t.short_description = j.value("short_description", std::string{});
@@ -65,8 +55,6 @@ inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
     j.at("argument_schema_json").get_to(t.argument_schema_json);
     j.at("parameters").get_to(t.parameters);
     j.at("preconditions").get_to(t.preconditions);
-    j.at("context_requirements").get_to(t.context_requirements);
-    j.at("affordance_tokens").get_to(t.affordance_tokens);
     j.at("aliases").get_to(t.aliases);
     j.at("keywords").get_to(t.keywords);
     j.at("capability_tags").get_to(t.capability_tags);
@@ -79,5 +67,22 @@ inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
     if (!usage.is_number_integer() || usage < 0 || usage > 3)
         throw std::invalid_argument("Invalid tool usage type");
     t.usage_type = static_cast<ToolUsage>(usage.get<uint32_t>());
+}
+inline void to_json(nlohmann::json& j, const RegisteredTool& tool) {
+    to_json(j, static_cast<const ToolDescriptor&>(tool));
+    // Older version-1 inspection readers require these keys.
+    j["context_requirements"] = nlohmann::json::array();
+    j["affordance_tokens"] = nlohmann::json::array();
+    j["provider_type"] = tool.provider.type;
+    j["provider_name"] = tool.provider.name;
+    j["provider_instance"] = tool.provider.instance;
+    j["provider_path"] = tool.provider.path;
+}
+inline void from_json(const nlohmann::json& j, RegisteredTool& tool) {
+    from_json(j, static_cast<ToolDescriptor&>(tool));
+    j.at("provider_type").get_to(tool.provider.type);
+    j.at("provider_name").get_to(tool.provider.name);
+    j.at("provider_instance").get_to(tool.provider.instance);
+    j.at("provider_path").get_to(tool.provider.path);
 }
 }

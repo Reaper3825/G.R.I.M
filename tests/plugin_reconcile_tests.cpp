@@ -39,9 +39,9 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     install("old");
     check(registry.toolCount() == baseline + 2, "Added file did not publish its complete batch");
     auto old = registry.getTool("Declared-alpha");
-    check(old && !old->provider_instance.empty() && old->provider_path == (watched / "alpha.dll").string(),
+    check(old && !old->provider.instance.empty() && old->provider.path == (watched / "alpha.dll").string(),
           "Loaded generation/source identity missing");
-    const auto firstInstance = old->provider_instance;
+    const auto firstInstance = old->provider.instance;
     const auto provider = [&]() -> std::optional<GRIM::MMO::ProviderDescriptor> {
         for (const auto& p : registry.snapshot().providers)
             if (p.name == "Declared-alpha" && p.type == GRIM::MMO::ToolProviderType::Plugin) return p;
@@ -49,7 +49,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     };
     check(provider() && provider()->instance == firstInstance, "Plugin commit did not publish provider identity");
     PluginManager::initialize(watched.string());
-    check(registry.getTool("Declared-alpha")->provider_instance == firstInstance, "Repeated initialize reloaded unchanged plugin");
+    check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Repeated initialize reloaded unchanged plugin");
     auto* observer = PluginAPI::createPluginAPI("observer", "", 0);
     const auto context = [&](const char* key) {
         const auto* text = observer->get_context(observer, key);
@@ -60,7 +60,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     // A staged candidate's subscriptions/timers must not replace the old ones.
     install("failed");
     check(provider() && provider()->instance == firstInstance, "Failed init changed the published provider");
-    check(registry.getTool("Declared-alpha")->provider_instance == firstInstance &&
+    check(registry.getTool("Declared-alpha")->provider.instance == firstInstance &&
           dispatchCommand("Declared-alpha", "").message == "old-result", "Failed init displaced working plugin");
     PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
     PluginAPI::processTimers();
@@ -71,9 +71,9 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(registry.version() == version, "Unchanged rejected binary was repeatedly processed");
 
     install("collision");
-    check(registry.getTool("Declared-alpha")->provider_instance == firstInstance, "Collision replaced working tools");
+    check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Collision replaced working tools");
     install("legacy");
-    check(registry.getTool("Declared-alpha")->provider_instance == firstInstance, "Incompatible ABI displaced working plugin");
+    check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Incompatible ABI displaced working plugin");
     {
         std::ofstream broken(watched / "alpha.dll", std::ios::binary | std::ios::trunc);
         broken << "incomplete binary";
@@ -89,9 +89,9 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     registry.removeListener(&notification);
     check(notification.callable, "Committed replacement was not callable from a registry observer");
     auto replacement = registry.getTool("Declared-alpha");
-    check(provider() && replacement && provider()->instance == replacement->provider_instance,
+    check(provider() && replacement && provider()->instance == replacement->provider.instance,
           "Replacement provider and tools have different generations");
-    check(replacement && replacement->provider_instance != firstInstance &&
+    check(replacement && replacement->provider.instance != firstInstance &&
           dispatchCommand("Declared-alpha", "").message == "new-result", "Valid replacement was not committed");
     check(!registry.isRegistered("Declared-alpha-extra"), "Replacement retained a removed tool");
     PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
@@ -99,22 +99,22 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(context("fixture_event") == "new-result" && context("fixture_timer") == "new-result",
           "Retiring old generation removed replacement resources");
 
-    const auto secondInstance = replacement->provider_instance;
+    const auto secondInstance = replacement->provider.instance;
     check(dispatchCommand("Declared-alpha", "reload").message == "new-result", "Reload request did not return normally");
-    check(registry.getTool("Declared-alpha")->provider_instance == secondInstance, "Plugin reloaded from inside its callback");
+    check(registry.getTool("Declared-alpha")->provider.instance == secondInstance, "Plugin reloaded from inside its callback");
     PluginManager::tick();
-    check(registry.getTool("Declared-alpha")->provider_instance != secondInstance, "Queued API reload request was not serviced");
+    check(registry.getTool("Declared-alpha")->provider.instance != secondInstance, "Queued API reload request was not serviced");
 
     fs::create_directory(watched / "ignored.dll");
     PluginManager::checkForHotReload(); // A directory ending in .dll is not a plugin.
     fs::copy_file(variants / "new" / "alpha.dll", watched / "beta.dll");
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline + 1 &&
-          registry.getTool("Declared-alpha")->provider_path == (watched / "alpha.dll").string(),
+          registry.getTool("Declared-alpha")->provider.path == (watched / "alpha.dll").string(),
           "Duplicate provider replaced its live owner");
     fs::remove(watched / "alpha.dll"); // Source is unlocked while its private copy is loaded.
     PluginManager::checkForHotReload();
-    check(registry.getTool("Declared-alpha")->provider_path == (watched / "beta.dll").string(),
+    check(registry.getTool("Declared-alpha")->provider.path == (watched / "beta.dll").string(),
           "Unchanged rejected plugin was not retried after its provider collision disappeared");
     fs::remove(watched / "beta.dll");
     PluginManager::checkForHotReload();
@@ -136,23 +136,14 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     PluginAPI::cleanupPluginContext(observer);
 
     if (!actual.empty()) {
-        registry.registerSimple("ui.show_osint_results", "Host UI test sink", "ui",
-            [](const std::string& args) {
-                CommandResult result;
-                result.message = "UI request for " + args;
-                return result;
-            }, false);
         PluginManager::initialize(fs::absolute(actual).string());
         const auto osint = registry.getTool("osint_report");
         const auto network = registry.getTool("networktest");
-        check(osint && network && osint->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
+        check(osint && network && osint->provider.type == GRIM::MMO::ToolProviderType::Plugin &&
               osint->parameters.size() == 1 && !network->description.empty(), "Standalone plugin metadata did not load");
         check(registry.resolveAlias("osint") == std::optional<std::string>("osint_report"), "Standalone plugin alias missing");
-        check(dispatchCommand("osint_show_ui", "fixture-user").message == "UI request for fixture-user",
-              "Standalone OSINT UI tool did not delegate through the host API");
-        // The UI receiver above is a test sink. Never start a scan or network test.
+        check(!registry.isRegistered("osint_show_ui"), "OSINT published a retired UI tool");
         PluginManager::unloadAll();
-        registry.unregisterTool("ui.show_osint_results");
         check(registry.toolCount() == baseline, "Standalone unload retained tools");
     }
     std::cout << "Plugin folder reconciliation and replacement tests passed\n";

@@ -21,16 +21,16 @@ void strings(std::ostringstream& out, const char* label, const std::vector<std::
     if (values.empty()) out << " Not documented\n";
     else { out << '\n'; for (const auto& value : values) out << "  " << value << '\n'; }
 }
-std::string detailText(const ToolDescriptor& tool) {
+std::string detailText(const RegisteredTool& tool) {
     std::ostringstream out;
     out << tool.tool_id << "\n" << documented(tool.display_name) << "\n\n"
         << documented(tool.description) << "\n\n"
         << "Short description: " << documented(tool.short_description) << '\n'
         << "Category: " << documented(tool.category) << '\n'
         << "Usage type: " << toolUsageName(tool.usage_type) << '\n'
-        << "Provider: " << (tool.provider_type == ToolProviderType::Plugin ? "Plugin" : "Built-in")
-        << " / " << documented(tool.provider_name) << '\n'
-        << "Source file: " << documented(tool.provider_path) << '\n'
+        << "Provider: " << (tool.provider.type == ToolProviderType::Plugin ? "Plugin" : "Built-in")
+        << " / " << documented(tool.provider.name) << '\n'
+        << "Source file: " << documented(tool.provider.path) << '\n'
         << "Version: " << documented(tool.version) << '\n'
         << "Type: " << (tool.is_informational ? "Informational" : "State-changing") << '\n'
         << "Confirmation required: " << (tool.needs_confirmation ? "Yes" : "No") << '\n'
@@ -49,9 +49,7 @@ std::string detailText(const ToolDescriptor& tool) {
     strings(out, "Aliases", tool.aliases);
     strings(out, "Keywords", tool.keywords);
     strings(out, "Preconditions", tool.preconditions);
-    strings(out, "Context requirements", tool.context_requirements);
     strings(out, "Capability tags", tool.capability_tags);
-    strings(out, "Affordance tokens", tool.affordance_tokens);
     out << "\nUsage count: " << tool.usage_count << '\n';
     if (tool.usage_count == 0) out << "Success rate: No recorded uses\n";
     else out << "Success rate: " << tool.success_rate * 100.0f << "%\n";
@@ -102,10 +100,10 @@ void UITrainingToolsView::filter() {
         const int provider = pluginFilter_.getSelectedIndex();
         if (provider > 0 && provider <= static_cast<int>(providers_.size())) {
             const auto& selected = providers_[provider - 1];
-            if (tool.provider_type != selected.first ||
-                (selected.first == ToolProviderType::Plugin && tool.provider_name != selected.second)) continue;
+            if (tool.provider.type != selected.first ||
+                (selected.first == ToolProviderType::Plugin && tool.provider.name != selected.second)) continue;
         }
-        std::string text = tool.tool_id + " " + tool.display_name + " " + tool.description + " " + tool.category + " " + tool.provider_name;
+        std::string text = tool.tool_id + " " + tool.display_name + " " + tool.description + " " + tool.category + " " + tool.provider.name;
         for (const auto& alias : tool.aliases) text += " " + alias;
         for (const auto& tag : tool.capability_tags) text += " " + tag;
         if (lower(text).find(needle) != std::string::npos) matches_.push_back(i);
@@ -124,7 +122,7 @@ void UITrainingToolsView::showSelection() {
 void UITrainingToolsView::refreshProviders() {
     std::vector<std::pair<ToolProviderType, std::string>> providers;
     for (const auto& tool : tools_)
-        providers.emplace_back(tool.provider_type, tool.provider_type == ToolProviderType::Plugin ? tool.provider_name : "");
+        providers.emplace_back(tool.provider.type, tool.provider.type == ToolProviderType::Plugin ? tool.provider.name : "");
     std::sort(providers.begin(), providers.end());
     providers.erase(std::unique(providers.begin(), providers.end()), providers.end());
     if (providers == providers_) return; // Keep open menus stable during periodic refresh.
@@ -144,7 +142,7 @@ void UITrainingToolsView::refreshProviders() {
     pluginFilter_.setSelectedIndex(selected);
 }
 void UITrainingToolsView::refresh() {
-    tools_ = ToolRegistry::instance().getAllTools();
+    tools_ = ToolRegistry::instance().getRegisteredTools();
     refreshProviders();
     filter();
 }
@@ -196,7 +194,7 @@ void UITrainingToolsView::draw(OverlayRenderer& renderer, const PanelRect& conte
             const float width = std::max(0.0f, list_.getSize().x - 24);
             if (tool.tool_id == selectedId_) renderer.drawRect({p.x + 2, y}, {width, rowHeight - 2}, Colors::PanelBg);
             renderer.drawText({p.x + 6, y + 3}, UIDrawHelpers::truncateText(tool.tool_id, std::max(0.0f, width - 12)), Colors::TextPrimary);
-            const auto summary = documented(tool.category) + " | " + documented(tool.provider_name);
+            const auto summary = documented(tool.category) + " | " + documented(tool.provider.name);
             renderer.drawText({p.x + 6, y + 24}, UIDrawHelpers::truncateText(summary, std::max(0.0f, width - 12)), Colors::TextSecondary);
         }
         y += rowHeight;

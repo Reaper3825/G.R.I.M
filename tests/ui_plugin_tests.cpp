@@ -114,7 +114,7 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     check(registry.toolCount() == baseline + 6, "UI DLL did not publish six operations");
     for (const char* tool : {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front", "ui.poll"}) {
         const auto entry = registry.getTool(tool);
-        check(entry && entry->provider_name == "UI Plugin" && entry->permission_bits == GRIM_PERM_UI &&
+        check(entry && entry->provider.name == "UI Plugin" && entry->permission_bits == GRIM_PERM_UI &&
               entry->argument_format == "json" && !entry->argument_schema_json.empty(), "UI tool metadata incomplete");
     }
     auto invoke = [](const char* tool, const std::string& args) {

@@ -42,10 +42,6 @@ static GrimResult handleOsintScanSecrets(const GrimToolCall* call, GrimToolResul
 static GrimResult handleOsintShowSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     return deliver(writer, cmdOsintShowSecrets(std::string(call->arguments, call->arguments_size)));
 }
-static GrimResult handleOsintShowUI(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    const auto command = std::string("ui.show_osint_results ") + std::string(call->arguments, call->arguments_size);
-    return g_api->execute_command(g_api, command.c_str(), writer);
-}
 // ============================================================================
 // NEW PLUGIN API IMPLEMENTATION
 // ============================================================================
@@ -83,23 +79,22 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         {"osint_status", "Read scan status and consume completed results", "osint_status [{t}]", handleOsintStatus, false, false},
         {"osint_clear_cache", "Delete cached OSINT reports", "osint_clear_cache", handleOsintClearCache, false, false},
         {"osint_scan_secrets", "Scan discovered URLs for exposed sensitive data", "osint_scan_secrets {t}", handleOsintScanSecrets, false, true},
-        {"osint_show_secrets", "Read discovered sensitive data for a username", "osint_show_secrets {t} [--severity <level>]", handleOsintShowSecrets, true, true},
-        {"osint_show_ui", "Show the OSINT results interface", "osint_show_ui {t}", handleOsintShowUI, false, true}
+        {"osint_show_secrets", "Read discovered sensitive data for a username", "osint_show_secrets {t} [--severity <level>]", handleOsintShowSecrets, true, true}
     };
-    GrimToolRegistration tools[8];
-    GrimToolParameter arguments[8];
+    constexpr size_t toolCount = sizeof(entries) / sizeof(entries[0]);
+    GrimToolRegistration tools[toolCount];
+    GrimToolParameter arguments[toolCount];
     const char* summaries[] = {"Build a public source profile for a username",
         "Search public websites for accounts matching a username",
         "Read a username report and optionally export findings",
         "Check scan status and collect completed scan results",
         "Delete locally cached reports from previous public searches",
         "Scan discovered web addresses for exposed sensitive information",
-        "Read sensitive information findings for a selected username",
-        "Show the results interface for a selected username"};
+        "Read sensitive information findings for a selected username"};
     const GrimToolBinding usernameBindings[] = {{"t", "t"}, {"o", "o"}};
     const char* reportAliases[] = {"osint"};
     const char* sweepAliases[] = {"sherlock"};
-    for (size_t i = 0; i < 8; ++i) {
+    for (size_t i = 0; i < toolCount; ++i) {
         tools[i].usage_type = GRIM_TOOL_USAGE_IGNORE;
         tools[i].short_description = summaries[i];
         if (i != 4) {
@@ -129,7 +124,7 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     }
     tools[1].descriptor.aliases = {sweepAliases, 1};
     tools[2].descriptor.aliases = {reportAliases, 1};
-    return api->register_tools(api, tools, 8);
+    return api->register_tools(api, tools, toolCount);
 
 }
 

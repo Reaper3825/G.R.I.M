@@ -77,7 +77,7 @@ void runWorldLabTests(){
     {
         auto& registry=GRIM::MMO::ToolRegistry::instance();
         GRIM::MMO::ToolDescriptor tool;
-        tool.tool_id="catalog_test";tool.provider_name="catalog-tests";
+        tool.tool_id="catalog_test";
         tool.description="Detailed instructions which must not appear in the catalog";
         tool.usage="catalog_test {t}";tool.bindings={{"t","t"}};
         tool.parameters={{"target","string","The selected thing to inspect",true}};
@@ -119,7 +119,8 @@ void runWorldLabTests(){
         tool.usage_type=GRIM::MMO::ToolUsage::Model;
         tool.description="Updated documentation available immediately";registry.updateMetadata(tool);
         check(details(tool.tool_id).at("tool_details").at("description")==tool.description,"Deeper inspection cached stale metadata");
-        registry.unregisterByProvider("catalog-tests",GRIM::MMO::ToolProviderType::Builtin);
+        registry.unregisterTool(tool.tool_id);
+        registry.unregisterTool(debug.tool_id);
         check(details(tool.tool_id).contains("observation_error"),"Removed catalog entry did not report unavailability");
         auto empty=response();resolveHostObservation(empty);
         check(empty["result"]["state"]["tool_catalog"]["tools"].empty(),"Catalog retained unloaded tools");

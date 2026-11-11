@@ -2,7 +2,7 @@
 #include "world_document.hpp"
 #include "live_world_navigation.hpp"
 #include "world_card_layout.hpp"
-#include "MMO/Core/ProviderDescriptor.hpp"
+#include "MMO/Core/ToolRegistrySnapshot.hpp"
 #include <map>
 #include <set>
 #include <algorithm>
@@ -151,8 +151,8 @@ public:
         for (const auto& key : connections_) if (roomId(key) == location_) {
             const auto* p = provider(key);
             for (const auto& t : snapshot_.tools)
-                if (p && t.provider_type == p->type && t.provider_name == p->name &&
-                    t.provider_instance == p->instance && t.usage_type == MMO::ToolUsage::Model) result.push_back(t);
+                if (p && t.provider.type == p->type && t.provider.name == p->name &&
+                    t.provider.instance == p->instance && t.usage_type == MMO::ToolUsage::Model) result.push_back(t);
         }
         return result;
     }

@@ -20,7 +20,6 @@ Authorized workflow:
 sherlock myusername
 osint_scan_secrets myusername
 osint_show_secrets myusername --severity critical
-osint_show_ui myusername
 ```
 
 Wait for discovery if using an async tool. A cache miss can trigger another scan.

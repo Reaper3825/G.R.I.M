@@ -81,7 +81,7 @@ void runInputPluginTests(const std::filesystem::path& directory) {
     const char* arguments[] = {"-1200, 300 trailing", "", "  raw text\n", "ctrl + c", "object save-button"};
     for (int i = 0; i < 5; ++i) {
         const auto descriptor = registry.getTool(ids[i]);
-        check(descriptor && descriptor->provider_name == "Input Plugin" && descriptor->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
+        check(descriptor && descriptor->provider.name == "Input Plugin" && descriptor->provider.type == GRIM::MMO::ToolProviderType::Plugin &&
               descriptor->needs_confirmation && !descriptor->is_informational && descriptor->argument_format == "raw_text" &&
               descriptor->permission_bits == (GRIM_PERM_INPUT | (i == 4 ? GRIM_PERM_SYSTEM : 0)) &&
               descriptor->parameters.size() == 1, "Input metadata/policy incomplete");

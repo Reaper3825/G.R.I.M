@@ -794,8 +794,6 @@ static void bootstrapMMOLayer() {
         s_idleTickThread.detach();
     }
 
-    // Built-ins register metadata and handlers together, before model discovery.
-    ensureCorePluginsRegistered();
     LOG_PHASE("MMO ToolRegistry loaded (" +
               std::to_string(GRIM::MMO::ToolRegistry::instance().toolCount()) + " tools)", true);
 
@@ -829,48 +827,6 @@ static void bootstrapMMOLayer() {
     // Touch the singleton so it's alive before any UI tools reference it.
     (void)GRIM::MMO::UISurfaceRegistry::instance();
     LOG_PHASE("MMO UISurfaceRegistry ready", true);
-
-    // Register UI tools in ToolRegistry so the model knows these capabilities exist
-    {
-        auto& toolReg = GRIM::MMO::ToolRegistry::instance();
-
-        GRIM::MMO::ToolDescriptor createSurface;
-        createSurface.tool_id        = "ui.create_surface";
-        createSurface.display_name   = "Create UI Surface";
-        createSurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
-        createSurface.provider_name  = "builtin";
-        createSurface.description    = "Create a new UI surface (panel, popup, modal, toast, tool window, or inspector)";
-        createSurface.category       = "ui";
-        createSurface.is_informational = false;
-        createSurface.needs_confirmation = true;
-        createSurface.parameters = {
-            {"surface_id", "string", "Unique identifier for the surface", true},
-            {"kind", "string", "Surface type: overlay_panel, popup, modal, toast, tool_window, inspector", true},
-            {"title", "string", "Display title", true}
-        };
-        createSurface.capability_tags = {"ui", "create_surface", "display"};
-        createSurface.keywords = {"panel", "popup", "modal", "toast", "window", "surface", "ui"};
-        if (!toolReg.updateMetadata(createSurface))
-            throw std::runtime_error("Missing or conflicting UI tool: " + createSurface.tool_id);
-
-        GRIM::MMO::ToolDescriptor destroySurface;
-        destroySurface.tool_id        = "ui.destroy_surface";
-        destroySurface.display_name   = "Destroy UI Surface";
-        destroySurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
-        destroySurface.provider_name  = "builtin";
-        destroySurface.description    = "Permanently remove a UI surface";
-        destroySurface.category       = "ui";
-        destroySurface.is_informational = false;
-        destroySurface.needs_confirmation = true;
-        destroySurface.parameters = {
-            {"surface_id", "string", "ID of the surface to destroy", true}
-        };
-        destroySurface.capability_tags = {"ui", "destroy_surface"};
-        if (!toolReg.updateMetadata(destroySurface))
-            throw std::runtime_error("Missing or conflicting UI tool: " + destroySurface.tool_id);
-
-        LOG_PHASE("MMO UI tools registered (2 surface lifecycle tools)", true);
-    }
 }
 
 // ================================================================

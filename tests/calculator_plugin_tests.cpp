@@ -30,8 +30,6 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
     handler = tool.handler;
     ToolDescriptor descriptor;
     descriptor.tool_id = d.tool_id;
-    descriptor.provider_name = "Calculator Plugin";
-    descriptor.provider_type = ToolProviderType::Plugin;
     descriptor.display_name = d.display_name;
     descriptor.description = d.description;
     descriptor.short_description = tool.short_description;
@@ -42,7 +40,7 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
     descriptor.needs_confirmation = d.needs_confirmation;
     descriptor.usage_type = ToolUsage::Model;
     descriptor.bindings.emplace(tool.bindings[0].placeholder, tool.bindings[0].type);
-    return ToolRegistry::instance().registerBatch("Calculator Plugin", {{descriptor,
+    return ToolRegistry::instance().registerBatch({ToolProviderType::Plugin, "Calculator Plugin", {}, {}}, {{descriptor,
         [](const std::string& arguments) {
             struct Capture { CommandResult result; int completions = 0; } capture;
             GrimToolResultWriter writer;

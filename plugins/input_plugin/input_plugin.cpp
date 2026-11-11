@@ -73,7 +73,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Raw text, including surrounding whitespace; host types with a 15 ms delay",
         "Host key name, or a plus-separated combination; retains existing host key handling",
         "Exact OCR region text (default/text prefix), or native control name, automation ID, or role (object prefix)"};
-    const char* context[] = {"Host perception context manager available; input targets the current desktop/focused application"};
     const char* grounded[] = {"Local Windows foreground window and fresh OCR/native control bounds"};
     const char* tags[] = {"input", "computer_control"};
     GrimToolParameter parameters[5];
@@ -88,7 +87,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         parameters[i].name = names[i]; parameters[i].type = "string";
         parameters[i].description = parameterDescriptions[i]; parameters[i].required = i != 1;
         d.parameters = &parameters[i]; d.parameter_count = 1;
-        d.context_requirements = {context, 1}; d.capability_tags = {tags, 2};
+        d.capability_tags = {tags, 2};
         if (i == 4) d.preconditions = {grounded, 1};
     }
     return api->register_tools(api, tools, 5);

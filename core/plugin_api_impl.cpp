@@ -297,12 +297,6 @@ static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& 
     out.keywords = copyList(in.keywords);
     out.capability_tags = copyList(in.capability_tags);
     out.preconditions = copyList(in.preconditions);
-    out.context_requirements = copyList(in.context_requirements);
-    out.affordance_tokens = copyList(in.affordance_tokens);
-    out.provider_type = ToolProviderType::Plugin;
-    out.provider_name = owner.name;
-    out.provider_path = owner.path;
-    out.provider_instance = owner.instance;
     out.permission_bits = in.required_permissions;
     out.is_informational = in.is_informational != 0;
     out.needs_confirmation = in.needs_confirmation != 0;
@@ -334,28 +328,15 @@ static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRe
         }
         if (!tools || !count || count > 256) throw std::invalid_argument("Invalid batch");
         std::vector<GRIM::MMO::ToolRegistration> copied;
-        // Walk the exact v3.0-v3.9, v3.10, and v3.11 prefixes. Appended fields
-        // keep their defaults when absent from older multi-tool batches.
-        constexpr size_t legacySize = offsetof(GrimToolRegistration, usage_type);
-        constexpr size_t v310Size = offsetof(GrimToolRegistration, bindings);
-        constexpr size_t v311Size = offsetof(GrimToolRegistration, short_description);
-        auto* record = reinterpret_cast<const unsigned char*>(tools);
-        for (size_t i = 0; i < count; ++i) {
-            uint32_t size = 0;
-            std::memcpy(&size, record, sizeof(size));
-            if (size != legacySize && size != v310Size && size != v311Size && size != sizeof(GrimToolRegistration))
-                throw std::invalid_argument("Invalid tool registration size");
-            GrimToolRegistration normalized;
-            std::memcpy(&normalized, record, size);
-            normalized.struct_size = sizeof(normalized);
-            copied.push_back(copyRegistration(normalized, *owner));
-            record += size;
-        }
+        copied.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+            copied.push_back(copyRegistration(tools[i], *owner));
         if (owner->staging) {
             owner->pending.insert(owner->pending.end(), copied.begin(), copied.end());
             return GRIM_OK;
         }
-        return GRIM::MMO::ToolRegistry::instance().registerBatch(owner->name, copied)
+        return GRIM::MMO::ToolRegistry::instance().registerBatch(
+            {GRIM::MMO::ToolProviderType::Plugin, owner->name, owner->instance, owner->path}, copied)
             ? GRIM_OK : GRIM_ERROR_ALREADY_EXISTS;
     } catch (...) {
         if (owner && owner->staging) owner->registration_failed = true;
@@ -440,7 +421,7 @@ static GrimResult api_unregister_command(const GrimPluginAPI* self, const char* 
     const auto tool = registry.getTool(command_name);
     if (!tool || tool->tool_id != command_name) return GRIM_ERROR_NOT_FOUND;
     const auto& owner = pluginContext(self);
-    if (tool->provider_type != GRIM::MMO::ToolProviderType::Plugin || tool->provider_name != owner.name || tool->provider_instance != owner.instance)
+    if (tool->provider.type != GRIM::MMO::ToolProviderType::Plugin || tool->provider.name != owner.name || tool->provider.instance != owner.instance)
         return GRIM_ERROR_PERMISSION_DENIED;
     return registry.unregisterTool(command_name, owner.name, GRIM::MMO::ToolProviderType::Plugin, owner.instance) ? GRIM_OK : GRIM_ERROR_NOT_FOUND;
 }
@@ -1098,7 +1079,7 @@ static const char* api_get_tool_snapshot(const GrimPluginAPI* self, const char* 
         if (tool_id) {
             if (const auto tool = registry.getTool(tool_id)) tools.push_back(*tool);
         } else {
-            for (const auto& tool : registry.getAllTools()) tools.push_back(tool);
+            for (const auto& tool : registry.getRegisteredTools()) tools.push_back(tool);
         }
         return allocateString(nlohmann::json{{"format", "grim-tool-snapshot"},
             {"version", 1}, {"tools", std::move(tools)}}.dump());

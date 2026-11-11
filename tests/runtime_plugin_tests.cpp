@@ -74,7 +74,7 @@ void runRuntimePluginTests(const std::filesystem::path& timerDirectory, const st
     };
     if (!timerDirectory.empty()) {
         const auto d = registry.getTool("set_timer");
-        check(d && d->provider_name == "Timers Plugin" && d->permission_bits == GRIM_PERM_SYSTEM && !d->is_informational && d->needs_confirmation,
+        check(d && d->provider.name == "Timers Plugin" && d->permission_bits == GRIM_PERM_SYSTEM && !d->is_informational && d->needs_confirmation,
               "Timer metadata/policy incorrect");
         for (const auto* input : {"", "invalid", "99999999999999999999999"})
             matches(registry.invoke("set_timer", input), false, "[Timer][Error] Invalid number of seconds.", "ERR_TIMER_INVALID", "error", "Invalid timer duration", Colors::Red);
@@ -97,7 +97,7 @@ void runRuntimePluginTests(const std::filesystem::path& timerDirectory, const st
     if (!memoryDirectory.empty()) {
         for (const auto* id : {"remember", "recall", "forget"}) {
             const auto d = registry.getTool(id); const bool recall = std::string(id) == "recall";
-            check(d && d->provider_name == "Memory Plugin" && d->permission_bits == GRIM_PERM_MEMORY && d->is_informational == recall && d->needs_confirmation != recall,
+            check(d && d->provider.name == "Memory Plugin" && d->permission_bits == GRIM_PERM_MEMORY && d->is_informational == recall && d->needs_confirmation != recall,
                   "Memory metadata/policy incorrect");
         }
         matches(registry.invoke("remember", ""), false, "configured:ERR_MEMORY_MISSING_INPUT", "ERR_MEMORY_MISSING_INPUT", "error", "Missing memory input", Colors::Red);

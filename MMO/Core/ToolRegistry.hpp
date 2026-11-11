@@ -1,7 +1,7 @@
 // The authoritative store for tool metadata and execution bindings.
 #pragma once
 #include "ToolDescriptor.hpp"
-#include "ProviderDescriptor.hpp"
+#include "ToolRegistrySnapshot.hpp"
 #include "ToolExecutionMode.hpp"
 #include <functional>
 #include <memory>
@@ -35,11 +35,11 @@ public:
 
     // Metadata and a callable are published together. Invalid definitions throw;
     // name/alias collisions return false. Replacement must retain the provider.
-    bool registerTool(const ToolDescriptor& descriptor, ToolHandler handler, bool replace = false);
+    bool registerTool(const ToolDescriptor& descriptor, ToolHandler handler, bool replace = false,
+                      const ProviderDescriptor& provider = {ToolProviderType::Builtin, "builtin", {}, {}});
     bool registerSimple(const std::string& tool_id, const std::string& description,
                         const std::string& category, ToolHandler handler, bool is_informational = true);
-    bool registerBatch(const std::string& plugin_name, const std::vector<ToolRegistration>& tools,
-                       bool replace = false, const ProviderDescriptor* publication = nullptr);
+    bool registerBatch(const ProviderDescriptor& provider, const std::vector<ToolRegistration>& tools);
     // Publish provider identity and tools in the same transaction, including zero tools.
     bool publishProvider(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
                          const std::string& old_instance = {});
@@ -51,13 +51,11 @@ public:
                           const std::vector<ResourceDescriptor>& resources);
     void removeResource(const ResourceDescriptor& resource);
     uint64_t resourceVersion() const;
-    // Atomically replace one loaded generation, including removing vanished tools.
-    bool replaceProvider(const std::string& provider, const std::string& old_instance,
-                         const std::vector<ToolRegistration>& tools,
-                         const ProviderDescriptor* publication = nullptr);
     void unregisterInstance(const std::string& provider, const std::string& instance);
     // Update documentation/policy without losing the callable or execution stats.
-    bool updateMetadata(const ToolDescriptor& descriptor);
+    // An inspection copy may update only the provider generation it came from.
+    bool updateMetadata(const ToolDescriptor& descriptor, const ProviderDescriptor* owner = nullptr);
+    bool updateMetadata(const RegisteredTool& tool) { return updateMetadata(tool, &tool.provider); }
     // Empty provider is for host callers; plugin callers must supply ownership.
     bool unregisterTool(const std::string& tool_id, const std::string& provider = {},
                         ToolProviderType type = ToolProviderType::Plugin, const std::string& instance = {});
@@ -77,9 +75,10 @@ public:
     bool isExecutable(const std::string& tool_id) const;
     std::vector<std::string> getExecutableNames(bool include_aliases = false) const;
 
-    std::optional<ToolDescriptor> getTool(const std::string& tool_id) const;
+    std::optional<RegisteredTool> getTool(const std::string& tool_id) const;
     // Snapshots and their filtered subsets are ordered alphabetically by tool ID.
     std::vector<ToolDescriptor> getAllTools() const;
+    std::vector<RegisteredTool> getRegisteredTools() const;
     // Loaded tools explicitly classified for model use. Host discovery is unfiltered.
     std::vector<ToolDescriptor> getModelTools() const;
     std::vector<ToolDescriptor> getByCategory(const std::string& category) const;
@@ -100,14 +99,17 @@ private:
     ToolRegistry() = default;
     CommandResult invokeChecked(const std::string& name, const std::string& arguments,
                                 std::optional<uint64_t> expected_version, ToolExecutionMode mode);
-    struct Entry { ToolDescriptor descriptor; ToolHandler handler; };
+    bool registerBatch(const ProviderDescriptor&, const std::vector<ToolRegistration>&, bool replace, bool publish);
+    bool replaceProvider(const ProviderDescriptor&, const std::string&, const std::vector<ToolRegistration>&);
+    using Provider = std::shared_ptr<const ProviderDescriptor>;
+    struct Entry { ToolDescriptor descriptor; ToolHandler handler; Provider provider; };
     using Entries = std::unordered_map<std::string, std::shared_ptr<Entry>>;
     using Aliases = std::unordered_map<std::string, std::string>;
     static bool buildAliases(const Entries& entries, Aliases& aliases);
     std::string resolveLocked(const std::string& name) const;
     mutable std::mutex mutex_;
     Entries tools_;
-    std::map<std::pair<ToolProviderType, std::string>, ProviderDescriptor> providers_;
+    std::map<std::pair<ToolProviderType, std::string>, Provider> providers_;
     Aliases alias_index_;
     uint64_t version_ = 0;
     uint64_t resourceVersion_ = 0;

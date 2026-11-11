@@ -1,6 +1,7 @@
 #pragma once
-#include "ToolDescriptor.hpp"
+#include "ProviderDescriptor.hpp"
 #include <nlohmann/json.hpp>
+#include <vector>
 
 namespace GRIM::MMO {
 // Data only. Identity is (provider type, provider name, resource ID);

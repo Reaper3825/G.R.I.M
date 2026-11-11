@@ -1,8 +1,6 @@
 #include "commands_core.hpp"
 
-#include "../MMO/Core/ToolRegistry.hpp"
 #include "ai/ai.hpp"
-#include <mutex>
 #include "error_manager.hpp"
 #include "helpers/color.hpp"
 #include "logger.hpp"
@@ -10,17 +8,6 @@
 
 namespace {
 constexpr const char* kDefaultSession = "default";
-}
-
-// Forward declaration (defined in core_plugin.cpp).
-extern void registerCorePlugin();
-
-void ensureCorePluginsRegistered() {
-    static std::once_flag registered;
-    std::call_once(registered, [] {
-        LOG_DEBUG("Core", "Ensuring core plugins registered...");
-        registerCorePlugin();
-    });
 }
 
 // User-input boundary. Raw user text is never interpreted as an application

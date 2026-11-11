@@ -13,7 +13,7 @@ $arguments = $common + @('tests/click_target_tests.cpp','perception/click_target
 $arguments += '/Fe:click_target_tests.exe'
 $arguments += '/link', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/opencv_core4.lib') + '"')
 Set-Content -LiteralPath (Join-Path $output 'test.rsp') -Value $arguments -Encoding ascii
-$syntax = $common + @('/Zs','perception/click_target_host.cpp','perception/perception_context.cpp','core/input/InputController.cpp','commands/commands_perception.cpp','plugins/core_plugin.cpp') | ForEach-Object { if ($_ -like '*.cpp') { '"' + (Join-Path $workspace $_) + '"' } else { $_ } }
+$syntax = $common + @('/Zs','perception/click_target_host.cpp','perception/perception_context.cpp','core/input/InputController.cpp','commands/commands_perception.cpp') | ForEach-Object { if ($_ -like '*.cpp') { '"' + (Join-Path $workspace $_) + '"' } else { $_ } }
 Set-Content -LiteralPath (Join-Path $output 'syntax.rsp') -Value $syntax -Encoding ascii
 Set-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('@echo off', ('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'), 'if errorlevel 1 exit /b %errorlevel%', ('set "PATH=' + (Join-Path $workspace 'vcpkg_installed/x64-windows/bin') + ';%PATH%"'), 'cl @test.rsp', 'if errorlevel 1 exit /b %errorlevel%', 'click_target_tests.exe', 'if errorlevel 1 exit /b %errorlevel%', 'cl @syntax.rsp') -Encoding ascii
 Push-Location $output

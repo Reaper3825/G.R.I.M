@@ -8,7 +8,7 @@
 
 namespace inspection {
 inline const GrimPluginAPI* host = nullptr;
-inline std::vector<GRIM::MMO::ToolDescriptor> snapshot(const char* id = nullptr) {
+inline std::vector<GRIM::MMO::RegisteredTool> snapshot(const char* id = nullptr) {
     struct OwnedString {
         const char* text;
         ~OwnedString() { if (text) host->string_free(host, text); }
@@ -17,7 +17,7 @@ inline std::vector<GRIM::MMO::ToolDescriptor> snapshot(const char* id = nullptr)
     const auto value = nlohmann::json::parse(text.text);
     if (value.at("format") != "grim-tool-snapshot" || value.at("version") != 1)
         throw std::runtime_error("Unsupported tool registry snapshot");
-    return value.at("tools").get<std::vector<GRIM::MMO::ToolDescriptor>>();
+    return value.at("tools").get<std::vector<GRIM::MMO::RegisteredTool>>();
 }
 struct Registry {
     auto getAllTools() const { return snapshot(); }
@@ -28,7 +28,7 @@ struct Registry {
         }), tools.end());
         return tools;
     }
-    std::optional<GRIM::MMO::ToolDescriptor> getTool(const std::string& id) const {
+    std::optional<GRIM::MMO::RegisteredTool> getTool(const std::string& id) const {
         auto tools = snapshot(id.c_str());
         if (tools.empty()) return std::nullopt;
         return std::move(tools.front());

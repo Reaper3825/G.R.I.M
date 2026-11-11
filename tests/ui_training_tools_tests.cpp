@@ -19,7 +19,6 @@ void runTrainingToolsTests() {
     // The first alphabetical tool must stay first even with a later category.
     tool.category = "z_information";
     tool.usage_type = ToolUsage::Debug;
-    tool.provider_name = "test_provider";
     tool.aliases = {"unique_alias"};
     registry.registerTool(tool, [](const std::string&) { return CommandResult{}; });
     for (int i = 0; i < 20; ++i) registry.registerSimple("z_viewer_" + std::to_string(i), "Scrolling entry", "test", [](const std::string&) { return CommandResult{}; });
@@ -76,10 +75,10 @@ void runTrainingToolsTests() {
     auto add = [&](const char* id, const char* provider, ToolUsage usage, const char* description,
                    ToolProviderType type = ToolProviderType::Plugin) {
         ToolDescriptor entry;
-        entry.tool_id = id; entry.provider_name = provider; entry.provider_type = type;
+        entry.tool_id = id;
         entry.usage_type = usage; entry.description = description; entry.category = "fixture";
         entry.aliases = {std::string(id) + "_alias"};
-        check(registry.registerTool(entry, [](const std::string&) { return CommandResult{}; }), "Filter fixture registration failed");
+        check(registry.registerTool(entry, [](const std::string&) { return CommandResult{}; }, false, {type, provider, {}, {}}), "Filter fixture registration failed");
     };
     add("alpha_debug", "Fixture Alpha Plugin", ToolUsage::Debug, "Alpha debug details");
     add("alpha_model", "Fixture Alpha Plugin", ToolUsage::Model, "Alpha model details");

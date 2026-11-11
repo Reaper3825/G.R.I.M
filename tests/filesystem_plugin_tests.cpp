@@ -35,8 +35,8 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     check(registry.toolCount() == baseline + 5, "Filesystem DLL did not register exactly five tools");
     for (const auto* id : {"pwd", "cd", "ls", "mkdir", "rm"}) {
         const auto tool = registry.getTool(id);
-        check(tool && tool->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
-              tool->provider_name == "Filesystem Plugin" && fs::path(tool->provider_path) == deployed,
+        check(tool && tool->provider.type == GRIM::MMO::ToolProviderType::Plugin &&
+              tool->provider.name == "Filesystem Plugin" && fs::path(tool->provider.path) == deployed,
               "Filesystem tool has incorrect provider ownership");
         check(!tool->usage.empty() && tool->permission_bits == GRIM_PERM_FILESYSTEM,
               "Filesystem tool metadata incomplete");

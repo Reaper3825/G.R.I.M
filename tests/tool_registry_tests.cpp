@@ -7,16 +7,13 @@
 #include <iostream>
 #include <stdexcept>
 
-void ensureCorePluginsRegistered() {}
 void logError(const std::string&, const std::string&) {}
 namespace {
 using namespace GRIM::MMO;
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-ToolDescriptor descriptor(const std::string& id, const std::string& provider = "tests") {
+ToolDescriptor descriptor(const std::string& id) {
     ToolDescriptor tool;
     tool.tool_id = tool.display_name = id;
-    tool.provider_name = provider;
-    tool.provider_type = ToolProviderType::Plugin;
     tool.category = "test";
     return tool;
 }
@@ -44,14 +41,18 @@ struct Observer : ToolRegistryListener {
 
 int main() try {
     using namespace GRIM::MMO;
+    auto& registry = ToolRegistry::instance();
+    const ProviderDescriptor testProvider{ToolProviderType::Plugin, "tests", {}, {}};
+    const auto registerTool = [&](const ToolDescriptor& tool, ToolHandler handler) {
+        return registry.registerTool(tool, std::move(handler), false, testProvider);
+    };
     // Snapshot ordering is independent of registration order and category.
     {
-        auto& registry = ToolRegistry::instance();
         for (const auto* id : {"zebra", "alpha", "middle"}) {
-            auto tool = descriptor(id, "ordering_tests");
+            auto tool = descriptor(id);
             tool.category = std::string(id) == "middle" ? "a_category" : "z_category";
             tool.capability_tags = {"ordering"};
-            check(registry.registerTool(tool, echo), "Ordering fixture registration failed");
+            check(registerTool(tool, echo), "Ordering fixture registration failed");
         }
         const auto ordered = [&](const auto& tools) {
             check(tools.size() == 3 && tools[0].tool_id == "alpha" &&
@@ -68,7 +69,7 @@ int main() try {
         alpha.category = "a_category";
         check(registry.updateMetadata(alpha), "Ordering metadata update failed");
         ordered(registry.getAllTools());
-        registry.unregisterByProvider("ordering_tests");
+        registry.unregisterByProvider("tests");
     }
     // Labels survive snapshots and never resolve or convert handler arguments.
     {
@@ -96,8 +97,7 @@ int main() try {
             try { malformed.get<ToolDescriptor>(); } catch (const std::exception&) { rejected = true; }
             check(rejected, "Invalid binding snapshot accepted");
         }
-        auto& registry = ToolRegistry::instance();
-        registry.registerTool(labeled, echo);
+        registerTool(labeled, echo);
         check(registry.invoke(labeled.tool_id, "an unresolved entity").message == "an unresolved entity",
               "Binding labels changed handler arguments");
         check(registry.generateFullPrompt().find("Usage: binding_fixture {target}") != std::string::npos &&
@@ -107,32 +107,30 @@ int main() try {
         check(!registry.updateMetadata(labeled), "Invalid metadata binding accepted");
         labeled.tool_id = "invalid_binding";
         bool rejected = false;
-        try { registry.registerTool(labeled, echo); } catch (const std::invalid_argument&) { rejected = true; }
+        try { registerTool(labeled, echo); } catch (const std::invalid_argument&) { rejected = true; }
         check(rejected && !registry.isRegistered(labeled.tool_id), "Invalid registration binding accepted");
         registry.unregisterTool("binding_fixture");
     }
-    auto& registry = ToolRegistry::instance();
     Observer observer;
     registry.addListener(&observer);
     auto first = descriptor("first");
     first.aliases = {"alias"};
-    check(registry.registerTool(first, echo), "Registration failed");
+    check(registerTool(first, echo), "Registration failed");
     check(registry.toolCount() == 1 && registry.resolveAlias("alias") == "first", "Metadata and callable not published together");
     check(dispatchCommand("alias", "argument").message == "argument", "Alias used a different execution store");
     check(registry.getTool("first")->usage_count == 1 && registry.getTool("alias")->success_count == 1, "Dispatch did not count exactly once on canonical tool");
     const auto version = registry.version();
-    check(!registry.registerTool(first, echo), "Duplicate replaced tool implicitly");
+    check(!registerTool(first, echo), "Duplicate replaced tool implicitly");
     auto collision = descriptor("second");
     collision.aliases = {"alias"};
-    check(!registry.registerTool(collision, echo), "Alias collision accepted");
-    check(!registry.registerTool(descriptor("alias"), echo), "Canonical name overwrote alias");
+    check(!registerTool(collision, echo), "Alias collision accepted");
+    check(!registerTool(descriptor("alias"), echo), "Canonical name overwrote alias");
     check(registry.version() == version && registry.toolCount() == 1, "Rejected registrations mutated registry");
     auto foreign = first;
-    foreign.provider_name = "other";
-    check(!registry.registerTool(foreign, echo, true), "Provider replaced foreign tool");
+    check(!registry.registerTool(foreign, echo, true, {ToolProviderType::Plugin, "other", {}, {}}), "Provider replaced foreign tool");
     check(!registry.unregisterTool("first", "other"), "Provider removed foreign tool");
     bool invalid = false;
-    try { registry.registerTool(descriptor("missing_handler"), {}); }
+    try { registerTool(descriptor("missing_handler"), {}); }
     catch (const std::invalid_argument&) { invalid = true; }
     check(invalid && !registry.isRegistered("missing_handler"), "Metadata-only tool accepted");
 
@@ -145,23 +143,23 @@ int main() try {
     auto batchGood = descriptor("batch_good");
     auto batchBad = descriptor("batch_bad");
     invalid = false;
-    try { registry.registerBatch("tests", {{batchGood, echo}, {batchBad, {}}}); }
+    try { registry.registerBatch(testProvider, {{batchGood, echo}, {batchBad, {}}}); }
     catch (const std::invalid_argument&) { invalid = true; }
     check(invalid && !registry.isRegistered("batch_good"), "Invalid batch partially committed");
-    check(registry.registerBatch("tests", {{batchGood, echo}, {batchBad, echo}}), "Valid batch failed");
+    check(registry.registerBatch(testProvider, {{batchGood, echo}, {batchBad, echo}}), "Valid batch failed");
     check(registry.getExecutableNames().size() == 3, "Callable listing lost batch tools");
     auto throwing = descriptor("throwing");
-    registry.registerTool(throwing, [](const std::string&) -> CommandResult { throw std::runtime_error("test"); });
+    registerTool(throwing, [](const std::string&) -> CommandResult { throw std::runtime_error("test"); });
     check(dispatchCommand("throwing", "").errorCode == "ERR_CMD_EXCEPTION", "Handler exception escaped dispatch");
     check(registry.getTool("throwing")->failure_count == 1, "Failure counted incorrectly");
     auto nested = descriptor("nested");
-    registry.registerTool(nested, [](const std::string& args) { return dispatchCommand("first", args); });
+    registerTool(nested, [](const std::string& args) { return dispatchCommand("first", args); });
     check(dispatchCommand("nested", "nested result").message == "nested result", "Nested registry dispatch failed");
 
     auto replaced = descriptor("replaced");
-    registry.registerTool(replaced, [&](const std::string&) {
+    registerTool(replaced, [&](const std::string&) {
         registry.unregisterTool("replaced");
-        registry.registerTool(replaced, echo);
+        registerTool(replaced, echo);
         return CommandResult{};
     });
     dispatchCommand("replaced", "");
@@ -186,7 +184,7 @@ int main() try {
         tool.aliases = {tool.tool_id + "_alias"};
         tool.capability_tags = {tool.tool_id + "_capability"};
         tool.keywords = {tool.tool_id};
-        registry.registerTool(tool, echo);
+        registerTool(tool, echo);
         check(registry.invoke(tool.tool_id, "host").message == "host", "Usage blocked host execution");
         const auto json = nlohmann::json(tool);
         check(json.get<ToolDescriptor>().usage_type == usage, "Usage JSON roundtrip failed");
@@ -218,7 +216,7 @@ int main() try {
     model.usage_type = static_cast<ToolUsage>(99);
     check(!registry.updateMetadata(model), "Invalid usage update accepted");
     invalid = false;
-    try { registry.registerTool(model, echo); } catch (const std::invalid_argument&) { invalid = true; }
+    try { registerTool(model, echo); } catch (const std::invalid_argument&) { invalid = true; }
     check(invalid, "Invalid usage registration accepted");
     registry.unregisterByProvider("tests");
     std::cout << "Unified tool registry tests passed\n";

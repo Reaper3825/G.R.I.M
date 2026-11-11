@@ -64,7 +64,7 @@ void runPerceptionPluginTests(const std::filesystem::path& pluginDirectory) {
     const char* ids[] = {"perception_what_see", "perception_read_text", "perception_detect_objects"};
     for (const auto* id : ids) {
         const auto d = registry.getTool(id);
-        check(d && d->provider_name == "Perception Plugin" && d->provider_type == ToolProviderType::Plugin &&
+        check(d && d->provider.name == "Perception Plugin" && d->provider.type == ToolProviderType::Plugin &&
               d->usage_type == ToolUsage::Debug &&
               d->permission_bits == GRIM_PERM_SYSTEM && d->is_informational && !d->needs_confirmation &&
               d->parameters.empty() && d->preconditions.size() == 1,

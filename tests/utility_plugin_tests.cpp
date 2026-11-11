@@ -41,9 +41,9 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     for (const auto* id : {"clean", "help"}) {
         const auto tool = registry.getTool(id);
         const bool isHelp = std::string(id) == "help";
-        check(tool && tool->provider_name == "Utility Plugin" &&
-              tool->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
-              fs::path(tool->provider_path) == folder / "utility_plugin.dll" &&
+        check(tool && tool->provider.name == "Utility Plugin" &&
+              tool->provider.type == GRIM::MMO::ToolProviderType::Plugin &&
+              fs::path(tool->provider.path) == folder / "utility_plugin.dll" &&
               tool->permission_bits == 0 && tool->parameters.empty() &&
               tool->is_informational == isHelp && tool->needs_confirmation != isHelp &&
               tool->category == (isHelp ? "information" : "system"), "Utility metadata changed policy or provider");

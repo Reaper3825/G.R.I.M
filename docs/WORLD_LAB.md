@@ -576,9 +576,7 @@ manual Play commands and validated model Execute commands through the Phase2 con
 Only completed Execute command contents reach this route, and host actions retain the
 adapter's Model-tool policy checks. Full worker facts remain host data and are
 excluded from the model's visible-field observation projection.
-`ui.create_surface` is classified Ignore for now, preserving its host handler while
-excluding creation from model discovery. Existing-resource UI operations retain
-their classifications; creation argument mapping is outside this slice.
+World Lab uses the existing-resource operations supplied by the UI plugin.
 
 Use a host and UI Plugin built with API v3.14 for guarded show/hide and cancellation.
 Existing descriptor and registration layouts are unchanged. Focused checks:

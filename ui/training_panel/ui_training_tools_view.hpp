@@ -24,7 +24,7 @@ private:
     UIDropdown usageFilter_, pluginFilter_;
     UIScrollBox list_;
     UITextArea details_;
-    std::vector<GRIM::MMO::ToolDescriptor> tools_;
+    std::vector<GRIM::MMO::RegisteredTool> tools_;
     std::vector<size_t> matches_;
     std::vector<std::pair<GRIM::MMO::ToolProviderType, std::string>> providers_;
     std::string query_, selectedId_;

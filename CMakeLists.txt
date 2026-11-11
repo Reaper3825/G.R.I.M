@@ -172,13 +172,6 @@ endif()
 # Allow GRIM.exe to export symbols for possible plugin use
 set_target_properties(GRIM PROPERTIES ENABLE_EXPORTS ON)
 
-# ✅ Compile the core plugin directly into the host
-target_sources(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/plugins/core_plugin.cpp)
-set_source_files_properties(
-    ${CMAKE_SOURCE_DIR}/plugins/core_plugin.cpp
-    PROPERTIES COMPILE_DEFINITIONS "GRIM_BUILD_HOST"
-)
-
 target_compile_definitions(GRIM PRIVATE GRIM_BUILD_HOST)
 
 include(cmake/Config.cmake)

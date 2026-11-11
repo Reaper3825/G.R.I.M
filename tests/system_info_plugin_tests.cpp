@@ -211,7 +211,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     check(live.observation().at("resources").size() == 7 && detectionCalls == beforeInspection,
           "Live inspection omitted objects or triggered hardware capture");
     const auto descriptor = registry.getTool("system_info");
-    check(descriptor && descriptor->provider_name == "System Information Plugin" && descriptor->provider_type == ToolProviderType::Plugin &&
+    check(descriptor && descriptor->provider.name == "System Information Plugin" && descriptor->provider.type == ToolProviderType::Plugin &&
           descriptor->permission_bits == GRIM_PERM_SYSTEM && descriptor->is_informational && !descriptor->needs_confirmation &&
           descriptor->category == "information" && descriptor->parameters.empty(),
           "System information metadata/policy incorrect");

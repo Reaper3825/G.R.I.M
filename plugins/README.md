@@ -1,5 +1,8 @@
 # Native GRIM tool plugins
 
+The current host requires plugin ABI v4. Rebuild v3 plugin binaries against
+[the v4 API](../docs/PLUGIN_API.md) before loading them.
+
 API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
 declares all nine standard panels; bootstrap registers host factories without
 creating their instances. Rebuild the host and UI plugin together for this
@@ -19,15 +22,14 @@ panel references and release interrupted requests. See
 
 API v3.12 adds `registration.short_description`: an authored 5-12 word summary
 for the environment tool catalog. The host copies it into the canonical
-descriptor; old plugin records default to empty. See
+descriptor. The summary defaults to empty. See
 [catalog summaries](../docs/PLUGIN_API.md#catalog-summaries-v312).
 
 API v3.11 adds optional world binding labels. Supply `GrimToolBinding` entries
 through `registration.bindings` and `registration.binding_count`; the host copies
 them into `ToolDescriptor::bindings`. For `open {t}`, use `{"t", "t"}`.
 Model-facing usage uses shared world placeholders; binding maps stay system-facing.
-These labels do not change argument parsing or execution. Older registration
-prefixes retain empty bindings. See [binding labels](../docs/PLUGIN_API.md#world-binding-labels-v311).
+These labels do not change argument parsing or execution. Bindings default to empty. See [binding labels](../docs/PLUGIN_API.md#world-binding-labels-v311).
 
 API v3.10 adds per-tool usage classification. Set
 `registration.usage_type` to `GRIM_TOOL_USAGE_DEBUG`, `GRIM_TOOL_USAGE_MODEL`,
@@ -35,9 +37,9 @@ API v3.10 adds per-tool usage classification. Set
 Model. Perception wrappers are Debug, and no voice-plugin tool is Model-facing.
 See [classification and compatibility](../docs/PLUGIN_API.md#tool-usage-classification-v310).
 These source classifications take effect after rebuilding the affected plugins
-and a host supporting API v3.10.
+and the host.
 
-Use the standalone build to produce API v3 plugin libraries without configuring
+Use the standalone build to produce API v4 plugin libraries without configuring
 or building GRIM:
 
     cmake -S plugins -B .codex-build/plugins-standalone -G "Visual Studio 17 2022" -A x64
@@ -73,7 +75,7 @@ completed file by rename where possible. Keep non-plugin dependencies outside
 the scanned top-level folder.
 
 See ../docs/PLUGIN_API.md for API ownership, reload behavior, limitations, and
-focused verification. The bundled core_plugin.cpp remains part of the host.
+focused verification.
 
 Deployment regression checks: `python -m unittest discover -s tests -p test_plugin_deployment.py -v`.
 They build a tiny synthetic plugin/host dependency fixture, never the GRIM application.
@@ -123,9 +125,8 @@ The plugin imports no host C++ symbols. Non-Windows stubs remain unchanged.
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -ApplicationPluginDirectory .codex-build/application-plugin/plugins
 
 Deploy `.codex-build/application-plugin/plugins/application_plugin.dll` into
-GRIM's `plugins/` folder. Rebuild the host separately for API v3.1 and removal of
-its old registrations. The new host continues to load v3.0 plugin binaries;
-the application plugin requires v3.1. The compatibility test uses a controlled
+GRIM's `plugins/` folder after rebuilding the host for API v4.
+The compatibility test uses a controlled
 native launch sink and does not open applications or browsers.
 
 ## Calculator plugin
@@ -190,8 +191,7 @@ usage, parameter, and example metadata and requires no permissions or confirmati
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -ToolInspectionPluginDirectory .codex-build/tool-inspection-plugin/plugins
 
 Deploy `.codex-build/tool-inspection-plugin/plugins/tool_inspection_plugin.dll`
-into GRIM's `plugins/` folder. Rebuild the host separately for API v3.2 and removal
-of its old registrations. The new host still supports v3.0/v3.1 plugin binaries.
+into GRIM's `plugins/` folder after rebuilding the host for API v4.
 The plugin imports no host C++ symbols; snapshots contain metadata, not handlers.
 The snapshot codec is shared as `MMO/Core/ToolDescriptorJson.hpp`.
 
@@ -229,8 +229,8 @@ See [System Information resources](../docs/SYSTEM_INFO_RESOURCES.md).
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -SystemInfoPluginDirectory .codex-build/system-info-plugin/plugins
 
 Deploy `.codex-build/system-info-plugin/plugins/system_info_plugin.dll` into
-GRIM's `plugins/` folder. Rebuild the host separately for API v3.19.
-Earlier v3.x plugin binaries remain supported by the new host.
+GRIM's `plugins/` folder after rebuilding the host for API v4.
+
 The tool requires system-information permission, is informational, and does not
 require confirmation. The shared snapshot codec is
 `MMO/Core/HardwareInventoryJson.hpp`.
@@ -246,8 +246,7 @@ For an isolated fixture build and resource lifecycle tests, run
 
 `timers_plugin` supplies `set_timer`; `memory_plugin` supplies `remember`,
 `recall`, and `forget`. Both use API v3.5 host services; neither imports host C++
-symbols or owns timer/storage state. Rebuild the host separately to expose v3.5
-and remove the former registrations. Older v3.x plugin binaries remain supported.
+symbols or owns timer/storage state.
 
     cmake -S plugins/timers_plugin -B .codex-build/timers-plugin -G "Visual Studio 17 2022" -A x64
     cmake --build .codex-build/timers-plugin --config Release --target timers_plugin --parallel 2
@@ -290,8 +289,7 @@ and installed nlohmann_json; it imports no host C++ or OpenCV symbols.
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -PerceptionPluginDirectory .codex-build/perception-plugin/plugins
 
 Deploy `.codex-build/perception-plugin/plugins/perception_plugin.dll` into GRIM's
-`plugins/` folder. Rebuild the host separately for API v3.6 and removal of the
-old registrations. Earlier v3.x plugins remain supported by the new host.
+`plugins/` folder after rebuilding the host for API v4.
 
 Commands preserve their original availability/error responses, ignored arguments,
 OCR defaults, and literal message/voice text. Empty text and error-looking host
@@ -316,8 +314,7 @@ messages; it does not truncate observations.
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -VoicePluginDirectory .codex-build/voice-plugin/plugins
 
 Deploy `.codex-build/voice-plugin/plugins/voice_plugin.dll` into GRIM's `plugins/`
-folder. Rebuild the host separately for API v3.7 and removal of its old voice/cache
-registrations. Earlier v3.x plugins remain supported by the new host.
+folder after rebuilding the host for API v4.
 
 The host retains microphone/Whisper context, streaming and its shared default
 session state, voice configuration, synthesis/playback, SAPI queries, and cache
@@ -371,13 +368,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps
 ```
 
 Deploy the completed `.codex-build/ui-plugin/plugins/ui_plugin.dll` into the
-application's `plugins/` folder after separately rebuilding the host for v3.8.
-This plugin requires v3.8; older v3.x binaries remain compatible with the new
-host. The new host no longer registers `console`, `toggle_settings`,
+application's `plugins/` folder after rebuilding the host for API v4.
+This plugin uses the panel operations introduced in v3.8. The new host no longer registers `console`, `toggle_settings`,
 `ui.show_surface`, or `ui.hide_surface`. Existing handler functions are retained.
-Surface creation/destruction and OSINT remain host tools.
-`ui.create_surface` is currently Ignore, retaining its host handler while creation
-is excluded from model discovery and World Lab adapter mapping.
+Surface lifecycle and OSINT findings panel handlers remain in the host.
 
 Tests load the real DLL against a controlled host UI queue and check metadata,
 validation, permissions, pending/completed/failure results, ownership, request
@@ -417,9 +411,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_click_target.ps1
 ```
 
 Deploy `.codex-build/input-plugin/plugins/input_plugin.dll` into the application's
-`plugins/` folder after separately rebuilding the host for API v3.9 and removal
-of the five old registrations. The new host supports earlier v3.x binaries;
-the input plugin rejects older APIs. Loading/unloading the DLL does not initialize
+`plugins/` folder after rebuilding the host for API v4. Loading or unloading the DLL does not initialize
 or destroy host perception/input state. Unload waits for active handlers and
 removes all five tools; source-file deletion is reconciled normally.
 
@@ -431,15 +423,7 @@ capture, model execution, application build, or package installation occurs.
 See [API details](../docs/PLUGIN_API.md#input-tool-migration-v39) and
 [grounded targeting](../docs/input/TOOLS.md#grounded-dispatch).
 
-### Remaining host tools
-
-These groups stay in the host until the plugin API can preserve their existing
-services and state. Replacing them with approximate plugin implementations would
-change behavior.
-
-| Group | Missing boundary for a behavior-preserving migration |
-|---|---|
-| UI surface lifecycle | `ui.create_surface` and `ui.destroy_surface` still use the host surface registry; OSINT panel handling remains outside this migration. |
+### Retained host handlers
 
 The eleven former AI/NLP/settings tools are retired from agent registration,
 with their handler logic retained for possible host/developer use. They are no

@@ -21,8 +21,8 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 3
-#define GRIM_API_VERSION_MINOR 19
+#define GRIM_API_VERSION_MAJOR 4
+#define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -122,7 +122,7 @@ struct GrimToolDescriptor {
     size_t parameter_count = 0;
     GrimStringList examples; // Reserved for ABI compatibility. Ignored by the host.
     GrimStringList aliases, keywords, capability_tags;
-    GrimStringList preconditions, context_requirements, affordance_tokens;
+    GrimStringList preconditions;
     uint32_t required_permissions = 0;
     uint32_t is_informational = 0;
     uint32_t needs_confirmation = 0;
@@ -165,14 +165,9 @@ struct GrimToolRegistration {
     GrimToolDescriptor descriptor;
     GrimToolHandler handler = nullptr;
     void* user_data = nullptr; // Plugin-owned until shutdown; not freed by the host.
-    // v3.10 extension; legacy registration prefixes default to Model.
-    // Kept outside the embedded descriptor to preserve its ABI and offsets.
     GrimToolUsage usage_type = GRIM_TOOL_USAGE_MODEL;
-    // v3.11: copied into canonical ToolDescriptor::bindings. Kept here to
-    // preserve the embedded descriptor and legacy registration offsets.
     const GrimToolBinding* bindings = nullptr;
     size_t binding_count = 0;
-    // v3.12: optional authored 5-12 word catalog summary.
     const char* short_description = nullptr;
 };
 

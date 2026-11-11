@@ -30,7 +30,6 @@ std::pair<std::string, std::string> parseInput(const std::string& text) {
     return {text.substr(0, space), space == std::string::npos ? "" : text.substr(space + 1)};
 }
 }
-void ensureCorePluginsRegistered() {}
 
 namespace {
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -139,7 +138,7 @@ int main(int argc, char** argv) try {
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
     check(registerOne(alpha, "alpha_later") == GRIM_OK, "Later registration failed");
     auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_later");
-    check(tool && tool->provider_name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY, "Later registration used last loaded plugin");
+    check(tool && tool->provider.name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY, "Later registration used last loaded plugin");
     check(beta->unregister_command(beta, "alpha_tool") == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's tool");
     GRIM::MMO::ToolRegistry::instance().registerSimple("builtin", "Builtin test", "test",
         [](const std::string&) { return CommandResult{}; });
@@ -217,68 +216,32 @@ int main(int argc, char** argv) try {
           "Binding labels were not copied before registration returned");
     check(snapshot && snapshot->usage_type == GRIM::MMO::ToolUsage::System &&
           snapshot->description == "copied metadata" && snapshot->version == "1.2.3" &&
-          snapshot->parameters[0].required && snapshot->provider_name == "staged" &&
-          snapshot->provider_path == "staged.dll" && snapshot->argument_format == "json" &&
+          snapshot->parameters[0].required && snapshot->provider.name == "staged" &&
+          snapshot->provider.path == "staged.dll" && snapshot->argument_format == "json" &&
           snapshot->argument_schema_json.find("properties") != std::string::npos &&
           snapshot->aliases == std::vector<std::string>{"staged_alias"}, "Descriptor copy lost fields");
     PluginAPI::cleanupPluginContext("staged");
 
-    // Old v3.x batches have a shorter stride. Keep both records and defaults.
-    struct LegacyRegistration {
-        uint32_t struct_size = sizeof(LegacyRegistration);
-        GrimToolDescriptor descriptor;
-        GrimToolHandler handler = nullptr;
-        void* user_data = nullptr;
-    };
-    static_assert(sizeof(LegacyRegistration) == offsetof(GrimToolRegistration, usage_type));
-    LegacyRegistration legacy[2];
-    for (size_t i = 0; i < 2; ++i) {
-        const auto source = definition(i ? "legacy_second" : "legacy_first");
-        legacy[i].descriptor = source.descriptor;
-        legacy[i].handler = source.handler;
-    }
-    check(beta->register_tools(beta, reinterpret_cast<const GrimToolRegistration*>(legacy), 2) == GRIM_OK &&
-          GRIM::MMO::ToolRegistry::instance().getTool("legacy_first")->usage_type == GRIM::MMO::ToolUsage::Model &&
-          GRIM::MMO::ToolRegistry::instance().getTool("legacy_second")->usage_type == GRIM::MMO::ToolUsage::Model,
-          "Legacy batch stride or default usage broken");
-    beta->unregister_command(beta, "legacy_first"); beta->unregister_command(beta, "legacy_second");
-    struct V310Registration {
-        uint32_t struct_size = sizeof(V310Registration);
-        GrimToolDescriptor descriptor;
-        GrimToolHandler handler = nullptr;
-        void* user_data = nullptr;
-        GrimToolUsage usage_type = GRIM_TOOL_USAGE_DEBUG;
-    };
-    static_assert(sizeof(V310Registration) == offsetof(GrimToolRegistration, bindings));
-    V310Registration v310[2];
-    for (size_t i = 0; i < 2; ++i) {
-        const auto source = definition(i ? "v310_second" : "v310_first");
-        v310[i].descriptor = source.descriptor; v310[i].handler = source.handler;
-    }
-    check(beta->register_tools(beta, reinterpret_cast<const GrimToolRegistration*>(v310), 2) == GRIM_OK &&
-          GRIM::MMO::ToolRegistry::instance().getTool("v310_first")->bindings.empty() &&
-          GRIM::MMO::ToolRegistry::instance().getTool("v310_second")->usage_type == GRIM::MMO::ToolUsage::Debug,
-          "v3.10 batch stride, classification, or empty binding default broken");
-    beta->unregister_command(beta, "v310_first"); beta->unregister_command(beta, "v310_second");
-    struct V311Registration {
-        uint32_t struct_size = sizeof(V311Registration);
-        GrimToolDescriptor descriptor;
-        GrimToolHandler handler = nullptr;
-        void* user_data = nullptr;
-        GrimToolUsage usage_type = GRIM_TOOL_USAGE_MODEL;
-        const GrimToolBinding* bindings = nullptr;
-        size_t binding_count = 0;
-    };
-    static_assert(sizeof(V311Registration) == offsetof(GrimToolRegistration, short_description));
-    V311Registration v311[2];
-    for (size_t i=0;i<2;++i) {
-        const auto source=definition(i ? "v311_second" : "v311_first");
-        v311[i].descriptor=source.descriptor;v311[i].handler=source.handler;
-    }
-    check(beta->register_tools(beta,reinterpret_cast<const GrimToolRegistration*>(v311),2)==GRIM_OK &&
-          GRIM::MMO::ToolRegistry::instance().getTool("v311_second")->short_description.empty(),
-          "v3.11 multi-record stride or empty summary default broken");
-    beta->unregister_command(beta,"v311_first");beta->unregister_command(beta,"v311_second");
+    auto first = definition("batch_first");
+    auto second = definition("batch_second");
+    second.usage_type = GRIM_TOOL_USAGE_DEBUG;
+    GrimToolRegistration batch[] = {first, second};
+    --batch[1].struct_size;
+    check(beta->register_tools(beta, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
+          !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
+          "Invalid registration size partially committed a batch");
+    batch[1] = second;
+    ++batch[1].descriptor.struct_size;
+    check(beta->register_tools(beta, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
+          !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
+          "Invalid descriptor size partially committed a batch");
+    batch[1] = second;
+    check(beta->register_tools(beta, batch, 2) == GRIM_OK &&
+          GRIM::MMO::ToolRegistry::instance().getTool("batch_first")->usage_type == GRIM::MMO::ToolUsage::Model &&
+          GRIM::MMO::ToolRegistry::instance().getTool("batch_second")->usage_type == GRIM::MMO::ToolUsage::Debug,
+          "v4 batch registration lost tool metadata");
+    beta->unregister_command(beta, "batch_first");
+    beta->unregister_command(beta, "batch_second");
     auto invalidSummary=definition("invalid_summary");invalidSummary.short_description="Too short";
     check(beta->register_tools(beta,&invalidSummary,1)==GRIM_ERROR_INVALID_PARAM,"Invalid short summary registered");
     auto badBinding = definition("bad_binding");
