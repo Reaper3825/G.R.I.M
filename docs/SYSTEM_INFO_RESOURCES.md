@@ -42,7 +42,7 @@ and timestamp. Device objects appear after enumeration. Success clears errors
 and atomically replaces the entire batch, removing devices no longer present.
 
 Identity includes the owning provider, `provider_instance`, and resource ID.
-Each object uses `runtime_id: 1` and has no operations. GPU keys follow the host
+Each object uses `runtime_id: 1`. GPU keys follow the host
 device index; monitor keys follow enumeration order. These indices identify
 enumeration slots, not persistent physical device identifiers across topology
 changes. Replacement and unload retire the provider's whole batch; an old

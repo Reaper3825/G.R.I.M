@@ -733,9 +733,9 @@ references use the `panel:` prefix, such as `panel:calendar`.
 Hidden panels remain registered objects; hiding does not destroy a resource.
 
 Enter the UI provider room, use `resources` or `look`, then
-`inspect-resource panel:calendar` to read its current state, runtime ID, provider
-generation, and supported operations. These are read-only commands; panel control
-still uses the existing UI tools. The action dropdown includes resource inspection.
+`inspect-resource panel:calendar` to read its current state, runtime ID,
+and provider generation. Panel control uses the existing UI tools. The action
+dropdown includes resource inspection.
 The canvas shows the resource under its provider without requiring `ui.list`.
 
 Resource revisions and room observations update as the actual panel changes.

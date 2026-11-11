@@ -17,7 +17,7 @@
 
 // Include plugin.hpp for GRIM_HOST_API macro
 #include "core/plugin.hpp"
-#include "MMO/Core/ResourceDescriptor.hpp"
+#include "MMO/Core/Descriptors/RegisteredResource.hpp"
 
 struct InputState; // Forward declaration
 
@@ -135,7 +135,7 @@ private:
     // UI-thread-owned implementation catalog; cleared at host shutdown.
     std::unordered_map<std::string, PanelFactoryEntry> m_panelFactories;
     std::unordered_map<std::string, PanelCleanup> m_panelCleanups;
-    std::unordered_map<std::string, GRIM::MMO::ResourceDescriptor> m_panelResources;
+    std::unordered_map<std::string, GRIM::MMO::RegisteredResource> m_panelResources;
     void synchronizePanelResources();
     OverlayRenderer m_renderer;  // Changed from UIRenderer to OverlayRenderer
     static constexpr int m_activePanelIndex = -1;  // Active panel always has zOrder = -1

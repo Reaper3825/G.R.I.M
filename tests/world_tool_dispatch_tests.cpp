@@ -1,5 +1,5 @@
 #include "ui/world_lab/world_tool_dispatch.hpp"
-#include "MMO/Core/ToolDescriptorJson.hpp"
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include <iostream>
 
 using Json = nlohmann::json;

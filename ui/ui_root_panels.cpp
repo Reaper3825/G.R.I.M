@@ -13,11 +13,10 @@ void UIRoot::bindPanelResource(const std::string& key, uint64_t runtime,
     const auto panel = getPanelByKey(key);
     if (!panel || panel->getPanelID() != runtime || m_panelResources.count(key))
         throw std::logic_error("Panel resource identity is missing, stale, or already bound");
-    GRIM::MMO::ResourceDescriptor r;
-    r.provider_name = provider; r.provider_instance = instance;
+    GRIM::MMO::RegisteredResource r;
+    r.provider = {GRIM::MMO::ToolProviderType::Plugin, provider, instance, {}};
     r.resource_id = "panel:" + key; r.kind = "ui.panel";
     r.name = panel->getTitle(); r.runtime_id = runtime;
-    r.operations = {"ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front"};
     m_panelResources.emplace(key, std::move(r));
     synchronizePanelResources();
 }
@@ -28,14 +27,14 @@ void UIRoot::synchronizePanelResources() {
         auto panel = getPanelByKey(it->first);
         auto& r = it->second;
         if (!panel || panel->getPanelID() != r.runtime_id) {
-            registry.removeResource(r); it = m_panelResources.erase(it); continue;
+            registry.removeResource(r.provider, r); it = m_panelResources.erase(it); continue;
         }
         r.name = panel->getTitle();
         const auto position = panel->getPosition(), size = panel->getSize();
         r.state = {{"visible", panel->isVisible()}, {"minimized", panel->isMinimized()},
             {"maximized", panel->isMaximized()}, {"position", {{"x", position.x}, {"y", position.y}}},
             {"size", {{"width", size.x}, {"height", size.y}}}, {"z_order", panel->getZOrder()}};
-        if (!registry.publishResource(r)) { it = m_panelResources.erase(it); continue; }
+        if (!registry.publishResource(r.provider, r)) { it = m_panelResources.erase(it); continue; }
         ++it;
     }
 }
@@ -140,7 +139,7 @@ void UIRoot::removePanel(const std::string& name)
         m_panelKeyMap.erase(panel->getPanelKey());
         const auto resource = m_panelResources.find(panel->getPanelKey());
         if (resource != m_panelResources.end()) {
-            GRIM::MMO::ToolRegistry::instance().removeResource(resource->second);
+            GRIM::MMO::ToolRegistry::instance().removeResource(resource->second.provider, resource->second);
             m_panelResources.erase(resource);
         }
 

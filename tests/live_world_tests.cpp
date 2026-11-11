@@ -44,16 +44,28 @@ int main() try {
         session.synchronize();
         check(std::filesystem::last_write_time(file) == timestamp, "Unchanged snapshot rewritten");
         ResourceDescriptor resource;
-        resource.provider_name = provider.name; resource.provider_instance = provider.instance;
         resource.resource_id = "navigation-fixture"; resource.name = "Fixture";
         resource.kind = "ui.panel"; resource.runtime_id = 1;
         resource.state = {{"visible", true}};
-        check(registry.publishResource(resource), "navigation resource fixture");
+        const auto toolRevision = registry.version();
+        check(registry.publishResource(provider, resource), "navigation resource fixture");
+        check(registry.version() == toolRevision, "Resource publication changed tool revision");
         session.synchronize();
         check(std::filesystem::last_write_time(file) == timestamp && loadJsonFile(file) == snapshot,
               "Resource update rewrote navigation snapshot");
         auto replacement = provider; replacement.instance = "second";
         check(registry.publishProvider(replacement, {}, provider.instance), "navigation replacement");
+        check(registry.snapshot().resourceCount() == 0, "Replacement kept retired resources");
+        check(!registry.publishResource(provider, resource), "Retired provider republished resource");
+        check(registry.publishResource(replacement, resource), "Replacement resource fixture");
+        registry.removeResource(provider, resource);
+        auto staleBinding = resource;
+        ++staleBinding.runtime_id;
+        registry.removeResource(replacement, staleBinding);
+        const auto current = registry.snapshot();
+        check(current.providers.size() == 1 && current.providers.front().provider == replacement &&
+              current.providers.front().resources == std::vector<ResourceDescriptor>{resource},
+              "Stale removal withdrew the current resource");
         session.synchronize();
         snapshot = loadJsonFile(file);
         check(snapshot.at("rooms").at(1).at("provider").at("instance") == "second" &&
@@ -77,13 +89,12 @@ int main() try {
         const ProviderDescriptor provider{ToolProviderType::Plugin, "Hardware fixture", "hardware-1", ""};
         check(registry.publishProvider(provider, {tool("cpu.tool")}), "hardware inspection provider");
         ResourceDescriptor resource;
-        resource.provider_name = provider.name; resource.provider_instance = provider.instance;
         resource.resource_id = "cpu"; resource.name = "CPU";
         resource.kind = "system_info.snapshot"; resource.runtime_id = 1;
         resource.state = {{"format", "grim-system-info-resource"}, {"version", 1}, {"component", "cpu"},
             {"data", {{"cpu_cores", 12}}}, {"capture_time_ns", 123000000000LL},
             {"stale", false}, {"error", nullptr}};
-        check(registry.publishResource(resource), "publish CPU fixture");
+        check(registry.publishResource(provider, resource), "publish CPU fixture");
         LiveWorldSession session(registry);
         session.command("inspect CPU");
         check(session.history().back().feedback.starts_with("Action rejected") &&
@@ -92,7 +103,7 @@ int main() try {
         session.command("inspect CPU");
         check(session.history().back().feedback == "CPU\nLogical cores: 12\nStatus: Current",
               "CPU inspection did not return the agreed readable format");
-        check(session.history().back().state.at("resource_inspection") == nlohmann::json(resource),
+        check(session.history().back().state.at("resource_inspection") == nlohmann::json(RegisteredResource{resource, provider}),
               "Inspection lost structured state, identity, or capture metadata");
         const auto historyState = session.history().back().state;
         // UI panels publish geometry/state every frame. These refreshes must not
@@ -100,7 +111,7 @@ int main() try {
         auto panel = resource;
         panel.resource_id = "panel:fixture"; panel.name = "Fixture panel"; panel.kind = "ui.panel";
         panel.state = {{"visible", true}, {"position", {{"x", 0}, {"y", 0}}}};
-        check(registry.publishResource(panel), "publish refresh regression fixture");
+        check(registry.publishResource(provider, panel), "publish refresh regression fixture");
         session.synchronize();
         check(session.history().back().action == "Resources changed" &&
               session.history().back().feedback == "Added: Hardware fixture / Fixture panel (panel:fixture)\n",
@@ -108,22 +119,22 @@ int main() try {
         const auto refreshHistory = session.history().size();
         for (int frame = 1; frame <= 100; ++frame) {
             panel.state["position"]["x"] = frame;
-            check(registry.publishResource(panel), "publish animated panel state");
+            check(registry.publishResource(provider, panel), "publish animated panel state");
             session.synchronize();
             check(session.history().size() == refreshHistory &&
-                  session.observation().at("resource_inspection") == nlohmann::json(resource),
+                  session.observation().at("resource_inspection") == nlohmann::json(RegisteredResource{resource, provider}),
                   "Frame refresh duplicated history or invalidated unrelated inspection");
         }
-        check(session.world().registry().resources.back().state == panel.state,
+        check(session.world().resourcesHere().back().state == panel.state,
               "Silent refresh failed to update live resource state");
         const auto stableRevision = registry.resourceVersion();
         for (int frame = 0; frame < 10; ++frame) {
-            check(registry.publishResource(panel), "republish unchanged panel state");
+            check(registry.publishResource(provider, panel), "republish unchanged panel state");
             session.synchronize();
         }
         check(session.history().size() == refreshHistory && registry.resourceVersion() == stableRevision,
               "Unchanged publication created history or resource revision churn");
-        registry.removeResource(panel); session.synchronize();
+        registry.removeResource(provider, panel); session.synchronize();
         check(session.history().size() == refreshHistory + 1 &&
               session.history().back().feedback == "Removed: Hardware fixture / Fixture panel (panel:fixture)\n",
               "Resource removal was missed or repeated the room snapshot");
@@ -134,7 +145,7 @@ int main() try {
         check(session.history().back().feedback == "CPU\nLogical cores: 12\nStatus: Current", "legacy inspection format differs");
         resource.state["stale"] = true;
         resource.state["error"] = {{"kind", "exception"}, {"message", "Fixture capture failed"}};
-        check(registry.publishResource(resource), "publish stale CPU");
+        check(registry.publishResource(provider, resource), "publish stale CPU");
         session.synchronize();
         check(!session.observation().contains("resource_inspection"), "Refresh retained an outdated inspection");
         session.command("inspect cpu");
@@ -145,7 +156,7 @@ int main() try {
               historyState.at("resource_inspection").at("state").at("stale") == false,
               "Inspection changed capture provenance or historical state");
         resource.state["data"] = nullptr; resource.state["capture_time_ns"] = nullptr;
-        check(registry.publishResource(resource), "publish unavailable CPU");
+        check(registry.publishResource(provider, resource), "publish unavailable CPU");
         session.command("inspect CPU");
         check(session.history().back().feedback.find("CPU information unavailable") != std::string::npos &&
               session.history().back().feedback.find("Logical cores") == std::string::npos,
@@ -153,24 +164,24 @@ int main() try {
         session.command("look");
         check(!session.observation().contains("resource_inspection"), "Unrelated action retained inspection result");
         resource.state["component"] = "memory"; resource.state["data"] = {{"ram_total_mb", 32768}};
-        check(resourceInspectionFeedback(resource).find("Total RAM: 32768 MB") != std::string::npos, "Memory formatting lost units");
+        check(resourceInspectionFeedback({resource, provider}).find("Total RAM: 32768 MB") != std::string::npos, "Memory formatting lost units");
         resource.state["component"] = "system";
         resource.state["data"] = {{"os_name", "Windows"}, {"arch", "x86_64"}, {"wifi_connected", true},
             {"gpu_count", 1}, {"monitor_count", 1}, {"desktop", {{"origin_x", -1920}, {"origin_y", 0}, {"width", 3840}, {"height", 1080}}}};
-        check(resourceInspectionFeedback(resource).find("Wi-Fi: Connected") != std::string::npos &&
-              resourceInspectionFeedback(resource).find("at (-1920, 0)") != std::string::npos, "System formatting lost Wi-Fi or signed geometry");
+        check(resourceInspectionFeedback({resource, provider}).find("Wi-Fi: Connected") != std::string::npos &&
+              resourceInspectionFeedback({resource, provider}).find("at (-1920, 0)") != std::string::npos, "System formatting lost Wi-Fi or signed geometry");
         resource.state["component"] = "gpu";
         resource.state["data"] = {{"device_index", 0}, {"name", "Fixture GPU"}, {"vram_mb", 8192},
             {"driver_version", ""}, {"has_cuda", true}, {"has_metal", false}, {"has_rocm", false}};
-        check(resourceInspectionFeedback(resource).find("Total VRAM: 8192 MB") != std::string::npos &&
-              resourceInspectionFeedback(resource).find("Driver: Unavailable") != std::string::npos, "GPU formatting lost capacity or unknown driver");
+        check(resourceInspectionFeedback({resource, provider}).find("Total VRAM: 8192 MB") != std::string::npos &&
+              resourceInspectionFeedback({resource, provider}).find("Driver: Unavailable") != std::string::npos, "GPU formatting lost capacity or unknown driver");
         resource.state["component"] = "monitor";
         resource.state["data"] = {{"monitor_index", 0}, {"x", -1920}, {"y", -200}, {"width", 1920}, {"height", 1080}, {"is_primary", false}};
-        check(resourceInspectionFeedback(resource).find("Position: (-1920, -200)") != std::string::npos &&
-              resourceInspectionFeedback(resource).find("Primary: No") != std::string::npos, "Monitor formatting lost topology");
+        check(resourceInspectionFeedback({resource, provider}).find("Position: (-1920, -200)") != std::string::npos &&
+              resourceInspectionFeedback({resource, provider}).find("Primary: No") != std::string::npos, "Monitor formatting lost topology");
         // A display name cannot redirect a command to a different object.
         auto duplicate = resource; duplicate.resource_id = "other";
-        check(registry.publishResource(duplicate), "publish ambiguous fixture");
+        check(registry.publishResource(provider, duplicate), "publish ambiguous fixture");
         session.command("inspect CPU");
         check(session.history().back().feedback.starts_with("Action rejected: Ambiguous"), "Ambiguous object name was guessed");
         session.command("inspect-resource cpu");
@@ -187,12 +198,15 @@ int main() try {
         const ProviderDescriptor builtin{ToolProviderType::Builtin, "builtin", "", ""};
         const ProviderDescriptor ui{ToolProviderType::Plugin, "UI Plugin", "ui-1", ""};
         const ProviderDescriptor collision{ToolProviderType::Plugin, "UI-Plugin", "other-1", ""};
-        world.reconcile({0, {builtin, ui}, {}});
+        const ProviderSnapshot builtinGroup{builtin};
+        const ProviderSnapshot uiGroup{.provider = ui, .published = true};
+        const ProviderSnapshot collisionGroup{.provider = collision, .published = true};
+        world.reconcile({0, 0, {builtinGroup, uiGroup}});
         world.move("UI");
         check(world.location() == world.roomId(providerKey(ui)) && world.document().find(world.location())->name == "UI",
               "Short provider name did not select/display UI room");
         world.move("/");
-        world.reconcile({1, {builtin, ui, collision}, {}});
+        world.reconcile({1, 0, {builtinGroup, uiGroup, collisionGroup}});
         check(world.providerPath(providerKey(builtin)) == "/builtin" &&
               world.providerPath(providerKey(ui)) == "/UI", "Readable provider paths missing");
         const auto alternate = world.providerPath(providerKey(collision));
@@ -201,9 +215,9 @@ int main() try {
         check(world.location() == world.roomId(providerKey(ui)), "Exact provider name navigation failed");
         world.move("/"); world.move(alternate);
         check(world.location() == world.roomId(providerKey(collision)), "Collision path selected wrong provider");
-        world.reconcile({2, {builtin, collision}, {}});
+        world.reconcile({2, 0, {builtinGroup, collisionGroup}});
         check(world.providerPath(providerKey(collision)) == alternate, "Unload reassigned another provider path");
-        world.reconcile({3, {collision, ui, builtin}, {}});
+        world.reconcile({3, 0, {collisionGroup, uiGroup, builtinGroup}});
         check(world.providerPath(providerKey(ui)) == "/UI", "Reload lost provider path");
     }
     auto& registry = ToolRegistry::instance();
@@ -277,18 +291,25 @@ int main() try {
 
     // Reader must never see a provider generation paired with another generation's tools.
     auto p = alpha; p.instance = "0";
-    check(registry.publishProvider(p, {tool("atomic.tool")}), "atomic fixture");
+    const auto atomicTool = [](const std::string& instance) {
+        auto registration = tool("atomic.tool");
+        registration.descriptor.description = instance;
+        return registration;
+    };
+    check(registry.publishProvider(p, {atomicTool(p.instance)}), "atomic fixture");
     std::atomic<bool> finished = false, inconsistent = false;
     std::thread reader([&] {
         while (!finished) {
             const auto s = registry.snapshot();
-            if (s.providers.size() != 1 || s.tools.size() != 1 || s.providers[0].instance != s.tools[0].provider.instance) inconsistent = true;
+            if (s.providers.size() != 1 || s.providers.front().tools.size() != 1 ||
+                s.providers.front().provider.instance != s.providers.front().tools.front().description)
+                inconsistent = true;
         }
     });
     bool published = true;
     for (int i = 1; i <= 100; ++i) {
         const auto old = p.instance; p.instance = std::to_string(i);
-        published &= registry.publishProvider(p, {tool("atomic.tool")}, old);
+        published &= registry.publishProvider(p, {atomicTool(p.instance)}, old);
     }
     finished = true; reader.join();
     check(published && !inconsistent, "mixed provider/tool snapshot");

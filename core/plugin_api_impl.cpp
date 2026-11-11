@@ -25,7 +25,7 @@
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/HardwareInventoryJson.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
-#include "../MMO/Core/ToolDescriptorJson.hpp"
+#include "../MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "helpers/grim_input.hpp"  // For GRIMInput::parseInput
 #include "synonyms.hpp"            // For normalizeWord() synonym resolution
@@ -962,8 +962,6 @@ static nlohmann::json captureHardware(PluginContext& owner, bool publish) {
         const auto add = [&](const std::string& id, const std::string& component,
                              const std::string& name, nlohmann::json data) {
             GRIM::MMO::ResourceDescriptor resource;
-            resource.provider_name = owner.name;
-            resource.provider_instance = owner.instance;
             resource.resource_id = id;
             resource.kind = "system_info.snapshot";
             resource.name = name;

@@ -2,11 +2,10 @@
 #include "live_world.hpp"
 #include "live_world_navigation_store.hpp"
 #include "MMO/Core/ToolRegistry.hpp"
-#include "MMO/Core/ToolDescriptorJson.hpp"
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "resource_inspection.hpp"
 #include <map>
 #include <sstream>
-#include <tuple>
 
 namespace GRIM::WorldLab {
 // A persistent manual live session, independent of compiled TextWorld episodes.
@@ -31,21 +30,26 @@ public:
             return;
         }
         const auto previousTools = catalogTools();
-        const auto previousResources = world_.registry().resources;
+        const auto previousResources = world_.resourcesHere();
         const auto changes = world_.reconcile(registry_.snapshot());
         navigationStore_.synchronize(world_.navigation());
         // Frame-level state publication is observation refresh, not a user action.
         // Keep an inspection valid when only unrelated resources changed.
         if (!resourceInspection_.is_null()) {
             bool retained = false;
-            for (const auto& resource : world_.registry().resources)
-                if (nlohmann::json(resource) == resourceInspection_) { retained = true; break; }
+            if (const auto* group = world_.providerInRoom(world_.location())) {
+                for (const auto& resource : group->resources)
+                    if (nlohmann::json(MMO::RegisteredResource{resource, group->provider}) == resourceInspection_) {
+                        retained = true;
+                        break;
+                    }
+            }
             if (!retained) resourceInspection_ = nullptr;
         }
         if (!changes.empty()) record("Providers changed", changes + describe());
         else if (previousTools != catalogTools()) record("Tools changed", describe());
         else {
-            const auto resourceChanges = describeResourceChanges(previousResources, world_.registry().resources);
+            const auto resourceChanges = describeResourceChanges(previousResources, world_.resourcesHere());
             if (!resourceChanges.empty()) record("Resources changed", resourceChanges);
         }
     }
@@ -71,7 +75,7 @@ public:
                 throw std::runtime_error("Resource is unavailable in the current provider room");
             } else if (command.starts_with("inspect ")) {
                 const auto id = command.substr(8);
-                const auto resources = world_.resourcesHere();
+                const auto& resources = world_.resourcesHere();
                 const auto tools = inspectableTools();
                 const MMO::ResourceDescriptor* selected = nullptr;
                 for (const auto& resource : resources)
@@ -101,12 +105,14 @@ public:
         for (const auto& t : world_.toolsHere()) {
             tools.push_back(t);
         }
-        for (const auto& t : inspectableTools()) commands.push_back("inspect " + t.tool_id);
+        const auto inspectable = inspectableTools();
+        for (const auto& t : inspectable) commands.push_back("inspect " + t.tool_id);
+        const auto* group = world_.providerInRoom(world_.location());
         auto resources = nlohmann::json::array();
         for (const auto& r : world_.resourcesHere()) {
-            resources.push_back(r); commands.push_back("inspect-resource " + r.resource_id);
+            resources.push_back(MMO::RegisteredResource{r, group->provider}); commands.push_back("inspect-resource " + r.resource_id);
             bool collision = false;
-            for (const auto& tool : inspectableTools()) collision |= tool.tool_id == r.resource_id;
+            for (const auto& tool : inspectable) collision |= tool.tool_id == r.resource_id;
             for (const auto& other : world_.resourcesHere())
                 collision |= other.resource_id != r.resource_id &&
                     (folded(other.resource_id) == folded(r.resource_id) || folded(other.name) == folded(r.resource_id));
@@ -133,7 +139,7 @@ public:
             for (const auto& room : world_.navigation().rooms) if (!room.parentId.empty())
                 text << room.path << " - " << room.name << '\n';
         } else {
-            const auto resources = world_.resourcesHere();
+            const auto& resources = world_.resourcesHere();
             text << "Live resources: " << resources.size() << '\n';
             for (const auto& r : resources) {
                 text << r.name << " (" << r.resource_id << ")";
@@ -151,32 +157,30 @@ public:
     }
 private:
     std::string describeResourceChanges(const std::vector<MMO::ResourceDescriptor>& before,
-                                       const std::vector<MMO::ResourceDescriptor>& after) const {
-        using Key = std::tuple<MMO::ToolProviderType, std::string, std::string>;
-        std::map<Key, const MMO::ResourceDescriptor*> previous, current;
-        const auto visible = [&](const MMO::ResourceDescriptor& r) {
-            return world_.roomId({r.provider_type, r.provider_name}) == world_.location();
-        };
-        for (const auto& r : before) if (visible(r)) previous.emplace(Key{r.provider_type, r.provider_name, r.resource_id}, &r);
-        for (const auto& r : after) if (visible(r)) current.emplace(Key{r.provider_type, r.provider_name, r.resource_id}, &r);
+                                        const std::vector<MMO::ResourceDescriptor>& after) const {
+        const auto* group = world_.providerInRoom(world_.location());
+        if (!group) return {};
+        std::map<std::string, const MMO::ResourceDescriptor*> previous, current;
+        for (const auto& resource : before) previous.emplace(resource.resource_id, &resource);
+        for (const auto& resource : after) current.emplace(resource.resource_id, &resource);
         std::ostringstream text;
-        const auto line = [&](const char* change, const MMO::ResourceDescriptor& r) {
-            text << change << ": " << providerRoomName(r.provider_name) << " / " << r.name
-                 << " (" << r.resource_id << ")\n";
+        const auto line = [&](const char* change, const MMO::ResourceDescriptor& resource) {
+            text << change << ": " << providerRoomName(group->provider.name) << " / " << resource.name
+                 << " (" << resource.resource_id << ")\n";
         };
-        for (const auto& [key, r] : current) {
-            const auto old = previous.find(key);
-            if (old == previous.end()) line("Added", *r);
+        for (const auto& [id, resource] : current) {
+            const auto old = previous.find(id);
+            if (old == previous.end()) line("Added", *resource);
             else {
                 const auto& p = *old->second;
-                // State (including capture timestamps and animated panel geometry)
-                // stays live in the projection without flooding session history.
-                if (p.provider_instance != r->provider_instance || p.runtime_id != r->runtime_id ||
-                    p.name != r->name || p.kind != r->kind || p.parent_id != r->parent_id || p.operations != r->operations)
-                    line("Updated", *r);
+                // Frame-level state changes refresh the projection without adding history.
+                if (p.runtime_id != resource->runtime_id || p.name != resource->name ||
+                    p.kind != resource->kind || p.parent_id != resource->parent_id)
+                    line("Updated", *resource);
             }
         }
-        for (const auto& [key, r] : previous) if (!current.count(key)) line("Removed", *r);
+        for (const auto& [id, resource] : previous)
+            if (!current.count(id)) line("Removed", *resource);
         return text.str();
     }
     static std::string folded(std::string value) {
@@ -184,25 +188,28 @@ private:
         return value;
     }
     void inspectResource(const std::string& command, const MMO::ResourceDescriptor& resource) {
-        const auto feedback = resourceInspectionFeedback(resource);
-        resourceInspection_ = resource;
-        record(command, feedback);
+        const auto* group = world_.providerInRoom(world_.location());
+        const MMO::RegisteredResource registered{resource, group->provider};
+        resourceInspection_ = registered;
+        record(command, resourceInspectionFeedback(registered));
     }
     std::vector<MMO::ToolDescriptor> inspectableTools() const {
-        if (!catalogOpen_) return world_.toolsHere();
+        return catalogOpen_ ? catalogModelTools() : world_.toolsHere();
+    }
+    std::vector<MMO::ToolDescriptor> catalogModelTools() const {
         std::vector<MMO::ToolDescriptor> result;
-        for (const auto& t : world_.registry().tools)
-            if (t.usage_type == MMO::ToolUsage::Model)
-                result.push_back(t);
+        for (const auto& group : world_.registry().providers)
+            for (const auto& tool : group.tools)
+                if (tool.usage_type == MMO::ToolUsage::Model) result.push_back(tool);
+        std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.tool_id < b.tool_id; });
         return result;
     }
     nlohmann::json catalogTools() const {
         auto entries = nlohmann::json::array();
-        for (const auto& t : world_.registry().tools)
-            if (t.usage_type == MMO::ToolUsage::Model)
-                entries.push_back({{"tool_id", t.tool_id},
-                    {"name", t.display_name.empty() ? t.tool_id : t.display_name},
-                    {"short_description", t.short_description.empty() ? t.description : t.short_description}});
+        for (const auto& tool : catalogModelTools())
+            entries.push_back({{"tool_id", tool.tool_id},
+                {"name", tool.display_name.empty() ? tool.tool_id : tool.display_name},
+                {"short_description", tool.short_description.empty() ? tool.description : tool.short_description}});
         return entries;
     }
     std::string describeCatalog() const {

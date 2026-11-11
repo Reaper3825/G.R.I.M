@@ -654,7 +654,7 @@ This service returns a host-owned JSON string, released with `string_free`:
   `examples`, `context_requirements`, and `affordance_tokens` as empty arrays for older readers.
   `provider_type` is numeric (0 built-in, 1 plugin). The legacy `swap_state` key
   is emitted as 0 (loaded) for version-1 readers. The codec lives in
-  `MMO/Core/ToolDescriptorJson.hpp`.
+  `MMO/Core/Descriptors/ToolDescriptorJson.hpp`.
 - Snapshots carry no handlers and do not execute tools or change counters.
   Calling an inspection command still records that command's own usage after
   its handler completes, as before. Snapshot strings remain independent of
@@ -955,9 +955,11 @@ and recreates the training panel, including its World Lab/live viewer session;
 unsaved panel-local state is not preserved by this migration. Runtime registration/removal APIs,
 widget parenting, and state persistence across replacement are subsequent stages.
 
-After construction the host binds each panel to a `ResourceDescriptor` owned by
-the calling provider generation. `ToolRegistrySnapshot.resources` contains live
-descriptors; `resource_revision` advances independently of the tool revision.
+After construction the host publishes each panel's `ResourceDescriptor` under
+the calling provider generation. The registry stores resource data with its
+provider record. `ToolRegistrySnapshot.providers` groups tool and resource
+descriptors under their owning provider generation. `resource_revision` advances
+independently of the tool revision.
 Provider replacement/unload removes old-generation descriptors under the registry
 lock, and stale generations cannot republish them. Runtime-ID checks protect
 removal. UI-thread frame sampling publishes actual title, visibility, minimized/
@@ -965,9 +967,7 @@ maximized state, position, size, and z-order, including direct mouse interaction
 Unchanged samples do not advance the resource revision. Panel removal and UI
 shutdown withdraw bindings. `parent_id` is reserved and must currently be empty.
 
-Each migrated panel publishes `panel:<stable-key>` of kind `ui.panel`, with the existing
-inspect/show/hide/bring-to-front tool IDs as supported operations. This metadata
-does not itself dispatch tools or bypass their argument and permission checks.
+Each migrated panel publishes `panel:<stable-key>` of kind `ui.panel`.
 
 ## Application catalog (v3.18)
 

@@ -14,7 +14,7 @@ ToolRegistry& ToolRegistry::instance() {
 bool ToolRegistry::publishProvider(const ProviderDescriptor& provider,
                                   const std::vector<ToolRegistration>& tools,
                                   const std::string& old_instance) {
-    if (old_instance.empty()) return registerBatch(provider, tools, false, true);
+    if (old_instance.empty()) return registerProviderTools(provider, tools, false, true);
     return replaceProvider(provider, old_instance, tools);
 }
 
@@ -23,17 +23,27 @@ ToolRegistrySnapshot ToolRegistry::snapshot() const {
     ToolRegistrySnapshot result;
     result.revision = version_;
     result.resource_revision = resourceVersion_;
-    for (const auto& [key, resource] : resources_) result.resources.push_back(resource);
-    auto providers = providers_;
-    for (const auto& [id, entry] : tools_) {
-        result.tools.push_back({entry->descriptor, *entry->provider});
-        if (entry->provider->type == ToolProviderType::Builtin)
-            providers.try_emplace(std::make_pair(entry->provider->type, entry->provider->name), entry->provider);
+    using Key = std::tuple<ToolProviderType, std::string, std::string>;
+    std::map<Key, ProviderSnapshot> groups;
+    const auto groupFor = [&](const ProviderDescriptor& provider) -> ProviderSnapshot& {
+        const auto [it, inserted] = groups.try_emplace({provider.type, provider.name, provider.instance});
+        if (inserted) it->second.provider = provider;
+        return it->second;
+    };
+    for (const auto& [key, record] : providers_) {
+        auto& group = groupFor(*record->descriptor);
+        group.published = true;
+        for (const auto& [id, resource] : record->resources)
+            group.resources.push_back(resource);
     }
-    for (const auto& [key, provider] : providers) result.providers.push_back(*provider);
-    std::sort(result.tools.begin(), result.tools.end(), [](const auto& a, const auto& b) {
-        return a.tool_id < b.tool_id;
-    });
+    for (const auto& [id, entry] : tools_)
+        groupFor(*entry->provider).tools.push_back(entry->descriptor);
+    for (auto& [key, group] : groups) {
+        std::sort(group.tools.begin(), group.tools.end(), [](const auto& a, const auto& b) {
+            return a.tool_id < b.tool_id;
+        });
+        result.providers.push_back(std::move(group));
+    }
     return result;
 }
 
@@ -41,68 +51,67 @@ uint64_t ToolRegistry::resourceVersion() const {
     std::lock_guard lock(mutex_);
     return resourceVersion_;
 }
-void ToolRegistry::pruneResourcesLocked() {
-    const auto removed = std::erase_if(resources_, [&](const auto& entry) {
-        const auto& r = entry.second;
-        const auto p = providers_.find({r.provider_type, r.provider_name});
-        return p == providers_.end() || p->second->instance != r.provider_instance;
-    });
-    if (removed) ++resourceVersion_;
+ToolRegistry::Resources* ToolRegistry::providerResourcesLocked(const ProviderDescriptor& provider) {
+    const auto owner = providers_.find({provider.type, provider.name});
+    if (owner == providers_.end() || owner->second->descriptor->instance != provider.instance) return nullptr;
+    return &owner->second->resources;
 }
-bool ToolRegistry::publishResource(const ResourceDescriptor& r) {
-    const auto validText = [](const std::string& value) {
-        return !value.empty() && value.size() <= 256 &&
-            value.find_first_of("\r\n\0", 0, 3) == std::string::npos;
-    };
-    if (!validText(r.resource_id) || !validText(r.name) || !validText(r.kind) ||
-        !r.parent_id.empty() || !r.runtime_id || !r.state.is_object())
-        throw std::invalid_argument("Invalid live resource");
+
+static bool validResourceText(const std::string& value) {
+    return !value.empty() && value.size() <= 256 &&
+        value.find_first_of("\r\n\0", 0, 3) == std::string::npos;
+}
+
+static bool validResource(const ResourceDescriptor& resource) {
+    return validResourceText(resource.resource_id) && validResourceText(resource.name) &&
+        validResourceText(resource.kind) && resource.parent_id.empty() &&
+        resource.runtime_id && resource.state.is_object();
+}
+
+bool ToolRegistry::publishResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource) {
+    if (!validResource(resource)) throw std::invalid_argument("Invalid live resource");
     std::lock_guard lock(mutex_);
-    const auto p = providers_.find({r.provider_type, r.provider_name});
-    if (p == providers_.end() || p->second->instance != r.provider_instance) return false;
-    const ResourceKey key{r.provider_type, r.provider_name, r.resource_id};
-    const auto existing = resources_.find(key);
-    if (existing != resources_.end() && existing->second == r) return true;
-    resources_.insert_or_assign(key, r);
+    auto* resources = providerResourcesLocked(provider);
+    if (!resources) return false;
+    const auto existing = resources->find(resource.resource_id);
+    if (existing != resources->end() && existing->second == resource) return true;
+    resources->insert_or_assign(resource.resource_id, resource);
     ++resourceVersion_;
     return true;
 }
-void ToolRegistry::removeResource(const ResourceDescriptor& r) {
+
+void ToolRegistry::removeResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource) {
     std::lock_guard lock(mutex_);
-    const auto it = resources_.find({r.provider_type, r.provider_name, r.resource_id});
-    if (it == resources_.end() || it->second.provider_instance != r.provider_instance ||
-        it->second.runtime_id != r.runtime_id) return;
-    resources_.erase(it);
+    auto* resources = providerResourcesLocked(provider);
+    if (!resources) return;
+    const auto existing = resources->find(resource.resource_id);
+    if (existing == resources->end() || existing->second.runtime_id != resource.runtime_id) return;
+    resources->erase(existing);
     ++resourceVersion_;
 }
 
 bool ToolRegistry::replaceResources(const ProviderDescriptor& provider, const std::string& kind,
                                     const std::vector<ResourceDescriptor>& resources) {
-    const auto valid = [](const std::string& s) {
-        return !s.empty() && s.size() <= 256 && s.find_first_of("\r\n\0", 0, 3) == std::string::npos;
-    };
-    if (!valid(kind) || resources.size() > 10000) throw std::invalid_argument("Invalid resource batch");
-    std::map<ResourceKey, ResourceDescriptor> batch;
-    for (const auto& r : resources) {
-        if (r.provider_type != provider.type || r.provider_name != provider.name ||
-            r.provider_instance != provider.instance || r.kind != kind || !valid(r.resource_id) ||
-            !valid(r.name) || !r.parent_id.empty() || !r.runtime_id || !r.state.is_object() ||
-            !batch.emplace(ResourceKey{r.provider_type, r.provider_name, r.resource_id}, r).second)
+    if (!validResourceText(kind) || resources.size() > 10000)
+        throw std::invalid_argument("Invalid resource batch");
+    Resources batch;
+    for (const auto& resource : resources) {
+        if (resource.kind != kind || !validResource(resource) ||
+            !batch.emplace(resource.resource_id, resource).second)
             throw std::invalid_argument("Invalid resource batch member");
     }
+
     std::lock_guard lock(mutex_);
-    const auto p = providers_.find({provider.type, provider.name});
-    if (p == providers_.end() || p->second->instance != provider.instance) return false;
-    auto next = resources_;
-    std::erase_if(next, [&](const auto& entry) {
-        const auto& r = entry.second;
-        return r.provider_type == provider.type && r.provider_name == provider.name && r.kind == kind;
-    });
-    for (const auto& [key, r] : batch) {
-        if (next.count(key)) throw std::invalid_argument("Resource ID belongs to another kind");
-        next.emplace(key, r);
+    auto* current = providerResourcesLocked(provider);
+    if (!current) return false;
+    auto next = *current;
+    std::erase_if(next, [&](const auto& entry) { return entry.second.kind == kind; });
+    next.merge(batch);
+    if (!batch.empty()) throw std::invalid_argument("Resource ID belongs to another kind");
+    if (next != *current) {
+        current->swap(next);
+        ++resourceVersion_;
     }
-    if (next != resources_) { resources_.swap(next); ++resourceVersion_; }
     return true;
 }
 
@@ -130,10 +139,10 @@ std::string ToolRegistry::resolveLocked(const std::string& name) const {
 
 bool ToolRegistry::registerTool(const ToolDescriptor& descriptor, ToolHandler handler, bool replace,
                                 const ProviderDescriptor& provider) {
-    return registerBatch(provider, {{descriptor, std::move(handler)}}, replace, false);
+    return registerProviderTools(provider, {{descriptor, std::move(handler)}}, replace, false);
 }
 
-bool ToolRegistry::registerBatch(const ProviderDescriptor& provider,
+bool ToolRegistry::registerProviderTools(const ProviderDescriptor& provider,
                                  const std::vector<ToolRegistration>& registrations,
                                  bool replace, bool publish) {
     if (registrations.empty() && !publish) return true;
@@ -153,10 +162,10 @@ bool ToolRegistry::registerBatch(const ProviderDescriptor& provider,
                 published != providers.end()) return false;
             for (const auto& [id, entry] : tools_)
                 if (entry->provider->type == provider.type && entry->provider->name == provider.name) return false;
-        } else if (published != providers.end() && *published->second != provider) return false;
+        } else if (published != providers.end() && *published->second->descriptor != provider) return false;
         const auto owner = published == providers.end()
-            ? std::make_shared<const ProviderDescriptor>(provider) : published->second;
-        if (publish) providers.emplace(key, owner);
+            ? std::make_shared<const ProviderDescriptor>(provider) : published->second->descriptor;
+        if (publish) providers.emplace(key, std::make_shared<ProviderRecord>(ProviderRecord{owner, {}}));
         auto candidate = tools_;
         std::unordered_set<std::string> seen;
         for (const auto& registration : registrations) {
@@ -178,7 +187,6 @@ bool ToolRegistry::registerBatch(const ProviderDescriptor& provider,
         listeners = listeners_;
         tools_.swap(candidate);
         providers_.swap(providers);
-        pruneResourcesLocked();
         alias_index_.swap(aliases);
         ++version_;
     }
@@ -203,13 +211,13 @@ bool ToolRegistry::replaceProvider(const ProviderDescriptor& provider, const std
         std::lock_guard lock(mutex_);
         auto providers = providers_;
         const auto owner = providers.find({provider.type, provider.name});
-        if (owner == providers.end() || owner->second->instance != old_instance) return false;
+        if (owner == providers.end() || owner->second->descriptor->instance != old_instance) return false;
         const auto previousProvider = owner->second;
         const auto nextProvider = std::make_shared<const ProviderDescriptor>(provider);
-        owner->second = nextProvider;
+        owner->second = std::make_shared<ProviderRecord>(ProviderRecord{nextProvider, {}});
         auto candidate = tools_;
         for (auto it = candidate.begin(); it != candidate.end();) {
-            if (it->second->provider == previousProvider) {
+            if (it->second->provider == previousProvider->descriptor) {
                 removed.push_back(it->first);
                 it = candidate.erase(it);
             } else ++it;
@@ -228,7 +236,7 @@ bool ToolRegistry::replaceProvider(const ProviderDescriptor& provider, const std
         listeners = listeners_;
         tools_.swap(candidate);
         providers_.swap(providers);
-        pruneResourcesLocked();
+        if (!previousProvider->resources.empty()) ++resourceVersion_;
         alias_index_.swap(aliases);
         ++version_;
         std::erase_if(removed, [&](const auto& id){ return seen.count(id) != 0; });
@@ -254,11 +262,13 @@ void ToolRegistry::unregisterInstance(const std::string& provider, const std::st
             if (owner.type == ToolProviderType::Plugin && owner.name == provider && owner.instance == instance) removed.push_back(id);
         }
         const auto owner = providers_.find({ToolProviderType::Plugin, provider});
-        const bool removeProvider = owner != providers_.end() && owner->second->instance == instance;
+        const bool removeProvider = owner != providers_.end() && owner->second->descriptor->instance == instance;
         if (removed.empty() && !removeProvider) return;
         listeners = listeners_;
-        if (removeProvider) providers_.erase(owner);
-        pruneResourcesLocked();
+        if (removeProvider) {
+            if (!owner->second->resources.empty()) ++resourceVersion_;
+            providers_.erase(owner);
+        }
         for (const auto& id : removed) tools_.erase(id);
         for (auto it = alias_index_.begin(); it != alias_index_.end();) {
             if (!tools_.count(it->second)) it = alias_index_.erase(it);
@@ -344,8 +354,10 @@ void ToolRegistry::unregisterByProvider(const std::string& provider, ToolProvide
         const auto owner = providers_.find({type, provider});
         if (removed.empty() && owner == providers_.end()) return;
         listeners = listeners_;
-        if (owner != providers_.end()) providers_.erase(owner);
-        pruneResourcesLocked();
+        if (owner != providers_.end()) {
+            if (!owner->second->resources.empty()) ++resourceVersion_;
+            providers_.erase(owner);
+        }
         for (const auto& id : removed) tools_.erase(id);
         for (auto it = alias_index_.begin(); it != alias_index_.end();) {
             if (!tools_.count(it->second)) it = alias_index_.erase(it);

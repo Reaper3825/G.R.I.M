@@ -1,10 +1,10 @@
 #pragma once
-#include "MMO/Core/ResourceDescriptor.hpp"
+#include "MMO/Core/Descriptors/RegisteredResource.hpp"
 #include <sstream>
 
 namespace GRIM::WorldLab {
 // Presentation only: inspection reads published state and never probes hardware.
-inline std::string resourceInspectionFeedback(const MMO::ResourceDescriptor& resource) {
+inline std::string resourceInspectionFeedback(const MMO::RegisteredResource& resource) {
     const auto& state = resource.state;
     if (resource.kind != "system_info.snapshot" ||
         state.value("format", "") != "grim-system-info-resource" || state.value("version", 0) != 1)

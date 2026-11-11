@@ -23,6 +23,7 @@ int main() try {
     Json selected;
     for (const auto& a : state.at("applications")) if (a.at("state").at("native_id") == "a") selected = a;
     check(selected.at("state").at("sources").size() == 2, "missing provenance");
+    check(!selected.contains("operations"), "Application resource retained operations metadata");
     const auto id = selected.at("resource_id");
     const auto runtime = selected.at("runtime_id");
     Json launch{{"resource_id", id}, {"runtime_id", runtime}, {"provider_instance", owner.instance}};
@@ -46,19 +47,19 @@ int main() try {
     state = catalog.request("refresh", Json::object());
     check(state.at("applications").at(0).at("resource_id") == id && state.at("applications").at(0).at("runtime_id") != runtime,
           "recreated identity/generation incorrect");
-    auto malformed = registry.snapshot().resources;
+    std::vector<ResourceDescriptor> malformed{registry.snapshot().providers.front().resources.front()};
     malformed.push_back(malformed.front());
     const auto before = registry.resourceVersion();
     rejects([&] { registry.replaceResources(owner, "application", malformed); });
-    check(registry.resourceVersion() == before && registry.snapshot().resources.size() == 1, "invalid batch partially published");
+    check(registry.resourceVersion() == before && registry.snapshot().resourceCount() == 1, "invalid batch partially published");
     auto replacement = owner; replacement.instance = "two";
     const auto latest = state.at("applications").at(0);
     auto retiredLaunch = Json{{"resource_id", latest.at("resource_id")}, {"runtime_id", latest.at("runtime_id")}, {"provider_instance", owner.instance}};
     check(registry.publishProvider(replacement, {}, owner.instance), "replacement");
-    check(registry.snapshot().resources.empty(), "replacement retained old resources");
+    check(registry.snapshot().resourceCount() == 0, "replacement retained old resources");
     rejects([&] { catalog.request("refresh", Json::object()); });
     rejects([&] { catalog.request("launch", retiredLaunch); });
-    check(registry.snapshot().resources.empty(), "retired catalog republished");
+    check(registry.snapshot().resourceCount() == 0, "retired catalog republished");
     registry.unregisterInstance(replacement.name, replacement.instance);
     owner.instance = "three";
     check(registry.publishProvider(owner, {}), "pagination provider");
@@ -74,7 +75,7 @@ int main() try {
         if (page.at("next_offset").is_null()) break;
         page = paged.request("list", {{"offset", page.at("next_offset")}});
     }
-    check(observed.size() == 180 && registry.snapshot().resources.size() == 180, "pagination hid registered resources");
+    check(observed.size() == 180 && registry.snapshot().resourceCount() == 180, "pagination hid registered resources");
     registry.unregisterInstance(owner.name, owner.instance);
     owner.instance = "four";
     check(registry.publishProvider(owner, {}), "failed backend provider");

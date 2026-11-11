@@ -1,5 +1,5 @@
 #pragma once
-#include "MMO/Core/ProviderDescriptor.hpp"
+#include "MMO/Core/Descriptors/ProviderDescriptor.hpp"
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>

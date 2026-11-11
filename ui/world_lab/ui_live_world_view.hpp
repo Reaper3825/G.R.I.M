@@ -83,8 +83,8 @@ public:
         for (auto* b : {send_.get(), exit_.get(), fit_.get()}) b->drawOverlay(renderer, {});
         commands_->drawOverlay(renderer, {});
         renderer.drawText({area.origin.x + 10, area.origin.y + 50},
-            std::to_string(session_.world().registry().providers.size()) + " providers - " +
-            std::to_string(session_.world().registry().resources.size()) + " live resources", UITheme::Colors::TextMuted, 13);
+            std::to_string(session_.world().document().paths.size() - 1) + " providers - " +
+            std::to_string(session_.world().registry().resourceCount()) + " live resources", UITheme::Colors::TextMuted, 13);
         renderer.drawText({area.origin.x + 10, area.origin.y + area.size.y - 22}, status_, UITheme::Colors::TextMuted, 12);
         if (!session_.navigationPersistenceError().empty())
             renderer.drawText({area.origin.x + 10, area.origin.y + 66},
@@ -114,10 +114,8 @@ private:
         const bool moved = id != gridRoom_;
         gridRoom_ = id;
         std::vector<const GRIM::MMO::ResourceDescriptor*> resources;
-        for (const auto& resource : world.registry().resources) {
-            if (world.roomId({resource.provider_type, resource.provider_name}) == id)
-                resources.push_back(&resource);
-        }
+        if (const auto* group = world.providerInRoom(id))
+            for (const auto& resource : group->resources) resources.push_back(&resource);
         std::sort(resources.begin(), resources.end(), [](const auto* a, const auto* b) {
             return std::tie(a->name, a->resource_id) < std::tie(b->name, b->resource_id);
         });
@@ -129,12 +127,13 @@ private:
         grid_->clearWidgets();
         for (const auto* resource : resources) {
             grid_->addWidget(std::make_shared<ResourceTile>(resource->name, [this, key = resource->resource_id] {
-                for (const auto& item : session_.world().registry().resources) {
-                    if (item.resource_id == key && session_.world().roomId({item.provider_type, item.provider_name}) == gridRoom_) {
-                        transcript_.setText(GRIM::WorldLab::resourceInspectionFeedback(item));
-                        transcript_.scrollToTop();
-                        break;
-                    }
+                const auto* group = session_.world().providerInRoom(gridRoom_);
+                if (!group) return;
+                for (const auto& item : group->resources) {
+                    if (item.resource_id != key) continue;
+                    transcript_.setText(GRIM::WorldLab::resourceInspectionFeedback({item, group->provider}));
+                    transcript_.scrollToTop();
+                    break;
                 }
             }));
         }

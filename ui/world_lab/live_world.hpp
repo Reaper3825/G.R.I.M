@@ -61,7 +61,8 @@ public:
     }
     std::string providerPath(const ProviderKey& key) const { return "/" + segments_.at(key); }
     const MMO::ProviderDescriptor* provider(const ProviderKey& key) const {
-        for (const auto& p : snapshot_.providers) if (providerKey(p) == key) return &p;
+        for (const auto& group : snapshot_.providers)
+            if (hasRoom(group) && providerKey(group.provider) == key) return &group.provider;
         return nullptr;
     }
     // Commit a complete projection so invalid snapshots cannot leave partial topology.
@@ -72,6 +73,9 @@ public:
         return changes;
     }
 private:
+    static bool hasRoom(const MMO::ProviderSnapshot& group) {
+        return group.published || group.provider.type == MMO::ToolProviderType::Builtin;
+    }
     void assignPath(const ProviderKey& key) {
         if (segments_.count(key)) return;
         std::string segment;
@@ -97,11 +101,11 @@ private:
         segments_.emplace(key, std::move(segment));
     }
     std::string reconcileSnapshot(MMO::ToolRegistrySnapshot snapshot) {
-        if (snapshot.providers.size() > 9999) throw std::runtime_error("Live world room limit reached");
+        if (std::count_if(snapshot.providers.begin(), snapshot.providers.end(), hasRoom) > 9999) throw std::runtime_error("Live world room limit reached");
         std::string changes;
         for (auto it = connections_.begin(); it != connections_.end();) {
             const auto found = std::find_if(snapshot.providers.begin(), snapshot.providers.end(),
-                [&](const auto& p) { return providerKey(p) == *it; });
+                [&](const auto& p) { return hasRoom(p) && providerKey(p.provider) == *it; });
             if (found == snapshot.providers.end()) {
                 changes += providerRoomName(it->second) + " disconnected: provider unloaded.\n";
                 if (location_ == roomId(*it)) {
@@ -111,12 +115,14 @@ private:
                 it = connections_.erase(it);
             } else {
                 const auto* previous = provider(*it);
-                if (previous && previous->instance != found->instance)
-                    changes += providerRoomName(found->name) + " updated to its replacement generation.\n";
+                if (previous && previous->instance != found->provider.instance)
+                    changes += providerRoomName(found->provider.name) + " updated to its replacement generation.\n";
                 ++it;
             }
         }
-        for (const auto& p : snapshot.providers) {
+        for (const auto& group : snapshot.providers) {
+            if (!hasRoom(group)) continue;
+            const auto& p = group.provider;
             const auto key = providerKey(p);
             if (connections_.insert(key).second) {
                 if (!ids_.count(key)) ids_[key] = "provider_" + std::to_string(nextId_++);
@@ -124,7 +130,7 @@ private:
                 changes += providerRoomName(p.name) + " registered: room added.\n";
             }
         }
-        const bool resourcesChanged = snapshot.resources != snapshot_.resources;
+        const bool resourcesChanged = snapshot.resource_revision != snapshot_.resource_revision;
         snapshot_ = std::move(snapshot);
         rebuild();
         if (!changes.empty() || resourcesChanged) ++revision_;
@@ -146,25 +152,22 @@ public:
             throw std::runtime_error("Return to System Hub before entering another provider room");
         location_ = target;
     }
+    const MMO::ProviderSnapshot* providerInRoom(const std::string& room) const {
+        for (const auto& group : snapshot_.providers)
+            if (hasRoom(group) && roomId(providerKey(group.provider)) == room) return &group;
+        return nullptr;
+    }
     std::vector<MMO::ToolDescriptor> toolsHere() const {
         std::vector<MMO::ToolDescriptor> result;
-        for (const auto& key : connections_) if (roomId(key) == location_) {
-            const auto* p = provider(key);
-            for (const auto& t : snapshot_.tools)
-                if (p && t.provider.type == p->type && t.provider.name == p->name &&
-                    t.provider.instance == p->instance && t.usage_type == MMO::ToolUsage::Model) result.push_back(t);
-        }
+        if (const auto* group = providerInRoom(location_))
+            for (const auto& tool : group->tools)
+                if (tool.usage_type == MMO::ToolUsage::Model) result.push_back(tool);
         return result;
     }
-    std::vector<MMO::ResourceDescriptor> resourcesHere() const {
-        std::vector<MMO::ResourceDescriptor> result;
-        for (const auto& r : snapshot_.resources) {
-            const ProviderKey key{r.provider_type, r.provider_name};
-            const auto* p = provider(key);
-            if (p && p->instance == r.provider_instance && roomId(key) == location_)
-                result.push_back(r);
-        }
-        return result;
+    const std::vector<MMO::ResourceDescriptor>& resourcesHere() const {
+        static const std::vector<MMO::ResourceDescriptor> empty;
+        const auto* group = providerInRoom(location_);
+        return group ? group->resources : empty;
     }
 private:
     void rebuild() {
@@ -186,16 +189,16 @@ private:
             ++index;
         }
         CardLayout::separate(next); // The live map displays room headers only.
-        for (const auto& r : snapshot_.resources) {
-            const ProviderKey key{r.provider_type, r.provider_name};
-            const auto* p = provider(key);
-            if (!p || p->instance != r.provider_instance) continue;
-            const auto identity = std::make_pair(key, r.resource_id);
-            auto [it, inserted] = resourceIds_.try_emplace(identity);
-            if (inserted) it->second = "resource_" + std::to_string(nextResourceId_++);
-            Entity entity{it->second, r.name, "object", roomId(key), "Live " + r.kind + " resource"};
-            entity.resourceBinding = ResourceBinding{r.kind, r.resource_id};
-            next.entities.push_back(std::move(entity));
+        for (const auto& group : snapshot_.providers) {
+            const auto key = providerKey(group.provider);
+            for (const auto& resource : group.resources) {
+                const auto identity = std::make_pair(key, resource.resource_id);
+                auto [it, inserted] = resourceIds_.try_emplace(identity);
+                if (inserted) it->second = "resource_" + std::to_string(nextResourceId_++);
+                Entity entity{it->second, resource.name, "object", roomId(key), "Live " + resource.kind + " resource"};
+                entity.resourceBinding = ResourceBinding{resource.kind, resource.resource_id};
+                next.entities.push_back(std::move(entity));
+            }
         }
         next.validate();
         document_ = std::move(next);

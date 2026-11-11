@@ -1,6 +1,6 @@
 #pragma once
 #include "core/plugin_api.hpp"
-#include "MMO/Core/ToolDescriptorJson.hpp"
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "commands/command_result.hpp"
 #include <algorithm>
 #include <optional>

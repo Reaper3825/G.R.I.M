@@ -16,7 +16,7 @@ int main() try {
     GRIM::Applications::Catalog catalog(provider, {{backend.name, [&] { return apps; }}},
         [](const auto&) { throw std::runtime_error("Smoke test must never launch applications"); });
     auto page = catalog.request("refresh", nlohmann::json::object());
-    if (!page.at("complete").get<bool>() || page.at("total") != identities.size() || registry.snapshot().resources.size() != identities.size())
+    if (!page.at("complete").get<bool>() || page.at("total") != identities.size() || registry.snapshot().resourceCount() != identities.size())
         throw std::runtime_error("Native discovery failed resource publication");
     for (;;) {
         if (page.dump().size() > 60000) throw std::runtime_error("Native catalog page too large");

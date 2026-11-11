@@ -34,14 +34,17 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     auto& registry = ToolRegistry::instance();
     const auto baseline = registry.toolCount();
     const auto resourceFor = [&](const std::string& provider, const std::string& id = "system") {
-        for (const auto& resource : registry.snapshot().resources)
-            if (resource.provider_name == provider && resource.resource_id == id) return resource;
-        return ResourceDescriptor{};
+        for (const auto& group : registry.snapshot().providers)
+            if (group.provider.name == provider)
+                for (const auto& resource : group.resources)
+                    if (resource.resource_id == id) return RegisteredResource{resource, group.provider};
+        return RegisteredResource{};
     };
     const auto resourcesFor = [&](const std::string& provider) {
-        std::vector<ResourceDescriptor> result;
-        for (const auto& resource : registry.snapshot().resources)
-            if (resource.provider_name == provider) result.push_back(resource);
+        std::vector<RegisteredResource> result;
+        for (const auto& group : registry.snapshot().providers)
+            if (group.provider.name == provider)
+                for (const auto& resource : group.resources) result.push_back({resource, group.provider});
         return result;
     };
     const auto folder = fs::temp_directory_path() / ("grim-system-info-test-" +
@@ -158,7 +161,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
           PluginAPI::commitPluginTools(contexts.second, first), "Cannot replace hardware provider");
     const auto secondResource = resourceFor("hardware-fixture");
     const auto afterReplacement = detectionCalls;
-    check(secondResource.provider_instance != firstResource.provider_instance &&
+    check(secondResource.provider.instance != firstResource.provider.instance &&
           first->get_hardware_snapshot(first) == nullptr && detectionCalls == afterReplacement &&
           resourceFor("hardware-fixture") == secondResource, "Retired provider refreshed replacement hardware");
     PluginAPI::beginPluginShutdown(first);
@@ -177,7 +180,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
           initialResource.state.at("data").at("wifi_connected") == true &&
           initialResource.state.at("data").at("desktop").at("origin_x") == -1920 &&
           initialResource.state.at("data").at("desktop").at("height") == 1280 &&
-          initialResources.size() == 7 && initialResource.operations.empty() &&
+          initialResources.size() == 7 &&
           resourceFor("System Information Plugin", "hardware").resource_id.empty(),
           "Plugin hardware resource missing or incorrect");
     check(resourceFor("System Information Plugin", "cpu").state.at("data") == nlohmann::json{{"cpu_cores", 12}} &&
@@ -189,7 +192,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     for (const auto& resource : initialResources) {
         check(resource.state.at("format") == "grim-system-info-resource" && resource.state.at("version") == 1 &&
               resource.state.at("capture_time_ns") == 123000000000LL && !resource.state.at("stale").get<bool>() &&
-              resource.state.at("error").is_null() && resource.operations.empty(),
+              resource.state.at("error").is_null(),
               "Organized resource capture metadata inconsistent");
         for (const char* removed : {"audio_output_device", "audio_input_device", "has_sapi", "has_say",
                                     "has_piper", "suggested_whisper_model"})
@@ -197,10 +200,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     }
     GRIM::WorldLab::LiveWorldSession live(registry);
     // Room paths are derived from provider names; resolve rather than assume their spelling.
-    for (const auto& resource : live.world().registry().resources) if (resource == initialResource) {
-        live.command("go " + live.world().document().roomPath(live.world().roomId(
-            {resource.provider_type, resource.provider_name})));
-    }
+    live.command("go " + live.world().providerPath(GRIM::WorldLab::providerKey(initialResource.provider)));
     const auto beforeInspection = detectionCalls;
     for (const auto& resource : initialResources) {
         live.command("inspect-resource " + resource.resource_id);
@@ -232,7 +232,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     detectedInventory.gpus.clear();
     matches(invoke(), header + "GPU        : Unknown (1 device(s))\nSuggested Whisper model: base.en\n");
     const auto refreshedResource = resourceFor("System Information Plugin");
-    check(refreshedResource.provider_instance == initialResource.provider_instance &&
+    check(refreshedResource.provider.instance == initialResource.provider.instance &&
           refreshedResource.runtime_id == initialResource.runtime_id &&
           resourceFor("System Information Plugin", "gpu_0").resource_id.empty() &&
           resourceFor("System Information Plugin", "gpu_1").resource_id.empty() &&

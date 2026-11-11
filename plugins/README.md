@@ -193,7 +193,7 @@ usage, parameter, and example metadata and requires no permissions or confirmati
 Deploy `.codex-build/tool-inspection-plugin/plugins/tool_inspection_plugin.dll`
 into GRIM's `plugins/` folder after rebuilding the host for API v4.
 The plugin imports no host C++ symbols; snapshots contain metadata, not handlers.
-The snapshot codec is shared as `MMO/Core/ToolDescriptorJson.hpp`.
+The snapshot codec is shared as `MMO/Core/Descriptors/ToolDescriptorJson.hpp`.
 
 Tests cover complete metadata, alias/display-name lookup, unchanged result fields,
 statistics limits and errors, large entries/results, copy isolation, lifecycle

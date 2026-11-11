@@ -1,5 +1,5 @@
 #include "MMO/Core/ToolRegistry.hpp"
-#include "MMO/Core/ToolDescriptorJson.hpp"
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "MMO/Core/ToolGapPlanner.hpp"
 #include "commands/commands_core.hpp"
 #include "core/plugin.hpp"

@@ -1,6 +1,6 @@
 // The authoritative store for tool metadata and execution bindings.
 #pragma once
-#include "ToolDescriptor.hpp"
+#include "Descriptors/RegisteredTool.hpp"
 #include "ToolRegistrySnapshot.hpp"
 #include "ToolExecutionMode.hpp"
 #include <functional>
@@ -50,11 +50,11 @@ public:
                          const std::string& old_instance = {});
     ToolRegistrySnapshot snapshot() const;
     // Host publication only. Resource changes do not invalidate tool selections.
-    bool publishResource(const ResourceDescriptor& resource);
+    bool publishResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource);
     // Atomically replace one resource kind for an exact provider generation.
     bool replaceResources(const ProviderDescriptor& provider, const std::string& kind,
                           const std::vector<ResourceDescriptor>& resources);
-    void removeResource(const ResourceDescriptor& resource);
+    void removeResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource);
     uint64_t resourceVersion() const;
     void unregisterInstance(const std::string& provider, const std::string& instance);
     // Update documentation/policy without losing the callable or execution stats.
@@ -96,7 +96,7 @@ public:
 
 private:
     ToolRegistry() = default;
-    bool registerBatch(const ProviderDescriptor&, const std::vector<ToolRegistration>&, bool replace, bool publish);
+    bool registerProviderTools(const ProviderDescriptor&, const std::vector<ToolRegistration>&, bool replace, bool publish);
     bool replaceProvider(const ProviderDescriptor&, const std::string&, const std::vector<ToolRegistration>&);
     using Provider = std::shared_ptr<const ProviderDescriptor>;
     struct Entry { ToolDescriptor descriptor; ToolHandler handler; Provider provider; };
@@ -106,13 +106,16 @@ private:
     std::string resolveLocked(const std::string& name) const;
     mutable std::mutex mutex_;
     Entries tools_;
-    std::map<std::pair<ToolProviderType, std::string>, Provider> providers_;
+    using Resources = std::map<std::string, ResourceDescriptor>;
+    struct ProviderRecord {
+        Provider descriptor;
+        Resources resources;
+    };
+    std::map<std::pair<ToolProviderType, std::string>, std::shared_ptr<ProviderRecord>> providers_;
+    Resources* providerResourcesLocked(const ProviderDescriptor& provider);
     Aliases alias_index_;
     uint64_t version_ = 0;
     uint64_t resourceVersion_ = 0;
-    using ResourceKey = std::tuple<ToolProviderType, std::string, std::string>;
-    std::map<ResourceKey, ResourceDescriptor> resources_;
-    void pruneResourcesLocked();
     std::vector<ToolRegistryListener*> listeners_;
 };
 } // namespace GRIM::MMO
