@@ -15,15 +15,6 @@ std::string lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return text;
 }
-const char* status(ToolSwapState state) {
-    switch (state) {
-        case ToolSwapState::Loaded: return "Loaded";
-        case ToolSwapState::Loading: return "Loading";
-        case ToolSwapState::Unloading: return "Unloading";
-        case ToolSwapState::Unavailable: return "Unavailable";
-    }
-    return "Unknown";
-}
 std::string documented(const std::string& text) { return text.empty() ? "Not documented" : text; }
 void strings(std::ostringstream& out, const char* label, const std::vector<std::string>& values) {
     out << '\n' << label << ":";
@@ -41,7 +32,6 @@ std::string detailText(const ToolDescriptor& tool) {
         << " / " << documented(tool.provider_name) << '\n'
         << "Source file: " << documented(tool.provider_path) << '\n'
         << "Version: " << documented(tool.version) << '\n'
-        << "Status: " << status(tool.swap_state) << '\n'
         << "Type: " << (tool.is_informational ? "Informational" : "State-changing") << '\n'
         << "Confirmation required: " << (tool.needs_confirmation ? "Yes" : "No") << '\n'
         << "Permission bits: " << tool.permission_bits << "\n\n"
@@ -56,7 +46,6 @@ std::string detailText(const ToolDescriptor& tool) {
     else for (const auto& p : tool.parameters)
         out << "\n  " << p.name << " (" << documented(p.type) << ", "
             << (p.required ? "required" : "optional") << ")\n    " << documented(p.description) << '\n';
-    strings(out, "Examples", tool.examples);
     strings(out, "Aliases", tool.aliases);
     strings(out, "Keywords", tool.keywords);
     strings(out, "Preconditions", tool.preconditions);
@@ -207,7 +196,7 @@ void UITrainingToolsView::draw(OverlayRenderer& renderer, const PanelRect& conte
             const float width = std::max(0.0f, list_.getSize().x - 24);
             if (tool.tool_id == selectedId_) renderer.drawRect({p.x + 2, y}, {width, rowHeight - 2}, Colors::PanelBg);
             renderer.drawText({p.x + 6, y + 3}, UIDrawHelpers::truncateText(tool.tool_id, std::max(0.0f, width - 12)), Colors::TextPrimary);
-            const auto summary = documented(tool.category) + " | " + documented(tool.provider_name) + " | " + status(tool.swap_state);
+            const auto summary = documented(tool.category) + " | " + documented(tool.provider_name);
             renderer.drawText({p.x + 6, y + 24}, UIDrawHelpers::truncateText(summary, std::max(0.0f, width - 12)), Colors::TextSecondary);
         }
         y += rowHeight;

@@ -69,7 +69,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.argument_format = "raw_text";
         d.is_informational = i == 1;
         d.needs_confirmation = i == 0;
-        d.examples = {&ids[i], 1};
     }
     return api->register_tools(api, tools, 2);
 }

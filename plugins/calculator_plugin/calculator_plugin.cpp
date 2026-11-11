@@ -436,8 +436,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     parameter.required = 1;
     d.parameters = &parameter;
     d.parameter_count = 1;
-    const char* examples[] = {"calculate 2 + 3 * 4", "calculate sqrt(144) + 2^3"};
-    d.examples = {examples, 2};
     return api->register_tools(api, &tool, 1);
 }
 

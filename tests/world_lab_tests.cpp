@@ -86,8 +86,6 @@ void runWorldLabTests(){
         registry.registerTool(tool,[&](const std::string&){++invocations;return CommandResult{};});
         auto debug=tool;debug.tool_id="catalog_debug";debug.usage_type=GRIM::MMO::ToolUsage::Debug;
         registry.registerTool(debug,[](const std::string&){return CommandResult{};});
-        auto unavailable=tool;unavailable.tool_id="catalog_unavailable";unavailable.swap_state=GRIM::MMO::ToolSwapState::Unavailable;
-        registry.registerTool(unavailable,[](const std::string&){return CommandResult{};});
         const auto response=[] {return nlohmann::json{{"ok",true},{"result",{{"state",{
             {"feedback","static"},{"observation_request",{{"provider","tool_catalog"},{"entity_id","catalog"}}}}}}}};};
         auto first=response();resolveHostObservation(first);
@@ -114,7 +112,7 @@ void runWorldLabTests(){
             "Deeper inspection omitted tool documentation");
         check(!detail.at("tool_details").contains("bindings") && !detail.at("tool_details").contains("provider_name") &&
             invocations==0 && registry.getTool(tool.tool_id)->usage_count==0,"Tool inspection leaked internals or invoked a handler");
-        for(const auto* id:{"catalog_debug","catalog_unavailable","missing"})
+        for(const auto* id:{"catalog_debug","missing"})
             check(!details(id).contains("tool_details"),"Deeper inspection exposed unavailable or nonmodel tool metadata");
         tool.usage_type=GRIM::MMO::ToolUsage::System;registry.updateMetadata(tool);
         check(!details(tool.tool_id).contains("tool_details"),"Inspection ignored a tool reclassified after listing");

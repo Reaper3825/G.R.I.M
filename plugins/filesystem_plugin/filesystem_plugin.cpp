@@ -107,7 +107,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         tools[1].bindings = directoryBindings; tools[1].binding_count = 1;
         tools[3].bindings = directoryBindings; tools[3].binding_count = 1;
         tools[4].bindings = pathBindings; tools[4].binding_count = 1;
-        const char* examples[] = {"pwd", "cd C:/Users", "ls", "mkdir new folder", "rm old.txt"};
         GrimToolParameter paths[5];
         for (size_t i = 0; i < 5; ++i) {
             tools[i].usage_type = GRIM_TOOL_USAGE_SYSTEM;
@@ -124,7 +123,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             d.required_permissions = GRIM_PERM_FILESYSTEM;
             d.is_informational = i == Pwd || i == Ls;
             d.needs_confirmation = !d.is_informational;
-            d.examples = {&examples[i], 1};
             if (i == Cd || i == Mkdir || i == Rm) {
                 paths[i].name = "path";
                 paths[i].type = "path";

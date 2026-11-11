@@ -84,7 +84,7 @@ void runInputPluginTests(const std::filesystem::path& directory) {
         check(descriptor && descriptor->provider_name == "Input Plugin" && descriptor->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
               descriptor->needs_confirmation && !descriptor->is_informational && descriptor->argument_format == "raw_text" &&
               descriptor->permission_bits == (GRIM_PERM_INPUT | (i == 4 ? GRIM_PERM_SYSTEM : 0)) &&
-              descriptor->parameters.size() == 1 && !descriptor->examples.empty(), "Input metadata/policy incomplete");
+              descriptor->parameters.size() == 1, "Input metadata/policy incomplete");
         fixture = {true, "complete result " + std::to_string(i), "ERR_NONE", "routine", "voice", Colors::Cyan};
         fixture.structuredOutputJson = R"({"input_sent":true,"application_response_verified":false,"desktop_x":-123})";
         same(dispatchCommand(ids[i], arguments[i]), fixture);

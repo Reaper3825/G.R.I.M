@@ -152,8 +152,7 @@ public:
             const auto* p = provider(key);
             for (const auto& t : snapshot_.tools)
                 if (p && t.provider_type == p->type && t.provider_name == p->name &&
-                    t.provider_instance == p->instance && t.usage_type == MMO::ToolUsage::Model &&
-                    t.swap_state == MMO::ToolSwapState::Loaded) result.push_back(t);
+                    t.provider_instance == p->instance && t.usage_type == MMO::ToolUsage::Model) result.push_back(t);
         }
         return result;
     }

@@ -36,8 +36,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     d.argument_format = "raw_text";
     d.required_permissions = GRIM_PERM_SYSTEM;
     d.is_informational = 1;
-    const char* examples[] = {"system_info"};
-    d.examples = {examples, 1};
     const auto registered = api->register_tools(api, &tool, 1);
     return registered == GRIM_OK ? api->register_hardware_resource(api) : registered;
 }

@@ -26,7 +26,7 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
           !d.needs_confirmation && !d.required_permissions, "Invalid tool policy");
     check(d.parameter_count == 1 && d.parameters[0].required &&
           std::string(d.parameters[0].name) == "expression", "Missing expression parameter");
-    check(tool.binding_count == 1 && d.examples.count == 2, "Missing tool documentation");
+    check(tool.binding_count == 1, "Missing tool documentation");
     handler = tool.handler;
     ToolDescriptor descriptor;
     descriptor.tool_id = d.tool_id;
@@ -42,7 +42,6 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
     descriptor.needs_confirmation = d.needs_confirmation;
     descriptor.usage_type = ToolUsage::Model;
     descriptor.bindings.emplace(tool.bindings[0].placeholder, tool.bindings[0].type);
-    for (size_t i = 0; i < d.examples.count; ++i) descriptor.examples.emplace_back(d.examples.items[i]);
     return ToolRegistry::instance().registerBatch("Calculator Plugin", {{descriptor,
         [](const std::string& arguments) {
             struct Capture { CommandResult result; int completions = 0; } capture;

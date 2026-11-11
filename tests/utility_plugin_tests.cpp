@@ -44,7 +44,7 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
         check(tool && tool->provider_name == "Utility Plugin" &&
               tool->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
               fs::path(tool->provider_path) == folder / "utility_plugin.dll" &&
-              tool->permission_bits == 0 && tool->parameters.empty() && tool->examples.size() == 1 &&
+              tool->permission_bits == 0 && tool->parameters.empty() &&
               tool->is_informational == isHelp && tool->needs_confirmation != isHelp &&
               tool->category == (isHelp ? "information" : "system"), "Utility metadata changed policy or provider");
     }

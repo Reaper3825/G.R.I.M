@@ -67,7 +67,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Press a key or combination of keys",
         "Click a uniquely identified visible interface element"};
     tools[4].bindings = targetBindings; tools[4].binding_count = 1;
-    const char* examples[] = {"move_mouse -1200 300", "click left", "type Hello world", "key ctrl+c", "click_on text Submit"};
     const char* names[] = {"coordinates", "button", "text", "keys", "target"};
     const char* parameterDescriptions[] = {"Two signed integers, comma- or whitespace-separated; uses existing integer-prefix parsing",
         "Button name; omitted means left; retains existing host interpretation",
@@ -89,7 +88,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         parameters[i].name = names[i]; parameters[i].type = "string";
         parameters[i].description = parameterDescriptions[i]; parameters[i].required = i != 1;
         d.parameters = &parameters[i]; d.parameter_count = 1;
-        d.examples = {&examples[i], 1}; d.context_requirements = {context, 1}; d.capability_tags = {tags, 2};
+        d.context_requirements = {context, 1}; d.capability_tags = {tags, 2};
         if (i == 4) d.preconditions = {grounded, 1};
     }
     return api->register_tools(api, tools, 5);

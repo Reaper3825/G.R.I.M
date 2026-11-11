@@ -92,7 +92,7 @@ meaning. Usage targets use the shared world vocabulary, such as `{t}`, `{c}`,
 and `{o}`, rather than subsystem-specific names such as `{panel_id}` or `{path}`.
 `<value>` and `[optional]` continue to document ordinary values/options. Usage
 labels are not necessarily literal handler calls: `ui.show {t}` describes the
-semantic action, while its examples and argument schema retain the actual JSON
+semantic action, while its argument schema describes the actual JSON
 format. World Lab now supplies an explicit host adapter for `ui.list`, `ui.inspect`,
 `ui.show`, and `ui.hide`; binding labels alone still do not implement argument conversion.
 See [manual UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
@@ -170,7 +170,8 @@ Descriptors require a canonical tool ID, display name, tool version,
 description, usage, category, and argument format. They can additionally supply:
 
 - Named parameters with types, descriptions, and required flags.
-- Usage examples, aliases, keywords, and capability tags.
+- Aliases, keywords, and capability tags. The legacy registration slot for
+  examples is reserved for ABI compatibility.
 - Preconditions, context requirements, and affordance tokens.
 - Required permission bits, informational/action classification, and a
   confirmation requirement.
@@ -554,7 +555,7 @@ and refresh on plugin registration/removal. Its focused host UI regression is:
 ### Filesystem migration
 
 `filesystem_plugin` owns the former built-in `pwd`, `cd`, `ls`, `mkdir`, and `rm`
-tools. It registers one atomic batch with path parameters, examples, usage,
+tools. It registers one atomic batch with path parameters, usage,
 filesystem permissions, and informational/confirmation metadata. It uses no
 host globals or imported host symbols. `clean` and `help` are provided by the
 separate `utility_plugin`.
@@ -662,12 +663,13 @@ This service returns a host-owned JSON string, released with `string_free`:
   call copies the registry's current entries under its existing mutex.
 - A supplied string uses the registry's existing canonical-ID, display-name, and
   alias lookup. Missing tools yield an empty `tools` array; a null return means
-  API failure. Unavailable registrations remain inspectable.
+  API failure. Plugin tools appear while their provider generation is published.
 - Each entry includes every field of `ToolDescriptor`: identity and provider
   generation/source, documentation, arguments/schema/parameters, policy,
-  prerequisites/context/affordances, aliases/keywords/tags, lifecycle, and stats.
-  `provider_type` is numeric (0 built-in, 1 plugin); `swap_state` is numeric
-  (0 loaded, 1 loading, 2 unloading, 3 unavailable). The version-1 codec lives in
+  prerequisites/context/affordances, aliases/keywords/tags, and stats.
+  The legacy `examples` key is emitted as an empty array for version-1 readers.
+  `provider_type` is numeric (0 built-in, 1 plugin). The legacy `swap_state` key
+  is emitted as 0 (loaded) for version-1 readers. The codec lives in
   `MMO/Core/ToolDescriptorJson.hpp`.
 - Snapshots carry no handlers and do not execute tools or change counters.
   Calling an inspection command still records that command's own usage after

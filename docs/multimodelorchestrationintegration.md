@@ -114,7 +114,7 @@ Minimum useful descriptor fields:
 - `provider_type = builtin | plugin`
 - `provider_name` / plugin name
 - `version`
-- `description`, `usage`, examples
+- `description`, `usage`
 - `category`
 - `permission_bits`
 - `needs_confirmation` / risk defaults
@@ -123,7 +123,6 @@ Minimum useful descriptor fields:
 - `context_requirements` — e.g. `app:blender`, `ui:selected_object`, `monitor:active`
 - `affordance_tokens` — symbolic tool markers such as `<press_hold_drag>`
 - `aliases`, `keywords`, `capability_tags`
-- `hot_swap_state = loaded | loading | unloading | unavailable`
 - `success_stats` / reward stats
 
 Current `ToolDescriptor` plus `ToolRegistration` is the canonical publication

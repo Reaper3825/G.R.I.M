@@ -80,7 +80,6 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     rich.argument_format = "json";
     rich.argument_schema_json = "{\"type\":\"object\"}";
     rich.parameters = {{"value", "string", "Value description", true}, {"optional", "number", "Optional value", false}};
-    rich.examples = {"inspection_fixture demo"};
     rich.aliases = {"fixture_alias"};
     rich.keywords = {"first", "second"};
     rich.preconditions = {"ready"};
@@ -105,7 +104,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     const std::string info = "[Tool: inspection_fixture]\n\nDescription: Fixture description\nCategory   : fixture\n"
         "Usage type : Model\nType       : Action\nUsage      : inspection_fixture {value}\nAliases    : fixture_alias\nKeywords   : first, second\n"
         "\nParameters:\n  value (string) [required]\n    Value description\n  optional (number)\n    Optional value\n"
-        "\nExamples:\n  - inspection_fixture demo\n\nUsage Stats:\n  Total uses  : 100\n  Success rate: 75%\n";
+        "\nUsage Stats:\n  Total uses  : 100\n  Success rate: 75%\n";
     matches(invoke("tool_info", "fixture_alias"), true, info, "ERR_NONE", "Tool information displayed");
     matches(invoke("tool_info", "Fixture Display"), true, info, "ERR_NONE", "Tool information displayed");
     matches(invoke("list_tools", "fixture"), true, "[fixture tools - 1 total]\n\n  inspection_fixture: Fixture description\n", "ERR_NONE", "Tool list displayed");
@@ -122,10 +121,9 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     check(invoke("tool_stats", "invalid").errorCode == "ERR_CMD_EXCEPTION" &&
           invoke("tool_stats", "99999999999999999999").errorCode == "ERR_CMD_EXCEPTION", "Invalid statistics parsing changed");
     rich.description = std::string(70000, 'x');
-    rich.swap_state = ToolSwapState::Unavailable;
     registry.updateMetadata(rich);
     check(snapshot("fixture_alias")[0].at("description").get<std::string>().size() == 70000 &&
-          snapshot("fixture_alias")[0].at("swap_state") == static_cast<int>(ToolSwapState::Unavailable) &&
+          snapshot("fixture_alias")[0].at("swap_state") == 0 &&
           encoded[0].at("description") == "Fixture description" && fixtureCalls == 0,
           "Snapshot truncated data, cached stale metadata, or lost copy isolation");
     const auto largeInfo = invoke("tool_info", "fixture_alias");

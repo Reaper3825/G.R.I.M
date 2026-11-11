@@ -220,7 +220,7 @@ int main(int argc, char** argv) try {
           snapshot->parameters[0].required && snapshot->provider_name == "staged" &&
           snapshot->provider_path == "staged.dll" && snapshot->argument_format == "json" &&
           snapshot->argument_schema_json.find("properties") != std::string::npos &&
-          snapshot->examples == std::vector<std::string>{"test example"}, "Descriptor copy lost fields");
+          snapshot->aliases == std::vector<std::string>{"staged_alias"}, "Descriptor copy lost fields");
     PluginAPI::cleanupPluginContext("staged");
 
     // Old v3.x batches have a shorter stride. Keep both records and defaults.

@@ -120,7 +120,8 @@ struct GrimToolDescriptor {
     const char* argument_schema_json = nullptr;
     const GrimToolParameter* parameters = nullptr;
     size_t parameter_count = 0;
-    GrimStringList examples, aliases, keywords, capability_tags;
+    GrimStringList examples; // Reserved for ABI compatibility. Ignored by the host.
+    GrimStringList aliases, keywords, capability_tags;
     GrimStringList preconditions, context_requirements, affordance_tokens;
     uint32_t required_permissions = 0;
     uint32_t is_informational = 0;

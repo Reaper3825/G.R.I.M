@@ -29,7 +29,7 @@ std::optional<ToolGapProposal> ToolGapPlanner::evaluate(
 
     // Resolve canonical IDs, display names, and aliases in one snapshot.
     if (const auto tool = registry_.getTool(capability)) {
-        if (tool->swap_state == ToolSwapState::Loaded && tool->usage_type == ToolUsage::Model) {
+        if (tool->usage_type == ToolUsage::Model) {
             return std::nullopt;  // tool exists and is available
         }
         // A registered tool may be unavailable to the model.
@@ -46,7 +46,7 @@ std::optional<ToolGapProposal> ToolGapPlanner::evaluate(
     // Capability tag search
     auto by_tag = registry_.getByCapabilityTag(capability);
     std::erase_if(by_tag, [](const auto& tool) {
-        return tool.usage_type != ToolUsage::Model || tool.swap_state != ToolSwapState::Loaded;
+        return tool.usage_type != ToolUsage::Model;
     });
     if (!by_tag.empty()) {
         return std::nullopt;  // existing tool covers this capability

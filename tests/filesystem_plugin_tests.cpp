@@ -38,7 +38,7 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
         check(tool && tool->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
               tool->provider_name == "Filesystem Plugin" && fs::path(tool->provider_path) == deployed,
               "Filesystem tool has incorrect provider ownership");
-        check(!tool->usage.empty() && tool->examples.size() == 1 && tool->permission_bits == GRIM_PERM_FILESYSTEM,
+        check(!tool->usage.empty() && tool->permission_bits == GRIM_PERM_FILESYSTEM,
               "Filesystem tool metadata incomplete");
         const bool informational = std::string(id) == "pwd" || std::string(id) == "ls";
         check(tool->is_informational == informational && tool->needs_confirmation != informational &&

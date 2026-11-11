@@ -37,7 +37,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Show recorded tool execution counts and success rates"};
     const GrimToolBinding toolBindings[] = {{"t", "t"}};
     tools[1].bindings = toolBindings; tools[1].binding_count = 1;
-    const char* examples[] = {"list_tools information", "tool_info list_tools", "tool_stats 10"};
     const char* names[] = {"category", "command_name", "limit"};
     const char* parameterDescriptions[] = {"Exact category; omitted lists all tools", "Canonical tool ID, display name, or registered alias", "Maximum rows; defaults to 20; retains existing integer-prefix parsing"};
     GrimToolParameter parameters[3];
@@ -51,7 +50,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.category = "information";
         d.argument_format = "raw_text";
         d.is_informational = 1;
-        d.examples = {&examples[i], 1};
         parameters[i].name = names[i];
         parameters[i].type = i == 2 ? "number" : "string";
         parameters[i].description = parameterDescriptions[i];

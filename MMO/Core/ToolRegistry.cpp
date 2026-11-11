@@ -406,8 +406,6 @@ CommandResult ToolRegistry::invokeChecked(const std::string& name, const std::st
         entry = tools_.at(id);
         if (expected_version && (id != name || entry->descriptor.usage_type != ToolUsage::Model))
             return {false, "Canonical Model tool required", "ERR_TOOL_NOT_MODEL", "", "", Colors::Red};
-        if (entry->descriptor.swap_state != ToolSwapState::Loaded)
-            return {false, "Tool unavailable: " + name, "ERR_TOOL_UNAVAILABLE", "", "", Colors::Red};
     }
     CommandResult result;
     try { result = entry->handler(arguments); }
@@ -450,7 +448,7 @@ std::vector<ToolDescriptor> ToolRegistry::getAllTools() const {
 std::vector<ToolDescriptor> ToolRegistry::getModelTools() const {
     auto result = getAllTools();
     std::erase_if(result, [](const auto& tool) {
-        return tool.usage_type != ToolUsage::Model || tool.swap_state != ToolSwapState::Loaded;
+        return tool.usage_type != ToolUsage::Model;
     });
     return result;
 }
@@ -486,17 +484,14 @@ bool ToolRegistry::isRegistered(const std::string& name) const {
     return !resolveLocked(name).empty();
 }
 bool ToolRegistry::isExecutable(const std::string& name) const {
-    const auto tool = getTool(name);
-    return tool && tool->swap_state == ToolSwapState::Loaded;
+    return isRegistered(name);
 }
 std::vector<std::string> ToolRegistry::getExecutableNames(bool include_aliases) const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> result;
-    for (const auto& [id, entry] : tools_)
-        if (entry->descriptor.swap_state == ToolSwapState::Loaded) result.push_back(id);
+    for (const auto& [id, entry] : tools_) result.push_back(id);
     if (include_aliases)
-        for (const auto& [alias, id] : alias_index_)
-            if (tools_.at(id)->descriptor.swap_state == ToolSwapState::Loaded) result.push_back(alias);
+        for (const auto& [alias, id] : alias_index_) result.push_back(alias);
     std::sort(result.begin(), result.end());
     return result;
 }
@@ -519,11 +514,7 @@ std::string ToolRegistry::generateCompactPrompt() const {
     // Sort by category for readability
     std::vector<const ToolDescriptor*> sorted;
     sorted.reserve(tools.size());
-    for (const auto& desc : tools) {
-        if (desc.swap_state == ToolSwapState::Loaded) {
-            sorted.push_back(&desc);
-        }
-    }
+    for (const auto& desc : tools) sorted.push_back(&desc);
     std::sort(sorted.begin(), sorted.end(),
               [](const auto* a, const auto* b) {
                   if (a->category != b->category) return a->category < b->category;
@@ -550,8 +541,6 @@ std::string ToolRegistry::generateFullPrompt() const {
     const auto tools = getModelTools();
 
     for (const auto& desc : tools) {
-        if (desc.swap_state != ToolSwapState::Loaded) continue;
-
         ss << "\n## " << desc.tool_id << "\n";
         ss << "Description: " << desc.description << "\n";
         if (!desc.usage.empty()) ss << "Usage: " << desc.usage << "\n";
@@ -566,13 +555,6 @@ std::string ToolRegistry::generateFullPrompt() const {
                 ss << "  - " << p.name << " (" << p.type << ")"
                    << (p.required ? " [required]" : " [optional]")
                    << ": " << p.description << "\n";
-            }
-        }
-
-        if (!desc.examples.empty()) {
-            ss << "Examples:\n";
-            for (const auto& ex : desc.examples) {
-                ss << "  " << ex << "\n";
             }
         }
 

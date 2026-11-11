@@ -142,13 +142,6 @@ CommandResult cmdToolInfo(const std::string& arg) {
         }
     }
     
-    if (!tool.examples.empty()) {
-        output << "\nExamples:\n";
-        for (const auto& example : tool.examples) {
-            output << "  - " << example << "\n";
-        }
-    }
-    
     output << "\nUsage Stats:\n";
     output << "  Total uses  : " << tool.usage_count << "\n";
     output << "  Success rate: " << static_cast<int>(tool.success_rate * 100) << "%\n";

@@ -40,16 +40,6 @@ enum class ToolProviderType : uint8_t {
 };
 
 // =========================================================
-// ToolSwapState — hot-swap lifecycle
-// =========================================================
-enum class ToolSwapState : uint8_t {
-    Loaded,
-    Loading,
-    Unloading,
-    Unavailable
-};
-
-// =========================================================
 // ToolParameter — describes one parameter of a tool
 // =========================================================
 struct ToolParameter {
@@ -64,10 +54,10 @@ struct ToolParameter {
 //
 // Fields from MMO plan Section "Unified ToolRegistry":
 //   tool_id, display_name, provider_type, provider_name, version,
-//   description, usage, examples, category, permission_bits,
+//   description, usage, category, permission_bits,
 //   needs_confirmation, argument_schema, preconditions,
 //   context_requirements, affordance_tokens, aliases, keywords,
-//   capability_tags, hot_swap_state, success_stats.
+//   capability_tags, success_stats.
 // =========================================================
 struct ToolDescriptor {
     // Identity
@@ -88,7 +78,6 @@ struct ToolDescriptor {
     // Host adapters (e.g. World Lab UI) explicitly validate these labels and map
     // observed resource references to handler parameters; never infer from prose.
     std::map<std::string, std::string> bindings;
-    std::vector<std::string> examples;
     std::string           category;         // "action", "information", "system", "ui"
 
     // Policy
@@ -109,9 +98,6 @@ struct ToolDescriptor {
     std::vector<std::string> aliases;
     std::vector<std::string> keywords;
     std::vector<std::string> capability_tags;
-
-    // Hot-swap
-    ToolSwapState         swap_state = ToolSwapState::Loaded;
 
     // Stats
     int                   usage_count   = 0;

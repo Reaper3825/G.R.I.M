@@ -16,7 +16,7 @@ inline MMO::ToolDescriptor descriptor(const std::string& id, uint64_t version) {
     auto& registry = MMO::ToolRegistry::instance();
     const auto tool = registry.getTool(id);
     require(registry.version() == version && tool && tool->tool_id == id &&
-            tool->usage_type == MMO::ToolUsage::Model && tool->swap_state == MMO::ToolSwapState::Loaded,
+            tool->usage_type == MMO::ToolUsage::Model,
             "Tool unavailable or registry changed; run ui.list again");
     require(tool->argument_format == "json", "Unsupported UI tool argument format");
     return *tool;

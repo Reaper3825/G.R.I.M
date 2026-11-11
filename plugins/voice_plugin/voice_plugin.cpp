@@ -57,7 +57,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.argument_format = "raw_text"; d.is_informational = informational; d.needs_confirmation = !informational;
         const bool filesystem = i == 4 || i == 8 || i == 9 || i == 10;
         d.required_permissions = GRIM_PERM_VOICE | (filesystem ? GRIM_PERM_FILESYSTEM : 0);
-        d.examples = {&usages[i], 1};
     }
     tools[2].descriptor.parameters = &text; tools[2].descriptor.parameter_count = 1;
     tools[7].descriptor.parameters = &embeddingArguments; tools[7].descriptor.parameter_count = 1;

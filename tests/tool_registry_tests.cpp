@@ -142,13 +142,6 @@ int main() try {
     check(!registry.isRegistered("alias") && registry.isRegistered("new_alias"), "Metadata update retained stale alias");
     check(registry.getTool("first")->usage_count == 1, "Metadata update reset stats");
     check(dispatchCommand("new_alias", "still callable").message == "still callable", "Metadata update lost handler");
-    first.swap_state = ToolSwapState::Unavailable;
-    registry.updateMetadata(first);
-    check(!registry.isExecutable("first") && registry.getExecutableNames().empty(), "Unavailable tool exposed as executable");
-    check(dispatchCommand("first", "").errorCode == "ERR_TOOL_UNAVAILABLE", "Unavailable handler ran");
-    first.swap_state = ToolSwapState::Loaded;
-    registry.updateMetadata(first);
-
     auto batchGood = descriptor("batch_good");
     auto batchBad = descriptor("batch_bad");
     invalid = false;
@@ -197,7 +190,9 @@ int main() try {
         check(registry.invoke(tool.tool_id, "host").message == "host", "Usage blocked host execution");
         const auto json = nlohmann::json(tool);
         check(json.get<ToolDescriptor>().usage_type == usage, "Usage JSON roundtrip failed");
+        check(json.at("examples") == nlohmann::json::array(), "Legacy examples key must be an empty array");
         auto legacy = json; legacy.erase("usage_type");
+        legacy["examples"] = {"obsolete invocation"};
         check(legacy.get<ToolDescriptor>().usage_type == ToolUsage::Model, "Legacy snapshot default changed");
         for (const auto& value : nlohmann::json::array({99, -1, 1.5, "Model", 4294967297ULL})) {
             auto bad = json; bad["usage_type"] = value;
@@ -217,11 +212,6 @@ int main() try {
     check(registry.getAllTools().size() == 4 && registry.getModelTools().size() == 1,
           "Model filtering lost developer metadata");
     auto model = *registry.getTool("usage_Model");
-    model.swap_state = ToolSwapState::Unavailable;
-    check(registry.updateMetadata(model) && registry.getModelTools().empty() &&
-          planner.evaluate(model.aliases[0], "usage-test").has_value() &&
-          planner.evaluate(model.capability_tags[0], "usage-test").has_value(), "Unavailable Model tool remained discoverable");
-    model.swap_state = ToolSwapState::Loaded;
     model.usage_type = ToolUsage::System;
     check(registry.updateMetadata(model) && registry.getModelTools().empty() &&
           registry.getTool(model.tool_id)->usage_count == 1, "Reclassification lost stats or model visibility");

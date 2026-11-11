@@ -67,7 +67,7 @@ void runPerceptionPluginTests(const std::filesystem::path& pluginDirectory) {
         check(d && d->provider_name == "Perception Plugin" && d->provider_type == ToolProviderType::Plugin &&
               d->usage_type == ToolUsage::Debug &&
               d->permission_bits == GRIM_PERM_SYSTEM && d->is_informational && !d->needs_confirmation &&
-              d->parameters.empty() && d->examples.size() == 1 && d->preconditions.size() == 1,
+              d->parameters.empty() && d->preconditions.size() == 1,
               "Perception metadata/provider/policy incorrect");
         const auto unavailableResult = registry.invoke(id, "ignored arguments");
         check(!unavailableResult.success && unavailableResult.message == "[Perception] System not initialized" &&

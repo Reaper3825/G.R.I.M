@@ -17,8 +17,7 @@ inline void resolveHostObservation(nlohmann::json& response) {
         const auto id = request.at("tool_id").get<std::string>();
         const auto tool = MMO::ToolRegistry::instance().getTool(id);
         std::ostringstream text;
-        if (!tool || tool->tool_id != id || tool->usage_type != MMO::ToolUsage::Model ||
-            tool->swap_state != MMO::ToolSwapState::Loaded) {
+        if (!tool || tool->tool_id != id || tool->usage_type != MMO::ToolUsage::Model) {
             text << "This tool is no longer available in the catalog.";
             state["observation_error"] = "Tool unavailable";
         } else {

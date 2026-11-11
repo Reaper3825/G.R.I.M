@@ -103,9 +103,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Request hiding a selected interface panel from view",
         "Request bringing a panel ahead of other panels",
         "Check completion of an earlier interface panel request"};
-    const char* examples[] = {"ui.list {}", "ui.inspect {\"panel_id\":\"settings\"}",
-        "ui.show {\"panel_id\":\"settings\"}", "ui.hide {\"panel_id\":\"settings\"}",
-        "ui.bring_to_front {\"panel_id\":\"console\"}", "ui.poll {\"request_id\":1}"};
     const GrimToolBinding panelBindings[] = {{"t", "t"}};
     for (size_t i = 1; i < 5; ++i) {
         tools[i].bindings = panelBindings; tools[i].binding_count = 1;
@@ -123,7 +120,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.description = descriptions[i]; d.usage = usages[i]; d.category = "ui";
         d.argument_format = "json"; d.required_permissions = GRIM_PERM_UI;
         d.is_informational = i < 2 || i == 5; d.needs_confirmation = !d.is_informational;
-        d.examples = {&examples[i], 1}; d.preconditions = {preconditions, 1}; d.capability_tags = {tags, 2};
+        d.preconditions = {preconditions, 1}; d.capability_tags = {tags, 2};
         if (i == 0) {
             d.argument_schema_json = R"({"type":"object","properties":{},"additionalProperties":false})";
         } else {

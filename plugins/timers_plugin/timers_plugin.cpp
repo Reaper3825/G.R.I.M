@@ -65,7 +65,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     parameter.name = "seconds"; parameter.type = "number";
     parameter.description = "Positive integer seconds; retains the existing integer-prefix parsing"; parameter.required = 1;
     d.parameters = &parameter; d.parameter_count = 1;
-    const char* examples[] = {"set_timer 60"}; d.examples = {examples, 1};
     return api->register_tools(api, &tool, 1);
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { grim::runtime::host = nullptr; }

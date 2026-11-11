@@ -37,10 +37,10 @@ the selected provider is preserved by identity, and a removed provider resets
 the dropdown to All plugins. Filtering out a selected tool clears its details.
 
 The selectable, copyable detail pane shows documentation, usage, parameters,
-examples, provider/version, confirmation and permission metadata, context
+provider/version, confirmation and permission metadata, context
 requirements, aliases, tags, and usage statistics. Missing fields display
 **Not documented**; an empty parameter list does not imply that no arguments are
-needed. Registration status does not verify that a tool is ready to execute.
+needed. Plugin tools appear while their provider generation is published.
 
 The viewer refreshes every two seconds while active and preserves selection by
 tool ID when it still matches the filters. Removed tools clear their stale details. This view displays the current

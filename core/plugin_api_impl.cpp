@@ -293,7 +293,6 @@ static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& 
         if (!parameters.insert(value.name).second) throw std::invalid_argument("Duplicate parameter");
         out.parameters.push_back(std::move(value));
     }
-    out.examples = copyList(in.examples);
     out.aliases = copyList(in.aliases);
     out.keywords = copyList(in.keywords);
     out.capability_tags = copyList(in.capability_tags);

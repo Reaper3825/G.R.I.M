@@ -192,14 +192,14 @@ private:
         if (!catalogOpen_) return world_.toolsHere();
         std::vector<MMO::ToolDescriptor> result;
         for (const auto& t : world_.registry().tools)
-            if (t.usage_type == MMO::ToolUsage::Model && t.swap_state == MMO::ToolSwapState::Loaded)
+            if (t.usage_type == MMO::ToolUsage::Model)
                 result.push_back(t);
         return result;
     }
     nlohmann::json catalogTools() const {
         auto entries = nlohmann::json::array();
         for (const auto& t : world_.registry().tools)
-            if (t.usage_type == MMO::ToolUsage::Model && t.swap_state == MMO::ToolSwapState::Loaded)
+            if (t.usage_type == MMO::ToolUsage::Model)
                 entries.push_back({{"tool_id", t.tool_id},
                     {"name", t.display_name.empty() ? t.tool_id : t.display_name},
                     {"short_description", t.short_description.empty() ? t.description : t.short_description}});

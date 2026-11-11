@@ -26,7 +26,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* summaries[] = {"Stage supplied information for the host memory pipeline",
         "Retrieve stored information matching the supplied memory query",
         "Check and flush matching memories without deleting records"};
-    const char* examples[] = {"remember my color is blue", "recall color", "forget color"};
     GrimToolParameter parameters[3];
     for (size_t i = 0; i < 3; ++i) {
         auto& d = tools[i].descriptor;
@@ -35,7 +34,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.description = descriptions[i]; d.usage = usages[i];
         d.category = i == 1 ? "information" : "action"; d.argument_format = "raw_text";
         d.required_permissions = GRIM_PERM_MEMORY; d.is_informational = i == 1; d.needs_confirmation = i != 1;
-        d.examples = {&examples[i], 1};
         parameters[i].name = i == 0 ? "text" : "query"; parameters[i].type = "string";
         parameters[i].description = i == 0 ? "Original manual memory text staged in the host rotation pipeline" :
             "Unmodified query for the existing host memory search";

@@ -648,7 +648,7 @@ CommandRegistry import or separate command map remains.
 **Owns**
 - Canonical registry of all tools (built-in commands + plugin commands)
 - `ToolDescriptor` record: identity, documentation, policy flags, parameters, preconditions, context requirements, affordance tokens, aliases, keywords, capability tags, hot-swap state, usage stats
-- Hot-swap lifecycle: `ToolSwapState` (Loaded/Loading/Unloading/Unavailable)
+- Tool availability follows publication of the provider generation.
 - Atomic batch registration/unregistration for plugin hot-swap
 - Alias → tool_id resolution
 - Model-facing prompt generation (compact and full)

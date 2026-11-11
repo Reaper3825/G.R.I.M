@@ -88,7 +88,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Search the web for information matching a query"};
     const GrimToolBinding openBindings[] = {{"t", "t"}};
     tools[0].bindings = openBindings; tools[0].binding_count = 1;
-    const char* examples[] = {"open notepad", "search weather tomorrow"};
     GrimToolParameter parameters[2];
     for (size_t i = 0; i < 2; ++i) {
         auto& d = tools[i].descriptor;
@@ -102,7 +101,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.required_permissions = GRIM_PERM_PROCESS;
         d.is_informational = i == 1;
         d.needs_confirmation = i == 0;
-        d.examples = {&examples[i], 1};
         parameters[i].name = i == 0 ? "target" : "query";
         parameters[i].type = "string";
         parameters[i].description = i == 0 ? "Application or file passed unchanged to the OS opener" :

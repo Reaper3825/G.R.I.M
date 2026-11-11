@@ -41,7 +41,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.tool_id = d.display_name = d.usage = ids[i];
         d.version = "1.0.0"; d.description = descriptions[i]; d.category = "information";
         d.argument_format = "raw_text"; d.required_permissions = GRIM_PERM_SYSTEM; d.is_informational = 1;
-        d.examples = {&ids[i], 1}; d.preconditions = {contexts, 1};
+        d.preconditions = {contexts, 1};
     }
     return api->register_tools(api, tools, 3);
 }

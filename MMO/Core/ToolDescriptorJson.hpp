@@ -6,7 +6,7 @@
 // Version-1 read-only registry snapshot metadata. No handlers cross this boundary.
 namespace GRIM::MMO {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ToolParameter, name, type, description, required)
-// Provider/swap enums retain their documented numeric values from ToolDescriptor.
+// Provider type retains its documented numeric values.
 inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     j = nlohmann::json::object();
     j["tool_id"] = t.tool_id;
@@ -20,7 +20,8 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     j["short_description"] = t.short_description;
     j["usage"] = t.usage;
     j["bindings"] = t.bindings;
-    j["examples"] = t.examples;
+    // Older version-1 readers require this key.
+    j["examples"] = nlohmann::json::array();
     j["category"] = t.category;
     j["permission_bits"] = t.permission_bits;
     j["needs_confirmation"] = t.needs_confirmation;
@@ -34,7 +35,7 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     j["aliases"] = t.aliases;
     j["keywords"] = t.keywords;
     j["capability_tags"] = t.capability_tags;
-    j["swap_state"] = t.swap_state;
+    j["swap_state"] = 0; // Legacy version-1 readers require the Loaded value.
     j["usage_count"] = t.usage_count;
     j["success_count"] = t.success_count;
     j["failure_count"] = t.failure_count;
@@ -56,7 +57,6 @@ inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
     // Older snapshots predate optional world binding labels.
     t.bindings = j.value("bindings", std::map<std::string, std::string>{});
     if (!validToolBindings(t)) throw std::invalid_argument("Invalid tool bindings");
-    j.at("examples").get_to(t.examples);
     j.at("category").get_to(t.category);
     j.at("permission_bits").get_to(t.permission_bits);
     j.at("needs_confirmation").get_to(t.needs_confirmation);
@@ -70,7 +70,6 @@ inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
     j.at("aliases").get_to(t.aliases);
     j.at("keywords").get_to(t.keywords);
     j.at("capability_tags").get_to(t.capability_tags);
-    j.at("swap_state").get_to(t.swap_state);
     j.at("usage_count").get_to(t.usage_count);
     j.at("success_count").get_to(t.success_count);
     j.at("failure_count").get_to(t.failure_count);

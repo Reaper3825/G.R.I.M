@@ -107,7 +107,7 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
         const bool search = std::string(id) == "search";
         check(tool && tool->provider_name == "Application Plugin" && tool->provider_type == GRIM::MMO::ToolProviderType::Plugin &&
               tool->permission_bits == GRIM_PERM_PROCESS && tool->is_informational == search && tool->needs_confirmation != search &&
-              tool->parameters.size() == 1 && tool->parameters[0].required && tool->examples.size() == 1,
+              tool->parameters.size() == 1 && tool->parameters[0].required,
               "Application registration metadata changed policy or lacks documentation");
     }
     const auto result = [&](const char* id, const std::string& args) { return registry.invoke(id, args); };

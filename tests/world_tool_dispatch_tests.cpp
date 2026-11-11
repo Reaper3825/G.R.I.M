@@ -65,6 +65,35 @@ int main() try {
               "Unimplemented execution modes changed Production statistics or metadata");
         registry.unregisterTool(definition.tool_id);
     }
+    {
+        ProviderDescriptor provider{ToolProviderType::Plugin, "fixture", "generation-1", "fixture.dll"};
+        auto retained = tool("retained_tool");
+        auto retired = tool("retired_tool");
+        for (auto* descriptor : {&retained, &retired}) {
+            descriptor->provider_type = provider.type;
+            descriptor->provider_path = provider.path;
+        }
+        retired.aliases = {"retired_alias"};
+        const auto handler = [](const std::string&) { return response(Json::object()); };
+        check(!registry.isExecutable(retained.tool_id), "Tool exposed before provider publication");
+        check(registry.publishProvider(provider, {{retained, handler}, {retired, handler}}) &&
+              registry.getModelTools().size() == 2 && registry.isExecutable("retired_alias"),
+              "Provider publication did not expose its tools");
+        const auto oldRevision = registry.version();
+        const auto oldInstance = provider.instance;
+        provider.instance = retained.provider_instance = "generation-2";
+        check(registry.publishProvider(provider, {{retained, handler}}, oldInstance),
+              "Provider replacement failed");
+        registry.unregisterInstance(provider.name, oldInstance);
+        check(registry.getModelTools().size() == 1 && registry.isExecutable(retained.tool_id) &&
+              !registry.isExecutable("retired_alias") &&
+              registry.invokeModel(retained.tool_id, "", oldRevision).errorCode == "ERR_TOOL_STALE",
+              "Replacement exposed retired tools or lost the new generation");
+        registry.unregisterInstance(provider.name, provider.instance);
+        check(registry.getModelTools().empty() && registry.getExecutableNames().empty() &&
+              registry.invoke(retained.tool_id, "").errorCode == "ERR_UNKNOWN_CMD",
+              "Provider unload left tools discoverable or callable");
+    }
     uint64_t next = 0, runtime = 7;
     bool visible = false, duplicate = false, removed = false, replaceBeforeShow = false, replaceBeforeHide = false;
     int shows = 0, hides = 0, lists = 0, cancels = 0;
