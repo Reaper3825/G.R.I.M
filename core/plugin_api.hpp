@@ -242,7 +242,7 @@ typedef struct GrimPluginAPI {
     // ========================================================================
     // Command Registration
     // ========================================================================
-    // Initialization batches are staged until the loader commits a successful init.
+    // Initialization only. Batches are staged until the loader commits a successful init.
     GrimResult (*register_tools)(const GrimPluginAPI* self, const GrimToolRegistration* tools, size_t count);
     GrimResult (*unregister_command)(const GrimPluginAPI* self, const char* command_name);
     bool (*is_command_registered)(const GrimPluginAPI* self, const char* command_name);

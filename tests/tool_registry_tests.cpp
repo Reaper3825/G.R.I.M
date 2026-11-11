@@ -100,9 +100,6 @@ int main() try {
         registerTool(labeled, echo);
         check(registry.invoke(labeled.tool_id, "an unresolved entity").message == "an unresolved entity",
               "Binding labels changed handler arguments");
-        check(registry.generateFullPrompt().find("Usage: binding_fixture {target}") != std::string::npos &&
-              registry.generateFullPrompt().find("Binding:") == std::string::npos,
-              "Full prompt lost usage or exposed system-facing bindings");
         labeled.bindings = {{"target", "new_type"}};
         check(!registry.updateMetadata(labeled), "Invalid metadata binding accepted");
         labeled.tool_id = "invalid_binding";
@@ -140,14 +137,16 @@ int main() try {
     check(!registry.isRegistered("alias") && registry.isRegistered("new_alias"), "Metadata update retained stale alias");
     check(registry.getTool("first")->usage_count == 1, "Metadata update reset stats");
     check(dispatchCommand("new_alias", "still callable").message == "still callable", "Metadata update lost handler");
+    const ProviderDescriptor batchProvider{ToolProviderType::Plugin, "batch", "batch-1", {}};
     auto batchGood = descriptor("batch_good");
     auto batchBad = descriptor("batch_bad");
     invalid = false;
-    try { registry.registerBatch(testProvider, {{batchGood, echo}, {batchBad, {}}}); }
+    try { registry.publishProvider(batchProvider, {{batchGood, echo}, {batchBad, {}}}); }
     catch (const std::invalid_argument&) { invalid = true; }
     check(invalid && !registry.isRegistered("batch_good"), "Invalid batch partially committed");
-    check(registry.registerBatch(testProvider, {{batchGood, echo}, {batchBad, echo}}), "Valid batch failed");
+    check(registry.publishProvider(batchProvider, {{batchGood, echo}, {batchBad, echo}}), "Valid batch failed");
     check(registry.getExecutableNames().size() == 3, "Callable listing lost batch tools");
+    registry.unregisterInstance(batchProvider.name, batchProvider.instance);
     auto throwing = descriptor("throwing");
     registerTool(throwing, [](const std::string&) -> CommandResult { throw std::runtime_error("test"); });
     check(dispatchCommand("throwing", "").errorCode == "ERR_CMD_EXCEPTION", "Handler exception escaped dispatch");
@@ -199,9 +198,6 @@ int main() try {
             check(rejected, "Invalid snapshot usage accepted");
         }
         const bool model = usage == ToolUsage::Model;
-        check((registry.generateCompactPrompt().find(tool.tool_id) != std::string::npos) == model &&
-              (registry.generateFullPrompt().find(tool.tool_id) != std::string::npos) == model,
-              "Non-model tool leaked into prompts");
         check(planner.evaluate(tool.tool_id, "usage-test").has_value() != model &&
               planner.evaluate(tool.aliases[0], "usage-test").has_value() != model &&
               planner.evaluate(tool.capability_tags[0], "usage-test").has_value() != model,

@@ -22,6 +22,12 @@ struct ToolRegistration {
     ToolHandler handler;
 };
 
+struct ToolInvocationOptions {
+    ToolExecutionMode mode = ToolExecutionMode::Production;
+    std::optional<uint64_t> expected_registry_version;
+    bool require_canonical_model = false;
+};
+
 struct ToolRegistryListener {
     virtual ~ToolRegistryListener() = default;
     virtual void onToolRegistered(const std::string& tool_id) = 0;
@@ -39,7 +45,6 @@ public:
                       const ProviderDescriptor& provider = {ToolProviderType::Builtin, "builtin", {}, {}});
     bool registerSimple(const std::string& tool_id, const std::string& description,
                         const std::string& category, ToolHandler handler, bool is_informational = true);
-    bool registerBatch(const ProviderDescriptor& provider, const std::vector<ToolRegistration>& tools);
     // Publish provider identity and tools in the same transaction, including zero tools.
     bool publishProvider(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
                          const std::string& old_instance = {});
@@ -65,13 +70,9 @@ public:
     // Handlers run outside the registry mutex and can query/register other tools.
     // Production uses the registered handler. Sandbox is reserved and returns
     // an explicit not-implemented result without invoking the handler.
-    CommandResult invoke(const std::string& tool_id, const std::string& arguments,
-                         ToolExecutionMode mode = ToolExecutionMode::Production);
-    // Canonical Model-only invocation against the caller's validated registry revision.
-    // Selection is atomic with revision/classification checks; policy remains caller-owned.
-    CommandResult invokeModel(const std::string& tool_id, const std::string& arguments,
-                              uint64_t expected_version,
-                              ToolExecutionMode mode = ToolExecutionMode::Production);
+    // Optional selection checks run under the same lock as handler selection.
+    CommandResult invoke(const std::string& name, const std::string& arguments,
+                         const ToolInvocationOptions& options = {});
     bool isExecutable(const std::string& tool_id) const;
     std::vector<std::string> getExecutableNames(bool include_aliases = false) const;
 
@@ -89,16 +90,12 @@ public:
     bool isRegistered(const std::string& tool_id) const;
     size_t toolCount() const;
     std::optional<std::string> resolveAlias(const std::string& alias) const;
-    std::string generateCompactPrompt() const;
-    std::string generateFullPrompt() const;
     uint64_t version() const;
     void addListener(ToolRegistryListener* listener);
     void removeListener(ToolRegistryListener* listener);
 
 private:
     ToolRegistry() = default;
-    CommandResult invokeChecked(const std::string& name, const std::string& arguments,
-                                std::optional<uint64_t> expected_version, ToolExecutionMode mode);
     bool registerBatch(const ProviderDescriptor&, const std::vector<ToolRegistration>&, bool replace, bool publish);
     bool replaceProvider(const ProviderDescriptor&, const std::string&, const std::vector<ToolRegistration>&);
     using Provider = std::shared_ptr<const ProviderDescriptor>;

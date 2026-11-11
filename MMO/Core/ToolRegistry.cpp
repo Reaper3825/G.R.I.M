@@ -1,7 +1,6 @@
 #include "ToolRegistry.hpp"
 #include "../../commands/command_result.hpp"
 #include <algorithm>
-#include <sstream>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -132,11 +131,6 @@ std::string ToolRegistry::resolveLocked(const std::string& name) const {
 bool ToolRegistry::registerTool(const ToolDescriptor& descriptor, ToolHandler handler, bool replace,
                                 const ProviderDescriptor& provider) {
     return registerBatch(provider, {{descriptor, std::move(handler)}}, replace, false);
-}
-
-bool ToolRegistry::registerBatch(const ProviderDescriptor& provider,
-                                 const std::vector<ToolRegistration>& registrations) {
-    return registerBatch(provider, registrations, false, false);
 }
 
 bool ToolRegistry::registerBatch(const ProviderDescriptor& provider,
@@ -364,20 +358,10 @@ void ToolRegistry::unregisterByProvider(const std::string& provider, ToolProvide
 }
 
 CommandResult ToolRegistry::invoke(const std::string& name, const std::string& arguments,
-                                   ToolExecutionMode mode) {
-    return invokeChecked(name, arguments, std::nullopt, mode);
-}
-
-CommandResult ToolRegistry::invokeModel(const std::string& id, const std::string& arguments,
-                                       uint64_t expected_version, ToolExecutionMode mode) {
-    return invokeChecked(id, arguments, expected_version, mode);
-}
-
-CommandResult ToolRegistry::invokeChecked(const std::string& name, const std::string& arguments,
-                                          std::optional<uint64_t> expected_version, ToolExecutionMode mode) {
+                                   const ToolInvocationOptions& options) {
     // Route at the shared boundary; a reserved mode must never fall through
     // to a real handler or affect its production execution statistics.
-    switch (mode) {
+    switch (options.mode) {
         case ToolExecutionMode::Production:
             break;
         case ToolExecutionMode::Sandbox:
@@ -389,12 +373,12 @@ CommandResult ToolRegistry::invokeChecked(const std::string& name, const std::st
     std::string id;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (expected_version && *expected_version != version_)
+        if (options.expected_registry_version && *options.expected_registry_version != version_)
             return {false, "Tool registry changed; inspect and retry", "ERR_TOOL_STALE", "", "", Colors::Red};
         id = resolveLocked(name);
         if (id.empty()) return {false, "Unknown command: " + name, "ERR_UNKNOWN_CMD", "", "", Colors::Red};
         entry = tools_.at(id);
-        if (expected_version && (id != name || entry->descriptor.usage_type != ToolUsage::Model))
+        if (options.require_canonical_model && (id != name || entry->descriptor.usage_type != ToolUsage::Model))
             return {false, "Canonical Model tool required", "ERR_TOOL_NOT_MODEL", "", "", Colors::Red};
     }
     CommandResult result;
@@ -505,70 +489,6 @@ std::optional<std::string> ToolRegistry::resolveAlias(const std::string& name) c
     const auto id = resolveLocked(name);
     if (id.empty()) return std::nullopt;
     return id;
-}
-
-std::string ToolRegistry::generateCompactPrompt() const {
-    std::ostringstream ss;
-    ss << "Available tools:\n";
-
-    const auto tools = getModelTools();
-    // Sort by category for readability
-    std::vector<const ToolDescriptor*> sorted;
-    sorted.reserve(tools.size());
-    for (const auto& desc : tools) sorted.push_back(&desc);
-    std::sort(sorted.begin(), sorted.end(),
-              [](const auto* a, const auto* b) {
-                  if (a->category != b->category) return a->category < b->category;
-                  return a->tool_id < b->tool_id;
-              });
-
-    std::string current_cat;
-    for (const auto* desc : sorted) {
-        if (desc->category != current_cat) {
-            current_cat = desc->category;
-            ss << "\n[" << current_cat << "]\n";
-        }
-        ss << "  " << desc->tool_id << " - " << desc->description;
-        if (!desc->is_informational) ss << " [ACTION]";
-        if (desc->needs_confirmation) ss << " [CONFIRM]";
-        ss << "\n";
-    }
-    return ss.str();
-}
-
-std::string ToolRegistry::generateFullPrompt() const {
-    std::ostringstream ss;
-    ss << "Available tools (detailed):\n";
-    const auto tools = getModelTools();
-
-    for (const auto& desc : tools) {
-        ss << "\n## " << desc.tool_id << "\n";
-        ss << "Description: " << desc.description << "\n";
-        if (!desc.usage.empty()) ss << "Usage: " << desc.usage << "\n";
-        ss << "Category: " << desc.category << "\n";
-        ss << "Argument format: " << desc.argument_format << "\n";
-        if (!desc.argument_schema_json.empty()) ss << "Argument schema: " << desc.argument_schema_json << "\n";
-        ss << "Type: " << (desc.is_informational ? "information" : "action") << "\n";
-
-        if (!desc.parameters.empty()) {
-            ss << "Parameters:\n";
-            for (const auto& p : desc.parameters) {
-                ss << "  - " << p.name << " (" << p.type << ")"
-                   << (p.required ? " [required]" : " [optional]")
-                   << ": " << p.description << "\n";
-            }
-        }
-
-        if (!desc.preconditions.empty()) {
-            ss << "Preconditions: ";
-            for (size_t i = 0; i < desc.preconditions.size(); ++i) {
-                if (i > 0) ss << ", ";
-                ss << desc.preconditions[i];
-            }
-            ss << "\n";
-        }
-    }
-    return ss.str();
 }
 
 uint64_t ToolRegistry::version() const {

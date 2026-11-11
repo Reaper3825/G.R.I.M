@@ -326,18 +326,14 @@ static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRe
             std::lock_guard lock(owner->gate->mutex);
             if (!owner->gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         }
+        if (!owner->staging) return GRIM_ERROR_UNSUPPORTED;
         if (!tools || !count || count > 256) throw std::invalid_argument("Invalid batch");
         std::vector<GRIM::MMO::ToolRegistration> copied;
         copied.reserve(count);
         for (size_t i = 0; i < count; ++i)
             copied.push_back(copyRegistration(tools[i], *owner));
-        if (owner->staging) {
-            owner->pending.insert(owner->pending.end(), copied.begin(), copied.end());
-            return GRIM_OK;
-        }
-        return GRIM::MMO::ToolRegistry::instance().registerBatch(
-            {GRIM::MMO::ToolProviderType::Plugin, owner->name, owner->instance, owner->path}, copied)
-            ? GRIM_OK : GRIM_ERROR_ALREADY_EXISTS;
+        owner->pending.insert(owner->pending.end(), copied.begin(), copied.end());
+        return GRIM_OK;
     } catch (...) {
         if (owner && owner->staging) owner->registration_failed = true;
         return GRIM_ERROR_INVALID_PARAM;

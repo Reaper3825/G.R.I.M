@@ -29,10 +29,11 @@ plugin-owned user_data.
 ### Host tool execution mode
 
 The shared C++ `ToolExecutionMode` selects the execution/feedback source per
-invocation. Both `ToolRegistry::invoke` and `invokeModel` accept it as an optional
-final argument, defaulting to `Production`. Existing callers therefore use the
-registered handler and receive its actual result, with existing registry checks
-and execution statistics preserved.
+invocation. `ToolRegistry::invoke` accepts optional `ToolInvocationOptions`.
+The default mode is `Production`, which calls the registered handler and records
+execution statistics. A caller can supply an expected registry revision and
+require the canonical ID of a tool classified as `Model`. The registry applies
+these checks when it selects the handler.
 
 `Sandbox` is a reserved option. Selecting it currently returns
 `ERR_TOOL_SANDBOX_NOT_IMPLEMENTED` without calling a handler or updating its
@@ -208,7 +209,7 @@ Any failed registration poisons the initialization transaction, even if the
 plugin ignores its error. Cross-batch duplicates and collisions are checked
 at commit. A failed initialization or commit publishes no partial tool set.
 
-After initialization, each register_tools call is an immediate atomic batch.
+After initialization, `register_tools` returns `GRIM_ERROR_UNSUPPORTED`.
 Registration, event/timer operations, and lifecycle changes must be serialized
 by the host/caller. This API does not make all plugin services thread-safe.
 unregister_command removes a committed canonical tool owned by the caller;

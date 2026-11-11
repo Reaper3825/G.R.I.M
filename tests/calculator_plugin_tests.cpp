@@ -40,7 +40,7 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
     descriptor.needs_confirmation = d.needs_confirmation;
     descriptor.usage_type = ToolUsage::Model;
     descriptor.bindings.emplace(tool.bindings[0].placeholder, tool.bindings[0].type);
-    return ToolRegistry::instance().registerBatch({ToolProviderType::Plugin, "Calculator Plugin", {}, {}}, {{descriptor,
+    return ToolRegistry::instance().publishProvider({ToolProviderType::Plugin, "Calculator Plugin", "calculator-test", {}}, {{descriptor,
         [](const std::string& arguments) {
             struct Capture { CommandResult result; int completions = 0; } capture;
             GrimToolResultWriter writer;
@@ -65,7 +65,7 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
 
 static Json invoke(const std::string& expression, bool success) {
     auto& registry = ToolRegistry::instance();
-    const auto result = registry.invokeModel("calculate", expression, registry.version());
+    const auto result = registry.invoke("calculate", expression, {.expected_registry_version = registry.version(), .require_canonical_model = true});
     check(result.success == success, expression.c_str());
     auto output = Json::parse(result.structuredOutputJson);
     check(output.at("success") == success, "Structured success mismatch");

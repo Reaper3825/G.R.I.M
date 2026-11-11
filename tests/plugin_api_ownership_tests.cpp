@@ -124,9 +124,15 @@ int main(int argc, char** argv) try {
         PluginAPI::cleanupPluginContext(empty);
         check(registry.snapshot().providers.size() == count, "Zero-tool provider survived unload");
     }
-    auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY);
-    check(registerOne(alpha, "alpha_tool") == GRIM_OK, "Alpha registration failed");
-    auto* beta = PluginAPI::createPluginAPI("beta", "beta.dll", GRIM_PERM_UI);
+    auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY, true);
+    check(registerOne(alpha, "alpha_tool") == GRIM_OK &&
+          registerOne(alpha, "alpha_second") == GRIM_OK &&
+          PluginAPI::commitPluginTools(alpha), "Alpha publication failed");
+    Blocking blocked;
+    auto waitTool = definition("blocking", blocking, &blocked);
+    auto* beta = PluginAPI::createPluginAPI("beta", "beta.dll", GRIM_PERM_UI, true);
+    check(beta->register_tools(beta, &waitTool, 1) == GRIM_OK &&
+          PluginAPI::commitPluginTools(beta), "Beta publication failed");
     check(alpha != beta, "Plugins share an API table");
     checkName(alpha, "alpha");
     checkName(beta, "beta");
@@ -136,14 +142,15 @@ int main(int argc, char** argv) try {
     check(beta->store_memory(beta, "key", "value", "test") == GRIM_ERROR_PERMISSION_DENIED, "API used another owner's permissions");
     check(dispatchCommand("alpha_tool", "").success, "Command callback used wrong owner");
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
-    check(registerOne(alpha, "alpha_later") == GRIM_OK, "Later registration failed");
-    auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_later");
-    check(tool && tool->provider.name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY, "Later registration used last loaded plugin");
+    check(registerOne(alpha, "alpha_later") == GRIM_ERROR_UNSUPPORTED &&
+          !GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_later"),
+          "Published provider accepted a new tool");
+    auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_second");
+    check(tool && tool->provider.name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY,
+          "Staged registration lost provider ownership");
     check(beta->unregister_command(beta, "alpha_tool") == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's tool");
     GRIM::MMO::ToolRegistry::instance().registerSimple("builtin", "Builtin test", "test",
         [](const std::string&) { return CommandResult{}; });
-    check(registerOne(beta, "builtin") == GRIM_ERROR_ALREADY_EXISTS, "Plugin overwrote builtin");
-    check(registerOne(beta, "") == GRIM_ERROR_INVALID_PARAM, "Empty tool name accepted");
 
     auto event = alpha->subscribe_event(alpha, "test", observe, alpha);
     check(beta->unsubscribe_event(beta, event) == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's event");
@@ -175,9 +182,11 @@ int main(int argc, char** argv) try {
           copiedResult.structuredOutputJson == R"({"answer":42})", "Host did not copy result data immediately");
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
         auto broken = definition("broken", handler);
-        check(beta->register_tools(beta, &broken, 1) == GRIM_OK, "Broken fixture registration failed");
+        auto* brokenProvider = PluginAPI::createPluginAPI("broken-fixture", "", 0, true);
+        check(brokenProvider->register_tools(brokenProvider, &broken, 1) == GRIM_OK &&
+              PluginAPI::commitPluginTools(brokenProvider), "Broken fixture publication failed");
         check(dispatchCommand("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
-        beta->unregister_command(beta, "broken");
+        PluginAPI::cleanupPluginContext(brokenProvider);
     }
     auto* staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
     std::string description = "copied metadata";
@@ -226,36 +235,39 @@ int main(int argc, char** argv) try {
     auto second = definition("batch_second");
     second.usage_type = GRIM_TOOL_USAGE_DEBUG;
     GrimToolRegistration batch[] = {first, second};
+    auto* invalidProvider = PluginAPI::createPluginAPI("invalid-fixture", "", GRIM_PERM_UI, true);
+    check(registerOne(invalidProvider, "") == GRIM_ERROR_INVALID_PARAM, "Empty tool name accepted");
     --batch[1].struct_size;
-    check(beta->register_tools(beta, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
+    check(invalidProvider->register_tools(invalidProvider, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
           !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
           "Invalid registration size partially committed a batch");
     batch[1] = second;
     ++batch[1].descriptor.struct_size;
-    check(beta->register_tools(beta, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
+    check(invalidProvider->register_tools(invalidProvider, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
           !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
           "Invalid descriptor size partially committed a batch");
     batch[1] = second;
-    check(beta->register_tools(beta, batch, 2) == GRIM_OK &&
+    auto* batchProvider = PluginAPI::createPluginAPI("batch-fixture", "", 0, true);
+    check(batchProvider->register_tools(batchProvider, batch, 2) == GRIM_OK &&
+          PluginAPI::commitPluginTools(batchProvider) &&
           GRIM::MMO::ToolRegistry::instance().getTool("batch_first")->usage_type == GRIM::MMO::ToolUsage::Model &&
           GRIM::MMO::ToolRegistry::instance().getTool("batch_second")->usage_type == GRIM::MMO::ToolUsage::Debug,
           "v4 batch registration lost tool metadata");
-    beta->unregister_command(beta, "batch_first");
-    beta->unregister_command(beta, "batch_second");
+    PluginAPI::cleanupPluginContext(batchProvider);
     auto invalidSummary=definition("invalid_summary");invalidSummary.short_description="Too short";
-    check(beta->register_tools(beta,&invalidSummary,1)==GRIM_ERROR_INVALID_PARAM,"Invalid short summary registered");
+    check(invalidProvider->register_tools(invalidProvider, &invalidSummary,1)==GRIM_ERROR_INVALID_PARAM,"Invalid short summary registered");
     auto badBinding = definition("bad_binding");
     badBinding.descriptor.usage = "bad_binding {target}";
     const GrimToolBinding duplicateBindings[] = {{"target", "t"}, {"target", "t"}};
     badBinding.bindings = duplicateBindings; badBinding.binding_count = 2;
-    check(beta->register_tools(beta, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
+    check(invalidProvider->register_tools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
           "Duplicate binding placeholder accepted");
     badBinding.bindings = nullptr; badBinding.binding_count = 1;
-    check(beta->register_tools(beta, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
+    check(invalidProvider->register_tools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
           "Null binding array accepted");
     GrimToolRegistration invalidUsage[] = {definition("usage_valid"), definition("usage_invalid")};
     invalidUsage[1].usage_type = static_cast<GrimToolUsage>(99);
-    check(beta->register_tools(beta, invalidUsage, 2) == GRIM_ERROR_INVALID_PARAM &&
+    check(invalidProvider->register_tools(invalidProvider, invalidUsage, 2) == GRIM_ERROR_INVALID_PARAM &&
           !GRIM::MMO::ToolRegistry::instance().isRegistered("usage_valid"), "Invalid usage published partial batch");
 
     staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
@@ -272,15 +284,14 @@ int main(int argc, char** argv) try {
     PluginAPI::cleanupPluginContext("staged");
     complete = definition("invalid");
     complete.descriptor.required_permissions = GRIM_PERM_MEMORY;
-    check(beta->register_tools(beta, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Undeclared permissions accepted");
+    check(invalidProvider->register_tools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Undeclared permissions accepted");
     complete.descriptor.required_permissions = 0;
     complete.descriptor.argument_format = "json";
     complete.descriptor.argument_schema_json = "[]";
-    check(beta->register_tools(beta, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Invalid schema accepted");
+    check(invalidProvider->register_tools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Invalid schema accepted");
 
-    Blocking blocked;
-    auto waitTool = definition("blocking", blocking, &blocked);
-    check(beta->register_tools(beta, &waitTool, 1) == GRIM_OK, "Blocking tool registration failed");
+    check(!PluginAPI::commitPluginTools(invalidProvider), "Invalid declarations did not poison publication");
+    PluginAPI::cleanupPluginContext(invalidProvider);
     auto running = std::async(std::launch::async, [] { return dispatchCommand("blocking", ""); });
     blocked.entered.get_future().wait();
     auto stopping = std::async(std::launch::async, [] { PluginAPI::beginPluginShutdown("beta"); });
@@ -293,7 +304,7 @@ int main(int argc, char** argv) try {
     check(running.get().success, "Active call was interrupted");
     stopping.get();
     PluginAPI::cleanupPluginContext("alpha");
-    check(!GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_tool") && !GRIM::MMO::ToolRegistry::instance().getTool("alpha_later"), "Owner cleanup retained tools");
+    check(!GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_tool") && !GRIM::MMO::ToolRegistry::instance().getTool("alpha_second"), "Owner cleanup retained tools");
     PluginAPI::processTimers();
     check(alphaTicks == 0 && betaTicks == 0, "Owner cleanup retained timer or removed another owner's timer");
     checkName(beta, "beta");

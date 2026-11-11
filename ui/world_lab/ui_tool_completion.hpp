@@ -9,7 +9,8 @@ namespace GRIM::WorldLab::UITools {
 // Stateless request protocol. Poll/cancel stay with the submitting plugin generation.
 class PanelRequestCompletion {
     static Json invoke(const std::string& id, const Json& args, uint64_t version) {
-        const auto result = MMO::ToolRegistry::instance().invokeModel(id, args.dump(), version);
+        const auto result = MMO::ToolRegistry::instance().invoke(
+            id, args.dump(), {.expected_registry_version = version, .require_canonical_model = true});
         require(!result.structuredOutputJson.empty(), result.errorCode + ": " + result.message);
         auto response = Json::parse(result.structuredOutputJson);
         require(response.at("format") == "grim-ui-panel-response" && response.at("version") == 1,

@@ -66,7 +66,7 @@ and deleted-reference checks; no host/model runtime build or deployment.
 | Implemented observation append | [RuntimeContextAppend.cu](../resources/models/GRIM-text/Shared/InferenceState/RuntimeContextAppend.cu) validates/remaps atoms and appends runtime context for resume. | [Phase2_RLTrainingLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_RLTrainingLoop.cu) remains an always-throwing, unbuilt/undispatched scoring/loss/update scaffold. |
 | Implemented host request routing | [ai.cpp](../ai/ai.cpp) uses direct `grim_native` / `ollama` paths and an orchestrator path for other enabled configurations. [Orchestrator.cpp](../MMO/Core/Orchestrator.cpp) owns route/sub-model/synthesis orchestration. | Plan's universal enforced single-path rule is not current source behavior. Historical `ai_interpret()` action wiring is not the active call surface. |
 | Implemented session state | [SessionContextManager.hpp](../MMO/Core/SessionContextManager.hpp) / [`.cpp`](../MMO/Core/SessionContextManager.cpp) own history, supplied reasoning state, referents, pending interactions, and snapshots; `beginTurn(session_id, turn_id, raw, normalized)` returns void. `clearHistory()` clears; `trimHistory()` caps messages. | Permanent-session token retirement/capsules and the personalization queue are pending, not implied by the session owner. |
-| Implemented sole tool store | [ToolRegistry.hpp](../MMO/Core/ToolRegistry.hpp) publishes metadata and handlers together (`registerTool`, `registerBatch`, provider-generation publication/replacement); [command_dispatch.cpp](../commands/command_dispatch.cpp) delegates explicit dispatch to `invoke()`. `invokeModel()` checks a caller-supplied revision/classification; policy remains caller-owned. | No `commandMap`/`CommandRegistry` metadata mirror or seeding bridge. Registry primitives do not prove end-to-end autonomous gated execution. |
+| Implemented sole tool store | [ToolRegistry.hpp](../MMO/Core/ToolRegistry.hpp) publishes metadata and handlers together (`registerTool`, `registerBatch`, provider-generation publication/replacement); [command_dispatch.cpp](../commands/command_dispatch.cpp) delegates explicit dispatch to `invoke()`. `invoke()` accepts optional revision and canonical Model ID checks. Policy remains caller-owned. | No `commandMap`/`CommandRegistry` metadata mirror or seeding bridge. Registry primitives do not prove end-to-end autonomous gated execution. |
 | Implemented plugin-owned surfaces | [input_plugin.cpp](../plugins/input_plugin/input_plugin.cpp) owns input tool registration over API v3.9 host services; [ui_plugin.cpp](../plugins/ui_plugin/ui_plugin.cpp) owns generic panel tools. [core_plugin.cpp](../plugins/core_plugin.cpp) retains surface create/destroy and OSINT UI registration. | No duplicate built-in input/panel registration; host perception/input/UI services remain host-owned. |
 | Implemented retirement | [RETIRED_AGENT_TOOLS.md](RETIRED_AGENT_TOOLS.md) and `core_plugin.cpp` describe eleven removed AI/NLP/admin tool registrations. | Retained handlers, conversation, routing, grammar, and session services are not deletion or migration targets. |
 | Implemented bootstrap systems | [bootstrap.cpp](../bootstrap/bootstrap.cpp) wires hardware inventory, resource signal/coordinator, model registry/loader/process/orchestrator, session state, and UI surface lifecycle in named phases. | No claim that every optional integration or planned resource lease is wired. |
@@ -463,7 +463,7 @@ and deleted-reference checks; no host/model runtime build or deployment.
 - `system_detect.hpp`
 - `system_detect.cpp`
 - old `g_systemInfo` ownership path
-- `CommandRegistry::generateCompactPrompt()` call in `ai_interpret` replaced by `ToolRegistry::instance().generateCompactPrompt()`
+- Historical migration moved prompt formatting from CommandRegistry to ToolRegistry. The formatters were later removed.
 - `CommandRegistry::recordSuccess/recordFailure` in `ai_interpret` replaced by `ToolRegistry` + `ActionPolicyRegistry` analytics
 - `CommandRegistry::recordSuccess/recordFailure` in `commands_core.cpp` `dispatchCommand()` → `ToolRegistry::instance().recordSuccess/recordFailure()`
 - `CommandRegistry::getAllTools/getToolsByCategory/getTool/getUsageStats` in `commands_system.cpp` → `ToolRegistry::instance()`
@@ -666,12 +666,12 @@ CommandRegistry import or separate command map remains.
 - `ToolRegistry::instance()` — singleton
 - `registerTool(descriptor, handler)` / `registerSimple(tool_id, desc, cat, handler)` — atomic metadata/callable registration
 - `unregisterTool(tool_id)` — removal
-- `registerBatch(plugin_name, tools)` / `unregisterByProvider(plugin_name)` — atomic plugin operations
+- `publishProvider(provider, tools)` / `unregisterInstance(provider, instance)` — atomic plugin operations
 - `getTool(tool_id)` / `getAllTools()` / `getByCategory(cat)` / `getByCapabilityTag(tag)` — queries
 - `resolveAlias(alias)` — alias resolution
-- `generateCompactPrompt()` / `generateFullPrompt()` — model-facing prompt text
+- `getModelTools()` — tool metadata filtered to the Model classification
 - `version()` — monotonic prompt invalidation counter
-- `invoke()` / `invokeModel()` — registered execution; invocation owns result statistics, model policy remains caller-owned
+- `invoke()` — registered execution; invocation owns result statistics, model policy remains caller-owned
 - `addListener(listener)` / `removeListener(listener)` — observer pattern
 
 **Config contract**
@@ -679,7 +679,6 @@ CommandRegistry import or separate command map remains.
 
 **Current consumers**
 - `plugins/core_plugin.cpp` and `core/plugin_api_impl.cpp` — sole registry publication, with provider identity/generation for dynamic tools
-- `ai/ai.cpp` — `ai_interpret()` uses `generateCompactPrompt()` for model context, `recordSuccess/recordFailure` for analytics
 - `ActionPolicyRegistry` — queries `getTool()` for risk derivation and tool existence checks
 - Future: `Orchestrator` context composition, plugin hot-swap manager
 
@@ -916,7 +915,7 @@ CommandRegistry import or separate command map remains.
 - `planner.evaluate(capability, request_id)` → `optional<ToolGapProposal>`
 - `ToolGapPlanner::parseProposedSpec(json)` → `ProposedToolSpec`
 - `ToolGapPlanner::formatRationale(proposal)` → user-visible string
-- On approval: caller takes `ProposedToolSpec` → scaffold → build → `PluginManager::loadPlugin()` → `ToolRegistry::registerBatch()`
+- On approval: caller takes `ProposedToolSpec` → scaffold → build → `PluginManager::loadPlugin()` → `ToolRegistry::publishProvider()`
 
 **Current consumers**
 - None yet — will be consumed by synthesize-step handling in Orchestrator when router returns a tool-gap signal
@@ -1127,7 +1126,7 @@ generation. Do not restore `s_commands`/`commandMap` publication or a metadata m
 - Builder throws `std::runtime_error` if annotation or context are not set (Rule 20: fail loud)
 
 **Current consumers**
-- `ai/ai.cpp::callAIAsync()` — builds `RouterMetadata` from `NlpAnnotation` + `ContextSnapshot` + `ToolRegistry::generateCompactPrompt()`, serializes to JSON for `RequestContext::metadata_json`
+- Historical `callAIAsync()` built `RouterMetadata` from `NlpAnnotation`, `ContextSnapshot`, and a registry-generated tool summary for `RequestContext::metadata_json`.
 - `Orchestrator::buildRouterScope()` — receives pre-built metadata via `ctx.metadata_json`, merges with memory retrieval results
 
 **Legacy replaced**
@@ -1941,13 +1940,9 @@ Host panel/surface services remain host-owned; do not duplicate their tools.
 
 **Canonical hook points**
 
-- Model can discover these tools via `ToolRegistry::generateCompactPrompt()` / `generateFullPrompt()`
+- `ToolRegistry::getModelTools()` returns tools classified for model discovery
 - `ToolGapPlanner::evaluate("ui.create_surface", ...)` returns `nullopt` — tool exists
 - When command handlers are wired, dispatch will route `ui.create_surface surface_id` to `UISurfaceRegistry::create()`
-
-**Current consumers**
-
-- `ToolRegistry::generateCompactPrompt()` — includes UI tools in model-facing tool summary
 
 **Status**
 

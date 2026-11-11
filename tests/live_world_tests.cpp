@@ -239,7 +239,9 @@ int main() try {
     auto replacement = alpha; replacement.instance = "alpha-2";
     const auto revision = registry.version();
     auto collision = tool("alpha.new"); collision.descriptor.aliases = {"beta.tool"};
-    check(registry.registerBatch(beta, {tool("beta.tool")}), "late tool publication");
+    auto betaReplacement = beta;
+    betaReplacement.instance = "beta-2";
+    check(registry.publishProvider(betaReplacement, {tool("beta.tool")}, beta.instance), "Beta replacement failed");
     const auto beforeRejected = registry.snapshot();
     check(!registry.publishProvider(replacement, {collision}, alpha.instance), "collision accepted");
     check(registry.version() == beforeRejected.revision && registry.getTool("alpha.read")->provider.instance == alpha.instance, "failed replacement changed registry");
@@ -248,7 +250,7 @@ int main() try {
     check(session.world().location() == room && session.world().roomId(providerKey(alpha)) == room, "replacement changed room/location");
     check(session.world().toolsHere().at(0).tool_id == "alpha.new", "replacement catalog stale");
     check(session.observation().at("tool_catalog").at("tools").dump().find("alpha.read") == std::string::npos, "inventory retained replaced tool");
-    check(registry.invokeModel("alpha.new", "", revision).errorCode == "ERR_TOOL_STALE", "stale revision accepted");
+    check(registry.invoke("alpha.new", "", {.expected_registry_version = revision, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE", "stale revision accepted");
     registry.unregisterInstance(alpha.name, alpha.instance);
     check(registry.getTool("alpha.new").has_value(), "old-generation cleanup removed replacement");
     session.command("inspect alpha.read");

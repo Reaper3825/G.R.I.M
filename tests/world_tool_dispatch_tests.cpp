@@ -26,6 +26,7 @@ int main() try {
     {
         // One shared routing boundary covers host and Model invocations.
         auto definition = tool("execution_mode_fixture");
+        definition.aliases = {"execution_mode_alias"};
         int calls = 0;
         registry.registerTool(definition, [&](const std::string& args) {
             ++calls;
@@ -37,27 +38,32 @@ int main() try {
             return result;
         });
         const auto version = registry.version();
-        const auto implicit = registry.invoke(definition.tool_id, "implicit");
+        const auto implicit = registry.invoke("execution_mode_alias", "implicit", {.expected_registry_version = version});
         check(implicit.success && implicit.message == "implicit" &&
               Json::parse(implicit.structuredOutputJson).at("actual") == "implicit" && calls == 1,
-              "Default invocation did not return the real Production result");
-        check(registry.invoke(definition.tool_id, "explicit", ToolExecutionMode::Production).success && calls == 2,
+              "Revision check alone blocked an alias or changed the Production result");
+        check(registry.invoke("execution_mode_alias", "", {.require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL",
+              "Canonical Model check depended on a registry revision");
+        check(registry.invoke(definition.tool_id, "explicit", {.mode = ToolExecutionMode::Production}).success && calls == 2,
               "Explicit Production did not invoke the handler");
-        check(registry.invokeModel(definition.tool_id, "model", version).success && calls == 3,
+        check(registry.invoke(definition.tool_id, "model", {.expected_registry_version = version, .require_canonical_model = true}).success && calls == 3,
               "Model invocation did not default to Production");
-        check(registry.invokeModel(definition.tool_id, "model", version, ToolExecutionMode::Production).success && calls == 4,
+        check(registry.invoke(definition.tool_id, "model",
+                              {.mode = ToolExecutionMode::Production, .expected_registry_version = version,
+                               .require_canonical_model = true}).success && calls == 4,
               "Explicit Model Production did not invoke the handler");
         const auto failed = registry.invoke(definition.tool_id, "fail");
         check(!failed.success && failed.errorCode == "FIXTURE_FAILURE" && calls == 5,
               "Production failure result was replaced");
         const auto stats = *registry.getTool(definition.tool_id);
-        const auto sandbox = registry.invoke(definition.tool_id, "sandbox", ToolExecutionMode::Sandbox);
+        const auto sandbox = registry.invoke(definition.tool_id, "sandbox", {.mode = ToolExecutionMode::Sandbox});
         check(!sandbox.success && sandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
               "Reserved Sandbox invoked Production or claimed success");
-        const auto modelSandbox = registry.invokeModel(definition.tool_id, "sandbox", version, ToolExecutionMode::Sandbox);
+        const auto modelSandbox = registry.invoke(definition.tool_id, "sandbox",
+            {.mode = ToolExecutionMode::Sandbox, .expected_registry_version = version, .require_canonical_model = true});
         check(!modelSandbox.success && modelSandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
               "Reserved Model Sandbox invoked Production or claimed success");
-        const auto invalid = registry.invoke(definition.tool_id, "invalid", static_cast<ToolExecutionMode>(255));
+        const auto invalid = registry.invoke(definition.tool_id, "invalid", {.mode = static_cast<ToolExecutionMode>(255)});
         check(!invalid.success && invalid.errorCode == "ERR_TOOL_EXECUTION_MODE" && calls == 5,
               "Invalid mode invoked Production");
         const auto after = *registry.getTool(definition.tool_id);
@@ -88,7 +94,7 @@ int main() try {
               registry.getTool(retained.tool_id)->provider == provider &&
               oldTool.provider.instance == oldInstance && !registry.updateMetadata(oldTool) &&
               !Json(registry.getModelTools().front()).contains("provider_instance") &&
-              registry.invokeModel(retained.tool_id, "", oldRevision).errorCode == "ERR_TOOL_STALE",
+              registry.invoke(retained.tool_id, "", {.expected_registry_version = oldRevision, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE",
               "Replacement exposed retired tools or lost the new generation");
         registry.unregisterInstance(provider.name, provider.instance);
         check(registry.getModelTools().empty() && registry.getExecutableNames().empty() &&
@@ -172,10 +178,13 @@ int main() try {
     auto changed = *registry.getTool("ui.show"); changed.usage_type = ToolUsage::System;
     registry.updateMetadata(changed);
     check(run("ui.show panel:settings").at("status") == "failed" && shows == 1, "Reclassified tool executed");
-    check(registry.invokeModel("ui.show", "{}", registry.version()).errorCode == "ERR_TOOL_NOT_MODEL", "Model gate ignored classification");
-    check(registry.invokeModel("ui.list", "{}", registry.version() - 1).errorCode == "ERR_TOOL_STALE", "Stale registry accepted");
+    check(registry.invoke("ui.show", "{}",
+                          {.expected_registry_version = registry.version(), .require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL", "Model gate ignored classification");
+    check(registry.invoke("ui.list", "{}",
+                          {.expected_registry_version = registry.version() - 1, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE", "Stale registry accepted");
     auto alias = tool("ui.list"); alias.aliases = {"listing"}; registry.updateMetadata(alias);
-    check(registry.invokeModel("listing", "{}", registry.version()).errorCode == "ERR_TOOL_NOT_MODEL", "Alias accepted by canonical gate");
+    check(registry.invoke("listing", "{}",
+                          {.expected_registry_version = registry.version(), .require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL", "Alias accepted by canonical gate");
     dispatch.clear();
     check(run("ui.inspect panel:settings").at("status") == "failed", "Cleared session retained resources");
     int cancelledChecks = 0;

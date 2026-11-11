@@ -33,7 +33,9 @@ static GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration*
 }
 static Json invoke(const std::string& operation,Json args) {
     auto& registry=GRIM::MMO::ToolRegistry::instance();
-    return Json::parse(registry.invokeModel("schedule."+operation,args.dump(),registry.version()).structuredOutputJson);
+    return Json::parse(registry.invoke(
+        "schedule." + operation, args.dump(),
+        {.expected_registry_version = registry.version(), .require_canonical_model = true}).structuredOutputJson);
 }
 int main() {
     const auto root=std::filesystem::temp_directory_path()/("grim-schedule-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
