@@ -4,7 +4,7 @@
 #include <string>
 
 // Include plugin.hpp for GRIM_HOST_API macro
-#include "core/plugin.hpp"
+#include "core/host_exports.hpp"
 
 // Structure to hold a single sensitive finding
 struct SensitiveFinding {

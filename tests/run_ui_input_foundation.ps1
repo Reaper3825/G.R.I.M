@@ -13,7 +13,7 @@ $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/wd4251','/DGRIM_BUILD_HOST
 $sources += 'ui/primitives/ui_panel.cpp', 'ui/primitives/ui_split_pane.cpp', 'tests/ui_split_pane_tests.cpp'
 $sources += 'ui/ui_root_panels.cpp', 'ui/ui_panel_service.cpp', 'ui/dynamic_surface_panel.cpp', 'ui/ui_surface_renderer_bridge.cpp', 'MMO/UI/UISurfaceRegistry.cpp', 'MMO/UI/UISurfaceSpec.cpp', 'tests/ui_panel_operations_tests.cpp'
 $sources += 'ui/primitives/ui_canvas.cpp', 'ui/primitives/ui_node.cpp', 'tests/ui_canvas_tests.cpp'
-$sources += 'MMO/Core/ToolRegistry.cpp' # Panel resource publication is now a base UI dependency.
+$sources += @('MMO/Core/ToolRegistry.cpp', 'MMO/Core/ProviderRegistry.cpp') # Panel resource publication is a base UI dependency.
 if ($Tools) {
     $sources += 'ui/training_panel/ui_training_tools_view.cpp', 'tests/ui_training_tools_tests.cpp'
     $arguments += '/DGRIM_TOOLS_VIEW_TESTS'

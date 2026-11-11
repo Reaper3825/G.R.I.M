@@ -2,7 +2,7 @@
 #include "world_document.hpp"
 #include "live_world_navigation.hpp"
 #include "world_card_layout.hpp"
-#include "MMO/Core/ToolRegistrySnapshot.hpp"
+#include "MMO/Core/ProviderRegistrySnapshot.hpp"
 #include <map>
 #include <set>
 #include <algorithm>
@@ -40,7 +40,7 @@ public:
         document_.validate();
     }
     const Document& document() const { return document_; }
-    const MMO::ToolRegistrySnapshot& registry() const { return snapshot_; }
+    const MMO::ProviderRegistrySnapshot& registry() const { return snapshot_; }
     const std::string& location() const { return location_; }
     uint64_t revision() const { return revision_; }
     LiveNavigationSnapshot navigation() const {
@@ -62,20 +62,17 @@ public:
     std::string providerPath(const ProviderKey& key) const { return "/" + segments_.at(key); }
     const MMO::ProviderDescriptor* provider(const ProviderKey& key) const {
         for (const auto& group : snapshot_.providers)
-            if (hasRoom(group) && providerKey(group.provider) == key) return &group.provider;
+            if (providerKey(group.provider) == key) return &group.provider;
         return nullptr;
     }
     // Commit a complete projection so invalid snapshots cannot leave partial topology.
-    std::string reconcile(MMO::ToolRegistrySnapshot snapshot) {
+    std::string reconcile(MMO::ProviderRegistrySnapshot snapshot) {
         auto next = *this;
         auto changes = next.reconcileSnapshot(std::move(snapshot));
         *this = std::move(next);
         return changes;
     }
 private:
-    static bool hasRoom(const MMO::ProviderSnapshot& group) {
-        return group.published || group.provider.type == MMO::ToolProviderType::Builtin;
-    }
     void assignPath(const ProviderKey& key) {
         if (segments_.count(key)) return;
         std::string segment;
@@ -95,17 +92,17 @@ private:
             // retired names reserved so an old path cannot silently change owner.
             uint64_t hash = 14695981039346656037ULL;
             for (unsigned char c : key.second) { hash ^= c; hash *= 1099511628211ULL; }
-            segment += (key.first == MMO::ToolProviderType::Plugin ? "-plugin-" : "-builtin-") + std::to_string(hash);
+            segment += "-plugin-" + std::to_string(hash);
             if (occupied(segment)) throw std::runtime_error("Provider navigation path collision");
         }
         segments_.emplace(key, std::move(segment));
     }
-    std::string reconcileSnapshot(MMO::ToolRegistrySnapshot snapshot) {
-        if (std::count_if(snapshot.providers.begin(), snapshot.providers.end(), hasRoom) > 9999) throw std::runtime_error("Live world room limit reached");
+    std::string reconcileSnapshot(MMO::ProviderRegistrySnapshot snapshot) {
+        if (snapshot.providers.size() > 9999) throw std::runtime_error("Live world room limit reached");
         std::string changes;
         for (auto it = connections_.begin(); it != connections_.end();) {
             const auto found = std::find_if(snapshot.providers.begin(), snapshot.providers.end(),
-                [&](const auto& p) { return hasRoom(p) && providerKey(p.provider) == *it; });
+                [&](const auto& p) { return providerKey(p.provider) == *it; });
             if (found == snapshot.providers.end()) {
                 changes += providerRoomName(it->second) + " disconnected: provider unloaded.\n";
                 if (location_ == roomId(*it)) {
@@ -121,7 +118,6 @@ private:
             }
         }
         for (const auto& group : snapshot.providers) {
-            if (!hasRoom(group)) continue;
             const auto& p = group.provider;
             const auto key = providerKey(p);
             if (connections_.insert(key).second) {
@@ -154,7 +150,7 @@ public:
     }
     const MMO::ProviderSnapshot* providerInRoom(const std::string& room) const {
         for (const auto& group : snapshot_.providers)
-            if (hasRoom(group) && roomId(providerKey(group.provider)) == room) return &group;
+            if (roomId(providerKey(group.provider)) == room) return &group;
         return nullptr;
     }
     std::vector<MMO::ToolDescriptor> toolsHere() const {
@@ -204,7 +200,7 @@ private:
         document_ = std::move(next);
     }
     Document document_;
-    MMO::ToolRegistrySnapshot snapshot_;
+    MMO::ProviderRegistrySnapshot snapshot_;
     std::set<ProviderKey> connections_;
     std::map<ProviderKey, std::string> ids_;
     std::map<ProviderKey, std::string> segments_;

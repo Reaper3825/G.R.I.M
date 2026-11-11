@@ -1,7 +1,7 @@
 #pragma once
 #include "live_world.hpp"
 #include "live_world_navigation_store.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/ProviderRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "resource_inspection.hpp"
 #include <map>
@@ -13,7 +13,7 @@ namespace GRIM::WorldLab {
 class LiveWorldSession {
 public:
     struct Entry { std::string action, feedback; nlohmann::json state; };
-    explicit LiveWorldSession(MMO::ToolRegistry& registry = MMO::ToolRegistry::instance(),
+    explicit LiveWorldSession(MMO::ProviderRegistry& registry = MMO::ProviderRegistry::instance(),
                               std::filesystem::path navigationPath = {})
         : registry_(registry), navigationStore_(std::move(navigationPath)) {
         world_.reconcile(registry_.snapshot());
@@ -24,8 +24,7 @@ public:
     const std::vector<Entry>& history() const { return history_; }
     const std::string& navigationPersistenceError() const { return navigationStore_.error(); }
     void synchronize() {
-        if (registry_.version() == world_.registry().revision &&
-            registry_.resourceVersion() == world_.registry().resource_revision) {
+        if (!registry_.hasChanged(world_.registry())) {
             navigationStore_.synchronize(world_.navigation());
             return;
         }
@@ -225,7 +224,7 @@ private:
     void record(const std::string& action, const std::string& feedback) {
         history_.push_back({action, feedback, observation()});
     }
-    MMO::ToolRegistry& registry_;
+    MMO::ProviderRegistry& registry_;
     LiveNavigationStore navigationStore_;
     LiveWorld world_;
     uint64_t moves_ = 0;

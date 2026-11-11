@@ -23,12 +23,14 @@ CommandResult response(const Json& value) {
 }
 int main() try {
     auto& registry = ToolRegistry::instance();
+    auto& providers = ProviderRegistry::instance();
     {
         // One shared routing boundary covers host and Model invocations.
         auto definition = tool("execution_mode_fixture");
         definition.aliases = {"execution_mode_alias"};
         int calls = 0;
-        registry.registerTool(definition, [&](const std::string& args) {
+        const ProviderDescriptor executionOwner{ToolProviderType::Plugin, "Execution fixture", "fixture-1", {}};
+        check(providers.publish(executionOwner, {{definition, [&](const std::string& args) {
             ++calls;
             CommandResult result;
             result.success = args != "fail";
@@ -36,7 +38,7 @@ int main() try {
             result.errorCode = result.success ? "ERR_NONE" : "FIXTURE_FAILURE";
             result.structuredOutputJson = Json{{"actual", args}}.dump();
             return result;
-        });
+        }}}), "Execution fixture publication failed");
         const auto version = registry.version();
         const auto implicit = registry.invoke("execution_mode_alias", "implicit", {.expected_registry_version = version});
         check(implicit.success && implicit.message == "implicit" &&
@@ -70,7 +72,7 @@ int main() try {
         check(after.usage_count == stats.usage_count && after.success_count == stats.success_count &&
               after.failure_count == stats.failure_count && registry.version() == version,
               "Unimplemented execution modes changed Production statistics or metadata");
-        registry.unregisterTool(definition.tool_id);
+        providers.retire(executionOwner.name, executionOwner.instance);
     }
     {
         ProviderDescriptor provider{ToolProviderType::Plugin, "fixture", "generation-1", "fixture.dll"};
@@ -79,16 +81,16 @@ int main() try {
         retired.aliases = {"retired_alias"};
         const auto handler = [](const std::string&) { return response(Json::object()); };
         check(!registry.isExecutable(retained.tool_id), "Tool exposed before provider publication");
-        check(registry.publishProvider(provider, {{retained, handler}, {retired, handler}}) &&
+        check(providers.publish(provider, {{retained, handler}, {retired, handler}}) &&
               registry.getModelTools().size() == 2 && registry.isExecutable("retired_alias"),
               "Provider publication did not expose its tools");
         const auto oldRevision = registry.version();
         const auto oldInstance = provider.instance;
         const auto oldTool = *registry.getTool(retained.tool_id);
         provider.instance = "generation-2";
-        check(registry.publishProvider(provider, {{retained, handler}}, oldInstance),
+        check(providers.publish(provider, {{retained, handler}}, oldInstance),
               "Provider replacement failed");
-        registry.unregisterInstance(provider.name, oldInstance);
+        providers.retire(provider.name, oldInstance);
         check(registry.getModelTools().size() == 1 && registry.isExecutable(retained.tool_id) &&
               !registry.isExecutable("retired_alias") &&
               registry.getTool(retained.tool_id)->provider == provider &&
@@ -96,7 +98,7 @@ int main() try {
               !Json(registry.getModelTools().front()).contains("provider_instance") &&
               registry.invoke(retained.tool_id, "", {.expected_registry_version = oldRevision, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE",
               "Replacement exposed retired tools or lost the new generation");
-        registry.unregisterInstance(provider.name, provider.instance);
+        providers.retire(provider.name, provider.instance);
         check(registry.getModelTools().empty() && registry.getExecutableNames().empty() &&
               registry.invoke(retained.tool_id, "").errorCode == "ERR_UNKNOWN_CMD",
               "Provider unload left tools discoverable or callable");
@@ -105,8 +107,10 @@ int main() try {
     bool visible = false, duplicate = false, removed = false, replaceBeforeShow = false, replaceBeforeHide = false;
     int shows = 0, hides = 0, lists = 0, cancels = 0;
     std::map<uint64_t, Json> requests;
+    const ProviderDescriptor uiOwner{ToolProviderType::Plugin, "UI fixture", "fixture-1", {}};
+    std::vector<ToolRegistration> registrations;
     for (const auto& id : {"ui.list", "ui.inspect", "ui.show", "ui.hide"}) {
-        registry.registerTool(tool(id), [&, id = std::string(id)](const std::string& text) {
+        registrations.push_back({tool(id), [&, id = std::string(id)](const std::string& text) {
             const auto args = Json::parse(text);
             Json result;
             if (id == "ui.list") {
@@ -129,16 +133,17 @@ int main() try {
             }
             requests[++next] = result;
             return response({{"format", "grim-ui-panel-response"}, {"version", 1}, {"request_id", next}, {"status", "pending"}});
-        });
+        }});
     }
-    registry.registerTool(tool("ui.poll"), [&](const std::string& text) {
+    registrations.push_back({tool("ui.poll"), [&](const std::string& text) {
         const auto args = Json::parse(text);
         const auto id = args.at("request_id").get<uint64_t>();
         auto value = requests.at(id); requests.erase(id);
         if (args.value("cancel", false)) { ++cancels; value = {{"success", true}}; }
         return response({{"format", "grim-ui-panel-response"}, {"version", 1}, {"request_id", id},
             {"status", "completed"}, {"result", value}});
-    });
+    }});
+    check(providers.publish(uiOwner, registrations), "UI fixture publication failed");
     WorldToolDispatch dispatch;
     uint64_t action = 0;
     auto run = [&](const std::string& command) { return dispatch.execute(command, ++action, [] { return false; }); };
@@ -176,13 +181,13 @@ int main() try {
     check(run("ui.show panel:settings").at("status") == "failed" && shows == 1, "Removed resource executed");
     removed = false; run("ui.list");
     auto changed = *registry.getTool("ui.show"); changed.usage_type = ToolUsage::System;
-    registry.updateMetadata(changed);
+    registry.updateMetadata(changed, uiOwner);
     check(run("ui.show panel:settings").at("status") == "failed" && shows == 1, "Reclassified tool executed");
     check(registry.invoke("ui.show", "{}",
                           {.expected_registry_version = registry.version(), .require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL", "Model gate ignored classification");
     check(registry.invoke("ui.list", "{}",
                           {.expected_registry_version = registry.version() - 1, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE", "Stale registry accepted");
-    auto alias = tool("ui.list"); alias.aliases = {"listing"}; registry.updateMetadata(alias);
+    auto alias = tool("ui.list"); alias.aliases = {"listing"}; registry.updateMetadata(alias, uiOwner);
     check(registry.invoke("listing", "{}",
                           {.expected_registry_version = registry.version(), .require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL", "Alias accepted by canonical gate");
     dispatch.clear();
@@ -193,7 +198,7 @@ int main() try {
     // Mapping is explicit: readable usage edits must not become executable syntax.
     changed.usage_type = ToolUsage::Model;
     changed.usage = "Show the observed panel {t}";
-    registry.updateMetadata(changed);
+    registry.updateMetadata(changed, uiOwner);
     run("ui.list");
     check(run("ui.show Settings panel").at("status") == "completed" && shows == 2,
           "Dispatch inferred its mapping from usage prose");
@@ -202,7 +207,7 @@ int main() try {
           "Resource discovery leaked across sessions");
     // A valid type label is insufficient when the actual handler parameter differs.
     changed.parameters = {{"other_id", "string", "Different contract", true}};
-    registry.updateMetadata(changed);
+    registry.updateMetadata(changed, uiOwner);
     run("ui.list");
     check(run("ui.show panel:settings").at("status") == "failed" && shows == 2,
           "Adapter accepted an incompatible handler parameter");
@@ -217,7 +222,7 @@ int main() try {
     check(rejected && resources.revision() == directoryRevision &&
           resources.resolve("panel:settings", registry.version()).runtime == runtime,
           "Rejected directory refresh replaced valid session resources");
-    registry.unregisterByProvider("builtin", ToolProviderType::Builtin);
+    providers.retire(uiOwner.name, uiOwner.instance);
     std::cout << "World tool discovery, resolution, dispatch, generation and cancellation tests passed\n";
     return 0;
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

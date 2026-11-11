@@ -9,9 +9,9 @@ using Json = nlohmann::json;
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 template<class F> void rejects(F fn) { bool threw = false; try { fn(); } catch (const std::exception&) { threw = true; } check(threw, "Expected rejection"); }
 int main() try {
-    auto& registry = ToolRegistry::instance();
+    auto& registry = ProviderRegistry::instance();
     ProviderDescriptor owner{ToolProviderType::Plugin, "Applications fixture", "one", ""};
-    check(registry.publishProvider(owner, {}), "publish");
+    check(registry.publish(owner, {}), "publish");
     Application first{"fixture", "a", "Same display name", "fixture", "first", ""};
     Application second{"fixture", "b", "Same display name", "fixture", "second", ""};
     std::vector<Application> primary{first, second}, secondary{first};
@@ -55,14 +55,14 @@ int main() try {
     auto replacement = owner; replacement.instance = "two";
     const auto latest = state.at("applications").at(0);
     auto retiredLaunch = Json{{"resource_id", latest.at("resource_id")}, {"runtime_id", latest.at("runtime_id")}, {"provider_instance", owner.instance}};
-    check(registry.publishProvider(replacement, {}, owner.instance), "replacement");
+    check(registry.publish(replacement, {}, owner.instance), "replacement");
     check(registry.snapshot().resourceCount() == 0, "replacement retained old resources");
     rejects([&] { catalog.request("refresh", Json::object()); });
     rejects([&] { catalog.request("launch", retiredLaunch); });
     check(registry.snapshot().resourceCount() == 0, "retired catalog republished");
-    registry.unregisterInstance(replacement.name, replacement.instance);
+    registry.retire(replacement.name, replacement.instance);
     owner.instance = "three";
-    check(registry.publishProvider(owner, {}), "pagination provider");
+    check(registry.publish(owner, {}), "pagination provider");
     primary.clear();
     for (int i = 0; i < 180; ++i) primary.push_back({"fixture", std::to_string(i), "Application " + std::to_string(i), "fixture", "target", ""});
     Catalog paged(owner, {{"many", [&] { return primary; }}}, [](const auto&) {});
@@ -76,15 +76,15 @@ int main() try {
         page = paged.request("list", {{"offset", page.at("next_offset")}});
     }
     check(observed.size() == 180 && registry.snapshot().resourceCount() == 180, "pagination hid registered resources");
-    registry.unregisterInstance(owner.name, owner.instance);
+    registry.retire(owner.name, owner.instance);
     owner.instance = "four";
-    check(registry.publishProvider(owner, {}), "failed backend provider");
+    check(registry.publish(owner, {}), "failed backend provider");
     Catalog unavailable(owner, {{"unavailable", []() -> std::vector<Application> { throw std::runtime_error("offline"); }}}, [](const auto&) {});
     for (int i = 0; i < 2; ++i) {
         const auto failed = unavailable.request("refresh", Json::object());
         check(!failed.at("complete").get<bool>() && !failed.at("errors").at(0).at("retained_previous").get<bool>(),
               "Never-successful backend reported a previous snapshot");
     }
-    registry.unregisterInstance(owner.name, owner.instance);
+    registry.retire(owner.name, owner.instance);
     std::cout << "Application catalog identity, refresh, failure retention, generation guards and atomic publication passed\n";
 } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

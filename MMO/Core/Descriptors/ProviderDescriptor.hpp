@@ -3,8 +3,8 @@
 #include <string>
 
 namespace GRIM::MMO {
-enum class ToolProviderType : uint8_t { Builtin, Plugin };
-// Identity is (type, name); instance identifies one loaded generation.
+enum class ToolProviderType : uint8_t { Plugin = 1 };
+// The plugin name identifies a provider. The instance identifies its loaded generation.
 // Providers exist independently of how many tools they expose.
 struct ProviderDescriptor {
     ToolProviderType type = ToolProviderType::Plugin;

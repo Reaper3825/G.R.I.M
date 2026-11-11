@@ -21,7 +21,7 @@ std::string resourceId(const Application& a) {
 }
 }
 Catalog::Catalog(MMO::ProviderDescriptor owner, std::vector<Backend> backends, Launcher launcher,
-                 MMO::ToolRegistry& registry)
+                 MMO::ProviderRegistry& registry)
     : owner_(std::move(owner)), backends_(std::move(backends)), launcher_(std::move(launcher)), registry_(registry) {
     if (backends_.size() > 8 || !launcher_) throw std::invalid_argument("Invalid application catalog configuration");
     std::set<std::string> names;
@@ -128,7 +128,7 @@ nlohmann::json Catalog::request(const std::string& operation, const nlohmann::js
         const auto snapshot = registry_.snapshot();
         if (std::none_of(snapshot.providers.begin(), snapshot.providers.end(), [&](const auto& group) {
                 const auto& p = group.provider;
-                return group.published && p.type == owner_.type && p.name == owner_.name && p.instance == owner_.instance;
+                return p.name == owner_.name && p.instance == owner_.instance;
             })) throw std::runtime_error("Application provider is no longer current");
         if (!args.contains("runtime_id") || !args.at("runtime_id").is_number_unsigned() ||
             args.at("runtime_id") != found->second.runtime || !args.contains("provider_instance") ||

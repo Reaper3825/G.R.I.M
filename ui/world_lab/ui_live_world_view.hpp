@@ -17,7 +17,7 @@
 class UILiveWorldView {
 public:
     explicit UILiveWorldView(std::filesystem::path navigationPath = {})
-        : session_(GRIM::MMO::ToolRegistry::instance(), std::move(navigationPath)) {
+        : session_(GRIM::MMO::ProviderRegistry::instance(), std::move(navigationPath)) {
         canvas_.selectionOnly = true;
         canvas_.radialPaths = true;
         canvas_.showRoomLabels = false;

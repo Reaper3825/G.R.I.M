@@ -44,7 +44,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value)
     d.category = "test";
     d.argument_format = "raw_text";
 #ifdef FIXTURE_COLLISION
-    const char* aliases[] = {"builtin"};
+    const char* aliases[] = {"reserved_fixture_tool"};
     d.aliases = {aliases, 1};
 #endif
     if (api->register_tools(api, &tool, 1) != GRIM_OK) return GRIM_ERROR_INVALID_PARAM;

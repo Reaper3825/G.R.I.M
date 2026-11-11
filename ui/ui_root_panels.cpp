@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/ProviderRegistry.hpp"
 
 void UIRoot::bindPanelResource(const std::string& key, uint64_t runtime,
                               const std::string& provider, const std::string& instance) {
@@ -22,7 +22,7 @@ void UIRoot::bindPanelResource(const std::string& key, uint64_t runtime,
 }
 
 void UIRoot::synchronizePanelResources() {
-    auto& registry = GRIM::MMO::ToolRegistry::instance();
+    auto& registry = GRIM::MMO::ProviderRegistry::instance();
     for (auto it = m_panelResources.begin(); it != m_panelResources.end();) {
         auto panel = getPanelByKey(it->first);
         auto& r = it->second;
@@ -139,7 +139,7 @@ void UIRoot::removePanel(const std::string& name)
         m_panelKeyMap.erase(panel->getPanelKey());
         const auto resource = m_panelResources.find(panel->getPanelKey());
         if (resource != m_panelResources.end()) {
-            GRIM::MMO::ToolRegistry::instance().removeResource(resource->second.provider, resource->second);
+            GRIM::MMO::ProviderRegistry::instance().removeResource(resource->second.provider, resource->second);
             m_panelResources.erase(resource);
         }
 

@@ -10,10 +10,9 @@ struct ProviderSnapshot {
     ProviderDescriptor provider;
     std::vector<ToolDescriptor> tools;
     std::vector<ResourceDescriptor> resources;
-    bool published = false; // A provider can also be discovered through standalone tool registrations.
 };
 
-struct ToolRegistrySnapshot {
+struct ProviderRegistrySnapshot {
     uint64_t revision = 0;
     uint64_t resource_revision = 0;
     std::vector<ProviderSnapshot> providers;

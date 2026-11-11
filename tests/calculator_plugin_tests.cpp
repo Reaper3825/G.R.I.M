@@ -40,7 +40,7 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
     descriptor.needs_confirmation = d.needs_confirmation;
     descriptor.usage_type = ToolUsage::Model;
     descriptor.bindings.emplace(tool.bindings[0].placeholder, tool.bindings[0].type);
-    return ToolRegistry::instance().publishProvider({ToolProviderType::Plugin, "Calculator Plugin", "calculator-test", {}}, {{descriptor,
+    return ProviderRegistry::instance().publish({ToolProviderType::Plugin, "Calculator Plugin", "calculator-test", {}}, {{descriptor,
         [](const std::string& arguments) {
             struct Capture { CommandResult result; int completions = 0; } capture;
             GrimToolResultWriter writer;
@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
         check(handler(&bad, nullptr, nullptr) == GRIM_ERROR_INVALID_PARAM, "Null writer accepted");
         check(handler(&bad, &writer, nullptr) == GRIM_ERROR_INVALID_PARAM, "Null completion accepted");
         pluginShutdown();
-        ToolRegistry::instance().unregisterByProvider("Calculator Plugin");
+        ProviderRegistry::instance().retire("Calculator Plugin", "calculator-test");
         check(!ToolRegistry::instance().isRegistered("calculate"), "Provider removal failed");
 #ifdef _WIN32
         FreeLibrary(library);

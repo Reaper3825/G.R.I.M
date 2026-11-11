@@ -10,7 +10,10 @@
 void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     namespace fs = std::filesystem;
     auto check = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
-    auto& registry = GRIM::MMO::ToolRegistry::instance();
+    using namespace GRIM::MMO;
+    auto& registry = ToolRegistry::instance();
+    auto& providers = ProviderRegistry::instance();
+    const ProviderDescriptor owner{ToolProviderType::Plugin, "Utility collision fixture", "fixture-1", {}};
     const auto baseline = registry.toolCount();
     const auto folder = fs::temp_directory_path() / ("grim-utility-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -26,15 +29,19 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     } cleanup{folder};
     fs::copy_file(pluginDirectory / "utility_plugin.dll", folder / "utility_plugin.dll");
 
-    // An old host must reject the whole batch, retaining its original handler.
-    check(registry.registerSimple("clean", "Old host fixture", "system",
-        [](const std::string&) { CommandResult r; r.message = "old host"; return r; }, false),
-        "Cannot register old host fixture");
+    // A collision must reject the whole batch and retain the existing provider.
+    ToolDescriptor clean;
+    clean.tool_id = "clean";
+    check(providers.publish(owner, {{clean, [](const std::string&) {
+        CommandResult result;
+        result.message = "existing provider";
+        return result;
+    }}}), "Cannot publish collision fixture");
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 1 && !registry.isRegistered("help") &&
-          registry.invoke("clean", "").message == "old host", "Plugin collision changed existing host behavior");
-    registry.unregisterTool("clean");
-    // Restart discovery to clear the rejected-file cache after removing the host fixture.
+          registry.invoke("clean", "").message == "existing provider", "Plugin collision changed the existing handler");
+    providers.retire(owner.name, owner.instance);
+    // Restart discovery to clear the rejected-file cache after retiring the fixture.
     PluginManager::unloadAll();
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 2, "Utility DLL did not publish two tools");

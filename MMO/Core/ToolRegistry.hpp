@@ -1,26 +1,15 @@
-// The authoritative store for tool metadata and execution bindings.
+// Global lookup and dispatch for provider-owned tools.
 #pragma once
 #include "Descriptors/RegisteredTool.hpp"
-#include "ToolRegistrySnapshot.hpp"
+#include "ProviderRegistry.hpp"
 #include "ToolExecutionMode.hpp"
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
-#include <tuple>
-
-struct CommandResult;
 
 namespace GRIM::MMO {
-
-using ToolHandler = std::function<CommandResult(const std::string&)>;
-
-struct ToolRegistration {
-    ToolDescriptor descriptor;
-    ToolHandler handler;
-};
 
 struct ToolInvocationOptions {
     ToolExecutionMode mode = ToolExecutionMode::Production;
@@ -39,32 +28,12 @@ class ToolRegistry {
 public:
     static ToolRegistry& instance();
 
-    // Metadata and a callable are published together. Invalid definitions throw;
-    // name/alias collisions return false. Replacement must retain the provider.
-    bool registerTool(const ToolDescriptor& descriptor, ToolHandler handler, bool replace = false,
-                      const ProviderDescriptor& provider = {ToolProviderType::Builtin, "builtin", {}, {}});
-    bool registerSimple(const std::string& tool_id, const std::string& description,
-                        const std::string& category, ToolHandler handler, bool is_informational = true);
-    // Publish provider identity and tools in the same transaction, including zero tools.
-    bool publishProvider(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
-                         const std::string& old_instance = {});
-    ToolRegistrySnapshot snapshot() const;
-    // Host publication only. Resource changes do not invalidate tool selections.
-    bool publishResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource);
-    // Atomically replace one resource kind for an exact provider generation.
-    bool replaceResources(const ProviderDescriptor& provider, const std::string& kind,
-                          const std::vector<ResourceDescriptor>& resources);
-    void removeResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource);
-    uint64_t resourceVersion() const;
-    void unregisterInstance(const std::string& provider, const std::string& instance);
     // Update documentation/policy without losing the callable or execution stats.
     // An inspection copy may update only the provider generation it came from.
-    bool updateMetadata(const ToolDescriptor& descriptor, const ProviderDescriptor* owner = nullptr);
-    bool updateMetadata(const RegisteredTool& tool) { return updateMetadata(tool, &tool.provider); }
-    // Empty provider is for host callers; plugin callers must supply ownership.
-    bool unregisterTool(const std::string& tool_id, const std::string& provider = {},
-                        ToolProviderType type = ToolProviderType::Plugin, const std::string& instance = {});
-    void unregisterByProvider(const std::string& provider, ToolProviderType type = ToolProviderType::Plugin);
+    bool updateMetadata(const ToolDescriptor& descriptor, const ProviderDescriptor& owner);
+    bool updateMetadata(const RegisteredTool& tool) { return updateMetadata(tool, tool.provider); }
+    bool unregisterTool(const std::string& tool_id, const std::string& provider,
+                        const std::string& instance);
 
     // Explicit selected-tool execution. Does not infer intent or run policy gates.
     // Handlers run outside the registry mutex and can query/register other tools.
@@ -95,27 +64,18 @@ public:
     void removeListener(ToolRegistryListener* listener);
 
 private:
+    friend class ProviderRegistry;
     ToolRegistry() = default;
-    bool registerProviderTools(const ProviderDescriptor&, const std::vector<ToolRegistration>&, bool replace, bool publish);
-    bool replaceProvider(const ProviderDescriptor&, const std::string&, const std::vector<ToolRegistration>&);
-    using Provider = std::shared_ptr<const ProviderDescriptor>;
-    struct Entry { ToolDescriptor descriptor; ToolHandler handler; Provider provider; };
-    using Entries = std::unordered_map<std::string, std::shared_ptr<Entry>>;
+    using Entry = ProviderRegistry::Entry;
+    using ToolIndex = std::unordered_map<std::string, Entry*>;
     using Aliases = std::unordered_map<std::string, std::string>;
-    static bool buildAliases(const Entries& entries, Aliases& aliases);
+    static bool buildAliases(const ToolIndex& entries, Aliases& aliases);
     std::string resolveLocked(const std::string& name) const;
     mutable std::mutex mutex_;
-    Entries tools_;
-    using Resources = std::map<std::string, ResourceDescriptor>;
-    struct ProviderRecord {
-        Provider descriptor;
-        Resources resources;
-    };
-    std::map<std::pair<ToolProviderType, std::string>, std::shared_ptr<ProviderRecord>> providers_;
-    Resources* providerResourcesLocked(const ProviderDescriptor& provider);
+    ProviderRegistry providers_{*this};
+    ToolIndex tool_index_; // Non-owning. Provider records retain the entries.
     Aliases alias_index_;
     uint64_t version_ = 0;
-    uint64_t resourceVersion_ = 0;
     std::vector<ToolRegistryListener*> listeners_;
 };
 } // namespace GRIM::MMO

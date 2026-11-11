@@ -14,6 +14,7 @@ static const char* execute(const GrimPluginAPI*,const char* op,const char* arg,s
 }
 static GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration* tools,size_t count) {
     assert(count==6);
+    std::vector<GRIM::MMO::ToolRegistration> registrations;
     for(size_t i=0;i<count;++i) {
         const auto& t=tools[i];assert(t.usage_type==GRIM_TOOL_USAGE_MODEL);
         auto schema=Json::parse(t.descriptor.argument_schema_json);assert(schema["type"]=="object" && schema["additionalProperties"]==false);
@@ -22,14 +23,16 @@ static GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration*
         d.description=t.descriptor.description;d.short_description=t.short_description;d.usage_type=GRIM::MMO::ToolUsage::Model;
         d.needs_confirmation=t.descriptor.needs_confirmation;d.is_informational=t.descriptor.is_informational;
         auto handler=t.handler;auto context=t.user_data;
-        assert(GRIM::MMO::ToolRegistry::instance().registerTool(d,[handler,context](const std::string& args){
+        registrations.push_back({d,[handler,context](const std::string& args){
             CommandResult result;GrimToolResultWriter writer;writer.host_context=&result;
             writer.complete=[](GrimToolResultWriter* w,const GrimToolResult* r){auto& value=*static_cast<CommandResult*>(w->host_context);
                 value.success=r->success;value.message=r->message;value.structuredOutputJson=r->structured_output_json;return GRIM_OK;};
             GrimToolCall request;request.arguments=args.data();request.arguments_size=args.size();assert(handler(&request,&writer,context)==GRIM_OK);return result;
-        },false,{GRIM::MMO::ToolProviderType::Plugin,"schedule_test",{}, {}}));
+        }});
     }
-    return GRIM_OK;
+    return GRIM::MMO::ProviderRegistry::instance().publish(
+        {GRIM::MMO::ToolProviderType::Plugin, "schedule_test", "fixture-1", {}}, registrations)
+        ? GRIM_OK : GRIM_ERROR_ALREADY_EXISTS;
 }
 static Json invoke(const std::string& operation,Json args) {
     auto& registry=GRIM::MMO::ToolRegistry::instance();
@@ -75,7 +78,7 @@ int main() {
         auto item=reopened.execute("get",{{"id","event"}},now);assert(item["item"]["title"]=="Updated");
         assert(reopened.takeDue(now+20000).empty());
     }
-    GRIM::MMO::ToolRegistry::instance().unregisterByProvider("schedule_test");
+    GRIM::MMO::ProviderRegistry::instance().retire("schedule_test", "fixture-1");
     std::filesystem::remove_all(root);
     std::cout<<"Schedule service, plugin handlers and model ToolRegistry tests passed\n";
 }

@@ -43,7 +43,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
           "Loaded generation/source identity missing");
     const auto firstInstance = old->provider.instance;
     const auto provider = [&]() -> std::optional<GRIM::MMO::ProviderDescriptor> {
-        for (const auto& group : registry.snapshot().providers)
+        for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
             if (group.provider.name == "Declared-alpha" && group.provider.type == GRIM::MMO::ToolProviderType::Plugin)
                 return group.provider;
         return std::nullopt;

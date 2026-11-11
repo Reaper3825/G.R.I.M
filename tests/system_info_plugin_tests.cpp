@@ -34,7 +34,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     auto& registry = ToolRegistry::instance();
     const auto baseline = registry.toolCount();
     const auto resourceFor = [&](const std::string& provider, const std::string& id = "system") {
-        for (const auto& group : registry.snapshot().providers)
+        for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
             if (group.provider.name == provider)
                 for (const auto& resource : group.resources)
                     if (resource.resource_id == id) return RegisteredResource{resource, group.provider};
@@ -42,7 +42,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     };
     const auto resourcesFor = [&](const std::string& provider) {
         std::vector<RegisteredResource> result;
-        for (const auto& group : registry.snapshot().providers)
+        for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
             if (group.provider.name == provider)
                 for (const auto& resource : group.resources) result.push_back({resource, group.provider});
         return result;
@@ -198,7 +198,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
                                     "has_piper", "suggested_whisper_model"})
             check(!resource.state.at("data").contains(removed), "Resource exposed removed audio/voice/model fields");
     }
-    GRIM::WorldLab::LiveWorldSession live(registry);
+    GRIM::WorldLab::LiveWorldSession live(ProviderRegistry::instance());
     // Room paths are derived from provider names; resolve rather than assume their spelling.
     live.command("go " + live.world().providerPath(GRIM::WorldLab::providerKey(initialResource.provider)));
     const auto beforeInspection = detectionCalls;

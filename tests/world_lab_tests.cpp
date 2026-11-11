@@ -83,9 +83,13 @@ void runWorldLabTests(){
         tool.parameters={{"target","string","The selected thing to inspect",true}};
         tool.short_description="Inspect information supplied by a selected entity";
         int invocations=0;
-        registry.registerTool(tool,[&](const std::string&){++invocations;return CommandResult{};});
         auto debug=tool;debug.tool_id="catalog_debug";debug.usage_type=GRIM::MMO::ToolUsage::Debug;
-        registry.registerTool(debug,[](const std::string&){return CommandResult{};});
+        auto& providers = GRIM::MMO::ProviderRegistry::instance();
+        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Catalog fixture", "fixture-1", {}};
+        check(providers.publish(owner, {
+            {tool, [&](const std::string&) { ++invocations; return CommandResult{}; }},
+            {debug, [](const std::string&) { return CommandResult{}; }}
+        }), "Catalog fixture publication failed");
         const auto response=[] {return nlohmann::json{{"ok",true},{"result",{{"state",{
             {"feedback","static"},{"observation_request",{{"provider","tool_catalog"},{"entity_id","catalog"}}}}}}}};};
         auto first=response();resolveHostObservation(first);
@@ -96,7 +100,7 @@ void runWorldLabTests(){
         check(!state.contains("observation_request") && invocations==0 && registry.getTool(tool.tool_id)->usage_count==0,
             "Catalog request invoked a handler or retained unresolved marker");
         tool.short_description="Read newly updated information about a selected entity";
-        check(registry.updateMetadata(tool),"Summary metadata update failed");
+        check(registry.updateMetadata(tool, owner),"Summary metadata update failed");
         auto next=response();resolveHostObservation(next);
         check(next["result"]["state"]["tool_catalog"]["tools"][0]["short_description"]==tool.short_description,
             "Catalog retained a stale registry snapshot");
@@ -114,13 +118,12 @@ void runWorldLabTests(){
             invocations==0 && registry.getTool(tool.tool_id)->usage_count==0,"Tool inspection leaked internals or invoked a handler");
         for(const auto* id:{"catalog_debug","missing"})
             check(!details(id).contains("tool_details"),"Deeper inspection exposed unavailable or nonmodel tool metadata");
-        tool.usage_type=GRIM::MMO::ToolUsage::System;registry.updateMetadata(tool);
+        tool.usage_type=GRIM::MMO::ToolUsage::System;registry.updateMetadata(tool, owner);
         check(!details(tool.tool_id).contains("tool_details"),"Inspection ignored a tool reclassified after listing");
         tool.usage_type=GRIM::MMO::ToolUsage::Model;
-        tool.description="Updated documentation available immediately";registry.updateMetadata(tool);
+        tool.description="Updated documentation available immediately";registry.updateMetadata(tool, owner);
         check(details(tool.tool_id).at("tool_details").at("description")==tool.description,"Deeper inspection cached stale metadata");
-        registry.unregisterTool(tool.tool_id);
-        registry.unregisterTool(debug.tool_id);
+        providers.retire(owner.name, owner.instance);
         check(details(tool.tool_id).contains("observation_error"),"Removed catalog entry did not report unavailability");
         auto empty=response();resolveHostObservation(empty);
         check(empty["result"]["state"]["tool_catalog"]["tools"].empty(),"Catalog retained unloaded tools");

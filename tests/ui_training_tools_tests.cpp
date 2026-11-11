@@ -11,6 +11,12 @@ void runTrainingToolsTests() {
     using namespace GRIM::MMO;
     auto check = [](bool value, const char* message) { if (!value) throw std::runtime_error(message); };
     auto& registry = ToolRegistry::instance();
+    auto& providers = ProviderRegistry::instance();
+    const auto owner = [](const std::string& name) {
+        return ProviderDescriptor{ToolProviderType::Plugin, name, "fixture-1", {}};
+    };
+    const auto retire = [&](const std::string& name) { providers.retire(name, owner(name).instance); };
+    const auto handler = [](const std::string&) { return CommandResult{}; };
     ToolDescriptor tool;
     tool.tool_id = "viewer_test";
     tool.description = "Inspect metadata";
@@ -20,8 +26,16 @@ void runTrainingToolsTests() {
     tool.category = "z_information";
     tool.usage_type = ToolUsage::Debug;
     tool.aliases = {"unique_alias"};
-    registry.registerTool(tool, [](const std::string&) { return CommandResult{}; });
-    for (int i = 0; i < 20; ++i) registry.registerSimple("z_viewer_" + std::to_string(i), "Scrolling entry", "test", [](const std::string&) { return CommandResult{}; });
+    const auto viewer = owner("Viewer Fixture Plugin");
+    std::vector<ToolRegistration> registrations{{tool, handler}};
+    for (int i = 0; i < 20; ++i) {
+        ToolDescriptor entry;
+        entry.tool_id = "z_viewer_" + std::to_string(i);
+        entry.description = "Scrolling entry";
+        entry.category = "test";
+        registrations.push_back({std::move(entry), handler});
+    }
+    check(providers.publish(viewer, registrations), "Viewer fixture publication failed");
     UITrainingToolsView view;
     UITrainingToolsView* activeView = &view;
     OverlayRenderer renderer;
@@ -63,28 +77,33 @@ void runTrainingToolsTests() {
     check(renderedTestText.find("1 shown / 21 registered") != std::string::npos, "Alias search did not filter case insensitively");
     click(30,159);
     check(renderedTestText.find("Inspect metadata") != std::string::npos, "Filtered selection used incorrect row");
-    registry.unregisterTool("viewer_test");
+    check(registry.unregisterTool("viewer_test", viewer.name, viewer.instance), "Viewer fixture removal failed");
     frame({}, 2.0f);
     check(renderedTestText.find("No matching tools.") != std::string::npos, "Registry removal did not refresh search");
     check(renderedTestText.find("Inspect metadata") == std::string::npos, "Removed tool retained stale details");
     view.hide();
     check(GRIM::UI::InputRouter::get().focus.widget == 0, "Tools view retained focus after hiding");
-    for (int i = 0; i < 20; ++i) registry.unregisterTool("z_viewer_" + std::to_string(i));
+    retire(viewer.name);
 
     // Exercise the real dropdowns, combined search, and changing registry providers.
-    auto add = [&](const char* id, const char* provider, ToolUsage usage, const char* description,
-                   ToolProviderType type = ToolProviderType::Plugin) {
+    auto entryFor = [&](const char* id, ToolUsage usage, const char* description) {
         ToolDescriptor entry;
         entry.tool_id = id;
         entry.usage_type = usage; entry.description = description; entry.category = "fixture";
         entry.aliases = {std::string(id) + "_alias"};
-        check(registry.registerTool(entry, [](const std::string&) { return CommandResult{}; }, false, {type, provider, {}, {}}), "Filter fixture registration failed");
+        return ToolRegistration{std::move(entry), handler};
     };
-    add("alpha_debug", "Fixture Alpha Plugin", ToolUsage::Debug, "Alpha debug details");
-    add("alpha_model", "Fixture Alpha Plugin", ToolUsage::Model, "Alpha model details");
-    add("beta_system", "Fixture Beta Plugin", ToolUsage::System, "Beta system details");
-    add("beta_ignore", "Fixture Beta Plugin", ToolUsage::Ignore, "Beta ignored details");
-    add("host_debug", "builtin", ToolUsage::Debug, "Built-in debug details", ToolProviderType::Builtin);
+    check(providers.publish(owner("Fixture Alpha Plugin"), {
+        entryFor("alpha_debug", ToolUsage::Debug, "Alpha debug details"),
+        entryFor("alpha_model", ToolUsage::Model, "Alpha model details")
+    }), "Alpha fixture publication failed");
+    check(providers.publish(owner("Fixture Beta Plugin"), {
+        entryFor("beta_system", ToolUsage::System, "Beta system details"),
+        entryFor("beta_ignore", ToolUsage::Ignore, "Beta ignored details")
+    }), "Beta fixture publication failed");
+    check(providers.publish(owner("Debug Fixture Plugin"), {
+        entryFor("extra_debug", ToolUsage::Debug, "Extra debug details")
+    }), "Debug fixture publication failed");
     UITrainingToolsView filters;
     activeView = &filters;
     auto count = [&](int shown, int total) {
@@ -104,36 +123,38 @@ void runTrainingToolsTests() {
     click(520,100);
     check(renderedTestText.find("Fixture Alpha Plugin") != std::string::npos &&
           renderedTestText.find("Fixture Beta Plugin") != std::string::npos &&
-          renderedTestText.find("Built-in (host)") != std::string::npos, "Detected providers missing from dropdown");
+          renderedTestText.find("Debug Fixture Plugin") != std::string::npos, "Detected providers missing from dropdown");
     const auto popup = GRIM::UI::InputRouter::get().popup.widget;
     frame({},2.0f);
     check(popup && GRIM::UI::InputRouter::get().popup.widget == popup, "Unchanged refresh closed plugin dropdown");
     click(520,132); // All plugins; close the menu.
     usage(1); count(2,5); // Debug.
     check(renderedTestText.find("Alpha debug details") == std::string::npos, "Dropdown click selected the underlying tool row");
-    plugin(2); count(1,5); // Alpha; built-in is the first provider.
+    plugin(2); count(1,5); // Alpha; Debug Fixture sorts first.
     click(30,159);
     check(renderedTestText.find("Alpha debug details") != std::string::npos, "Combined filter row selection failed");
     search("ALPHA_DEBUG_ALIAS"); count(1,5);
     usage(2); count(0,5); // Model plus the alias search must exclude Debug.
     check(renderedTestText.find("Alpha debug details") == std::string::npos, "Filtered-out selection left stale details");
     search(""); count(1,5);
-    add("aardvark_model", "Aardvark Plugin", ToolUsage::Model, "New provider details");
+    check(providers.publish(owner("Aardvark Plugin"), {
+        entryFor("aardvark_model", ToolUsage::Model, "New provider details")
+    }), "Aardvark fixture publication failed");
     frame({},2.0f); count(1,6);
     check(renderedTestText.find("alpha_model") != std::string::npos &&
           renderedTestText.find("aardvark_model") == std::string::npos, "Provider refresh preserved an index instead of identity");
-    registry.unregisterTool("aardvark_model");
+    retire("Aardvark Plugin");
     frame({},2.0f); count(1,5);
-    plugin(1); count(0,5); // Built-in + Model.
-    usage(1); count(1,5); // Built-in + Debug.
+    plugin(1); count(0,5); // Debug Fixture + Model.
+    usage(1); count(1,5); // Debug Fixture + Debug.
     click(30,159);
-    check(renderedTestText.find("Built-in debug details") != std::string::npos, "Built-in provider filter failed");
+    check(renderedTestText.find("Extra debug details") != std::string::npos, "Debug fixture provider filter failed");
     plugin(3); count(0,5); // Beta + Debug.
     usage(3); count(1,5); // Beta + System.
     usage(4); count(1,5); // Beta + Ignore.
     click(30,159);
     check(renderedTestText.find("Beta ignored details") != std::string::npos, "Ignore filter selected wrong row");
-    registry.unregisterTool("beta_system"); registry.unregisterTool("beta_ignore");
+    retire("Fixture Beta Plugin");
     frame({},2.0f); count(0,3);
     check(renderedTestText.find("All plugins") != std::string::npos &&
           renderedTestText.find("Beta ignored details") == std::string::npos, "Removed provider left stale filter or details");
@@ -142,5 +163,6 @@ void runTrainingToolsTests() {
     check(renderedTestText.find("Fixture Beta Plugin") == std::string::npos, "Unloaded plugin retained a dropdown option");
     filters.hide();
     check(GRIM::UI::InputRouter::get().popup.widget == 0, "Tools view retained dropdown ownership after hiding");
-    registry.unregisterTool("alpha_debug"); registry.unregisterTool("alpha_model"); registry.unregisterTool("host_debug");
+    retire("Fixture Alpha Plugin");
+    retire("Debug Fixture Plugin");
 }

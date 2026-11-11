@@ -28,8 +28,7 @@ std::string detailText(const RegisteredTool& tool) {
         << "Short description: " << documented(tool.short_description) << '\n'
         << "Category: " << documented(tool.category) << '\n'
         << "Usage type: " << toolUsageName(tool.usage_type) << '\n'
-        << "Provider: " << (tool.provider.type == ToolProviderType::Plugin ? "Plugin" : "Built-in")
-        << " / " << documented(tool.provider.name) << '\n'
+        << "Provider: " << documented(tool.provider.name) << '\n'
         << "Source file: " << documented(tool.provider.path) << '\n'
         << "Version: " << documented(tool.version) << '\n'
         << "Type: " << (tool.is_informational ? "Informational" : "State-changing") << '\n'
@@ -98,11 +97,8 @@ void UITrainingToolsView::filter() {
         const int usage = usageFilter_.getSelectedIndex();
         if (usage > 0 && tool.usage_type != static_cast<ToolUsage>(usage - 1)) continue;
         const int provider = pluginFilter_.getSelectedIndex();
-        if (provider > 0 && provider <= static_cast<int>(providers_.size())) {
-            const auto& selected = providers_[provider - 1];
-            if (tool.provider.type != selected.first ||
-                (selected.first == ToolProviderType::Plugin && tool.provider.name != selected.second)) continue;
-        }
+        if (provider > 0 && provider <= static_cast<int>(providers_.size()) &&
+            tool.provider.name != providers_[provider - 1]) continue;
         std::string text = tool.tool_id + " " + tool.display_name + " " + tool.description + " " + tool.category + " " + tool.provider.name;
         for (const auto& alias : tool.aliases) text += " " + alias;
         for (const auto& tag : tool.capability_tags) text += " " + tag;
@@ -120,9 +116,9 @@ void UITrainingToolsView::showSelection() {
     if (details_.getText() != text) details_.setText(text);
 }
 void UITrainingToolsView::refreshProviders() {
-    std::vector<std::pair<ToolProviderType, std::string>> providers;
+    std::vector<std::string> providers;
     for (const auto& tool : tools_)
-        providers.emplace_back(tool.provider.type, tool.provider.type == ToolProviderType::Plugin ? tool.provider.name : "");
+        providers.push_back(tool.provider.name);
     std::sort(providers.begin(), providers.end());
     providers.erase(std::unique(providers.begin(), providers.end()), providers.end());
     if (providers == providers_) return; // Keep open menus stable during periodic refresh.
@@ -134,8 +130,7 @@ void UITrainingToolsView::refreshProviders() {
     }
     providers_ = std::move(providers);
     std::vector<std::string> labels{"All plugins"};
-    for (const auto& provider : providers_)
-        labels.push_back(provider.first == ToolProviderType::Plugin ? provider.second : "Built-in (host)");
+    labels.insert(labels.end(), providers_.begin(), providers_.end());
     pluginFilter_.cancelInput();
     pluginFilter_.collapse();
     pluginFilter_.setItems(labels);

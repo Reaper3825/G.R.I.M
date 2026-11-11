@@ -419,7 +419,7 @@ static GrimResult api_unregister_command(const GrimPluginAPI* self, const char* 
     const auto& owner = pluginContext(self);
     if (tool->provider.type != GRIM::MMO::ToolProviderType::Plugin || tool->provider.name != owner.name || tool->provider.instance != owner.instance)
         return GRIM_ERROR_PERMISSION_DENIED;
-    return registry.unregisterTool(command_name, owner.name, GRIM::MMO::ToolProviderType::Plugin, owner.instance) ? GRIM_OK : GRIM_ERROR_NOT_FOUND;
+    return registry.unregisterTool(command_name, owner.name, owner.instance) ? GRIM_OK : GRIM_ERROR_NOT_FOUND;
 }
 
 static bool api_is_command_registered(const GrimPluginAPI* self, const char* command_name) {
@@ -1012,7 +1012,7 @@ static nlohmann::json captureHardware(PluginContext& owner, bool publish) {
         }
         // Replace the whole capture atomically, removing devices no longer present.
         // Generation checks reject a retired provider's in-flight capture.
-        GRIM::MMO::ToolRegistry::instance().replaceResources(
+        GRIM::MMO::ProviderRegistry::instance().replaceResources(
             {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
             "system_info.snapshot", resources);
     }
@@ -1839,13 +1839,13 @@ static GrimPluginAPI* uniquePlugin(const std::string& name) {
 bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing) {
     auto& owner = const_cast<PluginContext&>(pluginContext(api));
     if (owner.registration_failed || !owner.staging) return false;
-    auto& registry = GRIM::MMO::ToolRegistry::instance();
+    auto& providers = GRIM::MMO::ProviderRegistry::instance();
     // Handlers may become reachable as soon as the registry swaps its entries,
     // including from listeners. Late registrations must no longer be staged.
     owner.staging = false;
     bool committed;
     try {
-        committed = registry.publishProvider(
+        committed = providers.publish(
             {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
             owner.pending, replacing ? pluginContext(replacing).instance : std::string{});
     } catch (...) {
@@ -1889,7 +1889,7 @@ void beginPluginShutdown(const GrimPluginAPI* api) {
         std::lock_guard lock(owner.gate->mutex);
         owner.gate->accepting = false;
     }
-    GRIM::MMO::ToolRegistry::instance().unregisterInstance(owner.name, owner.instance);
+    GRIM::MMO::ProviderRegistry::instance().retire(owner.name, owner.instance);
     GRIM::UI::retireProviderPanels(owner.panelLease);
     std::unique_lock lock(owner.gate->mutex);
     owner.gate->idle.wait(lock, [&]{ return owner.gate->active == 0; });

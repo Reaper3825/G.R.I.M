@@ -22,7 +22,7 @@ inline nlohmann::json navigationJson(const LiveNavigationSnapshot& snapshot) {
         nlohmann::json entry = {{"room_id", room.roomId}, {"parent_id", room.parentId},
             {"display_name", room.name}, {"path", room.path}};
         if (room.provider) entry["provider"] = {
-            {"type", room.provider->type == MMO::ToolProviderType::Plugin ? "plugin" : "builtin"},
+            {"type", "plugin"},
             {"name", room.provider->name}, {"instance", room.provider->instance}};
         rooms.push_back(std::move(entry));
     }

@@ -22,7 +22,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
         GrimPluginAPI* api = nullptr;
         ~Cleanup() {
             PluginManager::unloadAll();
-            ToolRegistry::instance().unregisterByProvider("inspection-fixtures", ToolProviderType::Builtin);
+            ProviderRegistry::instance().retire("inspection-fixtures", "fixture-generation");
             if (api) PluginAPI::cleanupPluginContext(api);
             std::error_code error;
             fs::remove(folder / "tool_inspection_plugin.dll", error);
@@ -66,7 +66,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     ToolDescriptor rich;
     rich.tool_id = "inspection_fixture";
     rich.display_name = "Fixture Display";
-    const ProviderDescriptor owner{ToolProviderType::Builtin, "inspection-fixtures", "fixture-generation", "C:/fixture.dll"};
+    const ProviderDescriptor owner{ToolProviderType::Plugin, "inspection-fixtures", "fixture-generation", "C:/fixture.dll"};
     rich.version = "9.8.7";
     rich.description = "Fixture description";
     rich.usage = "inspection_fixture {value}";
@@ -87,7 +87,10 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     rich.failure_count = 25;
     rich.success_rate = 0.75f;
     int fixtureCalls = 0;
-    registry.registerTool(rich, [&](const std::string&) { ++fixtureCalls; return CommandResult{}; }, false, owner);
+    check(ProviderRegistry::instance().publish(owner, {{rich, [&](const std::string&) {
+        ++fixtureCalls;
+        return CommandResult{};
+    }}}), "Inspection fixture publication failed");
     const auto encoded = snapshot("fixture_alias");
     check(encoded.size() == 1 && encoded[0].size() == 31 && encoded[0].at("usage_type") == 1 &&
           encoded[0].at("bindings").at("value") == "t" &&
@@ -123,7 +126,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     check(invoke("tool_stats", "invalid").errorCode == "ERR_CMD_EXCEPTION" &&
           invoke("tool_stats", "99999999999999999999").errorCode == "ERR_CMD_EXCEPTION", "Invalid statistics parsing changed");
     rich.description = std::string(70000, 'x');
-    registry.updateMetadata(rich);
+    registry.updateMetadata(rich, owner);
     check(snapshot("fixture_alias")[0].at("description").get<std::string>().size() == 70000 &&
           snapshot("fixture_alias")[0].at("swap_state") == 0 &&
           encoded[0].at("description") == "Fixture description" && fixtureCalls == 0,
@@ -133,7 +136,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     check(largeInfo.success && largeInfo.message.find(rich.description) != std::string::npos &&
           largeList.success && largeList.message.find(rich.description) != std::string::npos && fixtureCalls == 0,
           "Inspection result was truncated or rejected at the old 64-KiB message limit");
-    registry.unregisterTool(rich.tool_id);
+    ProviderRegistry::instance().retire(owner.name, owner.instance);
     check(snapshot("fixture_alias").empty(), "Removed alias retained stale snapshot");
     fs::remove(folder / "tool_inspection_plugin.dll");
     PluginManager::checkForHotReload();

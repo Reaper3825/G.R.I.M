@@ -645,54 +645,22 @@ CommandRegistry import or separate command map remains.
 **What changed**
 - New system implemented
 
-**Owns**
-- Canonical registry of all tools (built-in commands + plugin commands)
-- `ToolDescriptor` record: identity, documentation, policy flags, parameters, preconditions, context requirements, affordance tokens, aliases, keywords, capability tags, hot-swap state, usage stats
-- Tool availability follows publication of the provider generation.
-- Atomic batch registration/unregistration for plugin hot-swap
-- Alias → tool_id resolution
-- Model-facing prompt generation (compact and full)
-- Prompt cache version counter (incremented on mutation)
-- Usage analytics (success/failure recording)
-- `ToolRegistryListener` observer interface for registry changes
-
-**Does not own**
-- Action policy evaluation; execution bindings themselves are registry-owned, and `command_dispatch.cpp` delegates explicit dispatch to `invoke()`
-- Action policy evaluation (delegated to `ActionPolicyRegistry`)
-- Plugin lifecycle management (future plugin manager)
-- Session context (delegated to `SessionContextManager`)
+**Ownership**
+- Each published plugin generation owns its tool descriptors, handlers, and live resources in `ProviderRegistry`.
+- `ToolRegistry` indexes tool IDs and aliases, dispatches handlers, tracks usage statistics, and exposes tool metadata to discovery callers.
+- Provider lifecycle changes update provider records and tool indexes under the same lock.
 
 **Canonical hook points**
-- `ToolRegistry::instance()` — singleton
-- `registerTool(descriptor, handler)` / `registerSimple(tool_id, desc, cat, handler)` — atomic metadata/callable registration
-- `unregisterTool(tool_id)` — removal
-- `publishProvider(provider, tools)` / `unregisterInstance(provider, instance)` — atomic plugin operations
-- `getTool(tool_id)` / `getAllTools()` / `getByCategory(cat)` / `getByCapabilityTag(tag)` — queries
-- `resolveAlias(alias)` — alias resolution
-- `getModelTools()` — tool metadata filtered to the Model classification
-- `version()` — monotonic prompt invalidation counter
-- `invoke()` — registered execution; invocation owns result statistics, model policy remains caller-owned
-- `addListener(listener)` / `removeListener(listener)` — observer pattern
-
-**Config contract**
-- Built-ins publish `ToolRegistration` batches; plugins publish descriptor/handler pairs through the host API. There is no CommandRegistry seeding.
-
-**Current consumers**
-- `plugins/core_plugin.cpp` and `core/plugin_api_impl.cpp` — sole registry publication, with provider identity/generation for dynamic tools
-- `ActionPolicyRegistry` — queries `getTool()` for risk derivation and tool existence checks
-- Future: `Orchestrator` context composition, plugin hot-swap manager
-
-**Replaces**
-- `GRIM::CommandRegistry::generateCompactPrompt()` call in `ai_interpret()`
-- `GRIM::CommandRegistry::recordSuccess/recordFailure` in `ai_interpret()`
-- `CommandRegistry::getAllTools/getToolsByCategory/getTool/getUsageStats` in `commands_system.cpp`
-- `CommandRegistry::getAllTools/getCategories/getToolsByCategory` in `commands_question.cpp`
-- `CommandRegistry::recordSuccess/recordFailure` in `commands_core.cpp` `dispatchCommand()`
-- Dead `command_registry.hpp` includes removed from `commands_core.cpp`, `commands_system.cpp`, `commands_question.cpp`, `ai/ai.cpp`
-- (CommandRegistry class still exists — `bootstrap.cpp` calls `getAllTools()` once at startup to seed ToolRegistry)
+- `ProviderRegistry::publish(provider, tools, old_instance)` publishes or replaces a generation. `ProviderRegistry::retire(name, instance)` removes it.
+- `ProviderRegistry::snapshot()` reads provider, tool, and resource descriptors together.
+- `ToolRegistry::unregisterTool(tool_id, provider, instance)` removes a command owned by that generation.
+- `getTool(tool_id)`, `getAllTools()`, `getByCategory(cat)`, and `getByCapabilityTag(tag)` expose tool metadata.
+- `getModelTools()` filters discovery to the Model classification.
+- `version()` tracks mutations that invalidate tool selections. `invoke()` dispatches and records usage statistics.
+- `addListener(listener)` and `removeListener(listener)` manage tool change observers.
 
 **Status**
-- Implemented; bootstrap import wired; all consumer migrations complete; only bootstrap seed import remains
+- Implemented. Plugin publication supplies the tool index at load time.
 
 ### 12. ActionPolicyRegistry (`MMO/Core/ActionPolicyRegistry.hpp`, `MMO/Core/ActionPolicyRegistry.cpp`)
 
@@ -915,7 +883,7 @@ CommandRegistry import or separate command map remains.
 - `planner.evaluate(capability, request_id)` → `optional<ToolGapProposal>`
 - `ToolGapPlanner::parseProposedSpec(json)` → `ProposedToolSpec`
 - `ToolGapPlanner::formatRationale(proposal)` → user-visible string
-- On approval: caller takes `ProposedToolSpec` → scaffold → build → `PluginManager::loadPlugin()` → `ToolRegistry::publishProvider()`
+- On approval: caller takes `ProposedToolSpec` → scaffold → build → `PluginManager::loadPlugin()` → `ProviderRegistry::publish()`
 
 **Current consumers**
 - None yet — will be consumed by synthesize-step handling in Orchestrator when router returns a tool-gap signal
@@ -1013,43 +981,17 @@ CommandRegistry import or separate command map remains.
 **Status**
 - Implemented; no behavioral change, purely structural
 
-### 14. Plugin → ToolRegistry sync (Phase 0.25)
+### 14. Plugin provider publication (Phase 0.25)
 
-Historical dual-store synchronization is superseded. Current
-`core/plugin_api_impl.cpp` publishes descriptor/callable pairs and provider
-generations to the sole `ToolRegistry`; unload/replacement invalidates that
-generation. Do not restore `s_commands`/`commandMap` publication or a metadata mirror.
+The host stages each plugin's tool registrations during initialization.
+`commitPluginTools()` publishes the generation through `ProviderRegistry::publish()`
+after initialization succeeds. Reload replaces the provider and updates the
+global tool index atomically. `beginPluginShutdown()` retires the exact generation
+and drains active calls before the loader releases the plugin.
 
-**What changed**
-- `core/plugin_api_impl.cpp` now includes `MMO/Core/ToolRegistry.hpp`
-- `api_register_command()` — after registering in `s_commands` and `commandMap`, also builds a `ToolDescriptor` (provider_type=Plugin, provider_name=plugin_name, permission_bits from plugin context) and registers in `ToolRegistry::instance()`
-- `api_unregister_command()` — after removing from maps, calls `ToolRegistry::instance().unregisterTool(cmd_name)`
-- `cleanupPluginContext()` — calls `ToolRegistry::instance().unregisterByProvider(plugin_name)` for atomic batch cleanup after per-command removal from `s_commands`/`commandMap`
-
-**Owns**
-- Plugin ↔ ToolRegistry synchronization at the command registration boundary
-
-**Does not own**
-- ToolRegistry lifecycle (singleton, bootstrapped independently)
-- Plugin lifecycle / hot-reload detection (owned by `PluginManager`)
-- Command execution dispatch (owned by `commands_core.cpp`)
-
-**Canonical hook points**
-- `api_register_command()` — registers tool descriptor
-- `api_unregister_command()` — unregisters individual tool
-- `cleanupPluginContext()` — atomic batch unregister via `unregisterByProvider()`
-- `PluginManager::checkForHotReload()` — triggers unload→reload which flows through the above hooks
-
-**Current consumers**
-- Any plugin that calls `api->register_command()` now automatically appears in ToolRegistry
-- Hot-reload (file timestamp change) triggers unload→cleanup→reload→re-register cycle, keeping ToolRegistry in sync
-
-**Legacy replaced**
-- Plugin commands were previously invisible to ToolRegistry (only visible through `s_commands` and `commandMap`)
-- Bootstrap's CommandRegistry seed already handled built-in tools; plugin tools were the gap
-
-**Status**
-- Implemented; ToolRegistry version counter increments on every plugin load/unload/reload
+`api_unregister_command()` removes an individual command after verifying its
+provider generation. The provider remains published and may continue to own
+resources and other tools.
 
 ### 15. NlpAnnotation (Phase 0.5)
 

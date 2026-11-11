@@ -15,8 +15,8 @@
 #include "logger.hpp"
 #include "core/grim_platform.h"
 
-// Include plugin.hpp for GRIM_HOST_API macro
-#include "core/plugin.hpp"
+// Include host_exports.hpp for GRIM_HOST_API macro
+#include "core/host_exports.hpp"
 #include "MMO/Core/Descriptors/RegisteredResource.hpp"
 
 struct InputState; // Forward declaration

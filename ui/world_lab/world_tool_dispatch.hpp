@@ -3,7 +3,7 @@
 
 namespace GRIM::WorldLab {
 // Manual command boundary: parsing and result envelope only. The session owns its
-// UI adapter; ToolRegistry owns handlers. Model policy integration is separate.
+// UI adapter for dispatch through ToolRegistry. Model policy integration is separate.
 class WorldToolDispatch {
     UITools::PanelToolAdapter panels_;
 public:

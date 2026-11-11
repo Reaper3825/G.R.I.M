@@ -51,7 +51,12 @@ void runTextWorldClientTests(){
         tool.usage="catalog_fixture {t}";tool.bindings={{"t","t"}};
         tool.parameters={{"target","string","The selected thing to inspect",true}};
         int calls=0;
-        registry.registerTool(tool,[&](const std::string&){++calls;return CommandResult{};});
+        auto& providers = GRIM::MMO::ProviderRegistry::instance();
+        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Client catalog fixture", "fixture-1", {}};
+        check(providers.publish(owner, {{tool, [&](const std::string&) {
+            ++calls;
+            return CommandResult{};
+        }}}), "Client catalog fixture publication failed");
         Editor catalog;
         catalog.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"resources/models/games/grim_internal.grimworld.json");
         TextWorldClient catalogClient;
@@ -72,14 +77,14 @@ void runTextWorldClientTests(){
         check(detail.at("tool_details").at("description")==tool.description &&
             detail.at("feedback").get<std::string>().find("Tool usage: catalog_fixture {t}")!=std::string::npos &&
             detail.at("tool_details").at("parameters").size()==1,"Native deeper inspection did not return tool documentation");
-        tool.description="Updated tool documentation without world recompilation";registry.updateMetadata(tool);
+        tool.description="Updated tool documentation without world recompilation";registry.updateMetadata(tool, owner);
         detail=request(catalogClient,{{"op","step"},{"command","x catalog_fixture in tool catalog"}}).at("state");
         check(detail.at("tool_details").at("description")==tool.description && calls==0,"Scoped details were stale or invoked a tool");
         request(catalogClient,{{"op","step"},{"command","close tool catalog"}});
         closed=request(catalogClient,{{"op","step"},{"command","examine catalog_fixture in tool catalog"}}).at("state");
         check(!closed.contains("tool_details"),"Closing the catalog did not hide its entries");
         request(catalogClient,{{"op","step"},{"command","open tool catalog"}});
-        registry.unregisterTool(tool.tool_id);
+        providers.retire(owner.name, owner.instance);
         detail=request(catalogClient,{{"op","step"},{"command","examine catalog_fixture in tool catalog"}}).at("state");
         check(!detail.contains("tool_details") && detail.contains("observation_error"),"Removed tool inspection leaked stale documentation");
         observation=request(catalogClient,{{"op","step"},{"command","open tool catalog"}}).at("state");
@@ -90,7 +95,9 @@ void runTextWorldClientTests(){
     Editor example;
     {
         // Real mailbox/client/worker path; controlled handlers stand in for UI Plugin.
-        auto& registry = GRIM::MMO::ToolRegistry::instance();
+        auto& providers = GRIM::MMO::ProviderRegistry::instance();
+        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Client UI fixture", "fixture-1", {}};
+        std::vector<GRIM::MMO::ToolRegistration> registrations;
         int shows = 0, hides = 0;
         bool visible = false;
         std::atomic<bool> stall{false}, submitted{false}, released{false};
@@ -102,7 +109,7 @@ void runTextWorldClientTests(){
                 tool.usage = tool.tool_id + " {t}"; tool.bindings = {{"t", "t"}};
                 tool.parameters = {{"panel_id", "string", "Panel key", true}};
             }
-            registry.registerTool(tool, [&, id = std::string(id)](const std::string& text) {
+            registrations.push_back({tool, [&, id = std::string(id)](const std::string& text) {
                 const auto args = nlohmann::json::parse(text);
                 nlohmann::json result = {{"success", true}};
                 if ((id == "ui.list" && stall) || id == "ui.poll") {
@@ -130,8 +137,9 @@ void runTextWorldClientTests(){
                 output.structuredOutputJson = nlohmann::json{{"format", "grim-ui-panel-response"}, {"version", 1},
                     {"request_id", 1}, {"status", "completed"}, {"result", result}}.dump();
                 return output;
-            });
+            }});
         }
+        check(providers.publish(owner, registrations), "Client UI fixture publication failed");
         TextWorldClient uiClient;
         const auto initial = request(uiClient, {{"op", "compile"}, {"document", Document::initial().gameJson()}}).at("state");
         auto state = request(uiClient, {{"op", "step"}, {"command", " ui.list "}}).at("state");
@@ -162,7 +170,7 @@ void runTextWorldClientTests(){
         const auto cancelled = wait(uiClient);
         check(!cancelled.at("ok").get<bool>() && cancelled.at("transport_error").get<bool>() && released,
               "Stop during host dispatch did not cancel owned work and stop the worker");
-        registry.unregisterByProvider("builtin", GRIM::MMO::ToolProviderType::Builtin);
+        providers.retire(owner.name, owner.instance);
     }
     example.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"examples/world_lab/locked_door.grimworld.json");
     const Document d=example.document();

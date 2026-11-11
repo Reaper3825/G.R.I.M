@@ -14,7 +14,7 @@ void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(mes
 }
 void runLiveWorldUITests() {
     using namespace GRIM::MMO;
-    auto& registry = ToolRegistry::instance();
+    auto& registry = ProviderRegistry::instance();
     const ProviderDescriptor provider{ToolProviderType::Plugin, "Live UI fixture", "first", "fixture.dll"};
     const auto initialRooms = registry.snapshot().providers.size() + 1;
     UILiveWorldView view;
@@ -32,7 +32,7 @@ void runLiveWorldUITests() {
     };
     frame({});
     check(view.session().world().document().entities.size() == initialRooms, "Live UI startup projection mismatch");
-    check(registry.publishProvider(provider, {}), "UI fixture registration failed");
+    check(registry.publish(provider, {}), "UI fixture registration failed");
     frame({});
     check(view.session().world().document().entities.size() == initialRooms + 1, "Published provider room did not appear automatically");
     check(renderedTestText.find("Live UI fixture") != std::string::npos, "Automatic provider room not drawn");
@@ -119,7 +119,7 @@ void runLiveWorldUITests() {
     const auto identity = view.session().observation().at("session_id");
     const auto history = view.session().history().size();
     view.hide();
-    registry.unregisterInstance(provider.name, provider.instance);
+    registry.retire(provider.name, provider.instance);
     frame({});
     check(view.session().world().location() == "system_hub" && view.session().world().document().entities.size() == initialRooms,
         "Provider unload while hidden did not reconcile on return");

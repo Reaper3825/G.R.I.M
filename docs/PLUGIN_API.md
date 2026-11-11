@@ -957,7 +957,7 @@ widget parenting, and state persistence across replacement are subsequent stages
 
 After construction the host publishes each panel's `ResourceDescriptor` under
 the calling provider generation. The registry stores resource data with its
-provider record. `ToolRegistrySnapshot.providers` groups tool and resource
+provider record. `ProviderRegistrySnapshot.providers` groups tool and resource
 descriptors under their owning provider generation. `resource_revision` advances
 independently of the tool revision.
 Provider replacement/unload removes old-generation descriptors under the registry

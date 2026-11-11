@@ -11,7 +11,7 @@ struct RegisteredResource : ResourceDescriptor {
 
 inline void to_json(nlohmann::json& j, const RegisteredResource& resource) {
     to_json(j, static_cast<const ResourceDescriptor&>(resource));
-    j["provider_type"] = resource.provider.type == ToolProviderType::Plugin ? "plugin" : "builtin";
+    j["provider_type"] = "plugin";
     j["provider_name"] = resource.provider.name;
     j["provider_instance"] = resource.provider.instance;
 }

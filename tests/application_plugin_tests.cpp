@@ -92,7 +92,7 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     auto catalogResult = registry.invoke("applications.list", "{}");
     check(catalogResult.success, "Application list failed");
     auto apps = nlohmann::json::parse(catalogResult.structuredOutputJson).at("value").at("applications");
-    check(apps.size() == 1 && registry.snapshot().resourceCount() >= 1, "Application resources not published at plugin commit");
+    check(apps.size() == 1 && GRIM::MMO::ProviderRegistry::instance().snapshot().resourceCount() >= 1, "Application resources not published at plugin commit");
     const auto app = apps.at(0);
     const auto applicationId = app.at("resource_id");
     check(registry.invoke("applications.inspect", nlohmann::json{{"resource_id", applicationId}}.dump()).success, "Application inspection failed");
@@ -135,7 +135,7 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     errorPrefix = "configured:";
     fs::remove(folder / "application_plugin.dll");
     PluginManager::checkForHotReload();
-    for (const auto& group : registry.snapshot().providers)
+    for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
         check(group.provider.name != "Application Plugin", "DLL removal retained the application provider");
     check(registry.toolCount() == baseline && !registry.isRegistered("open") && !registry.isRegistered("search"), "DLL removal retained application tools");
     std::cout << "Application plugin exact results, native launch boundaries, permissions, and removal tests passed\n";

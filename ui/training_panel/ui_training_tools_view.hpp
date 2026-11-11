@@ -26,7 +26,7 @@ private:
     UITextArea details_;
     std::vector<GRIM::MMO::RegisteredTool> tools_;
     std::vector<size_t> matches_;
-    std::vector<std::pair<GRIM::MMO::ToolProviderType, std::string>> providers_;
+    std::vector<std::string> providers_;
     std::string query_, selectedId_;
     float refreshTimer_ = 2.0f;
 };

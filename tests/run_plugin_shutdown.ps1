@@ -60,7 +60,7 @@ $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
 $apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/host_alias_service_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','tests/voice_plugin_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/applications/application_catalog.cpp','core/applications/application_backends.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/host_alias_service_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','tests/voice_plugin_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/applications/application_catalog.cpp','core/applications/application_backends.cpp','core/plugin_manager.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
@@ -77,7 +77,7 @@ if ($PerceptionPluginDirectory) {
 }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'
-$registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/ToolGapPlanner.cpp','commands/command_dispatch.cpp','core/plugin.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/ProviderRegistry.cpp','MMO/Core/ToolGapPlanner.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
 if ($BuildApplicationFixture) {

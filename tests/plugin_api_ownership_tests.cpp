@@ -115,7 +115,7 @@ void runInputPluginTests(const std::filesystem::path&);
 
 int main(int argc, char** argv) try {
     {
-        auto& registry = GRIM::MMO::ToolRegistry::instance();
+        auto& registry = GRIM::MMO::ProviderRegistry::instance();
         const auto count = registry.snapshot().providers.size();
         auto* empty = PluginAPI::createPluginAPI("zero-tool-provider", "empty.dll", 0, true);
         check(registry.snapshot().providers.size() == count, "Staged provider leaked before commit");
@@ -149,8 +149,13 @@ int main(int argc, char** argv) try {
     check(tool && tool->provider.name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY,
           "Staged registration lost provider ownership");
     check(beta->unregister_command(beta, "alpha_tool") == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's tool");
-    GRIM::MMO::ToolRegistry::instance().registerSimple("builtin", "Builtin test", "test",
-        [](const std::string&) { return CommandResult{}; });
+    using namespace GRIM::MMO;
+    const ProviderDescriptor collisionOwner{ToolProviderType::Plugin, "Collision fixture", "fixture-1", {}};
+    ToolDescriptor collisionTool;
+    collisionTool.tool_id = "reserved_fixture_tool";
+    check(ProviderRegistry::instance().publish(collisionOwner, {
+        {collisionTool, [](const std::string&) { return CommandResult{}; }}
+    }), "Collision fixture publication failed");
 
     auto event = alpha->subscribe_event(alpha, "test", observe, alpha);
     check(beta->unsubscribe_event(beta, event) == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's event");
@@ -271,7 +276,7 @@ int main(int argc, char** argv) try {
           !GRIM::MMO::ToolRegistry::instance().isRegistered("usage_valid"), "Invalid usage published partial batch");
 
     staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
-    GrimToolRegistration collision[] = {definition("new_tool"), definition("builtin")};
+    GrimToolRegistration collision[] = {definition("new_tool"), definition("reserved_fixture_tool")};
     check(staged->register_tools(staged, collision, 2) == GRIM_OK, "Staging collision failed early");
     check(!PluginAPI::commitPluginTools("staged") && !GRIM::MMO::ToolRegistry::instance().isRegistered("new_tool"),
           "Failed commit left a partial batch");
@@ -339,6 +344,7 @@ int main(int argc, char** argv) try {
     if (argc > 13 && *argv[13]) runVoicePluginTests(argv[13]);
     runUIPluginTests(argc > 14 ? argv[14] : "");
     runInputPluginTests(argc > 15 ? argv[15] : "");
+    ProviderRegistry::instance().retire(collisionOwner.name, collisionOwner.instance);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

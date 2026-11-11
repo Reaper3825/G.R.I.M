@@ -6,8 +6,8 @@
 #include <functional>
 #include <cstdint>
 
-// Include plugin.hpp for GRIM_HOST_API macro
-#include "../core/plugin.hpp"
+// Include host_exports.hpp for GRIM_HOST_API macro
+#include "../core/host_exports.hpp"
 class OverlayRenderer;  // Forward declaration
 
 struct PanelChromeOptions {

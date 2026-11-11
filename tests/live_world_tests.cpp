@@ -1,3 +1,4 @@
+#include "MMO/Core/ToolRegistry.hpp"
 #include "ui/world_lab/live_world_session.hpp"
 #include "commands/command_result.hpp"
 #include <atomic>
@@ -21,15 +22,15 @@ int main() try {
             std::filesystem::path directory;
             ~Cleanup() { std::error_code ec; std::filesystem::remove_all(directory, ec); }
         } cleanup{directory};
-        auto& registry = ToolRegistry::instance();
+        auto& providers = ProviderRegistry::instance();
         const auto file = directory / "live_navigation.json";
-        LiveWorldSession session(registry, file);
+        LiveWorldSession session(providers, file);
         auto snapshot = loadJsonFile(file);
         check(snapshot.at("format") == "grim-live-navigation-snapshot" &&
               snapshot.at("rooms").size() == 1 && snapshot.at("hub_id") == "system_hub",
               "Initial navigation snapshot missing hub");
         const ProviderDescriptor provider{ToolProviderType::Plugin, "Navigation Plugin", "first", ""};
-        check(registry.publishProvider(provider, {}), "navigation fixture publication");
+        check(providers.publish(provider, {}), "navigation fixture publication");
         session.synchronize();
         snapshot = loadJsonFile(file);
         const auto room = snapshot.at("rooms").at(1);
@@ -47,22 +48,22 @@ int main() try {
         resource.resource_id = "navigation-fixture"; resource.name = "Fixture";
         resource.kind = "ui.panel"; resource.runtime_id = 1;
         resource.state = {{"visible", true}};
-        const auto toolRevision = registry.version();
-        check(registry.publishResource(provider, resource), "navigation resource fixture");
-        check(registry.version() == toolRevision, "Resource publication changed tool revision");
+        const auto toolRevision = ToolRegistry::instance().version();
+        check(providers.publishResource(provider, resource), "navigation resource fixture");
+        check(ToolRegistry::instance().version() == toolRevision, "Resource publication changed tool revision");
         session.synchronize();
         check(std::filesystem::last_write_time(file) == timestamp && loadJsonFile(file) == snapshot,
               "Resource update rewrote navigation snapshot");
         auto replacement = provider; replacement.instance = "second";
-        check(registry.publishProvider(replacement, {}, provider.instance), "navigation replacement");
-        check(registry.snapshot().resourceCount() == 0, "Replacement kept retired resources");
-        check(!registry.publishResource(provider, resource), "Retired provider republished resource");
-        check(registry.publishResource(replacement, resource), "Replacement resource fixture");
-        registry.removeResource(provider, resource);
+        check(providers.publish(replacement, {}, provider.instance), "navigation replacement");
+        check(providers.snapshot().resourceCount() == 0, "Replacement kept retired resources");
+        check(!providers.publishResource(provider, resource), "Retired provider republished resource");
+        check(providers.publishResource(replacement, resource), "Replacement resource fixture");
+        providers.removeResource(provider, resource);
         auto staleBinding = resource;
         ++staleBinding.runtime_id;
-        registry.removeResource(replacement, staleBinding);
-        const auto current = registry.snapshot();
+        providers.removeResource(replacement, staleBinding);
+        const auto current = providers.snapshot();
         check(current.providers.size() == 1 && current.providers.front().provider == replacement &&
               current.providers.front().resources == std::vector<ResourceDescriptor>{resource},
               "Stale removal withdrew the current resource");
@@ -75,7 +76,7 @@ int main() try {
         std::filesystem::remove(file);
         session.synchronize();
         check(loadJsonFile(file) == snapshot, "Deleted snapshot not restored");
-        registry.unregisterInstance(provider.name, replacement.instance);
+        providers.retire(provider.name, replacement.instance);
         session.synchronize();
         check(loadJsonFile(file).at("rooms").size() == 1 && session.world().location() == "system_hub",
               "Provider unload retained exported room");
@@ -85,17 +86,17 @@ int main() try {
               "Persistence failure was not isolated/reported");
     }
     {
-        auto& registry = ToolRegistry::instance();
+        auto& providers = ProviderRegistry::instance();
         const ProviderDescriptor provider{ToolProviderType::Plugin, "Hardware fixture", "hardware-1", ""};
-        check(registry.publishProvider(provider, {tool("cpu.tool")}), "hardware inspection provider");
+        check(providers.publish(provider, {tool("cpu.tool")}), "hardware inspection provider");
         ResourceDescriptor resource;
         resource.resource_id = "cpu"; resource.name = "CPU";
         resource.kind = "system_info.snapshot"; resource.runtime_id = 1;
         resource.state = {{"format", "grim-system-info-resource"}, {"version", 1}, {"component", "cpu"},
             {"data", {{"cpu_cores", 12}}}, {"capture_time_ns", 123000000000LL},
             {"stale", false}, {"error", nullptr}};
-        check(registry.publishResource(provider, resource), "publish CPU fixture");
-        LiveWorldSession session(registry);
+        check(providers.publishResource(provider, resource), "publish CPU fixture");
+        LiveWorldSession session(providers);
         session.command("inspect CPU");
         check(session.history().back().feedback.starts_with("Action rejected") &&
               !session.observation().contains("resource_inspection"), "remote resource inspection bypassed room access");
@@ -111,7 +112,7 @@ int main() try {
         auto panel = resource;
         panel.resource_id = "panel:fixture"; panel.name = "Fixture panel"; panel.kind = "ui.panel";
         panel.state = {{"visible", true}, {"position", {{"x", 0}, {"y", 0}}}};
-        check(registry.publishResource(provider, panel), "publish refresh regression fixture");
+        check(providers.publishResource(provider, panel), "publish refresh regression fixture");
         session.synchronize();
         check(session.history().back().action == "Resources changed" &&
               session.history().back().feedback == "Added: Hardware fixture / Fixture panel (panel:fixture)\n",
@@ -119,7 +120,7 @@ int main() try {
         const auto refreshHistory = session.history().size();
         for (int frame = 1; frame <= 100; ++frame) {
             panel.state["position"]["x"] = frame;
-            check(registry.publishResource(provider, panel), "publish animated panel state");
+            check(providers.publishResource(provider, panel), "publish animated panel state");
             session.synchronize();
             check(session.history().size() == refreshHistory &&
                   session.observation().at("resource_inspection") == nlohmann::json(RegisteredResource{resource, provider}),
@@ -127,14 +128,14 @@ int main() try {
         }
         check(session.world().resourcesHere().back().state == panel.state,
               "Silent refresh failed to update live resource state");
-        const auto stableRevision = registry.resourceVersion();
+        const auto stableRevision = providers.resourceVersion();
         for (int frame = 0; frame < 10; ++frame) {
-            check(registry.publishResource(provider, panel), "republish unchanged panel state");
+            check(providers.publishResource(provider, panel), "republish unchanged panel state");
             session.synchronize();
         }
-        check(session.history().size() == refreshHistory && registry.resourceVersion() == stableRevision,
+        check(session.history().size() == refreshHistory && providers.resourceVersion() == stableRevision,
               "Unchanged publication created history or resource revision churn");
-        registry.removeResource(provider, panel); session.synchronize();
+        providers.removeResource(provider, panel); session.synchronize();
         check(session.history().size() == refreshHistory + 1 &&
               session.history().back().feedback == "Removed: Hardware fixture / Fixture panel (panel:fixture)\n",
               "Resource removal was missed or repeated the room snapshot");
@@ -145,7 +146,7 @@ int main() try {
         check(session.history().back().feedback == "CPU\nLogical cores: 12\nStatus: Current", "legacy inspection format differs");
         resource.state["stale"] = true;
         resource.state["error"] = {{"kind", "exception"}, {"message", "Fixture capture failed"}};
-        check(registry.publishResource(provider, resource), "publish stale CPU");
+        check(providers.publishResource(provider, resource), "publish stale CPU");
         session.synchronize();
         check(!session.observation().contains("resource_inspection"), "Refresh retained an outdated inspection");
         session.command("inspect cpu");
@@ -156,7 +157,7 @@ int main() try {
               historyState.at("resource_inspection").at("state").at("stale") == false,
               "Inspection changed capture provenance or historical state");
         resource.state["data"] = nullptr; resource.state["capture_time_ns"] = nullptr;
-        check(registry.publishResource(provider, resource), "publish unavailable CPU");
+        check(providers.publishResource(provider, resource), "publish unavailable CPU");
         session.command("inspect CPU");
         check(session.history().back().feedback.find("CPU information unavailable") != std::string::npos &&
               session.history().back().feedback.find("Logical cores") == std::string::npos,
@@ -181,33 +182,33 @@ int main() try {
               resourceInspectionFeedback({resource, provider}).find("Primary: No") != std::string::npos, "Monitor formatting lost topology");
         // A display name cannot redirect a command to a different object.
         auto duplicate = resource; duplicate.resource_id = "other";
-        check(registry.publishResource(provider, duplicate), "publish ambiguous fixture");
+        check(providers.publishResource(provider, duplicate), "publish ambiguous fixture");
         session.command("inspect CPU");
         check(session.history().back().feedback.starts_with("Action rejected: Ambiguous"), "Ambiguous object name was guessed");
         session.command("inspect-resource cpu");
         check(session.observation().at("resource_inspection").at("resource_id") == "cpu", "Explicit object ID did not resolve ambiguity");
         session.command("inspect cpu.tool");
         check(session.history().back().feedback.find("cpu.tool") != std::string::npos, "Resource route broke tool inspection");
-        registry.unregisterInstance(provider.name, provider.instance);
+        providers.retire(provider.name, provider.instance);
         session.command("inspect cpu");
         check(session.history().back().feedback.starts_with("Action rejected") &&
               !session.observation().contains("resource_inspection"), "Unloaded object remained inspectable");
     }
     {
         LiveWorld world;
-        const ProviderDescriptor builtin{ToolProviderType::Builtin, "builtin", "", ""};
+        const ProviderDescriptor extra{ToolProviderType::Plugin, "Extra Plugin", "extra-1", ""};
         const ProviderDescriptor ui{ToolProviderType::Plugin, "UI Plugin", "ui-1", ""};
         const ProviderDescriptor collision{ToolProviderType::Plugin, "UI-Plugin", "other-1", ""};
-        const ProviderSnapshot builtinGroup{builtin};
-        const ProviderSnapshot uiGroup{.provider = ui, .published = true};
-        const ProviderSnapshot collisionGroup{.provider = collision, .published = true};
-        world.reconcile({0, 0, {builtinGroup, uiGroup}});
+        const ProviderSnapshot extraGroup{extra};
+        const ProviderSnapshot uiGroup{.provider = ui};
+        const ProviderSnapshot collisionGroup{.provider = collision};
+        world.reconcile({0, 0, {extraGroup, uiGroup}});
         world.move("UI");
         check(world.location() == world.roomId(providerKey(ui)) && world.document().find(world.location())->name == "UI",
               "Short provider name did not select/display UI room");
         world.move("/");
-        world.reconcile({1, 0, {builtinGroup, uiGroup, collisionGroup}});
-        check(world.providerPath(providerKey(builtin)) == "/builtin" &&
+        world.reconcile({1, 0, {extraGroup, uiGroup, collisionGroup}});
+        check(world.providerPath(providerKey(extra)) == "/Extra" &&
               world.providerPath(providerKey(ui)) == "/UI", "Readable provider paths missing");
         const auto alternate = world.providerPath(providerKey(collision));
         check(alternate != "/UI", "Normalized provider names collided");
@@ -215,18 +216,18 @@ int main() try {
         check(world.location() == world.roomId(providerKey(ui)), "Exact provider name navigation failed");
         world.move("/"); world.move(alternate);
         check(world.location() == world.roomId(providerKey(collision)), "Collision path selected wrong provider");
-        world.reconcile({2, 0, {builtinGroup, collisionGroup}});
+        world.reconcile({2, 0, {extraGroup, collisionGroup}});
         check(world.providerPath(providerKey(collision)) == alternate, "Unload reassigned another provider path");
-        world.reconcile({3, 0, {collisionGroup, uiGroup, builtinGroup}});
+        world.reconcile({3, 0, {collisionGroup, uiGroup, extraGroup}});
         check(world.providerPath(providerKey(ui)) == "/UI", "Reload lost provider path");
     }
-    auto& registry = ToolRegistry::instance();
+    auto& providers = ProviderRegistry::instance();
     const ProviderDescriptor alpha{ToolProviderType::Plugin, "Alpha", "alpha-1", "alpha.dll"};
     const ProviderDescriptor beta{ToolProviderType::Plugin, "Beta", "beta-1", "beta.dll"};
     LiveWorldSession session;
     check(session.world().document().entities.size() == 1, "Empty registry must leave only System Hub");
-    check(registry.publishProvider(alpha, {tool("alpha.read"), tool("alpha.debug", ToolUsage::Debug)}), "publish alpha");
-    check(registry.publishProvider(beta, {}), "zero-tool provider publication");
+    check(providers.publish(alpha, {tool("alpha.read"), tool("alpha.debug", ToolUsage::Debug)}), "publish alpha");
+    check(providers.publish(beta, {}), "zero-tool provider publication");
     session.synchronize();
     LiveWorldSession preloaded;
     check(preloaded.world().document().entities.size() == 3, "Existing providers did not populate at startup");
@@ -251,39 +252,39 @@ int main() try {
     session.command("go /Beta");
     check(session.world().location() == room && session.history().back().feedback.starts_with("Action rejected"), "nonadjacent move accepted");
     auto replacement = alpha; replacement.instance = "alpha-2";
-    const auto revision = registry.version();
+    const auto revision = ToolRegistry::instance().version();
     auto collision = tool("alpha.new"); collision.descriptor.aliases = {"beta.tool"};
     auto betaReplacement = beta;
     betaReplacement.instance = "beta-2";
-    check(registry.publishProvider(betaReplacement, {tool("beta.tool")}, beta.instance), "Beta replacement failed");
-    const auto beforeRejected = registry.snapshot();
-    check(!registry.publishProvider(replacement, {collision}, alpha.instance), "collision accepted");
-    check(registry.version() == beforeRejected.revision && registry.getTool("alpha.read")->provider.instance == alpha.instance, "failed replacement changed registry");
-    check(registry.publishProvider(replacement, {tool("alpha.new")}, alpha.instance), "replacement rejected");
+    check(providers.publish(betaReplacement, {tool("beta.tool")}, beta.instance), "Beta replacement failed");
+    const auto beforeRejected = providers.snapshot();
+    check(!providers.publish(replacement, {collision}, alpha.instance), "collision accepted");
+    check(ToolRegistry::instance().version() == beforeRejected.revision && ToolRegistry::instance().getTool("alpha.read")->provider.instance == alpha.instance, "failed replacement changed registry");
+    check(providers.publish(replacement, {tool("alpha.new")}, alpha.instance), "replacement rejected");
     session.synchronize();
     check(session.world().location() == room && session.world().roomId(providerKey(alpha)) == room, "replacement changed room/location");
     check(session.world().toolsHere().at(0).tool_id == "alpha.new", "replacement catalog stale");
     check(session.observation().at("tool_catalog").at("tools").dump().find("alpha.read") == std::string::npos, "inventory retained replaced tool");
-    check(registry.invoke("alpha.new", "", {.expected_registry_version = revision, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE", "stale revision accepted");
-    registry.unregisterInstance(alpha.name, alpha.instance);
-    check(registry.getTool("alpha.new").has_value(), "old-generation cleanup removed replacement");
+    check(ToolRegistry::instance().invoke("alpha.new", "", {.expected_registry_version = revision, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE", "stale revision accepted");
+    providers.retire(alpha.name, alpha.instance);
+    check(ToolRegistry::instance().getTool("alpha.new").has_value(), "old-generation cleanup removed replacement");
     session.command("inspect alpha.read");
     check(session.history().back().feedback.starts_with("Action rejected"), "stale tool inspect accepted");
     const auto historySize = session.history().size();
     const auto moves = session.observation().at("moves");
-    registry.unregisterInstance(alpha.name, replacement.instance); session.synchronize();
+    providers.retire(alpha.name, replacement.instance); session.synchronize();
     check(session.world().location() == "system_hub" && !session.world().document().find(room), "occupied unload did not return to hub");
     check(session.history().size() > historySize && session.observation().at("session_id") == sessionId && session.observation().at("moves") == moves, "unload reset session/history");
     session.command("go /Alpha");
     check(session.world().location() == "system_hub", "removed room remained navigable");
-    check(registry.publishProvider(replacement, {}), "reload zero tools"); session.synchronize();
+    check(providers.publish(replacement, {}), "reload zero tools"); session.synchronize();
     check(session.world().connected(providerKey(alpha)), "Reloaded provider did not populate automatically");
     check(session.world().roomId(providerKey(alpha)) == room, "reconnect lost stable identity");
-    registry.unregisterInstance(alpha.name, replacement.instance);
-    registry.unregisterByProvider(beta.name);
+    providers.retire(alpha.name, replacement.instance);
+    providers.retire(betaReplacement.name, betaReplacement.instance);
     session.synchronize();
     check(session.world().document().entities.size() == 1, "Unloading all providers must retain System Hub");
-    check(registry.snapshot().providers.empty(), "provider cleanup retained zero-tool record");
+    check(providers.snapshot().providers.empty(), "provider cleanup retained zero-tool record");
     check(session.observation().at("tool_catalog").at("tools").empty(), "catalog retained unloaded tools");
     check(session.observation().at("inventory").size() == 1, "provider unload removed carried catalog");
     session.command("close tool_catalog");
@@ -296,11 +297,11 @@ int main() try {
         registration.descriptor.description = instance;
         return registration;
     };
-    check(registry.publishProvider(p, {atomicTool(p.instance)}), "atomic fixture");
+    check(providers.publish(p, {atomicTool(p.instance)}), "atomic fixture");
     std::atomic<bool> finished = false, inconsistent = false;
     std::thread reader([&] {
         while (!finished) {
-            const auto s = registry.snapshot();
+            const auto s = providers.snapshot();
             if (s.providers.size() != 1 || s.providers.front().tools.size() != 1 ||
                 s.providers.front().provider.instance != s.providers.front().tools.front().description)
                 inconsistent = true;
@@ -309,10 +310,10 @@ int main() try {
     bool published = true;
     for (int i = 1; i <= 100; ++i) {
         const auto old = p.instance; p.instance = std::to_string(i);
-        published &= registry.publishProvider(p, {atomicTool(p.instance)}, old);
+        published &= providers.publish(p, {atomicTool(p.instance)}, old);
     }
     finished = true; reader.join();
     check(published && !inconsistent, "mixed provider/tool snapshot");
-    registry.unregisterInstance(p.name, p.instance);
+    providers.retire(p.name, p.instance);
     std::cout << "Live world lifecycle, navigation, history and atomic snapshot tests passed\n";
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
