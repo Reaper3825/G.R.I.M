@@ -8,7 +8,7 @@
 #include <thread>
 #include "commands/commands_core.hpp"
 #include "MMO/Core/HardwareInventory.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -113,7 +113,54 @@ void runVoicePluginTests(const std::filesystem::path&);
 void runUIPluginTests(const std::filesystem::path&);
 void runInputPluginTests(const std::filesystem::path&);
 
+// Exercise the generic resource ABI with no domain implementation linked into the host.
+void runProviderResourceTests() {
+    using namespace GRIM::MMO;
+    auto& registry = ProviderRegistry::instance();
+    const auto baseline = registry.snapshot().resourceCount();
+    const auto payload = nlohmann::json::array({{{"resource_id", "item"}, {"kind", "fixture"},
+        {"name", "Fixture item"}, {"runtime_id", uint64_t{1}}, {"state", {{"value", 42}}}}}).dump();
+    auto publish = [&](const GrimPluginAPI* api, const std::string& text) {
+        return api->replace_resources(api, "fixture", text.data(), text.size());
+    };
+    auto* first = PluginAPI::createPluginAPI("resource-provider", "fixture", 0, true);
+    check(!first->is_provider_current(first), "Staging provider is current");
+    auto copiedPayload = payload;
+    check(publish(first, copiedPayload) == GRIM_OK, "Cannot stage resources without tools");
+    copiedPayload.assign(copiedPayload.size(), 'x');
+    check(registry.snapshot().resourceCount() == baseline, "Staged resource leaked");
+    check(PluginAPI::commitPluginTools(first), "Resource-only provider commit failed");
+    check(first->is_provider_current(first) && registry.snapshot().resourceCount() == baseline + 1,
+          "Initial resources missing at commit");
+    for (const auto& group : registry.snapshot().providers)
+        if (group.provider.name == "resource-provider")
+            check(group.resources.at(0).state.at("value") == 42, "Resource payload was not copied");
+    const auto revision = registry.resourceVersion();
+    check(publish(first, "[{}]") == GRIM_ERROR_INVALID_PARAM && registry.resourceVersion() == revision,
+          "Malformed update changed live resources");
+    auto duplicate = nlohmann::json::parse(payload); duplicate.push_back(duplicate[0]);
+    check(publish(first, duplicate.dump()) == GRIM_ERROR_INVALID_PARAM && registry.resourceVersion() == revision,
+          "Duplicate update partially committed");
+    auto* failed = PluginAPI::createPluginAPI("resource-provider", "replacement", 0, true, first);
+    check(publish(failed, payload) == GRIM_OK && publish(failed, "[{}]") == GRIM_ERROR_INVALID_PARAM,
+          "Invalid staged resources accepted");
+    check(!PluginAPI::commitPluginTools(failed, first), "Ignored resource error committed replacement");
+    PluginAPI::cleanupPluginContext(failed);
+    check(first->is_provider_current(first) && registry.snapshot().resourceCount() == baseline + 1,
+          "Failed replacement removed current resources");
+    auto* second = PluginAPI::createPluginAPI("resource-provider", "replacement", 0, true, first);
+    check(publish(second, payload) == GRIM_OK && PluginAPI::commitPluginTools(second, first), "Resource replacement failed");
+    check(!first->is_provider_current(first) && publish(first, "[]") == GRIM_ERROR_PLUGIN_NOT_LOADED,
+          "Retired generation could mutate replacement");
+    PluginAPI::cleanupPluginContext(first);
+    check(registry.snapshot().resourceCount() == baseline + 1, "Old cleanup erased replacement resources");
+    check(publish(second, "[]") == GRIM_OK && registry.snapshot().resourceCount() == baseline,
+          "Empty resource batch did not remove kind");
+    PluginAPI::cleanupPluginContext(second);
+}
+
 int main(int argc, char** argv) try {
+    runProviderResourceTests();
     {
         auto& registry = GRIM::MMO::ProviderRegistry::instance();
         const auto count = registry.snapshot().providers.size();

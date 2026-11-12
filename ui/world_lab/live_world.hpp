@@ -2,7 +2,7 @@
 #include "world_document.hpp"
 #include "live_world_navigation.hpp"
 #include "world_card_layout.hpp"
-#include "MMO/Core/ProviderRegistrySnapshot.hpp"
+#include "MMO/Core/Registries/ProviderRegistrySnapshot.hpp"
 #include <map>
 #include <set>
 #include <algorithm>

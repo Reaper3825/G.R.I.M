@@ -203,7 +203,7 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const std::str
             info->required_permissions, true, oldApi);
         initialized = true; // Shutdown must tolerate partially completed init.
         if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginTools(candidate.api, oldApi))
-            throw std::runtime_error("Initialization or tool publication rejected");
+            throw std::runtime_error("Initialization or provider publication rejected");
         candidate.fingerprint = stamp;
     } catch (const std::exception& error) {
         LOG_ERROR("PluginManager", "Rejected " + name + ": " + error.what());

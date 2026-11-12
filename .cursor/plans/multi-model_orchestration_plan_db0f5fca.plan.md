@@ -1100,7 +1100,7 @@ flowchart LR
 - Add `MMO/UI/UISurfaceSpec.hpp/.cpp`, `MMO/UI/UISurfaceRegistry.hpp/.cpp`, and `MMO/UI/EmotionPresentationController.hpp/.cpp` so UI surfaces and emotion presentation become first-class runtime contracts rather than ad-hoc startup wiring.
 - Rework `memory/context_manager.`* into the session-scoped interaction authority (or rename it to `SessionContextManager`), with `TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, and `ContextSnapshotV2`. Keep `getSnapshot()` as a compatibility projection during migration.
 - Define the context payload contract so `ContextSnapshotV2` and router metadata include both `visual_context.physical_semantics` and `visual_context.digital_visual`, with current repo support coming primarily from the digital side (`PerceptionContextManager::VisualContext`).
-- Add `MMO/Core/ToolRegistry.hpp/.cpp` as the canonical registry over built-in commands and plugin tools, replacing the current split between `CommandRegistry` metadata and plugin direct registration.
+- Add `MMO/Core/Registries/ToolRegistry.hpp/.cpp` as the canonical registry over built-in commands and plugin tools, replacing the current split between `CommandRegistry` metadata and plugin direct registration.
 - Add `MMO/Core/ToolTrainingParser.hpp/.cpp` (or equivalent offline pipeline) to parse explicit tool-usage training data into symbolic exemplars / affordance-token mappings.
 - Add `MMO/Core/ToolGapPlanner.hpp/.cpp` for structured tool-gap proposals and user-approved tool creation flow.
 - Add registry-backed UI tools (e.g. `ui.create_surface`, `ui.update_surface`, `ui.show_surface`, `ui.hide_surface`, `ui.destroy_surface`) so grim can request UIs through validated specs rather than raw rendering commands.
@@ -1126,7 +1126,7 @@ flowchart LR
 
 **1.2 Model registry and config**  
 
-- Implement `MMO/Core/ModelRegistry.hpp/.cpp`: load **router** (single) and **sub-models** (list), each with `MMD::ModelInfo` plus backend type, URL/path, and subject tags. `lora_path` / `hard_copy_path` are router-only fields.
+- Implement `MMO/Core/Registries/ModelRegistry.hpp/.cpp`: load **router** (single) and **sub-models** (list), each with `MMD::ModelInfo` plus backend type, URL/path, and subject tags. `lora_path` / `hard_copy_path` are router-only fields.
 - Extend `ai_config.json`: `mmo`, `router`, `sub_models`, `routing`, `model_loader`, and `action_policy`. When `mmo.enabled=true`, missing `router` or empty `sub_models` is a startup error. Sub-model entries must not accept `lora_path`.
 - Add NLP config sections for annotation and tagging, e.g. `nlp.annotation`, `nlp.memory_tags`, `nlp.router_tags`, `nlp.priors`, and `nlp.risk_tags`. These are configuration for metadata generation, not command execution.
 - Add UI and emotion config sections so modular UI surfaces and runtime presentation toggles are body-owned runtime settings instead of hardcoded startup behavior.
@@ -1435,7 +1435,7 @@ flowchart TD
 - **Resource signal / coordinator** — `MMO/Core/ResourceSignal.hpp`, `MMO/Core/ResourceSignal.cpp`, `MMO/Core/ResourceCoordinator.hpp`, `MMO/Core/ResourceCoordinator.cpp` (live resource loop, pressure evaluation, reservations/claims, and admission hooks for model/tool/process loading).
 - **UI surface model** — `MMO/UI/UISurfaceSpec.hpp`, `MMO/UI/UISurfaceSpec.cpp`, `MMO/UI/UISurfaceRegistry.hpp`, `MMO/UI/UISurfaceRegistry.cpp` (validated UI surface contract + runtime registry over overlay/popup/modal/tool surfaces).
 - **Emotion presentation** — `MMO/UI/EmotionPresentationController.hpp`, `MMO/UI/EmotionPresentationController.cpp` (runtime-togglable outward emotion layer for UI/voice/avatar channels, separated from internal mood state).
-- **Tool registry** — `MMO/Core/ToolRegistry.hpp`, `MMO/Core/ToolRegistry.cpp` (canonical registry across built-in commands and plugin tools, including metadata, versioning, hot-swap state, and model-visible summaries).
+- **Tool registry** — `MMO/Core/Registries/ToolRegistry.hpp`, `MMO/Core/Registries/ToolRegistry.cpp` (canonical registry across built-in commands and plugin tools, including metadata, versioning, hot-swap state, and model-visible summaries).
 - **Tool training parser** — `MMO/Core/ToolTrainingParser.hpp`, `MMO/Core/ToolTrainingParser.cpp` (explicit parser for tool-usage exemplars / affordance-token mappings extracted from training data).
 - **Tool gap planner** — `MMO/Core/ToolGapPlanner.hpp`, `MMO/Core/ToolGapPlanner.cpp` (structured tool-gap proposals, user-confirmed tool creation flow, and retry semantics).
 - **NLP annotation core** — `nlp/NlpAnnotation.hpp`, `nlp/NlpAnnotation.cpp` (canonical annotation payload shared by memory + router metadata).
@@ -1443,7 +1443,7 @@ flowchart TD
 - **NLP taggers** — `nlp/EntityTagger.`*, `nlp/MemoryTagger.`*, and compatibility wrappers around current `nlp/nlp.*`, `ai/intent_gate.*`, and `ai/fast_classifier.*`.
 - **Backend interface** — `ai/backends/IGenerationBackend.hpp`, router backend (precomposed in → route response; synthesize(sub_model_outputs) → final structured response), sub-model backends (frozen bricks, composed_generation in only).
 - **MMD** — `MMO/Shared/MMD.hpp` (existing), `MMO/Shared/MMD.cpp` (`getSubjectTags`).
-- **Registry** — `MMO/Core/ModelRegistry.hpp`, `MMO/Core/ModelRegistry.cpp` (router + sub_models, router-only `lora_path` / `hard_copy_path`).
+- **Registry** — `MMO/Core/Registries/ModelRegistry.hpp`, `MMO/Core/Registries/ModelRegistry.cpp` (router + sub_models, router-only `lora_path` / `hard_copy_path`).
 - **Router (thin)** — `MMO/Router/ModelRouter.hpp`, `MMO/Router/ModelRouter.cpp` (parse grim-text router response).
 - **ModelLoader** — `MMO/Core/ModelLoader.hpp`, `MMO/Core/ModelLoader.cpp` (use-degrading state machine, resource-aware load/unload driven by ResourceCoordinator).
 - **Process manager** — Generalize `ai/grim_text_server_manager.`* into a model-keyed process manager for router + sub-model servers.

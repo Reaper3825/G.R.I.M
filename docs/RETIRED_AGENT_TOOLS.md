@@ -61,7 +61,7 @@ Their PPO bootstrap/shutdown hooks, unused training-manager shutdown hook, and
 wake-voice pending-feedback capture branch were removed together. Normal wake
 capture still calls [handleCommand](../commands/commands_core.cpp); explicit
 tool dispatch remains in [command_dispatch.cpp](../commands/command_dispatch.cpp)
-and [ToolRegistry](../MMO/Core/ToolRegistry.hpp). Grounded click failure tests now
+and [ToolRegistry](../MMO/Core/Registries/ToolRegistry.hpp). Grounded click failure tests now
 exercise the [host input service](../perception/input_command_service.cpp).
 
 The eleven handlers listed above are unchanged. Underlying conversation,

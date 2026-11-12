@@ -21,7 +21,7 @@
 #include "Contracts.hpp"
 #include "MemoryFacade.hpp"
 #include "ModelLoader.hpp"
-#include "ModelRegistry.hpp"
+#include "Registries/ModelRegistry.hpp"
 #include "RequestContext.hpp"
 #include "ToolGapPlanner.hpp"
 #include "../Router/ModelRouter.hpp"

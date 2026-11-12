@@ -43,7 +43,7 @@ Wake capture no longer enters the orphan pending-feedback listening branch.
 
 Raw input is owned by [handleCommand](../commands/commands_core.cpp) and
 [ai_process](../ai/ai.cpp). Explicit tool invocation stays with
-[ToolRegistry](../MMO/Core/ToolRegistry.hpp), and input execution stays with
+[ToolRegistry](../MMO/Core/Registries/ToolRegistry.hpp), and input execution stays with
 [input_command_service.cpp](../perception/input_command_service.cpp).
 SessionContextManager, learned-memory storage, retained developer handlers,
 personality presentation, and model/configuration services remain.
@@ -57,7 +57,7 @@ and deleted-reference checks; no host/model runtime build or deployment.
 | Status | Current owner and concrete surface | Future boundary |
 | --- | --- | --- |
 | Implemented configuration | [train_gpu.cu](../resources/models/GRIM-text/training/train_gpu.cu) calls `loadAiConfigSnapshot()` → `finalizeAiConfigSnapshot()` in [HyperParameters_GPU.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp); the actual snapshot combines `ai_config.json` runtime policy with selected compiled `model.grimcfg` semantics/geometry. [HyperparameterGroupings.hpp](../resources/models/GRIM-text/Shared/HyperParameters/HyperparameterGroupings.hpp) provides read views only. | No launcher overrides or sidecar config/policy. |
-| Implemented host registry/process | [ModelRegistry.cpp](../MMO/Core/ModelRegistry.cpp) owns host model metadata and rejects sub-model LoRA/hard-copy fields; [ProcessManager.cpp](../MMO/Core/ProcessManager.cpp) launches model-keyed bridge processes with config-derived ports. | Router metadata does not load or publish an inference adapter. |
+| Implemented host registry/process | [ModelRegistry.cpp](../MMO/Core/Registries/ModelRegistry.cpp) owns host model metadata and rejects sub-model LoRA/hard-copy fields; [ProcessManager.cpp](../MMO/Core/ProcessManager.cpp) launches model-keyed bridge processes with config-derived ports. | Router metadata does not load or publish an inference adapter. |
 | Implemented bridge/worker boundary | [grim_text_server.cpp](../resources/models/GRIM-text/GRIM/grim_text_server.cpp) accepts `--public-port`, `--worker-port`, `--worker-exe` and proxies worker HTTP. [grim_text_server_api.hpp](../core/grim_text_server_api.hpp) owns HTTP constants; the bridge does not own model startup. | Personalized readiness/reload remains separate. |
 | Implemented LoRA ownership/registration | [ParameterRegistry.hpp](../resources/models/GRIM-text/training/Phases/Startup/Model/ParameterRegistry.hpp) owns five layer-local A/B classes; [ParameterGroupRegistration.cu](../resources/models/GRIM-text/training/Phases/Startup/Model/ParameterGroupRegistration.cu) freezes base owners and registers enabled A/B only. | Do not create the old second adapter registry. |
 | Implemented low-rank math | [ModelForward_GPU.cu](../resources/models/GRIM-text/Shared/Forward/ModelForward_GPU.cu) binds QKV, O, FFN gate/up/down; [LoRALinear.cu](../resources/models/GRIM-text/Shared/TensorContract/LoRALinear.cu) computes unmerged factored deltas. | Model math is not a host personalization lifecycle. |
@@ -66,7 +66,7 @@ and deleted-reference checks; no host/model runtime build or deployment.
 | Implemented observation append | [RuntimeContextAppend.cu](../resources/models/GRIM-text/Shared/InferenceState/RuntimeContextAppend.cu) validates/remaps atoms and appends runtime context for resume. | [Phase2_RLTrainingLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_RLTrainingLoop.cu) remains an always-throwing, unbuilt/undispatched scoring/loss/update scaffold. |
 | Implemented host request routing | [ai.cpp](../ai/ai.cpp) uses direct `grim_native` / `ollama` paths and an orchestrator path for other enabled configurations. [Orchestrator.cpp](../MMO/Core/Orchestrator.cpp) owns route/sub-model/synthesis orchestration. | Plan's universal enforced single-path rule is not current source behavior. Historical `ai_interpret()` action wiring is not the active call surface. |
 | Implemented session state | [SessionContextManager.hpp](../MMO/Core/SessionContextManager.hpp) / [`.cpp`](../MMO/Core/SessionContextManager.cpp) own history, supplied reasoning state, referents, pending interactions, and snapshots; `beginTurn(session_id, turn_id, raw, normalized)` returns void. `clearHistory()` clears; `trimHistory()` caps messages. | Permanent-session token retirement/capsules and the personalization queue are pending, not implied by the session owner. |
-| Implemented sole tool store | [ToolRegistry.hpp](../MMO/Core/ToolRegistry.hpp) publishes metadata and handlers together (`registerTool`, `registerBatch`, provider-generation publication/replacement); [command_dispatch.cpp](../commands/command_dispatch.cpp) delegates explicit dispatch to `invoke()`. `invoke()` accepts optional revision and canonical Model ID checks. Policy remains caller-owned. | No `commandMap`/`CommandRegistry` metadata mirror or seeding bridge. Registry primitives do not prove end-to-end autonomous gated execution. |
+| Implemented sole tool store | [ToolRegistry.hpp](../MMO/Core/Registries/ToolRegistry.hpp) publishes metadata and handlers together (`registerTool`, `registerBatch`, provider-generation publication/replacement); [command_dispatch.cpp](../commands/command_dispatch.cpp) delegates explicit dispatch to `invoke()`. `invoke()` accepts optional revision and canonical Model ID checks. Policy remains caller-owned. | No `commandMap`/`CommandRegistry` metadata mirror or seeding bridge. Registry primitives do not prove end-to-end autonomous gated execution. |
 | Implemented plugin-owned surfaces | [input_plugin.cpp](../plugins/input_plugin/input_plugin.cpp) owns input tool registration over API v3.9 host services; [ui_plugin.cpp](../plugins/ui_plugin/ui_plugin.cpp) owns generic panel tools. [core_plugin.cpp](../plugins/core_plugin.cpp) retains surface create/destroy and OSINT UI registration. | No duplicate built-in input/panel registration; host perception/input/UI services remain host-owned. |
 | Implemented retirement | [RETIRED_AGENT_TOOLS.md](RETIRED_AGENT_TOOLS.md) and `core_plugin.cpp` describe eleven removed AI/NLP/admin tool registrations. | Retained handlers, conversation, routing, grammar, and session services are not deletion or migration targets. |
 | Implemented bootstrap systems | [bootstrap.cpp](../bootstrap/bootstrap.cpp) wires hardware inventory, resource signal/coordinator, model registry/loader/process/orchestrator, session state, and UI surface lifecycle in named phases. | No claim that every optional integration or planned resource lease is wired. |
@@ -281,8 +281,8 @@ and deleted-reference checks; no host/model runtime build or deployment.
 ### 6. Model registry
 
 **Owner**
-- `MMO/Core/ModelRegistry.hpp`
-- `MMO/Core/ModelRegistry.cpp`
+- `MMO/Core/Registries/ModelRegistry.hpp`
+- `MMO/Core/Registries/ModelRegistry.cpp`
 
 **Responsibility**
 - Canonical registry of all known models (router + sub-models)
@@ -636,7 +636,7 @@ future design. Current API signatures/clear semantics are in the source map.
 **Status**
 - Implemented; fully integrated; all legacy caller migrations complete; conversation history migrated from ai.cpp globals
 
-### 11. ToolRegistry (`MMO/Core/ToolRegistry.hpp`, `MMO/Core/ToolRegistry.cpp`)
+### 11. ToolRegistry (`MMO/Core/Registries/ToolRegistry.hpp`, `MMO/Core/Registries/ToolRegistry.cpp`)
 
 This section's original metadata-only registry design is superseded: the sole
 registry owns metadata **and callable execution bindings**. No bootstrap

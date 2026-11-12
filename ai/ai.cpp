@@ -1,8 +1,8 @@
 #include "ai.hpp"
 #include "bootstrap/bootstrap.hpp"  // MMO orchestrator globals
 #include "../MMO/Core/SessionContextManager.hpp"
-#include "../MMO/Core/ToolRegistry.hpp"
-#include "../MMO/Core/ModelRegistry.hpp"
+#include "../MMO/Core/Registries/ToolRegistry.hpp"
+#include "../MMO/Core/Registries/ModelRegistry.hpp"
 #include "nlp/NlpAnnotation.hpp"
 #include "nlp/RouterMetadataBuilder.hpp"
 #include "memory/atomic_writer.hpp"

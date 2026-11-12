@@ -1,7 +1,7 @@
 #pragma once
 #include "live_world.hpp"
 #include "live_world_navigation_store.hpp"
-#include "MMO/Core/ProviderRegistry.hpp"
+#include "MMO/Core/Registries/ProviderRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "resource_inspection.hpp"
 #include <map>

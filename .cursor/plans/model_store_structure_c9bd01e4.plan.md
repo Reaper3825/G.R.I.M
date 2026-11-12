@@ -92,7 +92,7 @@ Introduce a single canonical directory where all trained models live:
 resources/models/model_store/
 ```
 
-The **current MMO implementation** ([MMO/Core/ModelRegistry.cpp](MMO/Core/ModelRegistry.cpp)) loads models **only from `ai_config.json`**: it expects `mmo.router` (object) and `mmo.sub_models` (array). There is no filesystem scan. Each model is a self-contained subfolder named by its `model_id`; the config entries point `model_path` and (for router) `hard_copy_path` into that folder.
+The **current MMO implementation** ([MMO/Core/Registries/ModelRegistry.cpp](MMO/Core/Registries/ModelRegistry.cpp)) loads models **only from `ai_config.json`**: it expects `mmo.router` (object) and `mmo.sub_models` (array). There is no filesystem scan. Each model is a self-contained subfolder named by its `model_id`; the config entries point `model_path` and (for router) `hard_copy_path` into that folder.
 
 ### Per-Model Directory Layout
 
@@ -486,7 +486,7 @@ flowchart TD
 
 ## MMO Integration Points (current MMO/Core)
 
-- **ModelRegistry** ([ModelRegistry.cpp](MMO/Core/ModelRegistry.cpp)): Loads **only from `ai_config.json`** — `mmo.router` and `mmo.sub_models`. No filesystem scan. Each entry's `model_path` (and router-only `hard_copy_path`) should point at paths inside `model_store/<model_id>/` so the bundle layout is the single source of files.
+- **ModelRegistry** ([ModelRegistry.cpp](MMO/Core/Registries/ModelRegistry.cpp)): Loads **only from `ai_config.json`** — `mmo.router` and `mmo.sub_models`. No filesystem scan. Each entry's `model_path` (and router-only `hard_copy_path`) should point at paths inside `model_store/<model_id>/` so the bundle layout is the single source of files.
 - **ModelLoader** ([ModelLoader.cpp](MMO/Core/ModelLoader.cpp)): Does not load weights; it runs the state machine and calls `start_cb`/`stop_cb` with `ModelInfo`. The body's callback starts the backend process with `ModelInfo::model_path` and the corresponding vocab path. With the model store layout, vocab is always in the same directory as the checkpoint.
 - **Orchestrator** ([Orchestrator.cpp](MMO/Core/Orchestrator.cpp)): Dispatches requests via `registerBackend(model_id, backend)`. Every model must have a backend registered at bootstrap.
 - **Router-only fields**: `lora_path`, `hard_copy_path` — only on `mmo.router`; sub-models must not set them (validated in `ModelRegistry::validateModel`). `hard_copy_path` can point at the bundle's `training_data.jsonl` for LoRA training input.

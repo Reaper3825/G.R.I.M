@@ -1,7 +1,7 @@
 #include "core/plugin_api_impl.hpp"
 #include "core/plugin_manager.hpp"
 #include "perception/input_command_service.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/commands_core.hpp"
 #include <condition_variable>
 #include <filesystem>
@@ -48,7 +48,7 @@ CommandResult ExecuteInputCommandService(GrimInputOperation operation, const std
 }
 
 void runInputPluginTests(const std::filesystem::path& directory) {
-    static_assert(sizeof(GrimPluginAPI) == offsetof(GrimPluginAPI, input_service) + 19 * sizeof(void*));
+
     auto* denied = PluginAPI::createPluginAPI("input-denied", "", GRIM_PERM_UI | GRIM_PERM_SYSTEM);
     check(!denied->input_service(denied, GRIM_INPUT_CLICK, "", 0), "UI permission unexpectedly authorized native input");
     PluginAPI::cleanupPluginContext(denied);

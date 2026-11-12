@@ -1,4 +1,4 @@
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "pch.hpp"
 #include "input_parser.hpp"
 #include "commands_core.hpp"     // for CommandResult / CommandFunc

@@ -1,10 +1,12 @@
 # System Information resources
 
-The System Information plugin opts into host-owned hardware objects through API
-v3.19 `register_hardware_resource`. This initialization-only operation requires
-SYSTEM permission and stages a declaration without detecting hardware. After
-successful provider commit, the host captures once and publishes a batch of
-read-only resources with kind `system_info.snapshot`:
+The System Information plugin owns native detection, snapshot state, resource
+construction, command handling, and cleanup. During initialization it captures
+once and stages copied resources through the generic `replace_resources` API.
+The framework commits the provider, tools, and resources atomically. No host
+hardware service or per-plugin hardware state remains in `plugin_api_impl`.
+The provider declares SYSTEM permission and supplies resources of kind
+`system_info.snapshot`:
 
 | Resource ID | Component | Data |
 | --- | --- | --- |
@@ -17,7 +19,7 @@ read-only resources with kind `system_info.snapshot`:
 `desktop` contains `origin_x`, `origin_y`, `width`, and `height` in virtual desktop
 coordinates. Memory and VRAM values are capacities in MB, not current usage.
 Audio device names, voice backend flags, and the Whisper model suggestion are
-excluded from these objects. The host inventory codec and existing `system_info`
+excluded from these objects. The shared inventory codec and existing `system_info`
 text response retain their compatibility behavior.
 
 Each resource state has this envelope:
@@ -42,20 +44,33 @@ and timestamp. Device objects appear after enumeration. Success clears errors
 and atomically replaces the entire batch, removing devices no longer present.
 
 Identity includes the owning provider, `provider_instance`, and resource ID.
-Each object uses `runtime_id: 1`. GPU keys follow the host
+Each object uses `runtime_id: 1`. GPU keys follow the plugin detector's
 device index; monitor keys follow enumeration order. These indices identify
 enumeration slots, not persistent physical device identifiers across topology
 changes. Replacement and unload retire the provider's whole batch; an old
 generation cannot republish into a replacement. No plugin callbacks or C++
-records cross the ABI. The API function consumes one reserved pointer slot,
-retaining table size and all previous service offsets.
+records cross the ABI.
 
-`get_hardware_snapshot` captures fresh hardware on every call. For an opted-in
-published provider it also refreshes that provider's objects; other callers do
-not publish resources. Its response still describes only the current attempt
-using the complete `grim-hardware-snapshot` v1 codec. Calling `system_info`
-refreshes all objects without changing the immutable startup inventory. Captures
-are serialized per API context. There is no periodic polling.
+Calling `system_info` captures fresh hardware and atomically refreshes all objects.
+The plugin serializes captures and owns last-good state. Detection failure during
+initialization publishes the fixed objects with explicit unavailable state; a
+publication/registration failure rejects the candidate. A failed command refresh
+publishes stale state before returning the existing command exception response.
+There is no periodic polling or worker thread. Shutdown destroys plugin state
+after the host drains callbacks; replacement starts with an independent cache.
+
+`hardware_detection.cpp` is compiled into the DLL. It uses native OS queries and
+optional dynamic CUDA driver discovery (no CUDA toolkit build dependency).
+Windows DXGI/WMI, COM objects, and driver modules have scoped lifetimes. No host
+startup detector, audio service, hardware global, or C++ host function is called.
+Audio capture is outside this provider. The separate startup inventory used by
+bootstrap is unchanged and is never consulted or mutated by the plugin.
+
+API v6 removes `get_hardware_snapshot`, `register_hardware_resource`, and unused
+legacy host system/CPU/memory query slots. No retired fields preserve their old
+positions in the table. Older DLLs are rejected; deployment needs
+a matching rebuilt host and plugins. The resource and tool result schemas remain
+unchanged. Linux/macOS paths require native validation on those platforms.
 
 The live world projects registered objects into the System Information room
 automatically. `inspect CPU`, `inspect cpu`, and other exact object names or IDs
@@ -101,3 +116,15 @@ This exposes topology and capabilities, not live utilization. The separate MMO
 resource signal and resource admission systems remain independent of these
 objects. The unused `hardware/resource_values.*` monitor and its randomized GPU
 fallback have been removed.
+
+## Validation
+
+`tests/run_plugin_shutdown.ps1 -BuildApplicationFixture -BuildSystemInfoFixture`
+builds isolated DLL fixtures. Hardware fixture implementation is linked into the
+system-info DLL, not the host. Tests cover topology, fresh capture, formatting,
+standard/unknown failures, stale retention, recovery, device removal, read-only
+world inspection, independent state after reload, and unload cleanup. Generic
+provider tests cover failed publication and retired-generation rejection.
+
+`tests/run_system_info_native.ps1` links the real native DLL in a test directory
+and runs a read-only native detector smoke test without the host runtime.

@@ -5,7 +5,7 @@
 // correlation validation → Contracts::validateResponse.
 //======================================================//
 #include "Orchestrator.hpp"
-#include "ToolRegistry.hpp"
+#include "Registries/ToolRegistry.hpp"
 #include "CorrectionTuple.hpp"
 #include "ToolTrainingParser.hpp"
 

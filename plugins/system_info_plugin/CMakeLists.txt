@@ -3,6 +3,15 @@ project(system_info_plugin LANGUAGES CXX)
 include("${CMAKE_CURRENT_LIST_DIR}/../plugin_build.cmake")
 find_package(nlohmann_json CONFIG REQUIRED
     HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
-add_library(system_info_plugin SHARED system_info_plugin.cpp system_info_command.cpp)
+add_library(system_info_plugin SHARED system_info_plugin.cpp system_info_command.cpp
+    system_info_provider.cpp hardware_detection.cpp)
 grim_configure_plugin(system_info_plugin)
-target_link_libraries(system_info_plugin PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(system_info_plugin PRIVATE nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
+
+target_compile_features(system_info_plugin PRIVATE cxx_std_20)
+if(WIN32)
+    target_link_libraries(system_info_plugin PRIVATE dxgi ole32 oleaut32 wbemuuid wlanapi user32)
+endif()
+if(MSVC)
+    target_link_libraries(system_info_plugin PRIVATE comsuppw)
+endif()

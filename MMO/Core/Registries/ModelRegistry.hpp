@@ -8,7 +8,7 @@
 //======================================================//
 #pragma once
 
-#include "../Shared/MMD.hpp"
+#include "../../Shared/MMD.hpp"
 
 #include <nlohmann/json_fwd.hpp>
 

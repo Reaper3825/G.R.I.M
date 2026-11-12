@@ -30,7 +30,7 @@ The selected future design gives GRIM one permanent conversation. `SessionContex
 The body-side MMO model contract is partially ready:
 
 - `MMO/Shared/MMD.hpp` has router-only `ModelInfo::lora_path` and `hard_copy_path` fields.
-- `MMO/Core/ModelRegistry.cpp` rejects those fields on sub-models.
+- `MMO/Core/Registries/ModelRegistry.cpp` rejects those fields on sub-models.
 - `ai_config.json` contains an empty `mmo.router.lora_path`.
 - `MMO/Core/CorrectionTuple.*` and `MMO/Core/ToolTrainingParser.*` already export two important classes of future LoRA training records.
 - `memory/atomic_writer.hpp` provides the write-temp + rename primitive expected by the MMO plan.
@@ -44,7 +44,7 @@ The body-side MMO model contract is partially ready:
 | Implemented runtime math | [ModelForward_GPU.cu](../../../resources/models/GRIM-text/Shared/Forward/ModelForward_GPU.cu) validates/binds registry pairs; [LoRALinear.cu](../../../resources/models/GRIM-text/Shared/TensorContract/LoRALinear.cu) adds a factored delta without merging base weights. Both full and cached attention use it. |
 | Implemented training persistence | [LoRATrainingCheckpoint.hpp](../../../resources/models/GRIM-text/Common/LoRATrainingCheckpoint.hpp), [grim_lora_training_checkpoint.fbs](../../../resources/models/GRIM-text/training/schemas/grim_lora_training_checkpoint.fbs), and [LoRACheckpointLifecycle.cu](../../../resources/models/GRIM-text/training/LoRACheckpointLifecycle.cu) provide strict immutable `.grimlorackpt` save/resume under the selected model store's `lora_checkpoints`. |
 | Implemented config authority | [train_gpu.cu](../../../resources/models/GRIM-text/training/train_gpu.cu) calls `loadAiConfigSnapshot()` then `finalizeAiConfigSnapshot()` in [HyperParameters_GPU.hpp](../../../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp): runtime/training policy comes from `ai_config.json`, immutable model semantics/geometry from selected compiled `model.grimcfg`. [HyperparameterGroupings.hpp](../../../resources/models/GRIM-text/Shared/HyperParameters/HyperparameterGroupings.hpp) only slices these owners. |
-| Implemented host metadata/process boundary | [ModelRegistry.cpp](../../../MMO/Core/ModelRegistry.cpp) retains router-only `lora_path`/`hard_copy_path` metadata; [ProcessManager.cpp](../../../MMO/Core/ProcessManager.cpp) launches with named public/worker ports, not model/vocab/adapter overrides. Neither connects `mmo.router.lora_path` to model adapter loading. |
+| Implemented host metadata/process boundary | [ModelRegistry.cpp](../../../MMO/Core/Registries/ModelRegistry.cpp) retains router-only `lora_path`/`hard_copy_path` metadata; [ProcessManager.cpp](../../../MMO/Core/ProcessManager.cpp) launches with named public/worker ports, not model/vocab/adapter overrides. Neither connects `mmo.router.lora_path` to model adapter loading. |
 | Future body lifecycle | [SessionContextManager.cpp](../../../MMO/Core/SessionContextManager.cpp) owns session history and pending interaction state; token-pressure retirement, boundary artifacts, durable personalization manifests/queue, candidate evaluation/publication, adapter identity readiness, and coordinated reload are not implemented. |
 
 Model runtime support is not evidence that a deployed personalized MMO router,
@@ -169,7 +169,7 @@ The base SHA-256 binds the adapter to the exact checkpoint bytes. Architecture f
 Modify:
 
 - `MMO/Shared/MMD.hpp`
-- `MMO/Core/ModelRegistry.cpp`
+- `MMO/Core/Registries/ModelRegistry.cpp`
 - `ai_config.json`
 
 Proposed host-only publication/readiness fields (not accepted model config today),

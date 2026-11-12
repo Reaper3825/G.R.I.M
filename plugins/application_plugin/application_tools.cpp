@@ -1,25 +1,21 @@
 #include "application_tools.hpp"
 #include <nlohmann/json.hpp>
-#include <memory>
 #include <string>
 
 namespace {
-struct Context { const GrimPluginAPI* api = nullptr; const char* operation = nullptr; };
+struct Context { GRIM::Applications::Catalog* catalog = nullptr; const char* operation = nullptr; };
 Context contexts[4];
 GrimResult invoke(const GrimToolCall* call, GrimToolResultWriter* writer, void* context) {
     const auto& selected = *static_cast<Context*>(context);
-    const auto* api = selected.api;
     const std::string operation = selected.operation;
-    const char* response = api->application_service(api, operation.c_str(), call->arguments, call->arguments_size);
-    const auto release = [api](const char* value) { if (value) api->string_free(api, value); };
-    std::unique_ptr<const char, decltype(release)> owned(response, release);
     GrimToolResult result;
     std::string message, output;
     try {
-        if (!response) throw std::runtime_error("Application service unavailable or permission denied");
-        const auto value = nlohmann::json::parse(response);
-        if (value.at("format") != "grim-application-result" || value.at("version") != 1)
-            throw std::runtime_error("Invalid application service response");
+        if (!call || call->arguments_size > 65536 || (call->arguments_size && !call->arguments))
+            throw std::invalid_argument("Invalid application arguments");
+        const auto args = nlohmann::json::parse(std::string(call->arguments ? call->arguments : "", call->arguments_size));
+        const auto value = nlohmann::json{{"format", "grim-application-result"}, {"version", 1},
+            {"success", true}, {"value", selected.catalog->request(operation, args)}};
         result.success = value.at("success").get<bool>();
         output = value.dump();
         if (!result.success) message = value.value("error", "Application operation failed");
@@ -31,14 +27,18 @@ GrimResult invoke(const GrimToolCall* call, GrimToolResultWriter* writer, void* 
             for (const auto& app : catalog.at("applications"))
                 message += "\n" + app.at("name").get<std::string>() + " (" + app.at("resource_id").get<std::string>() + ")";
         } else message = operation == "launch" ? "Application launch requested." : value.at("value").at("application").dump(2);
-    } catch (const std::exception& e) { result.success = false; message = e.what(); }
+    } catch (const std::exception& e) {
+        result.success = false; message = e.what();
+        output = nlohmann::json{{"format", "grim-application-result"}, {"version", 1},
+            {"success", false}, {"error", message}}.dump();
+    }
     result.message = message.c_str(); result.structured_output_json = output.empty() ? nullptr : output.c_str();
     result.error_code = result.success ? "ERR_NONE" : "ERR_APPLICATION_SERVICE";
     result.category = result.success ? "application" : "error";
     return writer->complete(writer, &result);
 }
 }
-GrimResult registerApplicationTools(const GrimPluginAPI* api) {
+GrimResult registerApplicationTools(const GrimPluginAPI* api, GRIM::Applications::Catalog& catalog) {
     GrimToolRegistration tools[4];
     const char* ids[] = {"applications.list", "applications.refresh", "applications.inspect", "applications.launch"};
     const char* operations[] = {"list", "refresh", "inspect", "launch"};
@@ -58,7 +58,7 @@ GrimResult registerApplicationTools(const GrimPluginAPI* api) {
     }
     for (size_t i = 0; i < 4; ++i) {
         auto& t = tools[i]; auto& d = t.descriptor;
-        contexts[i] = {api, operations[i]};
+        contexts[i] = {&catalog, operations[i]};
         t.handler = invoke; t.user_data = &contexts[i]; t.short_description = descriptions[i];
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0"; d.description = descriptions[i];
         d.usage = usages[i]; d.category = "application"; d.argument_format = "json";
@@ -77,6 +77,5 @@ GrimResult registerApplicationTools(const GrimPluginAPI* api) {
                 : R"({"type":"object","properties":{"resource_id":{"type":"string"},"provider_instance":{"type":"string"},"runtime_id":{"type":"integer","minimum":1}},"required":["resource_id","provider_instance","runtime_id"],"additionalProperties":false})";
         }
     }
-    const auto result = api->register_tools(api, tools, 4);
-    return result == GRIM_OK ? api->register_application_catalog(api) : result;
+    return api->register_tools(api, tools, 4);
 }

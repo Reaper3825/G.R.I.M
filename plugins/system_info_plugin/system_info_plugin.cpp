@@ -1,9 +1,12 @@
-#include "host_hardware.hpp"
+#include "system_info_provider.hpp"
+#include "system_info_command.hpp"
+#include <memory>
 #include "plugins/plugin_logging.hpp"
 
 namespace {
-GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
-    const auto value = cmdSystemInfo(std::string(request->arguments, request->arguments_size));
+std::unique_ptr<GRIM::SystemInfo::Provider> provider;
+GrimResult call(const GrimToolCall*, GrimToolResultWriter* writer, void* context) {
+    const auto value = formatSystemInfo(static_cast<GRIM::SystemInfo::Provider*>(context)->detectHardware());
     GrimToolResult result;
     result.success = value.success;
     result.message = value.message.c_str();
@@ -16,16 +19,17 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
 }
 extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
     static const GrimPluginInfo info{GRIM_API_VERSION, "System Information Plugin", "1.0.0", "GRIM Project",
-        "System information using fresh host hardware detection", GRIM_PERM_SYSTEM};
+        "System information using plugin-owned hardware detection", GRIM_PERM_SYSTEM};
     return &info;
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
-        !api->get_hardware_snapshot || !api->register_hardware_resource) return GRIM_ERROR_API_VERSION_MISMATCH;
-    hostHardware::host = api;
+        !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
     grim::plugin::setLoggingAPI(api);
     GrimToolRegistration tool;
+    provider = std::make_unique<GRIM::SystemInfo::Provider>(api);
     tool.handler = call;
+    tool.user_data = provider.get();
     auto& d = tool.descriptor;
     d.tool_id = d.display_name = "system_info";
     d.version = "1.0.0";
@@ -37,9 +41,12 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     d.required_permissions = GRIM_PERM_SYSTEM;
     d.is_informational = 1;
     const auto registered = api->register_tools(api, &tool, 1);
-    return registered == GRIM_OK ? api->register_hardware_resource(api) : registered;
+    if (registered != GRIM_OK) return registered;
+    try { provider->refresh(); } // Probe failure publishes explicit stale state; publication failure rejects init.
+    catch (...) { return GRIM_ERROR_UNKNOWN; }
+    return GRIM_OK;
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
+    provider.reset();
     grim::plugin::setLoggingAPI(nullptr);
-    hostHardware::host = nullptr;
 }

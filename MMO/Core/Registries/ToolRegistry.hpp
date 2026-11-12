@@ -1,8 +1,8 @@
 // Global lookup and dispatch for provider-owned tools.
 #pragma once
-#include "Descriptors/RegisteredTool.hpp"
+#include "../Descriptors/RegisteredTool.hpp"
 #include "ProviderRegistry.hpp"
-#include "ToolExecutionMode.hpp"
+#include "../ToolExecutionMode.hpp"
 #include <memory>
 #include <mutex>
 #include <optional>

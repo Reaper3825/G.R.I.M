@@ -21,9 +21,10 @@ std::string resourceId(const Application& a) {
 }
 }
 Catalog::Catalog(MMO::ProviderDescriptor owner, std::vector<Backend> backends, Launcher launcher,
-                 MMO::ProviderRegistry& registry)
-    : owner_(std::move(owner)), backends_(std::move(backends)), launcher_(std::move(launcher)), registry_(registry) {
-    if (backends_.size() > 8 || !launcher_) throw std::invalid_argument("Invalid application catalog configuration");
+                 Publisher publish, Current current)
+    : owner_(std::move(owner)), backends_(std::move(backends)), launcher_(std::move(launcher)),
+      publish_(std::move(publish)), current_(std::move(current)) {
+    if (backends_.size() > 8 || !launcher_ || !publish_ || !current_) throw std::invalid_argument("Invalid application catalog configuration");
     std::set<std::string> names;
     for (const auto& b : backends_)
         if (!valid(b.name, 256) || !b.discover || !names.insert(b.name).second)
@@ -82,7 +83,7 @@ void Catalog::refresh() {
             ? old->second.runtime : generation++;
         resources.push_back(resource(id, e));
     }
-    if (!registry_.replaceResources(owner_, "application", resources))
+    if (!publish_(resources))
         throw std::runtime_error("Application provider is no longer current");
     backendSnapshots_ = std::move(snapshots); entries_ = std::move(next);
     nextRuntime_ = generation; errors_ = std::move(errors);
@@ -125,11 +126,7 @@ nlohmann::json Catalog::request(const std::string& operation, const nlohmann::js
     const auto found = entries_.find(id);
     if (found == entries_.end()) throw std::invalid_argument("Unknown application resource; refresh discovery");
     if (operation == "launch") {
-        const auto snapshot = registry_.snapshot();
-        if (std::none_of(snapshot.providers.begin(), snapshot.providers.end(), [&](const auto& group) {
-                const auto& p = group.provider;
-                return p.name == owner_.name && p.instance == owner_.instance;
-            })) throw std::runtime_error("Application provider is no longer current");
+        if (!current_()) throw std::runtime_error("Application provider is no longer current");
         if (!args.contains("runtime_id") || !args.at("runtime_id").is_number_unsigned() ||
             args.at("runtime_id") != found->second.runtime || !args.contains("provider_instance") ||
             args.at("provider_instance") != owner_.instance)

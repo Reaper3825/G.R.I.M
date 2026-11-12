@@ -1,7 +1,7 @@
 // Real DLLs, timer queue, memory rotation, storage, and persistence in a private fixture.
 #include "core/plugin_manager.hpp"
 #include "core/plugin_api_impl.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/commands_timers.hpp"
 #include "memory/unified_memory.hpp"
 #include "memory/memory_buffer_rotation.hpp"

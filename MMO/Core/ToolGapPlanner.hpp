@@ -18,7 +18,7 @@
 //======================================================//
 #pragma once
 
-#include "ToolRegistry.hpp"
+#include "Registries/ToolRegistry.hpp"
 
 #include <cstdint>
 #include <optional>

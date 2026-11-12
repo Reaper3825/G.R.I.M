@@ -5,7 +5,7 @@
 #include "ui_model_panel.hpp"
 #include "overlay_renderer.hpp"
 #include "../core/input_parser.hpp"
-#include "../MMO/Core/ModelRegistry.hpp"
+#include "../MMO/Core/Registries/ModelRegistry.hpp"
 #include "../MMO/Core/ModelLoader.hpp"
 #include "../MMO/Core/ResourceSignal.hpp"
 #include "../resources.hpp"

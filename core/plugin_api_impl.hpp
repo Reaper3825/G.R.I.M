@@ -27,7 +27,7 @@ GrimPluginAPI* createPluginAPI(
     const GrimPluginAPI* replacing = nullptr
 );
 
-// Publish staged tools after successful plugin initialization.
+// Publish the staged provider, tools and initial resources after successful initialization.
 bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr);
 bool commitPluginTools(const std::string& plugin_name);
 // Host lifecycle thread only; never call from inside a plugin callback.

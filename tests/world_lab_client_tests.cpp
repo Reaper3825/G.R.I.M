@@ -1,7 +1,7 @@
 #include "ui/world_lab/textworld_client.hpp"
 #include "ui/world_lab/world_document.hpp"
 #include "ui/world_lab/ui_world_session.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "ui/overlay_renderer.hpp"

@@ -1,6 +1,6 @@
 // Assert the compatibility contract through the real loader and result writer.
 #include "core/plugin_manager.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include <chrono>
 #include <filesystem>

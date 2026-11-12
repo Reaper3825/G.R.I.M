@@ -24,13 +24,15 @@ public:
 
     // Publish a plugin generation and its tools together, including zero-tool providers.
     bool publish(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
-                 const std::string& old_instance = {});
+                 const std::string& old_instance = {},
+                 const std::vector<ResourceDescriptor>& resources = {});
     void retire(const std::string& provider, const std::string& instance);
 
     ProviderRegistrySnapshot snapshot() const;
     bool hasChanged(const ProviderRegistrySnapshot& snapshot) const;
 
-    // Host publication only. Resource changes do not invalidate tool selections.
+    // Resource changes do not invalidate tool selections.
+    static void validateResources(const std::string& kind, const std::vector<ResourceDescriptor>& resources);
     bool publishResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource);
     bool replaceResources(const ProviderDescriptor& provider, const std::string& kind,
                           const std::vector<ResourceDescriptor>& resources);

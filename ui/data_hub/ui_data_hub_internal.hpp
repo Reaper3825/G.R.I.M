@@ -8,7 +8,7 @@
 #include "core/input_parser.hpp"
 #include "logger.hpp"
 #include "resources.hpp"
-#include "MMO/Core/ModelRegistry.hpp"
+#include "MMO/Core/Registries/ModelRegistry.hpp"
 #include "DataCollection/concept_block_canonical.hpp"
 
 #include <nlohmann/json.hpp>

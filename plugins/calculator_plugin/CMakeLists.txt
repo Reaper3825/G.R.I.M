@@ -9,8 +9,8 @@ if(GRIM_CALCULATOR_TESTS)
     enable_testing()
     add_executable(calculator_plugin_tests
         "${GRIM_PLUGIN_ROOT}/tests/calculator_plugin_tests.cpp"
-        "${GRIM_PLUGIN_ROOT}/MMO/Core/ProviderRegistry.cpp"
-        "${GRIM_PLUGIN_ROOT}/MMO/Core/ToolRegistry.cpp")
+        "${GRIM_PLUGIN_ROOT}/MMO/Core/Registries/ProviderRegistry.cpp"
+        "${GRIM_PLUGIN_ROOT}/MMO/Core/Registries/ToolRegistry.cpp")
     target_compile_features(calculator_plugin_tests PRIVATE cxx_std_20)
     target_include_directories(calculator_plugin_tests PRIVATE "${GRIM_PLUGIN_ROOT}"
         "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/include")

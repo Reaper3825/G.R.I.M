@@ -1,6 +1,6 @@
 #include "core/plugin_api_impl.hpp"
 #include "core/plugin_manager.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/commands_core.hpp"
 #include "ui/ui_panel_service.hpp"
 #include <filesystem>
@@ -66,7 +66,7 @@ PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std
 }
 
 void runUIPluginTests(const std::filesystem::path& directory) {
-    static_assert(sizeof(GrimPluginAPI) == offsetof(GrimPluginAPI, ui_panel_service) + 20 * sizeof(void*));
+
     auto* denied = PluginAPI::createPluginAPI("ui-denied", "", 0);
     check(!denied->ui_panel_service(denied, GRIM_UI_LIST, nullptr, 0), "UI permission was not enforced");
     PluginAPI::cleanupPluginContext(denied);

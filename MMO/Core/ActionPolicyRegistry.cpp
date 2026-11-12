@@ -1,5 +1,5 @@
 #include "ActionPolicyRegistry.hpp"
-#include "ToolRegistry.hpp"
+#include "Registries/ToolRegistry.hpp"
 #include "logger.hpp"
 
 #include <algorithm>

@@ -1,17 +1,36 @@
-// Standalone API v3 plugin. No host globals, C++ symbols, or model dependencies.
+// Filesystem provider owns operations, directory state and cleanup.
 #include "core/plugin_api.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <mutex>
+#include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
 namespace {
 namespace fs = std::filesystem;
-fs::path currentDirectory;
-std::mutex directoryMutex;
 enum Operation { Pwd, Cd, Ls, Mkdir, Rm };
-Operation operations[] = {Pwd, Cd, Ls, Mkdir, Rm};
+struct Provider;
+struct OperationContext { Provider* provider; Operation operation; };
+struct Provider {
+    const GrimPluginAPI* api;
+    fs::path currentDirectory = fs::current_path();
+    std::mutex directoryMutex;
+    OperationContext operations[5] = {{this, Pwd}, {this, Cd}, {this, Ls}, {this, Mkdir}, {this, Rm}};
+    explicit Provider(const GrimPluginAPI* value) : api(value) {}
+    bool publishDirectory(const fs::path& directory) const {
+        const auto path = directory.u8string();
+        const auto payload = nlohmann::json::array({{
+            {"resource_id", "working_directory"}, {"kind", "filesystem.directory"},
+            {"name", "Working directory"}, {"runtime_id", uint64_t{1}},
+            {"state", {{"format", "grim-filesystem-directory"}, {"version", 1},
+                {"path", std::string(path.begin(), path.end())}, {"scope", "provider"}}}
+        }}).dump();
+        return api->replace_resources(api, "filesystem.directory", payload.data(), payload.size()) == GRIM_OK;
+    }
+};
+std::unique_ptr<Provider> provider;
 
 GrimResult complete(GrimToolResultWriter* writer, bool success,
                     const std::string& message, const char* error = "ERR_NONE") {
@@ -29,8 +48,11 @@ GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void*
         writer->struct_size != sizeof(*writer) || !writer->complete || !data ||
         (!call->arguments && call->arguments_size)) return GRIM_ERROR_INVALID_PARAM;
     const std::string argument(call->arguments ? call->arguments : "", call->arguments_size);
-    const auto op = *static_cast<Operation*>(data);
-    std::lock_guard lock(directoryMutex);
+    auto& context = *static_cast<OperationContext*>(data);
+    const auto op = context.operation;
+    auto& state = *context.provider;
+    auto& currentDirectory = state.currentDirectory;
+    std::lock_guard lock(state.directoryMutex);
     try {
         // A single raw path may contain spaces. Optional enclosing double quotes
         // are accepted; no shell expansion, flags, or multiple-path parsing.
@@ -57,7 +79,10 @@ GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void*
                 "[FS] Directory does not exist: " + pathText, "ERR_FS_NOT_FOUND");
             if (!fs::is_directory(path)) return complete(writer, false,
                 "[FS] Path is not a directory: " + pathText, "ERR_FS_NOT_DIRECTORY");
-            currentDirectory = fs::canonical(path);
+            auto nextDirectory = fs::canonical(path);
+            if (!state.publishDirectory(nextDirectory)) return complete(writer, false,
+                "[FS] Working directory resource publication rejected", "ERR_FS_RESOURCE");
+            currentDirectory = std::move(nextDirectory);
             return complete(writer, true, "[FS] Changed directory to: " + currentDirectory.string());
         }
         if (op == Mkdir) {
@@ -85,10 +110,11 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
-    if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION)
+    if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
+        !api->register_tools || !api->replace_resources)
         return GRIM_ERROR_API_VERSION_MISMATCH;
     try {
-        currentDirectory = fs::current_path();
+        provider = std::make_unique<Provider>(api);
         const char* ids[] = {"pwd", "cd", "ls", "mkdir", "rm"};
         const char* descriptions[] = {"Show the filesystem plugin's working directory",
             "Change the filesystem plugin's working directory without changing the host process directory",
@@ -112,7 +138,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             tools[i].usage_type = GRIM_TOOL_USAGE_SYSTEM;
             tools[i].short_description = summaries[i];
             tools[i].handler = execute;
-            tools[i].user_data = &operations[i];
+            tools[i].user_data = &provider->operations[i];
             auto& d = tools[i].descriptor;
             d.tool_id = d.display_name = ids[i];
             d.version = "1.0.0";
@@ -132,8 +158,10 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
                 d.parameter_count = 1;
             }
         }
-        return api->register_tools(api, tools, 5);
+        const auto registered = api->register_tools(api, tools, 5);
+        if (registered != GRIM_OK) return registered;
+        return provider->publishDirectory(provider->currentDirectory) ? GRIM_OK : GRIM_ERROR_UNKNOWN;
     } catch (...) { return GRIM_ERROR_UNKNOWN; }
 }
 
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { provider.reset(); }

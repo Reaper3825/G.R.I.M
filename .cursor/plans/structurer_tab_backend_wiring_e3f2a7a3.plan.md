@@ -256,7 +256,7 @@ In the constructor:
 
 ### Model dropdown behavior
 
-Populate from [MMO/Core/ModelRegistry.hpp](MMO/Core/ModelRegistry.hpp):
+Populate from [MMO/Core/Registries/ModelRegistry.hpp](MMO/Core/Registries/ModelRegistry.hpp):
 
 - use `ModelRegistry::instance().getAllModels()`
 - dropdown entries are model ids or names

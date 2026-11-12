@@ -12,8 +12,6 @@
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
-#include "shell_open.hpp"
-#include "applications/application_catalog.hpp"
 #include "aliases.hpp"
 #include "commands/commands_timers.hpp"
 #include "memory/command_memory_services.hpp"
@@ -22,9 +20,7 @@
 #include "ui/ui_panel_service.hpp"
 #include "perception/input_command_service.hpp"
 #include "voice/voice_speak.hpp"
-#include "../MMO/Core/HardwareInventory.hpp"
-#include "../MMO/Core/HardwareInventoryJson.hpp"
-#include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
+#include "../MMO/Core/Registries/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
 #include "../MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "helpers/grim_input.hpp"  // For GRIMInput::parseInput
@@ -62,9 +58,6 @@
     #include <fstream>
     #include <cstdlib>
 #endif
-
-// External globals
-extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
 namespace PluginAPI {
 
@@ -111,11 +104,8 @@ struct PluginContext {
     bool registration_failed = false;
     std::vector<GRIM::MMO::ToolRegistration> pending;
     std::vector<std::string> pendingPanels;
-    bool applicationCatalogRequested = false;
-    std::unique_ptr<GRIM::Applications::Catalog> applicationCatalog;
-    bool hardwareResourceRequested = false; // Immutable after initialization.
-    std::mutex hardwareMutex;
-    nlohmann::json lastHardware = nullptr;
+    std::mutex resourcesMutex;
+    std::map<std::string, GRIM::MMO::ResourceDescriptor> pendingResources;
     std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
         std::make_shared<GRIM::UI::ProviderPanelLease>();
     std::mutex panelRequestsMutex;
@@ -367,48 +357,69 @@ static GrimResult api_register_ui_panel(const GrimPluginAPI* self, const char* i
     }
 }
 
-static GrimResult api_register_application_catalog(const GrimPluginAPI* self) noexcept {
+// Provider-neutral bridge: copied descriptions only; implementation and state stay in the DLL.
+static const char* api_get_provider_identity(const GrimPluginAPI* self) noexcept {
+    try {
+        const auto& owner = pluginContext(self);
+        return allocateString(nlohmann::json{{"name", owner.name}, {"instance", owner.instance},
+                                            {"path", owner.path}}.dump());
+    } catch (...) { return nullptr; }
+}
+static bool api_is_provider_current(const GrimPluginAPI* self) noexcept {
+    try {
+        const auto& owner = pluginContext(self);
+        ActiveCall active(owner.gate, true);
+        if (!active.entered) return false;
+        const auto snapshot = GRIM::MMO::ProviderRegistry::instance().snapshot();
+        return std::any_of(snapshot.providers.begin(), snapshot.providers.end(), [&](const auto& group) {
+            return group.provider.name == owner.name && group.provider.instance == owner.instance;
+        });
+    } catch (...) { return false; }
+}
+static GrimResult api_replace_resources(const GrimPluginAPI* self, const char* kind,
+                                       const char* json, size_t size) noexcept {
     PluginContext* context = nullptr;
     try {
         auto& owner = const_cast<PluginContext&>(pluginContext(self));
         context = &owner;
-        std::lock_guard lock(owner.gate->mutex);
-        if (!owner.gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-        if (!checkPermission(self, GRIM_PERM_SYSTEM) || !checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-            if (owner.staging) owner.registration_failed = true;
-            return GRIM_ERROR_PERMISSION_DENIED;
+        ActiveCall active(owner.gate);
+        if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!json || !size || size > 64 * 1024 * 1024) throw std::invalid_argument("Invalid resource payload");
+        const auto resourceKind = copyText(kind, true, 256);
+        const auto values = nlohmann::json::parse(json, json + size);
+        if (!values.is_array() || values.size() > 10000) throw std::invalid_argument("Invalid resource array");
+        std::vector<GRIM::MMO::ResourceDescriptor> resources;
+        for (const auto& value : values) {
+            GRIM::MMO::ResourceDescriptor resource;
+            resource.resource_id = value.at("resource_id").get<std::string>();
+            resource.kind = value.at("kind").get<std::string>();
+            resource.name = value.at("name").get<std::string>();
+            resource.parent_id = value.value("parent_id", std::string{});
+            if (!value.at("runtime_id").is_number_unsigned()) throw std::invalid_argument("Invalid runtime identity");
+            resource.runtime_id = value.at("runtime_id").get<uint64_t>();
+            resource.state = value.at("state");
+            resources.push_back(std::move(resource));
         }
-        if (!owner.staging) return GRIM_ERROR_UNSUPPORTED;
-        if (owner.applicationCatalogRequested) return GRIM_ERROR_ALREADY_EXISTS;
-        owner.applicationCatalog = std::make_unique<GRIM::Applications::Catalog>(
-            GRIM::MMO::ProviderDescriptor{GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
-            GRIM::Applications::systemBackends(), GRIM::Applications::launchNative);
-        owner.applicationCatalogRequested = true;
-        return GRIM_OK;
+        // Identical validation for staging and live updates.
+        GRIM::MMO::ProviderRegistry::validateResources(resourceKind, resources);
+        std::lock_guard lock(owner.resourcesMutex);
+        if (owner.staging) {
+            auto next = owner.pendingResources;
+            std::erase_if(next, [&](const auto& entry) { return entry.second.kind == resourceKind; });
+            for (const auto& resource : resources)
+                if (!next.emplace(resource.resource_id, resource).second)
+                    throw std::invalid_argument("Resource ID belongs to another kind");
+            if (next.size() > 10000) throw std::invalid_argument("Provider resource limit exceeded");
+            owner.pendingResources.swap(next);
+            return GRIM_OK;
+        }
+        return GRIM::MMO::ProviderRegistry::instance().replaceResources(
+            {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path}, resourceKind, resources)
+            ? GRIM_OK : GRIM_ERROR_PLUGIN_NOT_LOADED;
     } catch (...) {
         if (context && context->staging) context->registration_failed = true;
-        return GRIM_ERROR_UNKNOWN;
+        return GRIM_ERROR_INVALID_PARAM;
     }
-}
-
-static const char* api_application_service(const GrimPluginAPI* self, const char* operation,
-                                          const char* arguments, size_t size) noexcept {
-    try {
-        auto& owner = const_cast<PluginContext&>(pluginContext(self));
-        ActiveCall active(owner.gate, true);
-        if (!active.entered || !owner.applicationCatalog || !operation || size > 65536 ||
-            (size && !arguments) || !checkPermission(self, GRIM_PERM_SYSTEM) ||
-            !checkPermission(self, GRIM_PERM_FILESYSTEM)) return nullptr;
-        const auto op = copyText(operation, true, 32);
-        if (op == "launch" && !checkPermission(self, GRIM_PERM_PROCESS)) return nullptr;
-        nlohmann::json response{{"format", "grim-application-result"}, {"version", 1}, {"success", false}};
-        try {
-            const auto args = size ? nlohmann::json::parse(arguments, arguments + size) : nlohmann::json::object();
-            response["value"] = owner.applicationCatalog->request(op, args);
-            response["success"] = true;
-        } catch (const std::exception& e) { response["error"] = e.what(); }
-        return allocateString(response.dump());
-    } catch (...) { return nullptr; }
 }
 
 static GrimResult api_unregister_command(const GrimPluginAPI* self, const char* command_name) {
@@ -713,130 +724,6 @@ static bool api_is_speaking(const GrimPluginAPI* self) {
 }
 
 // ============================================================================
-// File System Implementation
-// ============================================================================
-
-static GrimFileHandle api_open_file(const GrimPluginAPI* self, const char* path, const char* mode) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return nullptr;
-    }
-    
-    if (!path || !mode) {
-        return nullptr;
-    }
-    
-    FILE* file = fopen(path, mode);
-    return reinterpret_cast<GrimFileHandle>(file);
-}
-
-static GrimResult api_close_file(const GrimPluginAPI* self, GrimFileHandle handle) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return GRIM_ERROR_PERMISSION_DENIED;
-    }
-    
-    if (!handle) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    FILE* file = reinterpret_cast<FILE*>(handle);
-    fclose(file);
-    return GRIM_OK;
-}
-
-static size_t api_read_file(const GrimPluginAPI* self, GrimFileHandle handle, char* buffer, size_t size) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return 0;
-    }
-    
-    if (!handle || !buffer) {
-        return 0;
-    }
-    
-    FILE* file = reinterpret_cast<FILE*>(handle);
-    return fread(buffer, 1, size, file);
-}
-
-static size_t api_write_file(const GrimPluginAPI* self, GrimFileHandle handle, const char* data, size_t size) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return 0;
-    }
-    
-    if (!handle || !data) {
-        return 0;
-    }
-    
-    FILE* file = reinterpret_cast<FILE*>(handle);
-    return fwrite(data, 1, size, file);
-}
-
-static const char* api_read_file_text(const GrimPluginAPI* self, const char* path) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return nullptr;
-    }
-    
-    if (!path) {
-        return nullptr;
-    }
-    
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        return nullptr;
-    }
-    
-    std::string content((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
-    
-    return allocateString(content);
-}
-
-static GrimResult api_write_file_text(const GrimPluginAPI* self, const char* path, const char* content) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return GRIM_ERROR_PERMISSION_DENIED;
-    }
-    
-    if (!path || !content) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    std::ofstream file(path);
-    if (!file.is_open()) {
-        return GRIM_ERROR_UNKNOWN;
-    }
-    
-    file << content;
-    return GRIM_OK;
-}
-
-static bool api_file_exists(const GrimPluginAPI* self, const char* path) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return false;
-    }
-    
-    if (!path) {
-        return false;
-    }
-    
-    return std::filesystem::exists(path);
-}
-
-static GrimResult api_delete_file(const GrimPluginAPI* self, const char* path) {
-    if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-        return GRIM_ERROR_PERMISSION_DENIED;
-    }
-    
-    if (!path) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    if (!std::filesystem::exists(path)) {
-        return GRIM_ERROR_NOT_FOUND;
-    }
-    
-    std::filesystem::remove(path);
-    return GRIM_OK;
-}
-
-// ============================================================================
 // Process Management Implementation
 // ============================================================================
 
@@ -923,118 +810,6 @@ static const char* api_flush_memory_record_if_present(const GrimPluginAPI* self,
     });
 }
 
-static GrimResult api_register_hardware_resource(const GrimPluginAPI* self) noexcept {
-    PluginContext* context = nullptr;
-    try {
-        auto& owner = const_cast<PluginContext&>(pluginContext(self));
-        context = &owner;
-        std::lock_guard lock(owner.gate->mutex);
-        if (!owner.gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-        if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
-            if (owner.staging) owner.registration_failed = true;
-            return GRIM_ERROR_PERMISSION_DENIED;
-        }
-        if (!owner.staging) return GRIM_ERROR_UNSUPPORTED;
-        if (owner.hardwareResourceRequested) return GRIM_ERROR_ALREADY_EXISTS;
-        owner.hardwareResourceRequested = true;
-        return GRIM_OK;
-    } catch (...) {
-        if (context && context->staging) context->registration_failed = true;
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-}
-
-// Caller holds hardwareMutex. The response describes this attempt; resource
-// state retains the last successful capture when this attempt fails.
-static nlohmann::json captureHardware(PluginContext& owner, bool publish) {
-    nlohmann::json response{{"format", "grim-hardware-snapshot"}, {"version", 1},
-        {"hardware", nullptr}, {"error", nullptr}};
-    try {
-        response["hardware"] = GRIM::MMO::hardwareInventoryJson(GRIM::MMO::detectHardware());
-    } catch (const std::exception& error) {
-        response["error"] = {{"kind", "exception"}, {"message", error.what()}};
-    } catch (...) {
-        response["error"] = {{"kind", "unknown"}, {"message", ""}};
-    }
-    if (publish) {
-        if (response["error"].is_null()) owner.lastHardware = response["hardware"];
-        std::vector<GRIM::MMO::ResourceDescriptor> resources;
-        const auto add = [&](const std::string& id, const std::string& component,
-                             const std::string& name, nlohmann::json data) {
-            GRIM::MMO::ResourceDescriptor resource;
-            resource.resource_id = id;
-            resource.kind = "system_info.snapshot";
-            resource.name = name;
-            // Identity includes resource_id; each object has one logical lifetime
-            // within this provider generation, independent of changing readings.
-            resource.runtime_id = 1;
-            resource.state = {{"format", "grim-system-info-resource"}, {"version", 1},
-                {"component", component}, {"data", std::move(data)},
-                {"capture_time_ns", owner.lastHardware.is_null() ? nlohmann::json(nullptr) :
-                    owner.lastHardware.at("capture_time_ns")},
-                {"error", response["error"]}, {"stale", !response["error"].is_null()}};
-            resources.push_back(std::move(resource));
-        };
-        const auto& h = owner.lastHardware;
-        if (h.is_null()) {
-            // Always expose the fixed objects, even if the first probe failed.
-            // Device objects require a successful enumeration.
-            add("system", "system", "System", nullptr);
-            add("cpu", "cpu", "CPU", nullptr);
-            add("memory", "memory", "Memory", nullptr);
-        } else {
-            // Explicit field selection keeps audio and voice/model policy out of
-            // the public objects while preserving the host inventory ABI.
-            add("system", "system", "System", {{"os_name", h.at("os_name")},
-                {"arch", h.at("arch")}, {"wifi_connected", h.at("wifi_connected")},
-                {"gpu_count", h.at("gpu_count")}, {"monitor_count", h.at("monitor_count")},
-                {"desktop", {{"origin_x", h.at("virtual_origin_x")},
-                    {"origin_y", h.at("virtual_origin_y")},
-                    {"width", h.at("virtual_desktop_w")}, {"height", h.at("virtual_desktop_h")}}}});
-            add("cpu", "cpu", "CPU", {{"cpu_cores", h.at("cpu_cores")}});
-            add("memory", "memory", "Memory", {{"ram_total_mb", h.at("ram_total_mb")}});
-            for (const auto& gpu : h.at("gpus")) {
-                const auto index = std::to_string(gpu.at("device_index").get<int>());
-                add("gpu_" + index, "gpu", "GPU " + index + ": " + gpu.at("name").get<std::string>(),
-                    {{"device_index", gpu.at("device_index")}, {"name", gpu.at("name")},
-                     {"vram_mb", gpu.at("vram_mb")}, {"driver_version", gpu.at("driver_version")},
-                     {"has_cuda", gpu.at("has_cuda")}, {"has_metal", gpu.at("has_metal")},
-                     {"has_rocm", gpu.at("has_rocm")}});
-            }
-            size_t index = 0;
-            for (const auto& monitor : h.at("monitors")) {
-                const auto slot = std::to_string(index++);
-                add("monitor_" + slot, "monitor", "Monitor " + slot,
-                    {{"monitor_index", index - 1}, {"x", monitor.at("x")}, {"y", monitor.at("y")},
-                     {"width", monitor.at("width")}, {"height", monitor.at("height")},
-                     {"is_primary", monitor.at("is_primary")}});
-            }
-        }
-        // Replace the whole capture atomically, removing devices no longer present.
-        // Generation checks reject a retired provider's in-flight capture.
-        GRIM::MMO::ProviderRegistry::instance().replaceResources(
-            {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
-            "system_info.snapshot", resources);
-    }
-    return response;
-}
-
-static const char* api_get_hardware_snapshot(const GrimPluginAPI* self) noexcept {
-    try {
-        if (!checkPermission(self, GRIM_PERM_SYSTEM)) return nullptr;
-        auto& owner = const_cast<PluginContext&>(pluginContext(self));
-        ActiveCall active(owner.gate);
-        if (!active.entered) return nullptr;
-        bool publish;
-        {
-            std::lock_guard lock(owner.gate->mutex);
-            publish = owner.hardwareResourceRequested && owner.gate->published;
-        }
-        std::lock_guard lock(owner.hardwareMutex);
-        return allocateString(captureHardware(owner, publish).dump());
-    } catch (...) { return nullptr; }
-}
-
 static const char* api_get_alias_snapshot(const GrimPluginAPI* self, const char* key) noexcept {
     try {
         (void)pluginContext(self);
@@ -1084,40 +859,6 @@ static const char* api_get_user_error_message(const GrimPluginAPI*, const char* 
     if (!code) return nullptr;
     try { return allocateString(ErrorManager::getUserMessage(code)); }
     catch (...) { return nullptr; }
-}
-
-static GrimResult api_open_target(const GrimPluginAPI* self, const char* target, int64_t* native_status) noexcept {
-    if (native_status) *native_status = 0;
-    try {
-        if (!checkPermission(self, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
-        if (!target || !native_status) return GRIM_ERROR_INVALID_PARAM;
-#ifdef _WIN32
-        *native_status = shellOpenTarget(target);
-        return GRIM_OK;
-#else
-        return GRIM_ERROR_UNSUPPORTED;
-#endif
-    } catch (...) { return GRIM_ERROR_UNKNOWN; }
-}
-
-static GrimResult api_launch_app(const GrimPluginAPI* self, const char* app_name) {
-    if (!checkPermission(self, GRIM_PERM_PROCESS)) {
-        return GRIM_ERROR_PERMISSION_DENIED;
-    }
-    
-    if (!app_name) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    // Preserve the previous status-only service without depending on a tool.
-    if (!*app_name) return GRIM_ERROR_UNKNOWN;
-#ifdef _WIN32
-    int64_t nativeStatus = 0;
-    const auto status = api_open_target(self, app_name, &nativeStatus);
-    return status == GRIM_OK && nativeStatus > 32 ? GRIM_OK : GRIM_ERROR_UNKNOWN;
-#else
-    return GRIM_OK; // Preserve the original non-Windows command stub.
-#endif
 }
 
 static GrimResult api_launch_process(const GrimPluginAPI* self, const char* command, const char* args) {
@@ -1353,165 +1094,6 @@ static GrimResult api_kill_process(const GrimPluginAPI* self, const char* proces
 // ============================================================================
 // System Information Implementation
 // ============================================================================
-
-static const char* api_get_system_info(const GrimPluginAPI* self, const char* key) {
-    if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
-        return nullptr;
-    }
-    
-    if (!key) return nullptr;
-    
-    std::string key_str = key;
-    
-    if (key_str == "os") {
-        return allocateString(g_hardwareInventory.os_name);
-    } else if (key_str == "cpu") {
-        return allocateString(std::to_string(g_hardwareInventory.cpu_cores) + " cores");
-    }
-    
-return nullptr;
-}
-
-static uint64_t api_get_memory_usage(const GrimPluginAPI* self) {
-    if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
-        return 0;
-    }
-    
-    #ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS_EX pmc;
-    GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
-    return pmc.WorkingSetSize;
-    #else
-    // Linux implementation - read /proc/self/status
-    std::ifstream status("/proc/self/status");
-    std::string line;
-    
-    while (std::getline(status, line)) {
-        if (line.substr(0, 6) == "VmRSS:") {
-            // Extract the number (in kB)
-            size_t pos = line.find_first_of("0123456789");
-            if (pos != std::string::npos) {
-                uint64_t kb = std::stoull(line.substr(pos));
-                return kb * 1024; // Convert to bytes
-            }
-        }
-    }
-    
-    return 0;
-    #endif
-}
-
-static float api_get_cpu_usage(const GrimPluginAPI* self) {
-    if (!checkPermission(self, GRIM_PERM_SYSTEM)) {
-        return 0.0f;
-    }
-    
-    #ifdef _WIN32
-    static ULARGE_INTEGER lastCPU, lastSysCPU, lastUserCPU;
-    static int numProcessors = 0;
-    static HANDLE process = GetCurrentProcess();
-    static bool initialized = false;
-    
-    if (!initialized) {
-        SYSTEM_INFO sysInfo;
-        GetSystemInfo(&sysInfo);
-        numProcessors = sysInfo.dwNumberOfProcessors;
-        
-        FILETIME ftime, fsys, fuser;
-        GetSystemTimeAsFileTime(&ftime);
-        memcpy(&lastCPU, &ftime, sizeof(FILETIME));
-        
-        GetProcessTimes(process, &ftime, &ftime, &fsys, &fuser);
-        memcpy(&lastSysCPU, &fsys, sizeof(FILETIME));
-        memcpy(&lastUserCPU, &fuser, sizeof(FILETIME));
-        
-        initialized = true;
-        return 0.0f;
-    }
-    
-    FILETIME ftime, fsys, fuser;
-    ULARGE_INTEGER now, sys, user;
-    
-    GetSystemTimeAsFileTime(&ftime);
-    memcpy(&now, &ftime, sizeof(FILETIME));
-    
-    GetProcessTimes(process, &ftime, &ftime, &fsys, &fuser);
-    memcpy(&sys, &fsys, sizeof(FILETIME));
-    memcpy(&user, &fuser, sizeof(FILETIME));
-    
-    double percent = (sys.QuadPart - lastSysCPU.QuadPart) + (user.QuadPart - lastUserCPU.QuadPart);
-    percent /= (now.QuadPart - lastCPU.QuadPart);
-    percent /= numProcessors;
-    
-    lastCPU = now;
-    lastUserCPU = user;
-    lastSysCPU = sys;
-    
-    return static_cast<float>(percent * 100.0);
-    #else
-    // Linux implementation - read /proc/self/stat
-    static unsigned long long last_total_time = 0;
-    static unsigned long long last_process_time = 0;
-    static bool initialized = false;
-    
-    // Get system total time from /proc/stat
-    std::ifstream stat_file("/proc/stat");
-    std::string line;
-    std::getline(stat_file, line);
-    stat_file.close();
-    
-    unsigned long long user, nice, system, idle;
-    sscanf(line.c_str(), "cpu %llu %llu %llu %llu", &user, &nice, &system, &idle);
-    unsigned long long total_time = user + nice + system + idle;
-    
-    // Get process time from /proc/self/stat
-    std::ifstream proc_stat("/proc/self/stat");
-    std::string proc_line;
-    std::getline(proc_stat, proc_line);
-    proc_stat.close();
-    
-    // Parse utime and stime (fields 14 and 15, 1-indexed)
-    unsigned long long utime = 0, stime = 0;
-    int field = 0;
-    size_t pos = 0;
-    
-    // Skip pid field
-    pos = proc_line.find(' ');
-    // Skip comm field (enclosed in parentheses, can contain spaces)
-    pos = proc_line.find(')', pos) + 1;
-    
-    // Parse remaining fields
-    std::istringstream iss(proc_line.substr(pos));
-    std::string token;
-    while (iss >> token && field < 15) {
-        field++;
-        if (field == 12) utime = std::stoull(token);  // 14th field (0-indexed: 12)
-        if (field == 13) stime = std::stoull(token);  // 15th field (0-indexed: 13)
-    }
-    
-    unsigned long long process_time = utime + stime;
-    
-    if (!initialized) {
-        last_total_time = total_time;
-        last_process_time = process_time;
-        initialized = true;
-        return 0.0f;
-    }
-    
-    unsigned long long total_delta = total_time - last_total_time;
-    unsigned long long process_delta = process_time - last_process_time;
-    
-    float percent = 0.0f;
-    if (total_delta > 0) {
-        percent = static_cast<float>(process_delta) / static_cast<float>(total_delta) * 100.0f;
-    }
-    
-    last_total_time = total_time;
-    last_process_time = process_time;
-    
-    return percent;
-    #endif
-}
 
 // ============================================================================
 // Timer Implementation (Stub)
@@ -1762,26 +1344,12 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.stop_tts = api_stop_tts;
     api.is_speaking = api_is_speaking;
     
-    // File System
-    api.open_file = api_open_file;
-    api.close_file = api_close_file;
-    api.read_file = api_read_file;
-    api.write_file = api_write_file;
-    api.read_file_text = api_read_file_text;
-    api.write_file_text = api_write_file_text;
-    api.file_exists = api_file_exists;
-    api.delete_file = api_delete_file;
-    
     // Process Management
-    api.launch_app = api_launch_app;
     api.launch_process = api_launch_process;
     api.is_process_running = api_is_process_running;
     api.kill_process = api_kill_process;
     
     // System Information
-    api.get_system_info = api_get_system_info;
-    api.get_memory_usage = api_get_memory_usage;
-    api.get_cpu_usage = api_get_cpu_usage;
     
     // Timers
     api.create_timer = api_create_timer;
@@ -1800,11 +1368,9 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.string_duplicate = api_string_duplicate;
     api.string_free = api_string_free;
     api.get_user_error_message = api_get_user_error_message;
-    api.open_target = api_open_target;
     api.get_tool_snapshot = api_get_tool_snapshot;
     api.get_alias_snapshot = api_get_alias_snapshot;
     api.refresh_aliases = api_refresh_aliases;
-    api.get_hardware_snapshot = api_get_hardware_snapshot;
     api.schedule_user_timer = api_schedule_user_timer;
     api.create_local_calendar = api_create_local_calendar;
     api.schedule_service = api_schedule_service;
@@ -1816,9 +1382,9 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.ui_panel_service = api_ui_panel_service;
     api.input_service = api_input_service;
     api.register_ui_panel = api_register_ui_panel;
-    api.register_application_catalog = api_register_application_catalog;
-    api.register_hardware_resource = api_register_hardware_resource;
-    api.application_service = api_application_service;
+    api.get_provider_identity = api_get_provider_identity;
+    api.replace_resources = api_replace_resources;
+    api.is_provider_current = api_is_provider_current;
     
     auto* result = &api;
     auto instance = context->instance;
@@ -1844,29 +1410,17 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
     // including from listeners. Late registrations must no longer be staged.
     owner.staging = false;
     bool committed;
+    std::vector<GRIM::MMO::ResourceDescriptor> resources;
+    for (const auto& [id, resource] : owner.pendingResources) resources.push_back(resource);
     try {
         committed = providers.publish(
             {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
-            owner.pending, replacing ? pluginContext(replacing).instance : std::string{});
+            owner.pending, replacing ? pluginContext(replacing).instance : std::string{}, resources);
     } catch (...) {
         owner.staging = true;
         throw;
     }
     if (!committed) { owner.staging = true; return false; }
-    if (owner.hardwareResourceRequested) {
-        // Only a committed provider can own a resource. A capture failure is
-        // represented in state and must not roll back an already committed DLL.
-        try {
-            std::lock_guard lock(owner.hardwareMutex);
-            captureHardware(owner, true);
-        } catch (const std::exception& e) { LOG_ERROR("Hardware", e.what()); }
-    }
-    if (owner.applicationCatalog) {
-        // Discovery is host-only and starts after successful provider publication.
-        // Failure leaves the provider usable for explicit refresh; never rolls back a committed DLL.
-        try { owner.applicationCatalog->request("refresh", nlohmann::json::object()); }
-        catch (const std::exception& e) { LOG_ERROR("Applications", e.what()); }
-    }
     // Queue retirement before replacement creation. Generation-specific leases
     // prevent a later shutdown of the old DLL from removing its replacement.
     if (replacing) GRIM::UI::retireProviderPanels(pluginContext(replacing).panelLease);
@@ -1878,6 +1432,7 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
         old.gate->accepting = false;
     }
     owner.pending.clear();
+    owner.pendingResources.clear();
     owner.staging = false;
     { std::lock_guard lock(owner.gate->mutex); owner.gate->published = true; }
     return true;

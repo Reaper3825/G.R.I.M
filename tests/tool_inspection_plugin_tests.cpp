@@ -1,6 +1,6 @@
 #include "core/plugin_manager.hpp"
 #include "core/plugin_api_impl.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "commands/command_result.hpp"
 #include <chrono>

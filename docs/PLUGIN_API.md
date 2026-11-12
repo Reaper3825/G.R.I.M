@@ -1,6 +1,13 @@
-# G.R.I.M Plugin API v4
+# G.R.I.M Plugin API v6
 
-API version: **4.0.0**.
+API version: **6.0.0**.
+
+Version 5 moved application handling into its plugin and added generic resource
+publication. Version 6 moves system information handling into its plugin and
+removes host hardware services and unused system/CPU/memory query entry points.
+Both are breaking changes: older DLLs must be rebuilt. Retired API fields are
+removed entirely; the v6 table does not preserve their former offsets. See [application ownership](APPLICATION_DISCOVERY.md)
+and [system information ownership](SYSTEM_INFO_RESOURCES.md).
 
 The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
@@ -698,50 +705,16 @@ store/scanner fixture. They cover permissions, snapshots, lookup, and refresh
 normal/busy/failed/exception outcomes without scanning application folders or
 writing the real alias database.
 
-### System information migration (v3.4)
+### System information provider (v6)
 
-`system_info_plugin` supplies `system_info`, retaining its original output,
-ignored arguments, result/error fields, voice, color, GPU fallback behavior,
-and CUDA/Metal/ROCm reporting. The host no longer registers the command.
-
-API v3.4 consumes one reserved slot without changing table size or earlier
-service offsets. At the time, existing v3.0-v3.3 plugin binaries remained supported. New
-plugins must check v3.4 before reading `get_hardware_snapshot(self)`.
-
-This service requires `GRIM_PERM_SYSTEM` and calls the existing `detectHardware()`
-on each request, matching the former command rather than substituting the cached
-startup inventory. Since v3.19, the plugin opts into hardware objects and the
-host captures once after successful provider commit. Unload performs no detection;
-requesting a fresh snapshot does not replace `g_hardwareInventory`. Existing
-`get_system_info` behavior remains unchanged.
-
-The service returns host-owned JSON, released with `string_free`:
-
-```json
-{"format":"grim-hardware-snapshot","version":1,"hardware":{},"error":null}
-```
-
-The `hardware` object carries all HardwareInventory data: OS/architecture,
-CPU/RAM, GPU records/count and backend flags, monitor records/count and virtual
-desktop geometry, audio devices, Wi-Fi state, voice backend flags, suggested
-Whisper model, and `capture_time_ns`. The timestamp is monotonic nanoseconds in
-the host steady clock's local epoch, not a calendar timestamp. The codec lives in
-`MMO/Core/HardwareInventoryJson.hpp`; no C++ object or detector symbol crosses
-the ABI.
-
-Permission denial or API failure returns null. A detector exception produces
-`hardware:null` and `error:{kind:"exception",message:"..."}`; a nonstandard
-exception uses `kind:"unknown"`. The plugin preserves the original dispatch
-exception response, including standard exception text and the unknown-error
-fallback.
-
-The optional `-SystemInfoPluginDirectory` test argument exercises the real DLL,
-API, registry, and result writer against a controlled hardware detector. Coverage
-includes permissions, complete topology and clock round trips, fresh detection
-per command, independence from startup state, GPU/no-GPU/unknown-GPU formatting,
-both exception paths, and folder removal. It performs no actual hardware probe
-or application/model execution. See the
-[plugin instructions](../plugins/README.md#system-information-plugin).
+`system_info_plugin` supplies the `system_info` tool and its hardware resources.
+Its DLL owns detection, last-good snapshot state, resource construction, command
+formatting and cleanup. It stages resources with tools during initialization and
+publishes subsequent batches through the generic `replace_resources` API.
+There is no `get_hardware_snapshot` or `register_hardware_resource` host service.
+The historical v3.4 forwarding contract and v3.19 opt-in contract are removed.
+See [System Information resources](SYSTEM_INFO_RESOURCES.md) for schemas,
+failure handling, native detection and lifecycle validation.
 
 ### User timer and manual memory migration (v3.5)
 
@@ -969,31 +942,14 @@ shutdown withdraw bindings. `parent_id` is reserved and must currently be empty.
 
 Each migrated panel publishes `panel:<stable-key>` of kind `ui.panel`.
 
-## Application catalog (v3.18)
+## Application provider (v5+)
 
-Two reserved function slots become `register_application_catalog` and
-`application_service`; table size and previous field offsets remain unchanged.
-Registration requires SYSTEM + FILESYSTEM and is initialization-only. The host
-creates a catalog for the calling provider and scans only after successful commit.
-The service accepts list/refresh/inspect/launch plus a JSON object (maximum 64 KiB),
-requires a published, accepting provider with a registered catalog, and returns
-host-owned `grim-application-result` v1 JSON released with `string_free`.
-Launch additionally requires PROCESS. Ownership is inferred from the API object;
-callers cannot nominate another provider. Host active-call accounting protects
-service lifetime during unload. Registry generation checks prevent stale publication.
-See [Application discovery](APPLICATION_DISCOVERY.md) for schemas, native backend
-coverage, generation guards and refresh behavior.
+Application discovery, catalog state, and launch handling live in the application
+plugin. The old `register_application_catalog` and `application_service` host
+services are removed. Initial tools and resources commit atomically; subsequent
+updates use generic resource publication. See [Application discovery](APPLICATION_DISCOVERY.md).
 
-## Hardware resource opt-in (v3.19)
+## Hardware resources (v6)
 
-`register_hardware_resource(self)` requires SYSTEM and is initialization-only.
-After provider commit the host publishes read-only `system_info.snapshot`
-objects: `system` (including Wi-Fi), `cpu`, `memory`, one `gpu_<device_index>` per
-GPU, and one `monitor_<index>` per monitor. Their `grim-system-info-resource` v1
-states contain component data and shared capture/error/stale metadata, excluding
-audio devices, voice backend flags, and Whisper suggestions. Later
-`get_hardware_snapshot` calls from that provider atomically refresh the batch,
-retaining the last good objects with explicit stale/error state on failure.
-Unload/replacement removes the owning generation's objects. The new
-function uses one reserved pointer slot without changing table size or prior
-offsets. See [System Information resources](SYSTEM_INFO_RESOURCES.md).
+Hardware resources use generic publication. The plugin owns its snapshots and
+refresh behavior. See [System Information resources](SYSTEM_INFO_RESOURCES.md).

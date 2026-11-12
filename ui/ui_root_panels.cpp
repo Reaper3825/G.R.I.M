@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
-#include "MMO/Core/ProviderRegistry.hpp"
+#include "MMO/Core/Registries/ProviderRegistry.hpp"
 
 void UIRoot::bindPanelResource(const std::string& key, uint64_t runtime,
                               const std::string& provider, const std::string& instance) {

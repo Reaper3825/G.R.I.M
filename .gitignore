@@ -289,6 +289,9 @@ cache/geospatial/*.sqlite-wal
 !/plugins/application_plugin/application_plugin.cpp
 !/plugins/application_plugin/application_tools.cpp
 !/plugins/application_plugin/application_tools.hpp
+!/plugins/application_plugin/*.cpp
+!/plugins/application_plugin/*.hpp
+!/plugins/application_plugin/*.mm
 !/plugins/tool_inspection_plugin/
 /plugins/tool_inspection_plugin/*
 !/plugins/tool_inspection_plugin/CMakeLists.txt
@@ -306,7 +309,10 @@ cache/geospatial/*.sqlite-wal
 !/plugins/system_info_plugin/CMakeLists.txt
 !/plugins/system_info_plugin/system_info_plugin.cpp
 !/plugins/system_info_plugin/system_info_command.cpp
-!/plugins/system_info_plugin/host_hardware.hpp
+!/plugins/system_info_plugin/system_info_command.hpp
+!/plugins/system_info_plugin/system_info_provider.hpp
+!/plugins/system_info_plugin/system_info_provider.cpp
+!/plugins/system_info_plugin/hardware_detection.cpp
 !/plugins/runtime_service_client.hpp
 !/plugins/timers_plugin/
 /plugins/timers_plugin/*

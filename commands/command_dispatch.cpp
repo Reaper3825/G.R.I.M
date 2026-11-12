@@ -1,5 +1,5 @@
 #include "commands_core.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 
 // Only explicitly selected registered tools execute here. Intent and policy
 // selection remain the caller's responsibility.

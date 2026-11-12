@@ -2,7 +2,7 @@
 #include "core/plugin_manager.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "commands/commands_core.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>

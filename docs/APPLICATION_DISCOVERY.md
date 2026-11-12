@@ -1,16 +1,19 @@
 # Application discovery and provider resources
 
-The Application plugin opts into a host-owned catalog during initialization.
-After successful provider commit, the host scans applications and publishes
-`application` resources owned by that exact plugin generation. Failed plugin
-initialization performs no scan or publication. Unload/replacement removes the
-generation's resources through the existing registry lifecycle.
+The Application plugin owns its catalog, discovery backends, launch handling and
+private state. Initialization scans and stages copied `application` resource
+records through the generic provider API. The framework publishes the provider,
+tools and initial resources in one registry transaction. Failed initialization
+may have scanned, but publishes nothing and destroys the candidate catalog.
+Unload/replacement withdraws that generation, drains active callbacks, destroys
+its catalog through plugin shutdown, then unloads the DLL.
 
 ## Organization
 
-- `core/applications/application_catalog.*`: common records, backend composition,
+- `plugins/application_plugin/application_catalog.*`: common records, backend composition,
   identity deduplication, generation tracking, atomic resource publication and
-  guarded operations. No OS discovery details or plugin callbacks.
+  guarded operations. Publication is an injected callback; no registry singleton
+  or host implementation is linked into the plugin.
 - `application_backends.cpp`: backend assembly and the existing cached alias adapter.
 - `application_backend_windows.cpp`: Windows Shell Applications folder enumeration
   with `SHGetKnownFolderItem(FOLDERID_AppsFolder)` and `IEnumShellItems`. Includes
@@ -24,12 +27,15 @@ generation's resources through the existing registry lifecycle.
 - `application_backend_macos.mm`: application bundles in standard per-user,
   system and network application directories, with NSBundle identity and
   NSWorkspace/Launch Services activation.
-- `plugins/application_plugin/application_tools.*`: tool contracts and host API
-  forwarding. Existing raw-text `open` and `search` behavior remains compatible.
+- `plugins/application_plugin/application_tools.*`: tool contracts and direct calls
+  into the plugin-owned catalog. Existing raw-text `open` and `search` behavior remains compatible.
 
 No third-party discovery package is required. A future appcatalog or other
 scanner adapter can implement `Backend` without changing resource consumers.
-Backends and launch dispatch are host-owned; do not retain DLL callbacks in them.
+All files above live under `plugins/application_plugin`. Its native discovery and
+launch implementations are compiled into the DLL, never into the host. Shared
+alias configuration and error text are copied from framework services; their
+interpretation and application handling remain in the plugin.
 
 ## Resource identity and refresh
 
@@ -51,7 +57,7 @@ not look like uninstallations. The merged resource batch replaces only the
 current provider's `application` kind in one registry transaction. Other resource
 kinds are preserved. Stale generations cannot republish.
 
-Discovery runs on provider commit and explicit `applications.refresh`; there is
+Discovery runs during staged initialization and explicit `applications.refresh`; there is
 no filesystem watcher or periodic scanning yet. Calls are synchronous and serialized
 per catalog. The alias adapter reads existing cached aliases, filters to existing
 absolute Windows `.exe`/`.lnk` files and does not trigger the old directory scanner.
@@ -100,3 +106,25 @@ Platform references:
 - https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderitem
 - https://specifications.freedesktop.org/desktop-entry/latest-single/
 - https://developer.apple.com/documentation/appkit/nsworkspace
+
+## Generic publication boundary (API v5.0)
+
+`get_provider_identity` returns the framework-assigned name, generation and path.
+`replace_resources` copies a JSON array and atomically replaces one resource kind
+owned by the calling API context; an empty array removes it. Initial calls are
+serialized on the lifecycle thread and staged alongside tools. Live updates are
+serialized and validated, and stale generations cannot update another generation.
+Resource IDs must be unique across kinds within a provider. Resource-only
+providers are supported. Payloads are bounded to 64 MiB and 10,000 resources;
+malformed staged registration rejects the entire candidate.
+
+`is_provider_current` permits the plugin to reject stale launch requests. The
+existing host callback gate protects DLL lifetime; the plugin additionally checks
+observed provider instance and runtime identity before invoking its native launcher.
+
+The removed `launch_app`, `open_target`, `register_application_catalog` and
+`application_service` API entries and their retired layout slots are removed.
+The current v6 table does not preserve their old offsets. Older DLLs are rejected
+before initialization. Rebuild plugins
+against the matching SDK when deploying a rebuilt host. No host runtime or
+watched-folder deployment is part of this migration's tests.

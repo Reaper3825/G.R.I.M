@@ -1,5 +1,7 @@
 #pragma once
-#include "MMO/Core/ProviderRegistry.hpp"
+#include "MMO/Core/Descriptors/ProviderDescriptor.hpp"
+#include "MMO/Core/Descriptors/ResourceDescriptor.hpp"
+#include <vector>
 #include <functional>
 #include <mutex>
 #include <map>
@@ -11,21 +13,24 @@ struct Application {
     std::string launchKind, launchTarget, icon;
     bool operator==(const Application&) const = default;
 };
-// Backends are host-owned. A failed scan must throw: its last good snapshot is retained.
+// Backends are plugin-owned. A failed scan must throw: its last good snapshot is retained.
 struct Backend {
     std::string name;
     std::function<std::vector<Application>()> discover;
 };
 using Launcher = std::function<void(const Application&)>;
-std::vector<Backend> systemBackends();
+using AliasSource = std::function<std::map<std::string, std::string>()>;
+std::vector<Backend> systemBackends(AliasSource aliases);
 Backend nativeBackend();
 void launchNative(const Application& application);
 
-// Serializes refresh and launch, owns copied data only, never plugin callbacks.
+// Plugin-owned state. The framework receives copied resource descriptions only.
 class Catalog {
 public:
+    using Publisher = std::function<bool(const std::vector<MMO::ResourceDescriptor>&)>;
+    using Current = std::function<bool()>;
     Catalog(MMO::ProviderDescriptor owner, std::vector<Backend> backends, Launcher launcher,
-            MMO::ProviderRegistry& registry = MMO::ProviderRegistry::instance());
+            Publisher publish, Current current);
     nlohmann::json request(const std::string& operation, const nlohmann::json& arguments);
 private:
     struct Entry { Application app; std::vector<std::string> sources; uint64_t runtime = 0; };
@@ -35,7 +40,8 @@ private:
     MMO::ProviderDescriptor owner_;
     std::vector<Backend> backends_;
     Launcher launcher_;
-    MMO::ProviderRegistry& registry_;
+    Publisher publish_;
+    Current current_;
     std::mutex mutex_;
     std::map<std::string, std::vector<Application>> backendSnapshots_;
     std::map<std::string, Entry> entries_;

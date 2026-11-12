@@ -1,5 +1,5 @@
 #pragma once
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 

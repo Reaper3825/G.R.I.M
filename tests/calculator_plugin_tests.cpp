@@ -1,5 +1,5 @@
 #include "core/plugin_api.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include <nlohmann/json.hpp>
 #include <iostream>

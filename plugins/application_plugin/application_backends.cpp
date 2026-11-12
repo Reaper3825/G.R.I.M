@@ -1,16 +1,14 @@
 #include "application_catalog.hpp"
-#include "aliases.hpp"
 #include <filesystem>
 #include <cctype>
 
 namespace GRIM::Applications {
-std::vector<Backend> systemBackends() {
-    return {nativeBackend(), {"legacy-aliases", [] {
+std::vector<Backend> systemBackends(AliasSource aliases) {
+    return {nativeBackend(), {"legacy-aliases", [aliases = std::move(aliases)] {
         std::vector<Application> result;
 #ifdef _WIN32
-        auto aliases = aliases::getAll();
-        // Deterministic precedence if multiple names point to exactly the same file.
-        std::map<std::string, std::string> ordered(aliases.begin(), aliases.end());
+        // The plugin interprets a copied shared alias configuration snapshot.
+        const auto ordered = aliases();
         for (const auto& [name, target] : ordered) {
             const auto path = std::filesystem::path(std::u8string(target.begin(), target.end()));
             std::error_code error;

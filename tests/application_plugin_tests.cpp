@@ -1,79 +1,21 @@
 #include "core/plugin_manager.hpp"
 #include "core/plugin_api_impl.hpp"
-#include "core/shell_open.hpp"
-#include "core/applications/application_catalog.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "error_manager.hpp"
 #include <chrono>
-#include <cstddef>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
 
-// Only the OS primitive and configurable error catalog are replaced. The DLL,
-// loader, API permission/ownership handling, registry, and result writer are real.
-namespace {
-std::string lastTarget, errorPrefix = "configured:";
-int64_t nativeStatus = 33;
-int launches = 0;
-int applicationLaunches = 0;
-int discoveryCalls = 0;
-}
-namespace GRIM::Applications {
-Backend nativeBackend() { return {"fixture", [] { ++discoveryCalls; return std::vector<Application>{{"fixture", "editor", "Test editor", "fixture", "editor", ""}}; }}; }
-void launchNative(const Application&) { ++applicationLaunches; }
-}
-int64_t shellOpenTarget(const std::string& target) { lastTarget = target; ++launches; return nativeStatus; }
+// Native discovery and launch fixtures live inside the DLL. The host supplies no application implementation.
+namespace { std::string errorPrefix = "configured:"; }
 std::string ErrorManager::getUserMessage(const std::string& code) { return errorPrefix + code; }
-
-// v3.1 consumes two trailing reserved pointers, preserving v3.0 table size.
-static_assert(sizeof(GrimPluginAPI) == offsetof(GrimPluginAPI, get_user_error_message) + 32 * sizeof(void*));
 
 void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     namespace fs = std::filesystem;
     const auto check = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
     auto& registry = GRIM::MMO::ToolRegistry::instance();
     const auto baseline = registry.toolCount();
-    auto* denied = PluginAPI::createPluginAPI("launch-denied", "", 0);
-    int64_t status = -1;
-    const auto beforeDenied = launches;
-    check(denied->register_application_catalog(denied) == GRIM_ERROR_PERMISSION_DENIED, "discovery registration bypassed permission");
-    check(!denied->application_service(denied, "refresh", "{}", 2), "discovery service bypassed permission");
-    check(denied->open_target(denied, "fixture", &status) == GRIM_ERROR_PERMISSION_DENIED && status == 0 && launches == beforeDenied,
-          "open_target bypassed PROCESS permission");
-    check(denied->launch_app(denied, "fixture") == GRIM_ERROR_PERMISSION_DENIED, "Legacy launch permission changed");
-    const char* error = denied->get_user_error_message(denied, "ERR_APP_NO_ARGUMENT");
-    check(error && std::string(error) == "configured:ERR_APP_NO_ARGUMENT", "Host error lookup not copied");
-    denied->string_free(denied, error);
-    check(denied->get_user_error_message(denied, nullptr) == nullptr, "Null error code accepted");
-    PluginAPI::cleanupPluginContext(denied);
-    auto* allowed = PluginAPI::createPluginAPI("launch-allowed", "", GRIM_PERM_PROCESS);
-    check(allowed->open_target(allowed, nullptr, &status) == GRIM_ERROR_INVALID_PARAM &&
-          allowed->open_target(allowed, "fixture", nullptr) == GRIM_ERROR_INVALID_PARAM, "Invalid native launch parameters accepted");
-    nativeStatus = 32;
-    check(allowed->launch_app(allowed, "fixture") == GRIM_ERROR_UNKNOWN, "Legacy launch failure changed");
-    nativeStatus = 33;
-    check(allowed->launch_app(allowed, "fixture") == GRIM_OK, "Legacy launch success changed");
-    PluginAPI::cleanupPluginContext(allowed);
-
-    auto* discoveryOnly = PluginAPI::createPluginAPI("discovery-only", "", GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM, true);
-    const auto beforeDiscovery = discoveryCalls;
-    check(discoveryOnly->register_application_catalog(discoveryOnly) == GRIM_OK, "Cannot stage application catalog");
-    check(discoveryCalls == beforeDiscovery && !discoveryOnly->application_service(discoveryOnly, "list", "{}", 2),
-          "Staged catalog scanned or served before commit");
-    check(PluginAPI::commitPluginTools(discoveryOnly), "Catalog provider commit failed");
-    check(discoveryCalls == beforeDiscovery + 1, "Commit did not discover applications");
-    check(!discoveryOnly->application_service(discoveryOnly, "launch", "{}", 2), "Launch bypassed PROCESS permission");
-    PluginAPI::beginPluginShutdown(discoveryOnly);
-    check(!discoveryOnly->application_service(discoveryOnly, "refresh", "{}", 2), "Retired catalog served a refresh");
-    PluginAPI::cleanupPluginContext(discoveryOnly);
-
-    auto* abandoned = PluginAPI::createPluginAPI("abandoned-catalog", "", GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM, true);
-    check(abandoned->register_application_catalog(abandoned) == GRIM_OK, "Cannot stage abandoned catalog");
-    const auto beforeAbandon = discoveryCalls;
-    PluginAPI::cleanupPluginContext(abandoned);
-    check(discoveryCalls == beforeAbandon, "Failed initialization scanned applications");
-
     const auto folder = fs::temp_directory_path() / ("grim-application-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check(fs::create_directory(folder), "Cannot create application test folder");
@@ -97,9 +39,9 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     const auto applicationId = app.at("resource_id");
     check(registry.invoke("applications.inspect", nlohmann::json{{"resource_id", applicationId}}.dump()).success, "Application inspection failed");
     auto launchArgs = nlohmann::json{{"resource_id", applicationId}, {"provider_instance", app.at("provider_instance")}, {"runtime_id", app.at("runtime_id")}};
-    check(registry.invoke("applications.launch", launchArgs.dump()).success && applicationLaunches == 1, "Application launch service failed");
+    check(registry.invoke("applications.launch", launchArgs.dump()).success, "Plugin application launch failed");
     launchArgs["provider_instance"] = "retired";
-    check(!registry.invoke("applications.launch", launchArgs.dump()).success && applicationLaunches == 1, "Stale application reached launcher");
+    check(!registry.invoke("applications.launch", launchArgs.dump()).success, "Stale application reached launcher");
     check(registry.invoke("applications.refresh", "{}").success, "Application refresh failed");
     check(!registry.invoke("applications.inspect", "{}").success, "Malformed inspect accepted");
     for (const auto* id : {"open", "search"}) {
@@ -117,26 +59,32 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
               r.voice == voice && r.color.toUInt() == color.toUInt() && r.structuredOutputJson.empty(),
               "Application result differs from former built-in behavior");
     };
-    const auto beforeEmpty = launches;
     matches(result("open", ""), false, "configured:ERR_APP_NO_ARGUMENT", "ERR_APP_NO_ARGUMENT", "error", "Missing application name", Colors::Red);
     matches(result("search", " \t\r\n"), false, "configured:ERR_WEB_NO_ARGUMENT", "ERR_WEB_NO_ARGUMENT", "error", "No search query", Colors::Red);
-    check(launches == beforeEmpty, "Empty input attempted a launch");
     matches(result("open", "  C:/test folder/app.exe  "), true, "[App] Launched:   C:/test folder/app.exe  ",
         "ERR_NONE", "routine", "Opening   C:/test folder/app.exe  ", Colors::Green);
-    check(lastTarget == "  C:/test folder/app.exe  ", "open trimmed or rewrote its argument");
     matches(result("search", "  Mixed Case & stuff\t"), true, "[Web] Searching: Mixed Case & stuff",
         "ERR_NONE", "routine", "Searching web for Mixed Case & stuff", Colors::Cyan);
-    check(lastTarget == "https://www.google.com/search?q=Mixed Case & stuff", "Search URL or trimming changed");
-    nativeStatus = 32;
     errorPrefix = "updated:";
     matches(result("open", "missing"), false, "updated:ERR_APP_LAUNCH_FAILED: missing", "ERR_APP_LAUNCH_FAILED", "error", "Failed to open missing", Colors::Red);
     matches(result("search", "  query  "), false, "updated:ERR_WEB_OPEN_FAILED: query", "ERR_WEB_OPEN_FAILED", "error", "Web search failed", Colors::Red);
-    nativeStatus = 33;
     errorPrefix = "configured:";
+    // Reload the same implementation into a new DLL generation; old observed identities must fail.
+    fs::last_write_time(folder / "application_plugin.dll",
+        fs::last_write_time(folder / "application_plugin.dll") + std::chrono::seconds(2));
+    PluginManager::checkForHotReload();
+    const auto reloaded = nlohmann::json::parse(registry.invoke("applications.list", "{}").structuredOutputJson)
+        .at("value").at("applications").at(0);
+    check(reloaded.at("provider_instance") != app.at("provider_instance"), "Application DLL did not reload");
+    launchArgs["provider_instance"] = app.at("provider_instance");
+    check(!registry.invoke("applications.launch", launchArgs.dump()).success, "Old observation launched after reload");
+    launchArgs["provider_instance"] = reloaded.at("provider_instance");
+    launchArgs["runtime_id"] = reloaded.at("runtime_id");
+    check(registry.invoke("applications.launch", launchArgs.dump()).success, "Replacement lost its own catalog");
     fs::remove(folder / "application_plugin.dll");
     PluginManager::checkForHotReload();
     for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
         check(group.provider.name != "Application Plugin", "DLL removal retained the application provider");
     check(registry.toolCount() == baseline && !registry.isRegistered("open") && !registry.isRegistered("search"), "DLL removal retained application tools");
-    std::cout << "Application plugin exact results, native launch boundaries, permissions, and removal tests passed\n";
+    std::cout << "Application plugin results, DLL-owned native handling, reload identity and removal tests passed\n";
 }

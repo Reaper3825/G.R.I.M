@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v3.18
+// G.R.I.M Plugin API v7.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 4
+#define GRIM_API_VERSION_MAJOR 7
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -50,7 +50,6 @@
 typedef void* GrimHandle;
 typedef void* GrimEventHandle;
 typedef void* GrimMemoryHandle;
-typedef void* GrimFileHandle;
 typedef void* GrimTimerHandle;
 
 // Result codes
@@ -300,33 +299,11 @@ typedef struct GrimPluginAPI {
     bool (*is_speaking)(const GrimPluginAPI* self);
     
     // ========================================================================
-    // File System API (requires GRIM_PERM_FILESYSTEM)
-    // ========================================================================
-    GrimFileHandle (*open_file)(const GrimPluginAPI* self, const char* path, const char* mode); // "r", "w", "a", etc.
-    GrimResult (*close_file)(const GrimPluginAPI* self, GrimFileHandle handle);
-    size_t (*read_file)(const GrimPluginAPI* self, GrimFileHandle handle, char* buffer, size_t size);
-    size_t (*write_file)(const GrimPluginAPI* self, GrimFileHandle handle, const char* data, size_t size);
-    
-    // High-level file operations
-    const char* (*read_file_text)(const GrimPluginAPI* self, const char* path);  // Returns entire file as string
-    GrimResult (*write_file_text)(const GrimPluginAPI* self, const char* path, const char* content);
-    bool (*file_exists)(const GrimPluginAPI* self, const char* path);
-    GrimResult (*delete_file)(const GrimPluginAPI* self, const char* path);
-    
-    // ========================================================================
     // Process Management (requires GRIM_PERM_PROCESS)
     // ========================================================================
-    GrimResult (*launch_app)(const GrimPluginAPI* self, const char* app_name);
     GrimResult (*launch_process)(const GrimPluginAPI* self, const char* command, const char* args);
     bool (*is_process_running)(const GrimPluginAPI* self, const char* process_name);
     GrimResult (*kill_process)(const GrimPluginAPI* self, const char* process_name);
-    
-    // ========================================================================
-    // System Information (requires GRIM_PERM_SYSTEM)
-    // ========================================================================
-    const char* (*get_system_info)(const GrimPluginAPI* self, const char* key);  // "os", "cpu", "memory", "disk", etc.
-    uint64_t (*get_memory_usage)(const GrimPluginAPI* self);  // Returns bytes
-    float (*get_cpu_usage)(const GrimPluginAPI* self);        // Returns 0.0-100.0
     
     // ========================================================================
     // Timer & Scheduling
@@ -355,13 +332,8 @@ typedef struct GrimPluginAPI {
     const char* (*string_duplicate)(const GrimPluginAPI* self, const char* str);
     void (*string_free)(const GrimPluginAPI* self, const char* str);
     
-    // v3.1: consumes two reserved slots; earlier fields and table size unchanged.
     // Returns a host-owned string; release with string_free. Null on failure.
     const char* (*get_user_error_message)(const GrimPluginAPI* self, const char* code);
-    // Requires PROCESS. On Windows, returns the ShellExecute status unchanged;
-    // native_status > 32 means success. GRIM_OK means a native status was obtained.
-    // Other platforms return GRIM_ERROR_UNSUPPORTED. No command dispatch occurs.
-    GrimResult (*open_target)(const GrimPluginAPI* self, const char* target, int64_t* native_status);
     // v3.2: host-owned JSON metadata snapshot, released with string_free.
     // Null tool_id returns all tools in registry order; otherwise resolves the
     // canonical ID, display name, or alias. Missing tools produce an empty array.
@@ -376,12 +348,6 @@ typedef struct GrimPluginAPI {
     // Requires FILESYSTEM. Calls the existing synchronous host refresh. The JSON
     // records normal return vs exception; legacy commands ignore returned status.
     const char* (*refresh_aliases)(const GrimPluginAPI* self);
-    // v3.4: SYSTEM permission; invokes the existing detector on each call.
-    // Host-owned JSON {format:"grim-hardware-snapshot",version:1,hardware:...,
-    // error:null|{kind,message}}. Release with string_free. Null = API failure
-    // or denied permission. The cached startup inventory is not modified.
-    // v3.19: also refreshes the caller's opted-in, published hardware objects.
-    const char* (*get_hardware_snapshot)(const GrimPluginAPI* self);
     // v3.5: host-owned user timer queue (SYSTEM) and manual memory services
     // (MEMORY). JSON envelope: {format:"grim-runtime-service",version:1,
     // value:...,error:null|{kind,message}}; release with string_free.
@@ -432,21 +398,18 @@ typedef struct GrimPluginAPI {
     // GRIM_OK accepts the declaration; UI-thread creation is asynchronous.
     // The host owns the instance and removes it when this provider retires.
     GrimResult (*register_ui_panel)(const GrimPluginAPI* self, const char* implementation_key);
-    // v3.18: SYSTEM + FILESYSTEM. Initialization-only opt-in to host application
-    // discovery. Resources belong to this provider generation and retire with it.
-    GrimResult (*register_application_catalog)(const GrimPluginAPI* self);
-    // SYSTEM + FILESYSTEM; launch additionally requires PROCESS. Published providers only.
-    // Operations: list, refresh, inspect, launch. JSON object <=64 KiB, copied synchronously.
-    // Host-owned grim-application-result v1 JSON; release with string_free.
-    const char* (*application_service)(const GrimPluginAPI* self, const char* operation,
-        const char* arguments, size_t arguments_size);
-    // v3.19: SYSTEM permission. Initialization-only opt-in to a host-owned
-    // system_info.snapshot objects (system, cpu, memory, gpu_<index>, monitor_<index>).
-    // Capture starts after commit; subsequent get_hardware_snapshot calls refresh
-    // the batch. Provider retirement removes it. No plugin callbacks or C++
-    // objects cross this boundary.
-    GrimResult (*register_hardware_resource)(const GrimPluginAPI* self);
-    void* reserved[12];
+    // v5.0: Generic provider identity (JSON name/instance/path); string_free releases it.
+    const char* (*get_provider_identity)(const GrimPluginAPI* self);
+    // Copy an entire resource kind atomically. JSON array <=64 MiB, <=10000 entries.
+    // Each entry: resource_id, kind, name, runtime_id (>0), state (object).
+    // Initialization calls are serialized on the lifecycle thread (no init workers).
+    // During init this is staged with tools; after publication it replaces that kind.
+    // Empty array removes the kind. Ownership is derived exclusively from self.
+    GrimResult (*replace_resources)(const GrimPluginAPI* self, const char* kind,
+                                   const char* resources_json, size_t size);
+    // True only while this generation is the currently published provider.
+    bool (*is_provider_current)(const GrimPluginAPI* self);
+    void* reserved[9];
     
 } GrimPluginAPI;
 
@@ -536,12 +499,8 @@ public:
     }
     
     // File operations
-    const char* readFile(const char* path) { return m_api->read_file_text(m_api, path); }
-    GrimResult writeFile(const char* path, const char* content) { return m_api->write_file_text(m_api, path, content); }
-    bool fileExists(const char* path) { return m_api->file_exists(m_api, path); }
     
     // System info
-    const char* getSystemInfo(const char* key) { return m_api->get_system_info(m_api, key); }
     
     // Permissions
     bool hasPermission(GrimPermission perm) { return m_api->has_permission(m_api, perm); }

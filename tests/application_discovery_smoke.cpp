@@ -1,5 +1,6 @@
-#include "core/applications/application_catalog.hpp"
+#include "plugins/application_plugin/application_catalog.hpp"
 #include "commands/command_result.hpp"
+#include "MMO/Core/Registries/ProviderRegistry.hpp"
 #include <iostream>
 #include <set>
 int main() try {
@@ -14,7 +15,8 @@ int main() try {
     const GRIM::MMO::ProviderDescriptor provider{GRIM::MMO::ToolProviderType::Plugin, "Discovery smoke", "fixture", ""};
     if (!registry.publish(provider, {})) throw std::runtime_error("Cannot publish smoke provider");
     GRIM::Applications::Catalog catalog(provider, {{backend.name, [&] { return apps; }}},
-        [](const auto&) { throw std::runtime_error("Smoke test must never launch applications"); });
+        [](const auto&) { throw std::runtime_error("Smoke test must never launch applications"); },
+        [&](const auto& resources) { return registry.replaceResources(provider, "application", resources); }, [] { return true; });
     auto page = catalog.request("refresh", nlohmann::json::object());
     if (!page.at("complete").get<bool>() || page.at("total") != identities.size() || registry.snapshot().resourceCount() != identities.size())
         throw std::runtime_error("Native discovery failed resource publication");

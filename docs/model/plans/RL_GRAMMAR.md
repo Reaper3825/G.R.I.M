@@ -34,7 +34,7 @@ updates remain pending.
 | Implemented environment dispatch | [train_gpu.cu](../../../resources/models/GRIM-text/training/train_gpu.cu) routes `ready_for_environment` to [Phase2_EnvironmentLoop.cu](../../../resources/models/GRIM-text/training/Phases/Phase2_EnvironmentLoop.cu). Execute close submits one textual command; Answer close freezes/grades the attempt. This is not neural register-machine execution. |
 | Implemented observation insertion | [RuntimeContextAppend.cu](../../../resources/models/GRIM-text/Shared/InferenceState/RuntimeContextAppend.cu) validates channels/capacity and remaps atom tables before cache-preserving continuation. |
 | Future self-correction optimization | [Phase2_RLTrainingLoop.cu](../../../resources/models/GRIM-text/training/Phases/Phase2_RLTrainingLoop.cu) is an always-throwing, unbuilt/undispatched scaffold: no prepared scored group, frozen-reference scoring, RL loss/backward/update, retry scheduler, EMA, or receipt. |
-| Implemented host tool publication | [ToolRegistry.hpp](../../../MMO/Core/ToolRegistry.hpp) owns metadata **and handlers**; [command_dispatch.cpp](../../../commands/command_dispatch.cpp) delegates `dispatchCommand()` to `invoke()`. `invoke()` accepts optional selection checks. Policy remains caller-owned. Neither surface is an RL tool bridge. |
+| Implemented host tool publication | [ToolRegistry.hpp](../../../MMO/Core/Registries/ToolRegistry.hpp) owns metadata **and handlers**; [command_dispatch.cpp](../../../commands/command_dispatch.cpp) delegates `dispatchCommand()` to `invoke()`. `invoke()` accepts optional selection checks. Policy remains caller-owned. Neither surface is an RL tool bridge. |
 
 The actual finalized config snapshot combines runtime training policy and selected
 compiled model facts through [HyperParameters_GPU.hpp](../../../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp).
@@ -388,8 +388,8 @@ not provide executable semantics.
 | --- | --- | --- |
 | `generateOneSequence()` token loop | Incremental parser after recording sampled tokens and before sampling the next action | Complete declaration, bound call, READ, or answer close |
 | `commitToken` / `commitForcedToken` lambdas | Explicit token provenance and sampled-token counters | Sampled action versus runtime context versus forced retrieval |
-| `MMO/Core/ToolRegistry.hpp` | Resolve the episode's tool/version and validate metadata | `tool_payload` selects an available tool |
-| `commands/command_dispatch.cpp`, `commands/command_result.hpp`, `MMO/Core/ToolRegistry.hpp` | Future controlled adapter to explicit invocation/result envelope | Full call accepted; never arbitrary generated text dispatch |
+| `MMO/Core/Registries/ToolRegistry.hpp` | Resolve the episode's tool/version and validate metadata | `tool_payload` selects an available tool |
+| `commands/command_dispatch.cpp`, `commands/command_result.hpp`, `MMO/Core/Registries/ToolRegistry.hpp` | Future controlled adapter to explicit invocation/result envelope | Full call accepted; never arbitrary generated text dispatch |
 | New episode-owned assignment handler beside inference orchestration | Store call outcome; inject errors automatically; on success assign destination/version and select disclosure | Boolean gates successful values only |
 | New read handler beside the same orchestration | Resolve variable/version and insert actual stored value | Complete `<READ>…</READ>`; no execution |
 

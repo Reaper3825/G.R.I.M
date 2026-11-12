@@ -12,7 +12,7 @@
 //======================================================//
 #pragma once
 
-#include "ModelRegistry.hpp"
+#include "Registries/ModelRegistry.hpp"
 #include "ResourceCoordinator.hpp"
 
 #include <chrono>

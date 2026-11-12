@@ -26,7 +26,7 @@ Do not apply the two-attempt budget to individual environment actions.
 | Implemented | [train_gpu.cu](../../../resources/models/GRIM-text/training/train_gpu.cu) dispatches to [Phase2_EnvironmentLoop.cu](../../../resources/models/GRIM-text/training/Phases/Phase2_EnvironmentLoop.cu), iterating the schedule, submitting one textual command at Execute close, and grading at Answer close. This is not the removed neural register machine. |
 | Implemented | [RuntimeContextAppend.cu](../../../resources/models/GRIM-text/Shared/InferenceState/RuntimeContextAppend.cu) validates/remaps observation atom channels and appends context for the existing resume scheduler. |
 | Future | [Phase2_RLTrainingLoop.cu](../../../resources/models/GRIM-text/training/Phases/Phase2_RLTrainingLoop.cu) always throws and is neither built nor dispatched. Scored-group preparation, policy/reference replay, RL loss/backward/optimizer updates, retries, advantages, EMA, and receipts remain pending. |
-| Implemented host boundary, future RL bridge | [ToolRegistry.hpp](../../../MMO/Core/ToolRegistry.hpp) publishes metadata and callables together; [command_dispatch.cpp](../../../commands/command_dispatch.cpp) delegates explicit dispatch to `invoke()`. `invoke()` can check a caller-supplied registry revision. Policy remains caller-owned. |
+| Implemented host boundary, future RL bridge | [ToolRegistry.hpp](../../../MMO/Core/Registries/ToolRegistry.hpp) publishes metadata and callables together; [command_dispatch.cpp](../../../commands/command_dispatch.cpp) delegates explicit dispatch to `invoke()`. `invoke()` can check a caller-supplied registry revision. Policy remains caller-owned. |
 
 Runtime policy and selected compiled `model.grimcfg` facts are finalized on the
 actual snapshot by [HyperParameters_GPU.hpp](../../../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp).
@@ -58,8 +58,8 @@ Existing integration points:
 | Generation session and token accounting | `resources/models/GRIM-text/Shared/InferenceState/InferenceGenerationSession.hpp` and `.cu` (data-only state and free functions) |
 | Return/termination decisions | `resources/models/GRIM-text/Shared/InferenceState/InferenceReturnPolicy.hpp` (free functions) |
 | Live session, KV cache, and retrieval ownership | `resources/models/GRIM-text/Shared/InferenceState/GenerationState_GPU.hpp` |
-| Tool identities, descriptions, parameters, and availability | `MMO/Core/ToolRegistry.hpp` (`ToolDescriptor`, `ToolRegistry`) |
-| Command execution and result envelope | `commands/command_dispatch.cpp`, `commands/command_result.hpp`, and `MMO/Core/ToolRegistry.hpp` (`dispatchCommand` → `invoke`, `CommandResult`) |
+| Tool identities, descriptions, parameters, and availability | `MMO/Core/Registries/ToolRegistry.hpp` (`ToolDescriptor`, `ToolRegistry`) |
+| Command execution and result envelope | `commands/command_dispatch.cpp`, `commands/command_result.hpp`, and `MMO/Core/Registries/ToolRegistry.hpp` (`dispatchCommand` → `invoke`, `CommandResult`) |
 | Generated sequence data | `resources/models/GRIM-text/Shared/Forward/GeneratedSequence.hpp` |
 | Generation orchestration and public result | `resources/models/GRIM-text/training/Phases/Phase2_InferenceLoop.cu` and `.hpp` |
 | Sampling distribution | `resources/models/GRIM-text/Shared/Sampling/Sampling.cu` |

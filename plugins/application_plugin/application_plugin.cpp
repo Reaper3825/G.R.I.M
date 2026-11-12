@@ -1,10 +1,13 @@
 #include "core/plugin_api.hpp"
 #include "application_tools.hpp"
+#include "shell_open.hpp"
+#include <memory>
 #include <string>
 #include <stdexcept>
 
 namespace {
 const GrimPluginAPI* host = nullptr;
+std::unique_ptr<GRIM::Applications::Catalog> catalog;
 
 GrimResult finish(GrimToolResultWriter* writer, bool success, const std::string& message,
                   const char* error, const char* category, const std::string& voice, uint32_t color) {
@@ -33,8 +36,7 @@ GrimResult openApplication(const GrimToolCall* call, GrimToolResultWriter* write
     if (target.empty()) return finish(writer, false, errorMessage("ERR_APP_NO_ARGUMENT"),
         "ERR_APP_NO_ARGUMENT", "error", "Missing application name", 0xFF5050);
 #ifdef _WIN32
-    int64_t nativeStatus = 0;
-    if (host->open_target(host, target.c_str(), &nativeStatus) != GRIM_OK || nativeStatus <= 32)
+    if (shellOpenTarget(target) <= 32)
         return finish(writer, false, errorMessage("ERR_APP_LAUNCH_FAILED") + ": " + target,
             "ERR_APP_LAUNCH_FAILED", "error", "Failed to open " + target, 0xFF5050);
     return finish(writer, true, "[App] Launched: " + target,
@@ -54,8 +56,7 @@ GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, voi
 #ifdef _WIN32
     // Preserve the original URL construction; no new encoding or query rewriting.
     const auto url = "https://www.google.com/search?q=" + query;
-    int64_t nativeStatus = 0;
-    if (host->open_target(host, url.c_str(), &nativeStatus) != GRIM_OK || nativeStatus <= 32)
+    if (shellOpenTarget(url) <= 32)
         return finish(writer, false, errorMessage("ERR_WEB_OPEN_FAILED") + ": " + query,
             "ERR_WEB_OPEN_FAILED", "error", "Web search failed", 0xFF5050);
     return finish(writer, true, "[Web] Searching: " + query,
@@ -75,9 +76,35 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
-        !api->get_user_error_message || !api->open_target || !api->register_application_catalog ||
-        !api->application_service) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->get_user_error_message || !api->get_provider_identity || !api->replace_resources ||
+        !api->is_provider_current || !api->get_alias_snapshot) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
+    try {
+        const auto readJson = [api](const char* text) {
+            if (!text) throw std::runtime_error("Framework snapshot unavailable");
+            const auto release = [api](const char* p) { api->string_free(api, p); };
+            std::unique_ptr<const char, decltype(release)> owned(text, release);
+            return nlohmann::json::parse(text);
+        };
+        const auto identity = readJson(api->get_provider_identity(api));
+        GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin,
+            identity.at("name"), identity.at("instance"), identity.at("path")};
+        auto backends = GRIM::Applications::systemBackends([api, readJson] {
+            const auto snapshot = readJson(api->get_alias_snapshot(api, nullptr));
+            std::map<std::string, std::string> aliases;
+            for (const auto& entry : snapshot.at("entries")) aliases.emplace(entry.at("name"), entry.at("target"));
+            return aliases;
+        });
+        catalog = std::make_unique<GRIM::Applications::Catalog>(owner, std::move(backends),
+            GRIM::Applications::launchNative,
+            [api](const auto& resources) {
+                const auto json = nlohmann::json(resources).dump();
+                return api->replace_resources(api, "application", json.data(), json.size()) == GRIM_OK;
+            }, [api] { return api->is_provider_current(api); });
+        // Discovery prepares copied resources; nothing is visible until the manager commits.
+        catalog->request("refresh", nlohmann::json::object());
+    } catch (...) { catalog.reset(); return GRIM_ERROR_UNKNOWN; }
+
     GrimToolRegistration tools[2];
     tools[0].handler = openApplication;
     tools[1].handler = searchWeb;
@@ -110,6 +137,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.parameter_count = 1;
     }
     const auto result = api->register_tools(api, tools, 2);
-    return result == GRIM_OK ? registerApplicationTools(api) : result;
+    return result == GRIM_OK ? registerApplicationTools(api, *catalog) : result;
 }
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); host = nullptr; }

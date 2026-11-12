@@ -1,6 +1,6 @@
 #include "core/scheduling_service.hpp"
 #include "plugins/schedule_plugin/schedule_plugin.cpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include <cassert>
 #include <iostream>

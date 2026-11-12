@@ -1,6 +1,6 @@
 // Real DLL -> PluginManager -> API -> ToolRegistry -> filesystem, in a private sandbox.
 #include "core/plugin_manager.hpp"
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include <chrono>
 #include <filesystem>
@@ -14,6 +14,16 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     auto& registry = GRIM::MMO::ToolRegistry::instance();
     const auto baseline = registry.toolCount();
     const auto processDirectory = fs::current_path();
+    const auto directoryResource = [&] {
+        for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
+            if (group.provider.name == "Filesystem Plugin")
+                for (const auto& resource : group.resources)
+                    if (resource.resource_id == "working_directory")
+                        return GRIM::MMO::RegisteredResource{resource, group.provider};
+        return GRIM::MMO::RegisteredResource{};
+    };
+    const auto utf8 = [](const fs::path& path) { const auto text = path.u8string(); return std::string(text.begin(), text.end()); };
+
     const auto sandbox = fs::temp_directory_path() / ("grim-filesystem-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check(fs::create_directory(sandbox), "Cannot create private filesystem test directory");
@@ -46,7 +56,13 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     }
     const auto invoke = [&](const char* id, const std::string& args = "") { return registry.invoke(id, args); };
     check(invoke("pwd").message == "[FS] Current directory: " + processDirectory.string(), "Initial directory incorrect");
+    const auto initialResource = directoryResource();
+    check(initialResource.kind == "filesystem.directory" && initialResource.runtime_id == 1 &&
+          initialResource.state.at("path") == utf8(processDirectory), "Initial working directory resource missing");
     check(invoke("cd", sandbox.string()).success, "Absolute cd failed");
+    check(directoryResource().state.at("path") == utf8(fs::canonical(sandbox)) &&
+          directoryResource().provider.instance == initialResource.provider.instance,
+          "cd did not publish provider-owned directory state");
     check(fs::current_path() == processDirectory, "Plugin cd changed host process directory");
     check(invoke("mkdir", "\"new folder\"").success && fs::is_directory(sandbox / "new folder"), "Quoted mkdir failed");
     check(!invoke("mkdir", "new folder").success, "Duplicate mkdir succeeded");
@@ -56,6 +72,7 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     check(invoke("cd", "sample.txt").errorCode == "ERR_FS_NOT_DIRECTORY", "cd accepted regular file");
     check(invoke("cd", "missing").errorCode == "ERR_FS_NOT_FOUND", "Missing cd path not reported");
     check(invoke("pwd").message == "[FS] Current directory: " + fs::canonical(sandbox).string(), "Failed cd changed directory");
+    check(directoryResource().state.at("path") == utf8(fs::canonical(sandbox)), "Failed cd changed resource");
     check(invoke("cd", "new folder").success && invoke("cd", "..").success, "Relative cd failed");
     for (const auto* id : {"cd", "mkdir", "rm"})
         check(invoke(id).errorCode == "ERR_FS_NO_ARGUMENT", "Missing argument not rejected");
@@ -66,9 +83,23 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     check(invoke("rm", "sample.txt").success && !fs::exists(sandbox / "sample.txt"), "rm file failed");
     check(invoke("rm", "new folder").success && !fs::exists(sandbox / "new folder"), "rm empty directory failed");
     check(invoke("rm", "missing").errorCode == "ERR_FS_NOT_FOUND", "Missing rm path not reported");
+    // Failed candidate leaves the old plugin state/resources intact.
+    { std::ofstream invalid(deployed, std::ios::binary | std::ios::trunc); invalid << "invalid native library"; }
+    PluginManager::checkForHotReload();
+    check(registry.toolCount() == baseline + 5 && directoryResource().provider.instance == initialResource.provider.instance &&
+          invoke("pwd").message == "[FS] Current directory: " + fs::canonical(sandbox).string(),
+          "Failed replacement discarded the current provider");
+    // A new DLL generation owns a fresh directory; cleanup of the old one cannot remove it.
+    fs::copy_file(pluginDirectory / "filesystem_plugin.dll", deployed, fs::copy_options::overwrite_existing);
+    fs::last_write_time(deployed, fs::last_write_time(deployed) + std::chrono::seconds(2));
+    PluginManager::checkForHotReload();
+    check(directoryResource().provider.instance != initialResource.provider.instance &&
+          directoryResource().state.at("path") == utf8(processDirectory) &&
+          invoke("pwd").message == "[FS] Current directory: " + processDirectory.string() &&
+          fs::current_path() == processDirectory, "Reload retained old directory state or lost the replacement resource");
     fs::remove(deployed);
     PluginManager::checkForHotReload();
-    check(registry.toolCount() == baseline, "Removing filesystem DLL retained tools");
+    check(registry.toolCount() == baseline && directoryResource().resource_id.empty(), "Removing filesystem DLL retained tools/resources");
     check(invoke("pwd").errorCode == "ERR_UNKNOWN_CMD", "Removed filesystem tool still executable");
-    std::cout << "Filesystem plugin metadata, operations, and folder removal tests passed\n";
+    std::cout << "Filesystem plugin operations, directory resources, failed replacement, reload and removal tests passed\n";
 }

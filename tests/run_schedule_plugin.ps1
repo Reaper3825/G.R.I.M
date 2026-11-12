@@ -8,7 +8,7 @@ $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Componen
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
 $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/TP','/DNOMINMAX','/DGRIM_BUILD_HOST',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
-$arguments += @('tests/schedule_plugin_tests.cpp','MMO/Core/ToolRegistry.cpp','MMO/Core/ProviderRegistry.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$arguments += @('tests/schedule_plugin_tests.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $arguments += '/Fe:schedule_plugin_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'compile.rsp') -Value $arguments -Encoding ascii
 Set-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'),'if errorlevel 1 exit /b %errorlevel%','cl @compile.rsp','if errorlevel 1 exit /b %errorlevel%','schedule_plugin_tests.exe') -Encoding ascii

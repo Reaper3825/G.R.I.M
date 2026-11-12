@@ -1,7 +1,7 @@
 #pragma once
-#include "Descriptors/ProviderDescriptor.hpp"
-#include "Descriptors/ResourceDescriptor.hpp"
-#include "Descriptors/ToolDescriptor.hpp"
+#include "../Descriptors/ProviderDescriptor.hpp"
+#include "../Descriptors/ResourceDescriptor.hpp"
+#include "../Descriptors/ToolDescriptor.hpp"
 #include <cstddef>
 #include <vector>
 

@@ -1,11 +1,10 @@
-#include "host_hardware.hpp"
+#include "system_info_command.hpp"
 #include "plugins/plugin_logging.hpp"
 #include <sstream>
 
-CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
+CommandResult formatSystemInfo(const GRIM::MMO::HardwareInventory& inv) {
     LOG_DEBUG("Command", "Dispatch: system_info");
 
-    auto inv = hostHardware::detectHardware();
 
     std::ostringstream output;
     output << "[System Info]\n";

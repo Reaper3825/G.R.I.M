@@ -1,5 +1,5 @@
 #include "ToolRegistry.hpp"
-#include "../../commands/command_result.hpp"
+#include "../../../commands/command_result.hpp"
 #include <algorithm>
 
 namespace GRIM::MMO {

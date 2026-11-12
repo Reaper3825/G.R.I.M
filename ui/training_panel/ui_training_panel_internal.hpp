@@ -8,7 +8,7 @@
 #include "core/grim_platform.h"
 #include "core/input_parser.hpp"
 #include "logger.hpp"
-#include "MMO/Core/ModelRegistry.hpp"
+#include "MMO/Core/Registries/ModelRegistry.hpp"
 #include "MMO/Core/ModelLoader.hpp"
 #include "MMO/Core/ResourceSignal.hpp"
 #include "resources.hpp"

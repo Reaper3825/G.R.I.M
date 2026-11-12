@@ -1,5 +1,5 @@
 #pragma once
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "ui/primitives/ui_inputbox.hpp"
 #include "ui/primitives/ui_scrollbox.hpp"
 #include "ui/primitives/ui_textarea.hpp"

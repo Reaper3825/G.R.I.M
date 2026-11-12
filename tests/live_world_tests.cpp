@@ -1,4 +1,4 @@
-#include "MMO/Core/ToolRegistry.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "ui/world_lab/live_world_session.hpp"
 #include "commands/command_result.hpp"
 #include <atomic>
