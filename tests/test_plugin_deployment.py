@@ -71,6 +71,34 @@ class PluginDeploymentTests(unittest.TestCase):
         self.assertEqual(source.read_bytes(), b"completed plugin")
         self.assertEqual(list(self.folder.iterdir()), [source])
 
+    def test_host_platforms_include_complete_standalone_catalog(self):
+        # Evaluate the actual CMake platform conditions, intercepting target
+        # registration so this never configures the host or its dependencies.
+        host_plugins = (ROOT / "CMakeLists.txt").read_text().split(
+            "# Hot-Reloadable Plugins", 1)[1]
+        expected = {p.parent.name for p in (ROOT / "plugins").glob("*/CMakeLists.txt")}
+        for platform in ("windows", "macos"):
+            with self.subTest(platform=platform):
+                output = self.folder / f"{platform}-plugins.txt"
+                script = self.folder / f"{platform}.cmake"
+                script.write_text(
+                    'cmake_minimum_required(VERSION 3.22)\n'
+                    f'set(WIN32 {"TRUE" if platform == "windows" else "FALSE"})\n'
+                    f'set(APPLE {"TRUE" if platform == "macos" else "FALSE"})\n'
+                    'function(project)\nendfunction()\n'
+                    'function(target_link_libraries)\nendfunction()\n'
+                    'function(add_subdirectory path)\n'
+                    '  if(path STREQUAL "plugins")\n'
+                    f'    include("{(ROOT / "plugins/CMakeLists.txt").as_posix()}")\n'
+                    '  else()\n'
+                    '    get_filename_component(name "${path}" NAME)\n'
+                    f'    file(APPEND "{output.as_posix()}" "${{name}}\\n")\n'
+                    '  endif()\nendfunction()\n' + host_plugins)
+                self.run_command("cmake", "-P", str(script))
+                actual = output.read_text().splitlines()
+                self.assertEqual(set(actual), expected)
+                self.assertEqual(len(actual), len(expected))
+
     def configure_fixture(self, host, deployment=None):
         source = self.folder / "project"
         source.mkdir()

@@ -54,8 +54,15 @@ Normal host builds (including `cmake --build --preset release -j 100`) automatic
 deploy completed plugin libraries into the source tree's `plugins/` folder.
 Building just the `GRIM` target also builds and deploys its plugins. Deployment
 checks run even when linking is up to date, repairing missing/stale live files.
-The macOS host build currently includes the UI plugin, which provides the
-standard panels and their operations; the other host plugins are Windows-only.
+Windows and macOS host builds use the same plugin catalog as the standalone
+build. macOS produces `.dylib` libraries; Windows `.dll` files cannot load there.
+World Lab's Live view adds rooms when these plugins publish their providers.
+After updating an older UI-only Mac build, reconfigure its existing build tree
+and build/deploy the plugins with the Mac's installed dependencies. A standalone
+Mac build can use `cmake -S plugins -B build-plugins -DGRIM_DEPLOY_PLUGINS=ON`
+(plus the existing toolchain options), then `cmake --build build-plugins`.
+This does not build the host. Plugin visibility does not imply identical native
+device support: digital screen capture/automation still lacks a macOS backend.
 Identical DLLs are left untouched to avoid unnecessary hot reloads. Changed
 libraries are staged under a `.pending` filename and published by rename after
 linking completes; failure to publish fails the build.
