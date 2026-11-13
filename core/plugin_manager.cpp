@@ -22,12 +22,17 @@ constexpr const char* pluginExtension = ".dylib";
 constexpr const char* pluginExtension = ".so";
 #endif
 
-std::optional<std::string> fingerprint(const std::filesystem::path& path) {
+}
+
+std::optional<PluginManager::Fingerprint> PluginManager::fingerprint(const std::filesystem::path& path) {
     try {
         const auto time = std::filesystem::last_write_time(path);
         const auto size = std::filesystem::file_size(path);
         std::ifstream file(path, std::ios::binary);
-        if (!file) return std::nullopt;
+        if (!file) {
+            LOG_DEBUG("PluginManager", "Cannot read plugin for fingerprint: " + path.string());
+            return std::nullopt;
+        }
         uint64_t hash = 14695981039346656037ULL;
         char buffer[65536];
         while (file.read(buffer, sizeof(buffer)) || file.gcount()) {
@@ -37,11 +42,18 @@ std::optional<std::string> fingerprint(const std::filesystem::path& path) {
             }
         }
         if (file.bad() || time != std::filesystem::last_write_time(path) ||
-            size != std::filesystem::file_size(path)) return std::nullopt;
-        return std::to_string(time.time_since_epoch().count()) + ":" +
-               std::to_string(size) + ":" + std::to_string(hash);
-    } catch (...) { return std::nullopt; }
+            size != std::filesystem::file_size(path)) {
+            LOG_DEBUG("PluginManager", "Plugin changed or could not be read: " + path.string());
+            return std::nullopt;
+        }
+        return Fingerprint{time, size, hash};
+    } catch (const std::filesystem::filesystem_error& error) {
+        LOG_DEBUG("PluginManager", std::string("Cannot fingerprint plugin: ") + error.what());
+        return std::nullopt;
+    }
 }
+
+namespace {
 std::filesystem::path createCacheDirectory() {
     std::random_device random;
     for (int attempt = 0; attempt < 32; ++attempt) {
@@ -166,7 +178,7 @@ void PluginManager::unloadAll() {
     std::lock_guard lock(requestMutex);
     reloadRequests.clear();
 }
-bool PluginManager::loadPlugin(const std::filesystem::path& path, const std::string& stamp) {
+bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerprint& stamp) {
     const auto name = path.filename().string();
     auto previous = loadedPlugins.find(name);
     const auto* oldApi = previous == loadedPlugins.end() ? nullptr : previous->second.api;
@@ -177,8 +189,8 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const std::str
         const auto copy = candidate.cacheDirectory / path.filename();
         std::filesystem::copy_file(path, copy);
         const auto copied = fingerprint(copy);
-        if (fingerprint(path) != std::optional<std::string>(stamp) || !copied ||
-            copied->substr(copied->rfind(':')) != stamp.substr(stamp.rfind(':'))) {
+        if (fingerprint(path) != std::optional<Fingerprint>(stamp) || !copied ||
+            copied->hash != stamp.hash) {
             attempted.erase(name); // Retry once a complete write is visible.
             removeCache(candidate.cacheDirectory);
             return false;

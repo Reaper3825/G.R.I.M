@@ -54,6 +54,8 @@ Normal host builds (including `cmake --build --preset release -j 100`) automatic
 deploy completed plugin libraries into the source tree's `plugins/` folder.
 Building just the `GRIM` target also builds and deploys its plugins. Deployment
 checks run even when linking is up to date, repairing missing/stale live files.
+The macOS host build currently includes the UI plugin, which provides the
+standard panels and their operations; the other host plugins are Windows-only.
 Identical DLLs are left untouched to avoid unnecessary hot reloads. Changed
 libraries are staged under a `.pending` filename and published by rename after
 linking completes; failure to publish fails the build.
