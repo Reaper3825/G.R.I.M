@@ -70,7 +70,11 @@ if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
   link_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
 endif()
 
-project(GRIM LANGUAGES CXX C)
+set(GRIM_PROJECT_LANGUAGES CXX C)
+if(APPLE)
+  list(APPEND GRIM_PROJECT_LANGUAGES OBJCXX)
+endif()
+project(GRIM LANGUAGES ${GRIM_PROJECT_LANGUAGES})
 
 # Enable CUDA support for libraries that use GPU (ONNX Runtime, Whisper, etc.)
 # Note: CUDA is not available on macOS - only enable on Windows/Linux
