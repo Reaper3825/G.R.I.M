@@ -13,10 +13,9 @@
 #include "error_manager.hpp"
 #include "aliases.hpp"
 #include "memory/command_memory_services.hpp"
-#include "perception/perception_queries.hpp"
 #include "voice/voice_command_services.hpp"
 #include "ui/ui_panel_service.hpp"
-#include "perception/input_command_service.hpp"
+#include "core/input/input_service.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/Registries/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
 #include "../MMO/Core/Descriptors/ToolDescriptorJson.hpp"
@@ -740,22 +739,6 @@ static const char* api_voice_service(const GrimPluginAPI* self, GrimVoiceOperati
         return runtimeServiceResponse(self, permission, [&] { return GRIM::VoiceCommandServices::execute(operation, request); });
     } catch (...) { return nullptr; }
 }
-static const char* api_query_perception(const GrimPluginAPI* self, GrimPerceptionQuery query) noexcept {
-    if (query != GRIM_PERCEPTION_ANALYZE_SCREEN && query != GRIM_PERCEPTION_READ_TEXT &&
-        query != GRIM_PERCEPTION_DETECT_OBJECTS) return nullptr;
-    return runtimeServiceResponse(self, GRIM_PERM_SYSTEM, [&] {
-        const bool available = GRIM::Perception::isAvailable();
-        std::string text;
-        if (available) {
-            switch (query) {
-                case GRIM_PERCEPTION_ANALYZE_SCREEN: text = GRIM::Perception::analyzeScreen(); break;
-                case GRIM_PERCEPTION_READ_TEXT: text = GRIM::Perception::readText(); break;
-                case GRIM_PERCEPTION_DETECT_OBJECTS: text = GRIM::Perception::detectObjects(); break;
-            }
-        }
-        return nlohmann::json{{"available", available}, {"text", std::move(text)}};
-    });
-}
 static const char* api_stage_manual_memory(const GrimPluginAPI* self, const char* raw) noexcept {
     if (!raw || !*raw) return nullptr;
     return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
@@ -1234,33 +1217,8 @@ static const char* api_input_primitive(const GrimPluginAPI* self, const char* te
         const auto request = nlohmann::json::parse(text, text + size);
         if (!request.is_object()) return nullptr;
         return runtimeServiceResponse(self, GRIM_PERM_INPUT, [&] {
-            return nlohmann::json(GRIM::Perception::ExecuteInputPrimitive(request));
+            return nlohmann::json(GRIM::Input::ExecuteInputPrimitive(request));
         });
-    } catch (...) { return nullptr; }
-}
-
-static const char* api_input_service(const GrimPluginAPI* self, GrimInputOperation operation,
-                                     const char* arguments, size_t size) noexcept {
-    try {
-        auto& owner = const_cast<PluginContext&>(pluginContext(self));
-        ActiveCall active(owner.gate, true);
-        if (!active.entered || !checkPermission(self, GRIM_PERM_INPUT) || operation > GRIM_INPUT_CLICK_ON ||
-            (operation == GRIM_INPUT_CLICK_ON && !checkPermission(self, GRIM_PERM_SYSTEM)) ||
-            size > 65536 || (size && !arguments)) return nullptr;
-        const std::string copied = size ? std::string(arguments, size) : std::string{};
-        CommandResult result;
-        try { result = GRIM::Perception::ExecuteInputCommandService(operation, copied); }
-        catch (const std::exception& error) {
-            return allocateString(nlohmann::json{{"format", "grim-input-result"}, {"version", 1},
-                {"exception", error.what()}}.dump());
-        } catch (...) {
-            return allocateString(nlohmann::json{{"format", "grim-input-result"}, {"version", 1},
-                {"exception", nullptr}}.dump());
-        }
-        return allocateString(nlohmann::json{{"format", "grim-input-result"}, {"version", 1},
-            {"result", {{"success", result.success}, {"message", result.message}, {"error_code", result.errorCode},
-                {"category", result.category}, {"voice", result.voice}, {"structured_output_json", result.structuredOutputJson},
-                {"color_rgb", (uint32_t(result.color.r) << 16) | (uint32_t(result.color.g) << 8) | result.color.b}}}}.dump());
     } catch (...) { return nullptr; }
 }
 
@@ -1356,10 +1314,8 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.stage_manual_memory = api_stage_manual_memory;
     api.search_memory = api_search_memory;
     api.flush_memory_record_if_present = api_flush_memory_record_if_present;
-    api.query_perception = api_query_perception;
     api.voice_service = api_voice_service;
     api.ui_panel_service = api_ui_panel_service;
-    api.input_service = api_input_service;
     api.input_primitive = api_input_primitive;
     api.register_ui_panel = api_register_ui_panel;
     api.get_provider_identity = api_get_provider_identity;

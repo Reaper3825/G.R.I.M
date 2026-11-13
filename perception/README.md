@@ -451,7 +451,7 @@ operator envelope timings for model hot spots.
 
 Physical-camera files use the ownership taxonomy in
 [`physical/README.md`](physical/README.md). Update that file whenever adding,
-moving, or splitting a `perception/physical/Physical*` file.
+moving, or splitting a `plugins/perception_plugin/physical/Physical*` file.
 
 When extending perception:
 1. Add new analysis to `PerceptionContextManager::captureAndAnalyze()`

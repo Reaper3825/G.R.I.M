@@ -1,6 +1,6 @@
 #include "core/plugin_api_impl.hpp"
 #include "core/plugin_manager.hpp"
-#include "perception/input_command_service.hpp"
+#include "core/input/input_service.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/commands_core.hpp"
 #include <condition_variable>
@@ -36,7 +36,7 @@ void same(const CommandResult& actual, const CommandResult& expected) {
 }
 }
 
-namespace GRIM::Perception {
+namespace GRIM::Input {
 bool ExecuteInputPrimitive(const nlohmann::json& request) {
     primitiveRequest = request;
     if (request.at("op") == "available") return available;
@@ -49,38 +49,15 @@ bool ExecuteInputPrimitive(const nlohmann::json& request) {
     if (exceptionMode == 2) throw 42;
     return available;
 }
-// The loader/API/registry/plugin are real; all native input is replaced with this sink.
-CommandResult ExecuteInputCommandService(GrimInputOperation operation, const std::string& arguments) {
-    ++calls; observedOperation = operation; observedArguments = arguments;
-    if (block) {
-        std::unique_lock lock(gateMutex); entered = true; gateChanged.notify_all();
-        gateChanged.wait(lock, [] { return released; });
-    }
-    if (exceptionMode == 1) throw std::runtime_error("fixture input exception");
-    if (exceptionMode == 2) throw 42;
-    return fixture;
-}
+
 }
 
 void runInputPluginTests(const std::filesystem::path& directory) {
 
     auto* denied = PluginAPI::createPluginAPI("input-denied", "", GRIM_PERM_UI | GRIM_PERM_SYSTEM);
-    check(!denied->input_service(denied, GRIM_INPUT_CLICK, "", 0), "UI permission unexpectedly authorized native input");
     check(!denied->input_primitive(denied, "{\"op\":\"available\"}", 18), "Primitive bypassed INPUT permission");
     PluginAPI::cleanupPluginContext(denied);
-    auto* inputOnly = PluginAPI::createPluginAPI("input-only", "", GRIM_PERM_INPUT);
-    check(!inputOnly->input_service(inputOnly, GRIM_INPUT_CLICK_ON, "Submit", 6), "Targeting did not require perception permission");
-    fixture = {true, "sink", "ERR_NONE", "routine", "sink voice", Colors::Green};
-    take(inputOnly, inputOnly->input_service(inputOnly, GRIM_INPUT_CLICK, nullptr, 0));
-    check(observedArguments.empty(), "Empty raw input was changed");
-    check(!inputOnly->input_service(inputOnly, GRIM_INPUT_TYPE, nullptr, 1) &&
-          !inputOnly->input_service(inputOnly, static_cast<GrimInputOperation>(999), "", 0) &&
-          !inputOnly->input_service(inputOnly, GRIM_INPUT_TYPE, "x", 65537), "Invalid input API arguments accepted");
-    PluginAPI::cleanupPluginContext(inputOnly);
     auto* staging = PluginAPI::createPluginAPI("input-staging", "", GRIM_PERM_INPUT | GRIM_PERM_SYSTEM, true);
-    const auto before = calls;
-    check(!staging->input_service(staging, GRIM_INPUT_CLICK, "left", 4) && calls == before,
-          "Plugin initialization was able to execute input");
     check(!staging->input_primitive(staging, "{\"op\":\"available\"}", 18), "Staging provider used primitive");
     PluginAPI::cleanupPluginContext(staging);
     if (directory.empty()) return;
@@ -93,9 +70,9 @@ void runInputPluginTests(const std::filesystem::path& directory) {
     auto& registry = GRIM::MMO::ToolRegistry::instance();
     const auto baseline = registry.toolCount();
     PluginManager::initialize(folder.string());
-    check(registry.toolCount() == baseline + 5, "Input DLL did not register five tools");
+    check(registry.toolCount() == baseline + 4, "Input DLL did not register four tools");
     const char* ids[] = {"move_mouse", "click", "type", "key", "click_on"};
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 4; ++i) {
         const auto descriptor = registry.getTool(ids[i]);
         check(descriptor && descriptor->provider.name == "Input Plugin" && descriptor->provider.type == GRIM::MMO::ToolProviderType::Plugin &&
               descriptor->needs_confirmation && !descriptor->is_informational && descriptor->argument_format == "raw_text" &&
@@ -125,10 +102,6 @@ void runInputPluginTests(const std::filesystem::path& directory) {
     dispatchCommand("type", bytes);
     check(primitiveRequest.at("text").get<std::string>() == bytes, "Embedded NUL was truncated");
     check(dispatchCommand("type", std::string(65537, 'x')).errorCode == "ERR_INPUT_SERVICE", "Raw size limit lost");
-    fixture = {false,"ambiguous/stale/dispatch failure","ERR_INPUT_TARGET_AMBIGUOUS","error","failed",Colors::Red};
-    fixture.structuredOutputJson = R"({"input_sent":false})";
-    same(dispatchCommand("click_on", "object save-button"), fixture);
-    check(observedOperation == GRIM_INPUT_CLICK_ON && observedArguments == "object save-button", "Grounded path changed");
     exceptionMode = 1;
     check(dispatchCommand("click", "left").errorCode == "ERR_CMD_EXCEPTION", "Standard host exception changed dispatch policy");
     exceptionMode = 2;
@@ -151,7 +124,7 @@ void runInputPluginTests(const std::filesystem::path& directory) {
     unloading.get(); block = false;
     check(draining && registry.toolCount() == baseline, "Input plugin did not drain/unregister on unload");
     PluginManager::initialize(folder.string());
-    check(registry.toolCount() == baseline + 5, "Input plugin did not reload from file");
+    check(registry.toolCount() == baseline + 4, "Input plugin did not reload from file");
     fs::remove(folder / "input_plugin.dll");
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline, "Deleted input plugin retained registrations");

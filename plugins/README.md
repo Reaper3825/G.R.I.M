@@ -1,7 +1,7 @@
 # Native GRIM tool plugins
 
-The current host requires plugin ABI v4. Rebuild v3 plugin binaries against
-[the v4 API](../docs/PLUGIN_API.md) before loading them.
+The current host requires plugin ABI v9. Rebuild all older plugin binaries
+against [the current API](../docs/PLUGIN_API.md) before loading them.
 
 API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
 declares all nine standard panels; bootstrap registers host factories without
@@ -252,32 +252,11 @@ host and plugin rebuilds before deployment.
 
 ## Perception plugin
 
-`perception_plugin` supplies `perception_what_see`, `perception_read_text`, and
-`perception_detect_objects` through API v3.6's SYSTEM-permission observation
-service. The existing host retains capture, OCR, detection, live context, model
-and subsystem ownership. Mouse/keyboard tool registrations now come from the
-Input Plugin; their live execution services remain host-owned. The perception
-plugin depends only on the API, shared result helper,
-and installed nlohmann_json; it imports no host C++ or OpenCV symbols.
+API v9 moves digital/physical capture, primitive operators, workers and observation
+state into the DLL. The legacy host service, context manager, environment panels,
+question routing and session/memory projection connections are removed.
+See [provider ownership, tools and validation](perception_plugin/README.md).
 
-    cmake -S plugins/perception_plugin -B .codex-build/perception-plugin -G "Visual Studio 17 2022" -A x64
-    cmake --build .codex-build/perception-plugin --config Release --target perception_plugin --parallel 2
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -PerceptionPluginDirectory .codex-build/perception-plugin/plugins
-
-Deploy `.codex-build/perception-plugin/plugins/perception_plugin.dll` into GRIM's
-`plugins/` folder after rebuilding the host for API v4.
-
-Commands preserve their original availability/error responses, ignored arguments,
-OCR defaults, and literal message/voice text. Empty text and error-looking host
-text still use the old success result. They remain informational with no
-confirmation requirement. Loading/unloading performs no capture or perception
-initialization and leaves host context intact.
-
-Tests use controlled host services, including 70-KB text/voice results and both
-exception paths; no real capture, OCR, object detection, or model server runs.
-Existing OpenCV headers are used only for a syntax check of the remaining host
-input-command source. API v3.6 expands the voice result limit to 16 MiB to match
-messages; it does not truncate observations.
 
 ## Voice plugin
 
@@ -357,57 +336,15 @@ No model, renderer, training, package installation, or application startup occur
 
 ## Input plugin
 
-For an isolated DLL fixture: `tests/run_plugin_shutdown.ps1 -BuildInputFixture`.
+API v9 supplies four tools: `move_mouse`, `click`, `type`, and `key`. The plugin
+owns parsing/results and the host input primitive directly calls InputController.
+It no longer depends on perception initialization. `click_on` is retired with its
+legacy observation bridge; targeting geometry and checked input remain testable
+under `core/input`.
 
-`input_plugin` registers the five existing canonical input tool IDs through API
-v8.1. It owns parsing, validation, operation selection and result formatting for
-`move_mouse`, `click`, `type`, and `key`, using parsed input primitives through
-the permission-checked API. It imports no host C++ symbols. The host retains
-live capture, perception manager and input devices, plus legacy handlers for
-host/developer use. `click_on` remains on the grounded host service for now.
+Run `tests/run_plugin_shutdown.ps1 -BuildInputFixture` and
+`tests/run_click_target.ps1` for isolated input and targeting checks.
 
-| Tool | Raw arguments |
-|---|---|
-| `move_mouse` | `<x> <y>` or `<x>,<y>`, including negative coordinates |
-| `click` | Optional button name; empty means left |
-| `type` | Verbatim text, including surrounding whitespace |
-| `key` | A host key name or plus-separated combination |
-| `click_on` | `[text|object] <exact label>` |
-
-All tools require INPUT permission and confirmation metadata. `click_on` also
-requires SYSTEM for perception/targeting. Its complete host results pass through,
-including voice/colors, failures, exceptions, and structured targeting output.
-The four direct tools retain legacy key/button interpretation and void-input
-success semantics. `click_on` retains checked bounds, ambiguity, freshness, and
-OS-delivery handling. Calls remain synchronous; no input worker or polling is
-introduced. The application response still requires subsequent observation.
-
-```powershell
-cmake -S plugins/input_plugin -B .codex-build/input-plugin -G "Visual Studio 17 2022" -A x64
-cmake --build .codex-build/input-plugin --config Release --target input_plugin --parallel 2
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -InputPluginDirectory .codex-build/input-plugin/plugins
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_click_target.ps1
-```
-
-Deploy `.codex-build/input-plugin/plugins/input_plugin.dll` into the application's
-`plugins/` folder after rebuilding the host for API v8.1. Loading or unloading the DLL does not initialize
-or destroy host perception/input state. Unload waits for active handlers and
-removes all five tools; source-file deletion is reconciled normally.
-
-The focused suites load the real DLL/API/registry against an input sink and
-exercise the real host service/handlers with a simulated context manager. They
-cover metadata, permissions, exact arguments/results, failure/exception handling,
-active-call draining, and folder removal. No real pointer/key events, desktop
-capture, model execution, application build, or package installation occurs.
-See [API details](../docs/PLUGIN_API.md#input-tool-migration-v39) and
-[grounded targeting](../docs/input/TOOLS.md#grounded-dispatch).
-
-### Retained host handlers
-
-The eleven former AI/NLP/settings tools are retired from agent registration,
-with their handler logic retained for possible host/developer use. They are no
-longer a pending plugin migration set. See
-[retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md).
 
 ## Scheduling plugin (API v8)
 

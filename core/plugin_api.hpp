@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v8.1
+// G.R.I.M Plugin API v9.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -20,8 +20,8 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 8
-#define GRIM_API_VERSION_MINOR 1
+#define GRIM_API_VERSION_MAJOR 9
+#define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -169,11 +169,6 @@ struct GrimToolRegistration {
     const char* short_description = nullptr;
 };
 
-enum GrimPerceptionQuery : uint32_t {
-    GRIM_PERCEPTION_ANALYZE_SCREEN = 0,
-    GRIM_PERCEPTION_READ_TEXT = 1,
-    GRIM_PERCEPTION_DETECT_OBJECTS = 2
-};
 
 enum GrimVoiceOperation : uint32_t {
     GRIM_VOICE_CAPTURE = 0, GRIM_VOICE_HAS_STREAM_CONTEXT = 1, GRIM_VOICE_START_STREAM = 2,
@@ -195,7 +190,7 @@ enum GrimUIPanelOperation : uint32_t {
 
 enum GrimInputOperation : uint32_t {
     GRIM_INPUT_MOVE_MOUSE = 0, GRIM_INPUT_CLICK = 1, GRIM_INPUT_TYPE = 2,
-    GRIM_INPUT_KEY = 3, GRIM_INPUT_CLICK_ON = 4
+    GRIM_INPUT_KEY = 3
 };
 
 // Intent structure (matches your Intent struct)
@@ -356,11 +351,6 @@ typedef struct GrimPluginAPI {
     const char* (*search_memory)(const GrimPluginAPI* self, const char* query);
     // value is presence bool. Retains legacy forget's check+flush, not deletion.
     const char* (*flush_memory_record_if_present)(const GrimPluginAPI* self, uint64_t id);
-    // v3.6: SYSTEM permission. Checks current host availability, then invokes
-    // the selected existing observation service. Runtime-service JSON envelope;
-    // value is {available:bool,text:string}. Release with string_free.
-    // Null = invalid query, denied permission, or API failure. No input control.
-    const char* (*query_perception)(const GrimPluginAPI* self, GrimPerceptionQuery query);
     // v3.7: VOICE permission; cache lifecycle/precache also require FILESYSTEM.
     // Optional object-valued JSON arguments; runtime-service JSON response.
     // Host owns audio/configuration/stream/cache state. No command dispatch.
@@ -376,13 +366,6 @@ typedef struct GrimPluginAPI {
     // but cannot undo an effect already applied. Table/descriptor layouts unchanged.
     const char* (*ui_panel_service)(const GrimPluginAPI* self, GrimUIPanelOperation operation,
                                     const char* panel_key, uint64_t request_id);
-    // v3.9: INPUT permission, plus SYSTEM for CLICK_ON perception/targeting.
-    // Synchronous host execution of the existing raw-argument input operation;
-    // no registry dispatch. Arguments are borrowed only for this call (max 64 KiB).
-    // Returns host-owned grim-input-result v1 JSON; release with string_free.
-    // Null = invalid input, denied access, unpublished/stopping provider, or API failure.
-    const char* (*input_service)(const GrimPluginAPI* self, GrimInputOperation operation,
-                                const char* arguments, size_t arguments_size);
     // v3.17: UI permission. Initialization-only declaration of a host panel
     // implementation (1-256 bytes). Copied and staged until provider commit.
     // GRIM_OK accepts the declaration; UI-thread creation is asynchronous.

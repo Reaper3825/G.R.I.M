@@ -1,8 +1,5 @@
-#include "perception/click_target.hpp"
-#include "perception/perception_context.hpp"
-#include "commands/commands_perception.hpp"
+#include "core/input/click_target.hpp"
 #include "core/input/checked_click.hpp"
-#include "perception/input_command_service.hpp"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -24,25 +21,6 @@ std::vector<std::string> comboUsed;
 void logDebug(const std::string&, const std::string&) {}
 void logError(const std::string&, const std::string&) {}
 void logTrace(const std::string&, const std::string&) {}
-// Test-only host manager; production command parsing/result handling is linked unchanged.
-namespace GRIM::Perception {
-struct PerceptionContextManager::Impl {};
-PerceptionContextManager::PerceptionContextManager() : pImpl(std::make_unique<Impl>()) {}
-PerceptionContextManager::~PerceptionContextManager() = default;
-std::unique_ptr<PerceptionContextManager> g_contextManager;
-ClickTargetResult PerceptionContextManager::clickOnText(const std::string& text, const std::string&) {
-    ++commandCalls; commandTarget = text; commandKind = ClickTargetKind::Text; return commandResult;
-}
-ClickTargetResult PerceptionContextManager::clickOnObject(const std::string& text, const std::string&) {
-    ++commandCalls; commandTarget = text; commandKind = ClickTargetKind::Object; return commandResult;
-}
-void PerceptionContextManager::typeText(const std::string& text, int delay) { ++unrelatedInputs; rawTyped = text; typingDelay = delay; }
-void PerceptionContextManager::tapKey(const std::string& key) { ++unrelatedInputs; keyUsed = key; }
-void PerceptionContextManager::pressKeyCombo(const std::vector<std::string>& keys) { ++unrelatedInputs; comboUsed = keys; }
-void PerceptionContextManager::moveMouseTo(int x, int y) { ++unrelatedInputs; movedX = x; movedY = y; }
-void PerceptionContextManager::clickMouse(const std::string& button) { ++unrelatedInputs; buttonUsed = button; }
-}
-
 int main() try {
     using namespace GRIM::Perception;
     using namespace GRIM::Perception::Digital;
@@ -146,51 +124,5 @@ int main() try {
     sent = 0;
     check(!GRIM::Input::SendCheckedClick(10, 10, input), "Rejected input became success");
 
-    check(cmdInputClickOn("text Submit").errorCode == "ERR_INPUT_NOT_INITIALIZED", "Missing host manager was ignored");
-    g_contextManager = std::make_unique<PerceptionContextManager>();
-    for (const auto* arg : {"", " \t", "text", "object  ", "text \t"})
-        check(cmdInputClickOn(arg).errorCode == "ERR_INVALID_ARGS", "Empty selector reached host targeting");
-    check(commandCalls == 0, "Invalid command arguments called targeting");
-    commandResult = {false, "ERR_INPUT_TARGET_AMBIGUOUS", "Multiple matches"};
-    check(!cmdInputClickOn("text Submit").success && cmdInputClickOn("text Submit").errorCode == commandResult.error,
-          "Targeting failure was not propagated to command");
-    for (const auto* error : {"ERR_INPUT_TARGET_AMBIGUOUS", "ERR_INPUT_STALE_TARGET", "ERR_INPUT_DISPATCH_FAILED"}) {
-        commandResult = {false, error, "Targeted click rejected"};
-        const int beforeCalls = commandCalls;
-        const auto rejected = ExecuteInputCommandService(GRIM_INPUT_CLICK_ON, "text Submit");
-        check(!rejected.success && rejected.errorCode == error && rejected.structuredOutputJson.empty(),
-              "Input service lost targeting failure or returned success-shaped output");
-        check(commandCalls == beforeCalls + 1 && unrelatedInputs == 0,
-              "Failed targeted click was retried or replaced with another input action");
-    }
-    commandResult = {true, "", "Click input sent; response unverified", -1780, -150};
-    auto command = cmdInputClickOn("  ObJeCt\tsave-button  ");
-    check(command.success && commandTarget == "save-button" && commandKind == ClickTargetKind::Object,
-          "Object selector parsing lost target");
-    const auto output = nlohmann::json::parse(command.structuredOutputJson);
-    check(output.at("desktop_x") == -1780 && !output.at("application_response_verified").get<bool>(),
-          "Command lost coordinates or claimed application response verification");
-    check(cmdInputClickOn("Submit").success && commandKind == ClickTargetKind::Text, "Default text selector was lost");
-    check(ExecuteInputCommandService(GRIM_INPUT_MOVE_MOUSE, "-1200, 300 trailing").success && movedX == -1200 && movedY == 300,
-          "Input service changed coordinate parsing");
-    check(!ExecuteInputCommandService(GRIM_INPUT_MOVE_MOUSE, "bad coords").success, "Malformed coordinates became success");
-    check(ExecuteInputCommandService(GRIM_INPUT_CLICK, "").success && buttonUsed == "left", "Default button changed");
-    check(ExecuteInputCommandService(GRIM_INPUT_TYPE, "  raw text  ").success && rawTyped == "  raw text  " && typingDelay == 15,
-          "Typing text/delay changed across host service");
-    check(!ExecuteInputCommandService(GRIM_INPUT_TYPE, "").success, "Empty typing input became success");
-    check(ExecuteInputCommandService(GRIM_INPUT_KEY, "ctrl + c").success && comboUsed == std::vector<std::string>{"ctrl", "c"},
-          "Key-combination parsing changed");
-    check(ExecuteInputCommandService(GRIM_INPUT_KEY, "enter").success && keyUsed == "enter", "Single-key service changed");
-    check(ExecuteInputCommandService(GRIM_INPUT_CLICK_ON, "object save-button").success && commandKind == ClickTargetKind::Object,
-          "Input service did not route grounded targeting");
-    check(!ExecuteInputCommandService(static_cast<GrimInputOperation>(999), "").success, "Unknown service operation accepted");
-    check(ExecuteInputPrimitive({{"op","move"},{"x",-99},{"y",42}}) && movedX == -99 && movedY == 42,
-          "Parsed move primitive failed");
-    check(ExecuteInputPrimitive({{"op","click"},{"button","right"}}) && buttonUsed == "right", "Click primitive failed");
-    check(ExecuteInputPrimitive({{"op","type"},{"text"," raw "}}) && rawTyped == " raw " && typingDelay == 15, "Type primitive changed text/delay");
-    check(ExecuteInputPrimitive({{"op","key"},{"key","enter"}}) && keyUsed == "enter", "Key primitive failed");
-    check(ExecuteInputPrimitive({{"op","combo"},{"keys",{"ctrl","c"}}}) && comboUsed == std::vector<std::string>{"ctrl","c"}, "Combo primitive failed");
-    g_contextManager.reset();
-    check(!ExecuteInputPrimitive({{"op","available"}}) && !ExecuteInputPrimitive({{"op","click"},{"button","left"}}), "Primitive ignored missing context");
     std::cout << "Click targeting, geometry, ambiguity, delivery and command-result tests passed\n";
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

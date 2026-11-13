@@ -49,7 +49,6 @@ private:
     static QuestionResult searchExternalKnowledge(const std::string& question);
     
     // Search using vision/OCR (for "what do you see?" type questions)
-    static QuestionResult searchVision(const std::string& question);
     
     // Search OSINT databases for people/usernames
     static QuestionResult searchOSINT(const std::string& query);
@@ -67,10 +66,8 @@ private:
     static std::string performOSINTLookup(const std::string& username);
     
     // Helper: Perform OCR on screen
-    static std::string performScreenOCR();
     
     // Helper: Detect objects on screen
-    static std::string performObjectDetection();
     
     // Helper: Determine if Q&A should be remembered
     static bool shouldRememberQA(const std::string& question, 

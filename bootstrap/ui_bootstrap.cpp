@@ -9,19 +9,13 @@
 #include "../geospatial/geospatial_runtime.hpp"
 #include "../helpers/mouse.hpp"
 #include "../logger.hpp"
-#include "../perception/digital/DigitalCaptureSource.hpp"
-#include "../perception/digital/DigitalEnvironmentLoop.hpp"
-#include "../perception/digital/DigitalPerceptionPrimitivesLoop.hpp"
-#include "../perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "../popup_ui/popup_ui.hpp"
 #include "../resources.hpp"
 #include "../ui/console_panel.hpp"
 #include "../ui/primitives/ui_native_3d_viewport_attachment.hpp"
 #include "../ui/primitives/ui_native_3d_viewport_clear_pass.hpp"
 #include "../ui/ui_data_hub.hpp"
-#include "../ui/ui_digital_environment_panel.hpp"
 #include "../ui/ui_geospatial_panel.hpp"
-#include "../ui/ui_physical_environment_panel.hpp"
 #include "../ui/ui_root.hpp"
 #include "../ui/ui_settings_menu.hpp"
 #include "../ui/ui_storage_panel.hpp"
@@ -131,22 +125,10 @@ UIBootstrapResult bootstrapUI(
         throw std::runtime_error("bootstrapUI: failed to create transparent overlay window");
     }
 
-    std::string captureExclusionError;
-    if (!GRIM::Perception::Digital::SetDigitalCaptureExcludedWindow(
-            overlayWindow->hwnd, &captureExclusionError)) {
-        LOG_ERROR("DigitalCapture", "Could not exclude GRIM overlay from capture: " +
-                  captureExclusionError);
-    } else {
-        LOG_PHASE("GRIM overlay excluded from digital capture", true);
-    }
-
-    GRIM::Perception::Digital::DigitalEnvironmentConfig digitalCaptureConfig;
-    digitalCaptureConfig.request.mode =
-        GRIM::Perception::Digital::DigitalCaptureMode::ActiveMonitor;
-    digitalCaptureConfig.capture_interval = std::chrono::milliseconds(1000);
-    GRIM::Perception::Digital::StartDigitalEnvironment(digitalCaptureConfig);
-    GRIM::Perception::Digital::StartDigitalPerceptionPrimitives();
-    LOG_PHASE("Digital environment capture started", true);
+#ifdef _WIN32
+    if (!SetWindowDisplayAffinity(overlayWindow->hwnd, WDA_EXCLUDEFROMCAPTURE))
+        LOG_ERROR("UI", "Could not exclude GRIM overlay from screen capture");
+#endif
 
     WindowManager::updateWindowDimensions("overlay", virtualWidth, virtualHeight);
     WindowManager::processMainThreadUpdates();
@@ -159,7 +141,6 @@ UIBootstrapResult bootstrapUI(
     // Host services outlive provider panels. Factories capture these dependencies;
     // the UI plugin decides which live panel instances exist.
     auto geoSpatialRuntime = std::make_shared<GRIM::GeoSpatial::GeoSpatialRuntime>();
-    GRIM::Perception::Physical::RegisterPhysicalEnvironmentDeviceServer(&deviceCommServer);
     auto& root = UIRoot::get();
     root.registerPanelFactory("ui.console", "console", [] { return std::make_shared<ConsolePanel>(); });
     root.registerPanelFactory("ui.settings", "settings", [] { return std::make_shared<UISettingsMenu>(); });
@@ -170,12 +151,6 @@ UIBootstrapResult bootstrapUI(
         auto panel = std::make_shared<UIStoragePanel>();
         panel->setServer(server);
         return panel;
-    });
-    root.registerPanelFactory("ui.physical_environment", "physical_environment", [] {
-        return std::make_shared<UIPhysicalEnvironmentPanel>();
-    });
-    root.registerPanelFactory("ui.digital_environment", "digital_environment", [] {
-        return std::make_shared<UIDigitalEnvironmentPanel>();
     });
     const auto cleanupGeoSpatial = [geoSpatialRuntime](const std::shared_ptr<UIPanel>& base) {
         geoSpatialRuntime->setViewportReady(false);

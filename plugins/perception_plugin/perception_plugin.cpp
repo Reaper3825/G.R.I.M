@@ -1,48 +1,52 @@
-#include "plugins/runtime_service_client.hpp"
-
+#include "perception_runtime.hpp"
+#include "plugins/plugin_logging.hpp"
+#include <memory>
 namespace {
-template<GrimPerceptionQuery Query>
-GrimResult call(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
-    // All three former handlers ignored their arguments. The host performs the
-    // same availability check and calls its existing observation service once.
-    const auto value = grim::runtime::response(grim::runtime::host->query_perception(grim::runtime::host, Query));
-    if (!value.at("available").get<bool>()) {
-        return grim::runtime::deliver(writer, {false, "[Perception] System not initialized",
-            "ERR_PERCEPTION_NOT_INITIALIZED", "error", "Perception system not available", Colors::Red});
+std::unique_ptr<perceptionPlugin::Runtime> runtime;
+const char* ids[] = {"perception.observe", "perception.digital.start", "perception.digital.stop",
+    "perception.physical.open", "perception.physical.close", "perception.configure", "perception.calibrate"};
+GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void* context) {
+    std::string message, structured;
+    GrimToolResult result;
+    try {
+        const auto args = request->arguments_size ? nlohmann::json::parse(request->arguments,request->arguments+request->arguments_size) : nlohmann::json::object();
+        structured = runtime->request(static_cast<const char*>(context),args).dump();
+        result.success = true; result.error_code = "ERR_NONE"; result.category = "information";
+        message = "Perception snapshot";
+    } catch (const std::exception& e) {
+        message = e.what(); result.error_code = "ERR_PERCEPTION"; result.category = "error";
+    } catch (...) {
+        message = "Unknown perception failure"; result.error_code = "ERR_PERCEPTION"; result.category = "error";
     }
-    const auto text = value.at("text").get<std::string>();
-    // Preserve literal output and success status, including empty/error text.
-    return grim::runtime::deliver(writer, {true, text, "ERR_NONE", "routine", text, Colors::Cyan});
+    result.message = message.c_str(); result.structured_output_json = structured.c_str();
+    return writer->complete(writer,&result);
 }
 }
 extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION, "Perception Plugin", "1.0.0", "GRIM Project",
-        "Screen analysis, OCR, and object observations through existing host perception services", GRIM_PERM_SYSTEM};
+    static const GrimPluginInfo info{GRIM_API_VERSION,"Perception Plugin","2.0.0","GRIM Project",
+        "Plugin-owned digital and physical perception primitives",GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM | GRIM_PERM_NETWORK};
     return &info;
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
-    if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
-        !api->query_perception) return GRIM_ERROR_API_VERSION_MISMATCH;
-    grim::runtime::host = api;
-    GrimToolRegistration tools[3];
-    tools[0].handler = call<GRIM_PERCEPTION_ANALYZE_SCREEN>;
-    tools[1].handler = call<GRIM_PERCEPTION_READ_TEXT>;
-    tools[2].handler = call<GRIM_PERCEPTION_DETECT_OBJECTS>;
-    const char* ids[] = {"perception_what_see", "perception_read_text", "perception_detect_objects"};
-    const char* descriptions[] = {"Describe what's visible on screen", "Read text from screen using OCR", "Detect and locate objects on screen"};
-    const char* contexts[] = {"Host perception subsystem initialized"};
-    const char* summaries[] = {"Describe the currently visible contents of the screen",
-        "Read visible screen text using optical character recognition",
-        "Detect visible objects and report their screen locations"};
-    for (size_t i = 0; i < 3; ++i) {
-        tools[i].usage_type = GRIM_TOOL_USAGE_DEBUG;
-        tools[i].short_description = summaries[i];
-        auto& d = tools[i].descriptor;
-        d.tool_id = d.display_name = d.usage = ids[i];
-        d.version = "1.0.0"; d.description = descriptions[i]; d.category = "information";
-        d.argument_format = "raw_text"; d.required_permissions = GRIM_PERM_SYSTEM; d.is_informational = 1;
-        d.preconditions = {contexts, 1};
-    }
-    return api->register_tools(api, tools, 3);
+    if (!api || api->api_version != GRIM_API_VERSION || !api->register_tools || !api->create_timer ||
+        !api->cancel_timer || !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
+    grim::plugin::setLoggingAPI(api);
+    try {
+        runtime = std::make_unique<perceptionPlugin::Runtime>(api);
+        GrimToolRegistration registrations[7];
+        const char* descriptions[] = {"Read latest structured perception observations", "Start digital capture and primitives",
+            "Stop digital capture and primitives", "Open a physical camera source", "Close physical capture and processing",
+            "Configure a plugin-owned perception operator", "Begin physical camera calibration"};
+        for (size_t i=0;i<7;++i) {
+            auto& r=registrations[i]; auto& d=r.descriptor;
+            r.handler=call; r.user_data=const_cast<char*>(ids[i]); r.usage_type=GRIM_TOOL_USAGE_DEBUG;
+            r.short_description=descriptions[i]; d.tool_id=d.display_name=d.usage=ids[i]; d.version="2.0.0";
+            d.description=descriptions[i]; d.category="perception"; d.argument_format="json";
+            d.argument_schema_json=R"({"type":"object"})";
+            d.required_permissions=GRIM_PERM_SYSTEM | (i==0 ? 0 : GRIM_PERM_FILESYSTEM | GRIM_PERM_NETWORK);
+            d.is_informational=i==0; d.needs_confirmation=i!=0;
+        }
+        return api->register_tools(api,registrations,7);
+    } catch (...) { runtime.reset(); grim::plugin::setLoggingAPI(nullptr); return GRIM_ERROR_UNKNOWN; }
 }
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { grim::runtime::host = nullptr; }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { runtime.reset(); grim::plugin::setLoggingAPI(nullptr); }

@@ -36,8 +36,6 @@ void processPanelShortcuts()
     togglePanel("toggle_data_hub", "DataHub");
     togglePanel("toggle_storage", "Shared Storage");
     togglePanel("toggle_geospatial", "GeoSpatial");
-    togglePanel("toggle_physical_environment", "Physical Environment");
-    togglePanel("toggle_digital_environment", "Digital Environment");
 }
 
 } // namespace GRIM::UI

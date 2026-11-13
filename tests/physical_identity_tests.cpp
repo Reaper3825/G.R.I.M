@@ -1,5 +1,5 @@
-#include "perception/physical/PhysicalFaceIdentityMatcher.hpp"
-#include "perception/physical/PhysicalIdentityStore.hpp"
+#include "plugins/perception_plugin/physical/PhysicalFaceIdentityMatcher.hpp"
+#include "plugins/perception_plugin/physical/PhysicalIdentityStore.hpp"
 
 #include <cmath>
 #include <filesystem>

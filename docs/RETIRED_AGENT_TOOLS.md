@@ -73,3 +73,13 @@ integration questions; this cleanup does not connect them.
 
 Only focused tests and static diagnostics validate this cleanup. The host
 executable and model/training runtimes are not rebuilt or deployed by it.
+
+## Perception ownership break (November 13, 2026)
+
+API v9 removes the retained question handler's automatic vision-question branch
+and its direct OCR/detection helpers. Its unrelated conversation, memory, OSINT,
+and generation logic remains; the retired `question` tool is not re-registered.
+Perception now exposes explicit plugin-owned observation tools. Legacy
+`PerceptionContextManager`, host capture/engine lifecycle, automatic visual-memory
+writers, and session projectors were removed rather than adapted. Input devices
+are accessed independently through `core/input/input_service.cpp`.

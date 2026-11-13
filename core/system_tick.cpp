@@ -5,18 +5,6 @@
 #include "../geospatial/geospatial_runtime.hpp"
 #include "../helpers/key.hpp"
 #include "../helpers/mouse.hpp"
-#include "../perception/digital/DigitalContextProjector.hpp"
-#include "../perception/physical/PhysicalCameraCalibrator.hpp"
-#include "../perception/physical/PhysicalEnvironmentLoop.hpp"
-#include "../perception/physical/PhysicalFrameBus.hpp"
-#include "../perception/physical/PhysicalGestureControlLoop.hpp"
-#include "../perception/physical/PhysicalInteractionLoop.hpp"
-#include "../perception/physical/PhysicalLocalizationLoop.hpp"
-#include "../perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
-#include "../perception/physical/PhysicalSpatialGroundingLoop.hpp"
-#include "../perception/physical/PhysicalWorldStateContextProjector.hpp"
-#include "../perception/physical/PhysicalWorldStateLoop.hpp"
-#include "../perception/physical/PhysicalWorldStateMemoryWriter.hpp"
 #include "../ui/ui_root.hpp"
 #include "../ui/ui_shortcuts.hpp"
 #include "../wake/wake_key.hpp"
@@ -57,23 +45,6 @@ void tickApplicationFrame(
     PluginManager::tick();
     PluginAPI::processTimers(); // Dispatch gated plugin callbacks; providers own due-work policy.
 
-    Perception::Physical::TickPhysicalEnvironment();
-    // Calibration is an exclusive raw-camera workflow. Do not schedule the
-    // competing interaction/inference/world pipeline while it is collecting
-    // samples; this also prevents calibration-board observations from becoming
-    // durable environmental memories.
-    if (!Perception::Physical::IsPhysicalCameraCalibrationCaptureActive()
-        && Perception::Physical::PhysicalFrameBus::Instance().HasCalibratedModelFrame()) {
-        Perception::Physical::TickPhysicalInteraction();
-        Perception::Physical::TickPhysicalGestureControl();
-        Perception::Physical::TickPhysicalPerceptionPrimitives();
-        Perception::Physical::TickPhysicalSpatialGrounding();
-        Perception::Physical::TickPhysicalLocalization();
-        Perception::Physical::TickPhysicalWorldState();
-        Perception::Physical::TickPhysicalWorldStateContextProjector();
-        Perception::Physical::TickPhysicalWorldStateMemoryWriter();
-    }
-    Perception::Digital::TickDigitalContextProjector();
     geoSpatialRuntime.tick(kDeltaSeconds);
 
     // Global bindings above retain raw hardware input. UI gestures stop when

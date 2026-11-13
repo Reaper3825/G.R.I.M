@@ -11,8 +11,6 @@
 #include "net/websocket_server.hpp"
 #include "control/devices/server/device_comm_server.hpp"
 #include "resources.hpp"
-#include "perception/digital/DigitalCaptureProbe.hpp"
-#include "perception/digital/DigitalCaptureSource.hpp"
 
 GRIM::UnifiedMemoryStorage g_memoryStorage;
 static GRIM::WebSocketServer wsServer;
@@ -24,17 +22,9 @@ int main(int argc, char* argv[])
     GRIM::InstallCrashDumpHandler();
     LOG_PHASE("Initializing G.R.I.M", true);
 
-    std::string dpiAwarenessError;
-    if (!GRIM::Perception::Digital::EnsureDigitalCaptureDpiAwareness(&dpiAwarenessError)) {
-        LOG_ERROR("DigitalCapture", "Failed to enable per-monitor DPI awareness: " +
-                  dpiAwarenessError);
-    }
-
-    int digitalProbeExitCode = 0;
-    if (GRIM::Perception::Digital::TryRunDigitalCaptureProbe(
-            argc, argv, digitalProbeExitCode)) {
-        return digitalProbeExitCode;
-    }
+#ifdef _WIN32
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
 
     GRIM::installApplicationShutdownHandlers();
 
@@ -48,7 +38,6 @@ int main(int argc, char* argv[])
     bootstrapVoiceSubsystem();
 
     bootstrapMemorySubsystem(g_memoryStorage);
-    bootstrapPerceptionSubsystem();
 
     auto ui = bootstrapUI(*g_deviceCommServer, argc, argv);
 

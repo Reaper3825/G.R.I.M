@@ -1,31 +1,27 @@
-# G.R.I.M Plugin API v8
+# G.R.I.M Plugin API v9
 
-API version: **8.1.0**.
+API version: **9.0.0**.
 
-Version 8.1 adds `input_primitive` in a reserved slot without shifting existing
-fields. The input plugin now owns parsing, validation, operation selection and
-complete result formatting for `move_mouse`, `click`, `type`, and `key`.
-The host retains live input/context ownership and legacy handlers for host use.
-`click_on` continues through the existing grounded command service.
+Version 9 is a breaking perception ownership change. `query_perception`,
+`GrimPerceptionQuery`, and raw-command `input_service` are removed from the ABI.
+Rebuild the host and every plugin together; v8 binaries are rejected.
+There is no legacy forwarding or compatibility adapter.
 
-`input_primitive(self, request_json, size)` accepts an object with `op`:
-`available`, `move` (integer `x`, `y`), `click` (string `button`), `type`
-(string `text`), `key` (string `key`), or `combo` (string array `keys`).
-Typing retains a 15 ms delay. It returns the `grim-runtime-service` v1 envelope
-with a boolean value: false means the live context is unavailable; true means
-available/executed using the existing void input interfaces, not verified OS
-or application delivery. Exceptions use the existing runtime-service error
-encoding. Strings must be released with `string_free`.
+Perception implementation/state lives in `plugins/perception_plugin`.
+The host supplies only generic registration, provider-owned timers, resource
+publication and logging. New tools return copied JSON observations; no OpenCV
+objects, engines, devices, or C++ pointers cross the ABI. See
+[perception ownership and tools](../plugins/perception_plugin/README.md).
 
-INPUT permission and an active published provider are required. Calls drain on
-unload. The JSON transport limit is 6 * 65536 + 1024 bytes to allow escaping;
-the plugin retains the 65536-byte raw argument limit. The plugin checks
-availability before argument validation, and the host checks it again before
-execution. Null responses become `ERR_INPUT_SERVICE`. Rebuild the input plugin
-and host for v8.1 together; other v8.0 plugins retain their existing API layout.
-
-Validate with `tests/run_plugin_shutdown.ps1 -BuildInputFixture` and
-`tests/run_click_target.ps1`; both use simulated input, never desktop events.
+The input plugin supplies `move_mouse`, `click`, `type`, and `key` through
+`input_primitive(self, request_json, size)`. Its host implementation is in
+`core/input/input_service.cpp` and calls input devices directly, without a
+perception manager. Requests support `available`, `move` (`x`,`y`), `click`
+(`button`), `type` (`text`), `key` (`key`), and `combo` (`keys`). The existing
+runtime-service envelope carries a boolean or an exception. These are void
+input operations; a true response does not verify the application's reaction.
+INPUT permission and an active provider are required. `click_on` is retired;
+pure targeting geometry and checked click primitives remain under `core/input`.
 
 Version 5 moved application handling into its plugin and added generic resource
 publication. Version 6 moves system information handling into its plugin and
@@ -465,7 +461,9 @@ enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, an
 OSINT findings panel handlers remain host-owned after their tool registrations were removed.
 See [UI panel operations](ui/PANEL_OPERATIONS.md) for stable keys and examples.
 
-## Input tool migration (v3.9)
+## Input tool migration (v3.9) — removed in v9
+
+The following describes the retired ABI. It is not available in v9.
 
 `input_plugin` supplies `move_mouse`, `click`, `type`, `key`, and `click_on`.
 They are no longer registered by the host. This section describes the retained legacy `input_service` boundary, still used

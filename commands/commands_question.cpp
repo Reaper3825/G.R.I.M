@@ -3,8 +3,6 @@
 #include "logger.hpp"
 #include "memory/unified_memory.hpp" 
 #include "ai/ai.hpp" 
-#include "perception/perception.hpp" 
-#include "perception/perception_context.hpp" // ✅ NEW: Context-aware perception
 #include "external_collector/osit.hpp" 
 #include "location.hpp" 
 #include <algorithm>
@@ -30,19 +28,6 @@ QuestionResult QuestionHandler::process(const std::string& question) {
     // Check for vision-specific questions first
     std::string lowerQ = question;
     std::transform(lowerQ.begin(), lowerQ.end(), lowerQ.begin(), ::tolower);
-    
-    if (lowerQ.find("see") != std::string::npos || 
-        lowerQ.find("screen") != std::string::npos ||
-        lowerQ.find("monitor") != std::string::npos ||
-        lowerQ.find("display") != std::string::npos ||
-        lowerQ.find("what's on") != std::string::npos ||
-        lowerQ.find("what is on") != std::string::npos ||
-        lowerQ.find("read text") != std::string::npos) {
-        QuestionResult visionResult = searchVision(question);
-        if (visionResult.answered) {
-            return visionResult;
-        }
-    }
     
     // Check for OSINT-specific questions
     if (lowerQ.find("who is") != std::string::npos || 
@@ -506,81 +491,7 @@ QuestionResult QuestionHandler::searchExternalKnowledge(const std::string& quest
 // Vision/OCR Search - Enhanced with Context-Aware Perception
 // ============================================================================
 
-QuestionResult QuestionHandler::searchVision(const std::string& question) {
-    QuestionResult result;
-    result.answered = false;
-    result.source = AnswerSource::Vision;
-    result.confidence = 0.0f;
-    
-    LOG_DEBUG("QuestionHandler", "Vision search requested: " + question);
-    
-    // Check if question is about visual content
-    std::string lowerQ = question;
-    std::transform(lowerQ.begin(), lowerQ.end(), lowerQ.begin(), ::tolower);
-    
-    bool isVisionQuestion = (
-        lowerQ.find("see") != std::string::npos ||
-        lowerQ.find("read") != std::string::npos ||
-        lowerQ.find("text on screen") != std::string::npos ||
-        lowerQ.find("screen") != std::string::npos ||
-        lowerQ.find("monitor") != std::string::npos ||
-        lowerQ.find("display") != std::string::npos ||
-        lowerQ.find("what's on") != std::string::npos ||
-        lowerQ.find("what is on") != std::string::npos ||
-        lowerQ.find("show me") != std::string::npos ||
-        lowerQ.find("looking at") != std::string::npos ||
-        lowerQ.find("viewing") != std::string::npos
-    );
-    
-    if (!isVisionQuestion) {
-        return result; // Not a vision question
-    }
-    
-    // ✅ NEW: Use context-aware perception system
-    try {
-        // Use the new perception context manager for intelligent answers
-        std::string visionResult = GRIM::Perception::answerVisionQuestionWithContext(question);
-        
-        if (!visionResult.empty()) {
-            result.answer = visionResult;
-            result.answered = true;
-            result.confidence = 0.85f; // Higher confidence with context
-            result.references.push_back("perception_context");
-            
-            LOG_DEBUG("QuestionHandler", "Vision question answered with context (length: " + 
-                      std::to_string(visionResult.length()) + " chars)");
-            return result;
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("QuestionHandler", "Context-aware vision failed: " + std::string(e.what()));
-        // Fall through to legacy methods
-    }
-    
-    // ✅ FALLBACK: Legacy OCR/object detection for compatibility
-    // Determine if OCR or object detection is needed
-    bool needsOCR = (
-        lowerQ.find("read") != std::string::npos ||
-        lowerQ.find("text") != std::string::npos ||
-        lowerQ.find("words") != std::string::npos
-    );
-    
-    // Attempt to perform vision analysis using legacy methods
-    std::string visionResult;
-    if (needsOCR) {
-        visionResult = performScreenOCR();
-    } else {
-        visionResult = performObjectDetection();
-    }
-    
-    if (!visionResult.empty()) {
-        result.answer = visionResult;
-        result.answered = true;
-        result.confidence = 0.75f; // Lower confidence for legacy methods
-        result.references.push_back("perception");
-    }
-    
-    return result;
-}
+
 
 // ============================================================================
 // OSINT Search
@@ -1423,58 +1334,3 @@ std::string GRIM::QuestionHandler::performOSINTLookup(const std::string& usernam
 // ============================================================================
 // Vision/OCR Implementation
 // ============================================================================
-
-std::string GRIM::QuestionHandler::performScreenOCR() {
-    LOG_DEBUG("QuestionHandler", "Performing screen OCR");
-    
-    // Check if perception is available
-    if (!GRIM::Perception::isAvailable()) {
-        LOG_ERROR("QuestionHandler", "Perception system not initialized");
-        return "OCR capabilities ready. Use command: perception read text";
-    }
-    
-    try {
-        // Perform actual OCR on full screen
-        std::string ocrText = GRIM::Perception::readText();
-        
-        if (!ocrText.empty() && ocrText.find("[Error]") == std::string::npos) {
-            return "Screen text:\n" + ocrText;
-        } else {
-            LOG_DEBUG("QuestionHandler", "OCR returned no text or error");
-            return "No readable text detected on screen.";
-        }
-        
-    } catch (const std::exception& e) {
-        LOG_ERROR("QuestionHandler", "OCR exception: " + std::string(e.what()));
-    }
-    
-    return "OCR capabilities ready. Use command: perception read text";
-}
-
-std::string GRIM::QuestionHandler::performObjectDetection() {
-    LOG_DEBUG("QuestionHandler", "Performing object detection");
-    
-    // Check if perception is available
-    if (!GRIM::Perception::isAvailable()) {
-        LOG_ERROR("QuestionHandler", "Perception system not initialized");
-        return "Object detection ready. Use command: perception what see";
-    }
-    
-    try {
-        // Perform actual object detection
-        std::string detectionResult = GRIM::Perception::detectObjects();
-        
-        if (!detectionResult.empty() && detectionResult.find("[Error]") == std::string::npos) {
-            return detectionResult;
-        } else {
-            LOG_DEBUG("QuestionHandler", "Object detection returned no results");
-            return "No objects detected on screen.";
-        }
-        
-    } catch (const std::exception& e) {
-        LOG_ERROR("QuestionHandler", "Detection exception: " + std::string(e.what()));
-    }
-    
-    return "Object detection ready. Use command: perception what see";
-}
-

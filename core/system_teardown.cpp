@@ -10,19 +10,6 @@
 #include "../memory/memory_buffer_rotation.hpp"
 #include "../memory/unified_memory.hpp"
 #include "../net/websocket_server.hpp"
-#include "../perception/digital/DigitalContextProjector.hpp"
-#include "../perception/digital/DigitalEnvironmentLoop.hpp"
-#include "../perception/digital/DigitalPerceptionPrimitivesLoop.hpp"
-#include "../perception/perception.hpp"
-#include "../perception/physical/PhysicalEnvironmentLoop.hpp"
-#include "../perception/physical/PhysicalGestureControlLoop.hpp"
-#include "../perception/physical/PhysicalInteractionLoop.hpp"
-#include "../perception/physical/PhysicalLocalizationLoop.hpp"
-#include "../perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
-#include "../perception/physical/PhysicalSpatialGroundingLoop.hpp"
-#include "../perception/physical/PhysicalWorldStateContextProjector.hpp"
-#include "../perception/physical/PhysicalWorldStateLoop.hpp"
-#include "../perception/physical/PhysicalWorldStateMemoryWriter.hpp"
 #include "../ui/ui_root.hpp"
 #include "../voice/voice_speak.hpp"
 #include "../wake/wake_key.hpp"
@@ -117,8 +104,6 @@ void shutdownApplication(
     PluginManager::unloadAll();
     shutdownDatasetServices();
 
-    Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
-    Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
 
     MemoryBufferRotation::instance().mergeToWorking();
     MemoryBufferRotation::instance().syncToLongTerm(memoryStorage);
@@ -158,19 +143,6 @@ void shutdownApplication(
 
     Voice::shutdownQueue();
     Voice::shutdownTTS();
-    Perception::Digital::ShutdownDigitalPerceptionPrimitives();
-    Perception::Digital::ShutdownDigitalEnvironment();
-    Perception::Digital::ShutdownDigitalContextProjector();
-    Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
-    Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
-    Perception::Physical::ShutdownPhysicalWorldState();
-    Perception::Physical::ShutdownPhysicalLocalization();
-    Perception::Physical::ShutdownPhysicalSpatialGrounding();
-    Perception::Physical::ShutdownPhysicalPerceptionPrimitives();
-    Perception::Physical::ShutdownPhysicalGestureControl();
-    Perception::Physical::ShutdownPhysicalInteraction();
-    Perception::Physical::ShutdownPhysicalEnvironment();
-    Perception::shutdown();
     Mouse::shutdown();
 
     PlatformInput::shutdown();

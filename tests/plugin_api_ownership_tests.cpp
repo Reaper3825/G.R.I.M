@@ -110,7 +110,6 @@ void runToolInspectionPluginTests(const std::filesystem::path&);
 void runHostAliasServiceTests();
 void runSystemInfoPluginTests(const std::filesystem::path&);
 void runRuntimePluginTests(const std::filesystem::path&, const std::filesystem::path&);
-void runPerceptionPluginTests(const std::filesystem::path&);
 void runVoicePluginTests(const std::filesystem::path&);
 void runUIPluginTests(const std::filesystem::path&);
 void runInputPluginTests(const std::filesystem::path&);
@@ -390,7 +389,6 @@ int main(int argc, char** argv) try {
     runHostAliasServiceTests();
     if (argc > 9 && *argv[9]) runSystemInfoPluginTests(argv[9]);
     if ((argc > 10 && *argv[10]) || (argc > 11 && *argv[11])) runRuntimePluginTests(argc > 10 ? argv[10] : "", argc > 11 ? argv[11] : "");
-    if (argc > 12 && *argv[12]) runPerceptionPluginTests(argv[12]);
     if (argc > 13 && *argv[13]) runVoicePluginTests(argv[13]);
     runUIPluginTests(argc > 14 ? argv[14] : "");
     runInputPluginTests(argc > 15 ? argv[15] : "");

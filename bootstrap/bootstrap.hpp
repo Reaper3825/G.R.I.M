@@ -34,7 +34,6 @@ std::unique_ptr<GRIM::DeviceCommServer> bootstrapNetworkServices(
 void bootstrapVoiceSubsystem();
 
 void bootstrapMemorySubsystem(GRIM::UnifiedMemoryStorage& memoryStorage);
-void bootstrapPerceptionSubsystem();
 
 struct UIBootstrapResult {
 	GRIMWindow& overlayWindow;

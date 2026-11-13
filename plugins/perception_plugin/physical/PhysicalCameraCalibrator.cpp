@@ -1,0 +1,857 @@
+#include "PhysicalCameraCalibrator.hpp"
+
+#include "PhysicalEnvironmentLogTag.hpp"
+#include "PhysicalFrameBus.hpp"
+#include "plugins/plugin_logging.hpp"
+
+#include <opencv2/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <ctime>
+#include <future>
+#include <iomanip>
+#include <mutex>
+#include <sstream>
+#include <stdexcept>
+
+namespace GRIM { namespace Perception { namespace Physical {
+
+namespace {
+
+[[noreturn]] void ThrowWithLocation(const char* fn, const std::string& msg) {
+    std::ostringstream ss;
+    ss << fn << ": " << msg
+       << " [" << __FILE__ << ":" << __LINE__ << "]";
+    throw std::runtime_error(ss.str());
+}
+
+std::string FormatTimestampUtcIso() {
+    const auto t  = std::chrono::system_clock::now();
+    const auto tt = std::chrono::system_clock::to_time_t(t);
+    std::tm tm_buf{};
+#if defined(_WIN32)
+    gmtime_s(&tm_buf, &tt);
+#else
+    gmtime_r(&tt, &tm_buf);
+#endif
+    std::ostringstream ss;
+    ss << std::put_time(&tm_buf, "%Y-%m-%dT%H:%M:%SZ");
+    return ss.str();
+}
+
+// Auto-capture cadence: we accept at most one sample per N milliseconds, and
+// only when the pose is distinct. The centroid grid remains a coverage guide,
+// but tilt and distance can provide useful diversity within the same cell.
+constexpr int kAutoCaptureMinIntervalMs = 700;
+constexpr int kCoverageGridCols          = 8;
+constexpr int kCoverageGridRows          = 6;
+constexpr int kMinSamplesRequired        = 10;
+constexpr int kMinCoverageCellsRequired  = 10;
+constexpr int kMaxSamplesPerCell         = 3;
+constexpr double kMinimumDistinctPoseRmsFraction = 0.015;
+
+struct CalibrationDetectionJobResult {
+    DetectedCalibrationPattern detection;
+    cv::Mat analyzed_frame;
+    uint64_t frame_counter = 0;
+    cv::Size image_size {0, 0};
+    int pattern_inner_cols = 0;
+    int pattern_inner_rows = 0;
+    std::string source_url;
+};
+
+struct PhysicalCalibrationModuleState {
+    std::mutex                                          mutex;
+    bool                                                initialized   = false;
+
+    // Pattern config (mutable from UI)
+    int                                                 pattern_inner_cols    = 9;
+    int                                                 pattern_inner_rows    = 6;
+    float                                               pattern_square_meters = 0.025f;
+
+    // Sample pool
+    std::vector<std::vector<cv::Point2f>>               accepted_image_points;
+    cv::Size                                            samples_image_size {0, 0};
+    std::vector<int>                                    coverage_cell_counts;  // resized lazily
+    std::chrono::steady_clock::time_point               last_accept_time {};
+    bool                                                capturing = false;
+    bool                                                automatic_completion_enabled = false;
+
+    // Last frame analysis (kept for UI live readout even when not capturing)
+    DetectedCalibrationPattern                          last_detection;
+    bool                                                last_frame_present = false;
+    int                                                 last_frame_width   = 0;
+    int                                                 last_frame_height  = 0;
+    uint64_t                                            last_detection_frame_counter = 0;
+    cv::Mat                                             last_detection_frame;
+    std::future<CalibrationDetectionJobResult>           detection_future;
+    bool                                                manual_capture_requested = false;
+    uint64_t                                            manual_capture_min_frame_counter = 0;
+
+    // Latest pulled FrameBus content
+    PhysicalFrameBus::FrameView                         pull_view;
+    uint64_t                                            last_seen_counter  = 0;
+
+    // Calibration result
+    PhysicalCalibrationData                             calib;
+    bool                                                calib_valid        = false;
+    std::string                                         active_source_url;
+    std::string                                         active_source_label;
+    cv::Size                                            active_image_size {0, 0};
+    std::string                                         active_profile_path;
+    PhysicalCalibrationStage                            stage = PhysicalCalibrationStage::Uncalibrated;
+    std::string                                         status_reason;
+};
+
+PhysicalCalibrationModuleState& GetModule() {
+    static PhysicalCalibrationModuleState s;
+    return s;
+}
+
+void EnsureCoverageGridSizedLocked(PhysicalCalibrationModuleState& s) {
+    const size_t want = static_cast<size_t>(kCoverageGridCols) * kCoverageGridRows;
+    if (s.coverage_cell_counts.size() != want) {
+        s.coverage_cell_counts.assign(want, 0);
+    }
+}
+
+int CoverageCellIndexForPointLocked(const PhysicalCalibrationModuleState& s,
+                                    const cv::Point2f& p,
+                                    int                img_w,
+                                    int                img_h) {
+    if (img_w <= 0 || img_h <= 0) return -1;
+    int cx = static_cast<int>((p.x / static_cast<float>(img_w)) * kCoverageGridCols);
+    int cy = static_cast<int>((p.y / static_cast<float>(img_h)) * kCoverageGridRows);
+    if (cx < 0) cx = 0; else if (cx >= kCoverageGridCols) cx = kCoverageGridCols - 1;
+    if (cy < 0) cy = 0; else if (cy >= kCoverageGridRows) cy = kCoverageGridRows - 1;
+    return cy * kCoverageGridCols + cx;
+}
+
+void LazyInitLocked(PhysicalCalibrationModuleState& s) {
+    if (s.initialized) return;
+    s.initialized = true;
+    EnsureCoverageGridSizedLocked(s);
+    s.stage         = PhysicalCalibrationStage::Uncalibrated;
+    s.status_reason = "waiting for an active camera to select its calibration profile";
+}
+
+void ClearSamplePoolLocked(PhysicalCalibrationModuleState& s) {
+    s.accepted_image_points.clear();
+    s.samples_image_size = cv::Size(0, 0);
+    EnsureCoverageGridSizedLocked(s);
+    std::fill(s.coverage_cell_counts.begin(), s.coverage_cell_counts.end(), 0);
+    s.last_accept_time = std::chrono::steady_clock::time_point{};
+}
+
+bool LoadActiveProfileLocked(PhysicalCalibrationModuleState& s) {
+    if (s.active_source_url.empty() || s.active_image_size.width <= 0
+        || s.active_image_size.height <= 0) {
+        ThrowWithLocation(__FUNCTION__, "active camera identity is incomplete");
+    }
+
+    s.active_profile_path = GetPhysicalCalibrationStorePath(
+        s.active_source_url, s.active_image_size);
+    PhysicalCalibrationData loaded_data;
+    const bool loaded = LoadPhysicalCalibrationDataFromPath(
+        s.active_profile_path, loaded_data);
+    if (!loaded) {
+        s.calib = {};
+        s.calib_valid = false;
+        if (!s.capturing) s.stage = PhysicalCalibrationStage::Uncalibrated;
+        s.status_reason = "no calibration for active camera '"
+            + s.active_source_label + "' at "
+            + std::to_string(s.active_image_size.width) + "x"
+            + std::to_string(s.active_image_size.height);
+        return false;
+    }
+    if (loaded_data.source_url_at_capture != s.active_source_url) {
+        ThrowWithLocation(__FUNCTION__,
+            "profile source mismatch: active='" + s.active_source_url
+            + "' stored='" + loaded_data.source_url_at_capture + "'");
+    }
+    if (loaded_data.image_size != s.active_image_size) {
+        ThrowWithLocation(__FUNCTION__,
+            "profile resolution mismatch: active="
+            + std::to_string(s.active_image_size.width) + "x"
+            + std::to_string(s.active_image_size.height) + " stored="
+            + std::to_string(loaded_data.image_size.width) + "x"
+            + std::to_string(loaded_data.image_size.height));
+    }
+
+    s.calib = std::move(loaded_data);
+    s.calib_valid = true;
+    s.pattern_inner_cols = s.calib.pattern_inner_cols;
+    s.pattern_inner_rows = s.calib.pattern_inner_rows;
+    s.pattern_square_meters = s.calib.pattern_square_meters;
+    if (!s.capturing) s.stage = PhysicalCalibrationStage::LoadedFromDisk;
+    s.status_reason = "loaded active camera calibration from '"
+        + s.active_profile_path + "'";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+        "PhysicalCameraCalibrator: " + s.status_reason);
+    return true;
+}
+
+void ActivateFrameProfileLocked(PhysicalCalibrationModuleState& s) {
+    if (s.pull_view.source_url.empty()) {
+        ThrowWithLocation(__FUNCTION__, "FrameBus packet has no source_url");
+    }
+    const cv::Size frame_size(s.pull_view.raw_image.cols, s.pull_view.raw_image.rows);
+    if (frame_size.width <= 0 || frame_size.height <= 0) {
+        ThrowWithLocation(__FUNCTION__, "FrameBus packet has invalid raw image size");
+    }
+    if (s.active_source_url == s.pull_view.source_url
+        && s.active_image_size == frame_size) {
+        s.active_source_label = s.pull_view.source_label;
+        return;
+    }
+
+    ClearSamplePoolLocked(s);
+    s.calib = {};
+    s.calib_valid = false;
+    s.active_source_url = s.pull_view.source_url;
+    s.active_source_label = s.pull_view.source_label;
+    s.active_image_size = frame_size;
+    s.active_profile_path.clear();
+    s.last_detection = {};
+    s.last_detection_frame.release();
+    s.last_detection_frame_counter = 0;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
+    LoadActiveProfileLocked(s);
+}
+
+// Pull a fresh frame view from the FrameBus (under module lock).
+bool PullLatestFrameLocked(PhysicalCalibrationModuleState& s) {
+    PhysicalFrameBus::FrameView v;
+    if (PhysicalFrameBus::Instance().PullLatestFrameView(v, s.last_seen_counter)) {
+        s.pull_view          = std::move(v);
+        s.last_frame_present = !s.pull_view.raw_image.empty();
+        if (s.last_frame_present) {
+            s.last_frame_width  = s.pull_view.raw_image.cols;
+            s.last_frame_height = s.pull_view.raw_image.rows;
+            ActivateFrameProfileLocked(s);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool TryAddSampleLocked(PhysicalCalibrationModuleState& s,
+                        bool                            allow_duplicate_cell,
+                        std::string&                    out_reason) {
+    if (!s.last_detection.found || s.last_detection.image_points.empty()) {
+        out_reason = "no chessboard pattern in current frame";
+        return false;
+    }
+    if (!s.last_frame_present) {
+        out_reason = "no frame available";
+        return false;
+    }
+
+    const cv::Size img_sz(s.last_frame_width, s.last_frame_height);
+    if (!s.accepted_image_points.empty() && img_sz != s.samples_image_size) {
+        out_reason = "frame size " + std::to_string(img_sz.width) + "x"
+                   + std::to_string(img_sz.height)
+                   + " does not match prior samples "
+                   + std::to_string(s.samples_image_size.width) + "x"
+                   + std::to_string(s.samples_image_size.height)
+                   + " — clear samples to switch sources";
+        return false;
+    }
+
+    // A manual click may legitimately add another view in the same coverage
+    // cell, but accepting an effectively identical pose makes the sample
+    // count look healthier without adding calibration information.
+    const double image_diagonal = std::hypot(
+        static_cast<double>(img_sz.width), static_cast<double>(img_sz.height));
+    for (const auto& prior : s.accepted_image_points) {
+        if (prior.size() != s.last_detection.image_points.size()) continue;
+        double direct_squared_displacement_sum = 0.0;
+        double reversed_squared_displacement_sum = 0.0;
+        for (size_t i = 0; i < prior.size(); ++i) {
+            const cv::Point2f direct_delta =
+                prior[i] - s.last_detection.image_points[i];
+            const cv::Point2f reversed_delta =
+                prior[i] - s.last_detection.image_points[prior.size() - 1 - i];
+            direct_squared_displacement_sum +=
+                static_cast<double>(direct_delta.dot(direct_delta));
+            reversed_squared_displacement_sum +=
+                static_cast<double>(reversed_delta.dot(reversed_delta));
+        }
+        const double point_rms = std::sqrt(
+            std::min(direct_squared_displacement_sum,
+                     reversed_squared_displacement_sum)
+            / static_cast<double>(prior.size()));
+        if (image_diagonal > 0.0
+            && point_rms / image_diagonal < kMinimumDistinctPoseRmsFraction) {
+            out_reason = "view is too similar to an accepted sample "
+                         "(move, tilt, or resize the board)";
+            return false;
+        }
+    }
+
+    EnsureCoverageGridSizedLocked(s);
+    const int cell = CoverageCellIndexForPointLocked(
+        s, s.last_detection.centroid_px, img_sz.width, img_sz.height);
+    if (cell < 0 || cell >= static_cast<int>(s.coverage_cell_counts.size())) {
+        out_reason = "computed coverage cell out of range";
+        return false;
+    }
+    if (!allow_duplicate_cell && s.coverage_cell_counts[cell] >= kMaxSamplesPerCell) {
+        out_reason = "coverage cell has enough samples "
+                     "(move the board to another image region)";
+        return false;
+    }
+
+    s.accepted_image_points.push_back(s.last_detection.image_points);
+    s.samples_image_size = img_sz;
+    s.coverage_cell_counts[cell] += 1;
+    s.last_accept_time = std::chrono::steady_clock::now();
+    out_reason = "accepted (count=" + std::to_string(s.accepted_image_points.size()) + ")";
+    return true;
+}
+
+void AutoCaptureIfDueLocked(PhysicalCalibrationModuleState& s) {
+    if (!s.capturing) return;
+    if (!s.last_detection.found) return;
+    const auto now = std::chrono::steady_clock::now();
+    const auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - s.last_accept_time).count();
+    if (ms < kAutoCaptureMinIntervalMs) return;
+    std::string reason;
+    if (TryAddSampleLocked(s, /*allow_duplicate_cell=*/false, reason)) {
+        s.status_reason = "auto-captured: " + reason;
+        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                  "PhysicalCameraCalibrator: " + s.status_reason);
+    }
+}
+
+void ScheduleDetectionForPulledFrameLocked(PhysicalCalibrationModuleState& s) {
+    if (s.detection_future.valid() || !s.last_frame_present
+        || s.pull_view.raw_image.empty()) {
+        return;
+    }
+
+    cv::Mat frame = s.pull_view.raw_image.clone();
+    const uint64_t frame_counter = s.pull_view.frame_counter;
+    const cv::Size image_size = frame.size();
+    const int cols = s.pattern_inner_cols;
+    const int rows = s.pattern_inner_rows;
+    const std::string source_url = s.pull_view.source_url;
+    s.detection_future = std::async(
+        std::launch::async,
+        [frame = std::move(frame), frame_counter, image_size,
+         cols, rows, source_url]() mutable {
+            CalibrationDetectionJobResult result;
+            result.frame_counter = frame_counter;
+            result.image_size = image_size;
+            result.pattern_inner_cols = cols;
+            result.pattern_inner_rows = rows;
+            result.source_url = source_url;
+            try {
+                DetectChessboardCornersInBgrFrame(
+                    frame, cols, rows, result.detection);
+            } catch (const std::exception& e) {
+                result.detection = {};
+                result.detection.failure_reason =
+                    std::string("detection threw: ") + e.what();
+            }
+            result.analyzed_frame = std::move(frame);
+            return result;
+        });
+}
+
+void CollectCompletedDetectionLocked(PhysicalCalibrationModuleState& s) {
+    if (!s.detection_future.valid()
+        || s.detection_future.wait_for(std::chrono::milliseconds(0))
+            != std::future_status::ready) {
+        return;
+    }
+
+    CalibrationDetectionJobResult result;
+    try {
+        result = s.detection_future.get();
+    } catch (const std::exception& e) {
+        s.last_detection = {};
+        s.last_detection.failure_reason =
+            std::string("asynchronous detection failed: ") + e.what();
+        LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.last_detection.failure_reason);
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+        return;
+    }
+
+    // Results are meaningful only for the camera, resolution, and pattern
+    // geometry under which the job was launched.
+    if (result.source_url != s.active_source_url
+        || result.image_size != s.active_image_size
+        || result.pattern_inner_cols != s.pattern_inner_cols
+        || result.pattern_inner_rows != s.pattern_inner_rows) {
+        return;
+    }
+
+    s.last_detection = std::move(result.detection);
+    s.last_detection_frame = std::move(result.analyzed_frame);
+    s.last_detection_frame_counter = result.frame_counter;
+    if (s.manual_capture_requested
+        && result.frame_counter >= s.manual_capture_min_frame_counter) {
+        std::string reason;
+        const bool accepted = TryAddSampleLocked(
+            s, /*allow_duplicate_cell=*/true, reason);
+        s.status_reason = (accepted
+            ? "manual capture: " : "manual capture rejected: ") + reason;
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+    } else if (!s.manual_capture_requested) {
+        AutoCaptureIfDueLocked(s);
+    }
+}
+
+} // anonymous
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+void TickPhysicalCameraCalibration() {
+    auto& s = GetModule();
+    bool finish_automatic_calibration = false;
+    {
+        std::lock_guard<std::mutex> lk(s.mutex);
+        LazyInitLocked(s);
+        // Polling a future is bounded and never waits for OpenCV. The detector
+        // works on a cloned latest frame outside the main/UI thread.
+        CollectCompletedDetectionLocked(s);
+
+        const int filled_coverage_cells = static_cast<int>(std::count_if(
+            s.coverage_cell_counts.begin(), s.coverage_cell_counts.end(),
+            [](int sample_count) { return sample_count > 0; }));
+        if (s.automatic_completion_enabled
+            && filled_coverage_cells >= kMinCoverageCellsRequired
+            && static_cast<int>(s.accepted_image_points.size()) >= kMinSamplesRequired) {
+            // Freeze the exact sample pool. The run/save requests acquire the
+            // lock themselves, so completion happens after this scope.
+            s.capturing = false;
+            s.automatic_completion_enabled = false;
+            s.manual_capture_requested = false;
+            s.manual_capture_min_frame_counter = 0;
+            s.status_reason = "coverage target reached; calibrating and saving";
+            finish_automatic_calibration = true;
+        }
+
+        if (!finish_automatic_calibration) {
+            PullLatestFrameLocked(s);
+            ScheduleDetectionForPulledFrameLocked(s);
+        }
+    }
+
+    if (finish_automatic_calibration) {
+        try {
+            RequestRunIntrinsicCalibrationFromSamples();
+            RequestSavePhysicalCalibrationToDisk();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.status_reason = "automatic calibration complete; camera updated and profile saved to '"
+                + s.active_profile_path + "'";
+        } catch (const std::exception& e) {
+            std::lock_guard<std::mutex> lk(s.mutex);
+            const bool camera_was_updated =
+                s.stage == PhysicalCalibrationStage::Calibrated && s.calib_valid;
+            if (!camera_was_updated) {
+                s.stage = PhysicalCalibrationStage::Failed;
+            }
+            s.status_reason = std::string(camera_was_updated
+                ? "camera updated, but automatic profile save failed: "
+                : "automatic calibration failed: ") + e.what();
+            LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.status_reason);
+        }
+    }
+}
+
+PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    PhysicalCalibrationStatus out;
+    out.stage                  = s.stage;
+    out.pattern_inner_cols     = s.pattern_inner_cols;
+    out.pattern_inner_rows     = s.pattern_inner_rows;
+    out.pattern_square_meters  = s.pattern_square_meters;
+    out.accepted_sample_count  = static_cast<int>(s.accepted_image_points.size());
+    out.minimum_sample_count   = kMinSamplesRequired;
+    out.minimum_coverage_cells_required = kMinCoverageCellsRequired;
+    out.automatic_calibration_active = s.automatic_completion_enabled;
+    out.coverage_grid_cols     = kCoverageGridCols;
+    out.coverage_grid_rows     = kCoverageGridRows;
+    out.coverage_cell_counts   = s.coverage_cell_counts;
+    out.coverage_cells_filled  = 0;
+    for (int c : out.coverage_cell_counts) if (c > 0) ++out.coverage_cells_filled;
+
+    out.last_frame_present     = s.last_frame_present;
+    out.last_pattern_found     = s.last_detection.found;
+    out.last_detector_used     = s.last_detection.detector_used;
+    out.last_preprocess_path   = s.last_detection.preprocess_path;
+    out.last_frame_brightness  = s.last_detection.gray_mean;
+    out.last_frame_width       = s.last_frame_width;
+    out.last_frame_height      = s.last_frame_height;
+    out.detection_in_progress  = s.detection_future.valid();
+    out.last_detection_frame_counter = s.last_detection_frame_counter;
+    out.last_detection_frame  = s.last_detection_frame;
+    out.last_pattern_centroid_px = s.last_detection.centroid_px;
+    out.last_detected_image_points = s.last_detection.image_points;
+    out.last_failure_reason    = s.last_detection.failure_reason;
+
+    out.has_calibration_data   = s.calib_valid;
+    if (s.calib_valid) {
+        out.camera_matrix          = s.calib.camera_matrix.clone();
+        out.dist_coeffs            = s.calib.dist_coeffs.clone();
+        out.calibrated_image_size  = s.calib.image_size;
+        out.rms_reprojection_error = s.calib.rms_reprojection_error;
+    }
+    out.active_source_url   = s.active_source_url;
+    out.active_source_label = s.active_source_label;
+    out.active_profile_path = s.active_profile_path;
+    out.status_reason = s.status_reason;
+    return out;
+}
+
+bool IsPhysicalCalibrationDataAvailable() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    return s.calib_valid;
+}
+
+bool IsPhysicalCalibrationDataAvailableForFrame(const std::string& source_url,
+                                                const cv::Size&    image_size) {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    return s.calib_valid
+        && !source_url.empty()
+        && s.calib.source_url_at_capture == source_url
+        && s.calib.image_size == image_size;
+}
+
+bool IsPhysicalCameraCalibrationCaptureActive() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    return s.capturing;
+}
+
+void GetPhysicalCalibrationData(PhysicalCalibrationData& out) {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    if (!s.calib_valid) {
+        ThrowWithLocation(__FUNCTION__,
+            "no calibration data is loaded — caller MUST check "
+            "IsPhysicalCalibrationDataAvailable() first");
+    }
+    out = s.calib;
+    out.camera_matrix = s.calib.camera_matrix.clone();
+    out.dist_coeffs   = s.calib.dist_coeffs.clone();
+}
+
+void CalibrateBgrFrameUsingPhysicalCalibration(const cv::Mat& bgr_in, cv::Mat& bgr_out) {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    if (!s.calib_valid) {
+        ThrowWithLocation(__FUNCTION__, "no calibration data loaded");
+    }
+    if (bgr_in.empty()) {
+        ThrowWithLocation(__FUNCTION__, "bgr_in is empty");
+    }
+    if (bgr_in.type() != CV_8UC3) {
+        ThrowWithLocation(__FUNCTION__,
+            "expected CV_8UC3, got type=" + std::to_string(bgr_in.type()));
+    }
+    if (bgr_in.size() != s.calib.image_size) {
+        ThrowWithLocation(__FUNCTION__,
+            "input resolution " + std::to_string(bgr_in.cols) + "x"
+            + std::to_string(bgr_in.rows) + " does not match calibration resolution "
+            + std::to_string(s.calib.image_size.width) + "x"
+            + std::to_string(s.calib.image_size.height));
+    }
+    cv::undistort(bgr_in, bgr_out, s.calib.camera_matrix, s.calib.dist_coeffs);
+}
+
+// ── Requests ────────────────────────────────────────────────────────────────
+
+void RequestStartAutomaticPhysicalCameraCalibration() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    LazyInitLocked(s);
+    ClearSamplePoolLocked(s);
+    s.capturing = true;
+    s.automatic_completion_enabled = true;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
+    s.stage = PhysicalCalibrationStage::Capturing;
+    s.status_reason = "automatic calibration started - fill "
+        + std::to_string(kMinCoverageCellsRequired)
+        + " different coverage squares; calibration and save will follow automatically";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+              "RequestStartAutomaticPhysicalCameraCalibration");
+}
+
+void RequestStartPhysicalCameraCalibrationCapture() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    LazyInitLocked(s);
+    s.capturing     = true;
+    s.automatic_completion_enabled = false;
+    s.stage         = PhysicalCalibrationStage::Capturing;
+    s.status_reason = "capture started — point the chessboard at the camera";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "RequestStartPhysicalCameraCalibrationCapture");
+}
+
+void RequestStopPhysicalCameraCalibrationCapture() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    s.capturing = false;
+    s.automatic_completion_enabled = false;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
+    if (s.calib_valid) {
+        s.stage = PhysicalCalibrationStage::Calibrated;
+    } else {
+        s.stage = PhysicalCalibrationStage::Uncalibrated;
+    }
+    s.status_reason = "capture stopped (samples retained)";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "RequestStopPhysicalCameraCalibrationCapture");
+}
+
+void RequestCapturePhysicalCalibrationSampleNow() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    LazyInitLocked(s);
+    CollectCompletedDetectionLocked(s);
+    PullLatestFrameLocked(s);
+    if (!s.last_frame_present || s.pull_view.raw_image.empty()) {
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+        s.status_reason = "manual capture rejected: no frame available";
+        return;
+    }
+    s.manual_capture_requested = true;
+    s.manual_capture_min_frame_counter = s.pull_view.frame_counter;
+    ScheduleDetectionForPulledFrameLocked(s);
+    s.status_reason = "manual capture queued for the active detection job";
+}
+
+void RequestClearPhysicalCalibrationSamples() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    ClearSamplePoolLocked(s);
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
+    s.status_reason    = "samples cleared";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "RequestClearPhysicalCalibrationSamples");
+}
+
+void RequestRunIntrinsicCalibrationFromSamples() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    LazyInitLocked(s);
+
+    if (static_cast<int>(s.accepted_image_points.size()) < kMinSamplesRequired) {
+        ThrowWithLocation(__FUNCTION__,
+            "need at least " + std::to_string(kMinSamplesRequired)
+            + " samples; have " + std::to_string(s.accepted_image_points.size()));
+    }
+    if (s.samples_image_size.width <= 0 || s.samples_image_size.height <= 0) {
+        ThrowWithLocation(__FUNCTION__,
+            "samples_image_size is invalid: "
+            + std::to_string(s.samples_image_size.width) + "x"
+            + std::to_string(s.samples_image_size.height));
+    }
+    if (s.active_source_url.empty() || s.active_image_size != s.samples_image_size) {
+        ThrowWithLocation(__FUNCTION__,
+            "sample pool is not bound to the active camera profile");
+    }
+
+    // Calibration consumes a stable snapshot of the sample pool. Without
+    // this transition, auto-capture would silently continue after the stage
+    // changed to Calibrated or Failed.
+    s.capturing = false;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
+
+    const auto object_points_one = BuildObjectPointsForChessboard(
+        s.pattern_inner_cols, s.pattern_inner_rows, s.pattern_square_meters);
+
+    std::vector<std::vector<cv::Point3f>> object_points;
+    object_points.reserve(s.accepted_image_points.size());
+    for (size_t i = 0; i < s.accepted_image_points.size(); ++i) {
+        object_points.push_back(object_points_one);
+    }
+
+    cv::Mat K, dist;
+    std::vector<cv::Mat> rvecs, tvecs;
+    double rms = 0.0;
+    try {
+        rms = cv::calibrateCamera(
+            object_points, s.accepted_image_points, s.samples_image_size,
+            K, dist, rvecs, tvecs, 0);
+    } catch (const cv::Exception& e) {
+        s.stage         = PhysicalCalibrationStage::Failed;
+        s.status_reason = std::string("calibrateCamera threw: ") + e.what();
+        LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.status_reason);
+        ThrowWithLocation(__FUNCTION__, std::string("OpenCV calibrateCamera failed: ") + e.what());
+    }
+
+    if (K.empty() || K.rows != 3 || K.cols != 3 || dist.empty()) {
+        s.stage         = PhysicalCalibrationStage::Failed;
+        s.status_reason = "calibrateCamera returned malformed K or dist";
+        ThrowWithLocation(__FUNCTION__, s.status_reason);
+    }
+    K.convertTo(K,    CV_64F);
+    dist.convertTo(dist, CV_64F);
+
+    // Ten ordinary webcam views do not constrain the 8-coefficient rational
+    // model reliably, so use the standard 5-coefficient model above and reject
+    // numerically implausible results instead of saving poisoned data.
+    const double fx = K.at<double>(0, 0);
+    const double fy = K.at<double>(1, 1);
+    const double cx = K.at<double>(0, 2);
+    const double cy = K.at<double>(1, 2);
+    const bool plausible_intrinsics = cv::checkRange(K) && cv::checkRange(dist)
+        && std::isfinite(rms) && rms >= 0.0 && rms <= 5.0
+        && fx > 0.0 && fy > 0.0
+        && cx >= -s.samples_image_size.width
+        && cx <= 2.0 * s.samples_image_size.width
+        && cy >= -s.samples_image_size.height
+        && cy <= 2.0 * s.samples_image_size.height;
+    if (!plausible_intrinsics) {
+        s.stage = PhysicalCalibrationStage::Failed;
+        s.status_reason = "calibration rejected: implausible intrinsics or RMS > 5 px"
+            " (rms=" + std::to_string(rms) + ")";
+        LOG_ERROR(PHYSICAL_ENV_LOG_TAG,
+                  "RequestRunIntrinsicCalibrationFromSamples: " + s.status_reason);
+        ThrowWithLocation(__FUNCTION__, s.status_reason);
+    }
+
+    s.calib                          = {};
+    s.calib.camera_matrix            = K;
+    s.calib.dist_coeffs              = dist;
+    s.calib.image_size               = s.samples_image_size;
+    s.calib.rms_reprojection_error   = rms;
+    s.calib.sample_count             = static_cast<int>(s.accepted_image_points.size());
+    s.calib.pattern_inner_cols       = s.pattern_inner_cols;
+    s.calib.pattern_inner_rows       = s.pattern_inner_rows;
+    s.calib.pattern_square_meters    = s.pattern_square_meters;
+    s.calib.created_at_iso           = FormatTimestampUtcIso();
+    s.calib.source_url_at_capture    = s.active_source_url;
+    s.calib.source_label_at_capture  = s.active_source_label;
+    s.calib_valid                    = true;
+    s.stage                          = PhysicalCalibrationStage::Calibrated;
+    s.status_reason                  = "calibration complete (rms="
+                                     + std::to_string(rms) + ")";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+              "RequestRunIntrinsicCalibrationFromSamples: " + s.status_reason);
+}
+
+void RequestSavePhysicalCalibrationToDisk() {
+    PhysicalCalibrationData snapshot;
+    std::string profile_path;
+    {
+        auto& s = GetModule();
+        std::lock_guard<std::mutex> lk(s.mutex);
+        if (!s.calib_valid) {
+            ThrowWithLocation(__FUNCTION__,
+                "no calibration available — run RequestRunIntrinsicCalibrationFromSamples first");
+        }
+        snapshot = s.calib;
+        snapshot.camera_matrix = s.calib.camera_matrix.clone();
+        snapshot.dist_coeffs   = s.calib.dist_coeffs.clone();
+        profile_path = GetPhysicalCalibrationStorePath(
+            snapshot.source_url_at_capture, snapshot.image_size);
+    }
+    SavePhysicalCalibrationDataToPath(snapshot, profile_path);
+    {
+        auto& s = GetModule();
+        std::lock_guard<std::mutex> lk(s.mutex);
+        s.active_profile_path = profile_path;
+        s.status_reason = "calibration saved to '" + profile_path + "'";
+    }
+}
+
+bool RequestLoadPhysicalCalibrationFromDisk() {
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    LazyInitLocked(s);
+    PullLatestFrameLocked(s);
+    if (s.active_source_url.empty()) {
+        ThrowWithLocation(__FUNCTION__,
+            "no active camera frame is available to identify the calibration profile");
+    }
+    return LoadActiveProfileLocked(s);
+}
+
+void RequestReconfigurePhysicalCalibrationPattern(int   inner_cols,
+                                                  int   inner_rows,
+                                                  float square_meters) {
+    if (inner_cols < 2 || inner_rows < 2 || !(square_meters > 0.0f)) {
+        ThrowWithLocation(__FUNCTION__,
+            "invalid pattern (cols=" + std::to_string(inner_cols)
+            + ", rows=" + std::to_string(inner_rows)
+            + ", square_m=" + std::to_string(square_meters) + ")");
+    }
+    auto& s = GetModule();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    s.pattern_inner_cols    = inner_cols;
+    s.pattern_inner_rows    = inner_rows;
+    s.pattern_square_meters = square_meters;
+    s.accepted_image_points.clear();
+    s.samples_image_size    = cv::Size(0, 0);
+    EnsureCoverageGridSizedLocked(s);
+    std::fill(s.coverage_cell_counts.begin(), s.coverage_cell_counts.end(), 0);
+    // Corners detected for the previous geometry cannot be interpreted using
+    // the new row/column count. Wait for a fresh detection before drawing or
+    // accepting another sample.
+    s.last_detection = {};
+    s.last_detection_frame.release();
+    s.last_detection_frame_counter = 0;
+    s.manual_capture_requested = false;
+    s.manual_capture_min_frame_counter = 0;
+    s.status_reason = "pattern reconfigured (samples cleared)";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+              "RequestReconfigurePhysicalCalibrationPattern: cols=" + std::to_string(inner_cols)
+              + " rows=" + std::to_string(inner_rows)
+              + " square_m=" + std::to_string(square_meters));
+}
+
+void ResetPhysicalCalibrationState() {
+    auto& s = GetModule();
+    std::future<CalibrationDetectionJobResult> pending;
+    {
+        std::lock_guard<std::mutex> lk(s.mutex);
+        if (s.detection_future.valid()) {
+            pending = std::move(s.detection_future);
+        }
+        s.accepted_image_points.clear();
+        s.samples_image_size = cv::Size(0, 0);
+        s.coverage_cell_counts.clear();
+        s.calib       = {};
+        s.calib_valid = false;
+        s.active_source_url.clear();
+        s.active_source_label.clear();
+        s.active_image_size = cv::Size(0, 0);
+        s.active_profile_path.clear();
+        s.capturing   = false;
+        s.automatic_completion_enabled = false;
+        s.stage       = PhysicalCalibrationStage::Uncalibrated;
+        s.status_reason.clear();
+        s.last_detection = {};
+        s.last_detection_frame.release();
+        s.last_detection_frame_counter = 0;
+        s.manual_capture_requested = false;
+        s.manual_capture_min_frame_counter = 0;
+        s.last_frame_present = false;
+        s.last_seen_counter  = 0;
+        s.initialized        = false; // next tick will lazy-init again
+    }
+    // The detector owns only its cloned Mat and configuration. Waiting here
+    // is teardown-only and cannot deadlock the calibrator mutex.
+    if (pending.valid()) pending.wait();
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "ResetPhysicalCalibrationState");
+}
+
+}}} // namespace

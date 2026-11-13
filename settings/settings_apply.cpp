@@ -2,7 +2,6 @@
 #include "../resources.hpp"
 #include "../logger.hpp"
 #include "../voice/voice_speak.hpp"
-#include "../perception/perception_context.hpp"
 #include <filesystem>
 #include <algorithm>
 
@@ -22,15 +21,6 @@ void applyRuntimeSideEffects(const nlohmann::json& config,
         LOG_DEBUG("Settings", "Speaker set to: " + speaker);
     }
 
-    // Vision AI
-    if (config.contains("vision") && config["vision"].is_object() &&
-        config["vision"].contains("enabled")) {
-        bool enabled = config["vision"]["enabled"].get<bool>();
-        if (GRIM::Perception::g_contextManager) {
-            GRIM::Perception::g_contextManager->setFeatureEnabled("vision_ai", enabled);
-            LOG_DEBUG("Settings", "Vision AI " + std::string(enabled ? "enabled" : "disabled"));
-        }
-    }
 
     // Font
     if (config.contains("ui") && config["ui"].is_object() &&
