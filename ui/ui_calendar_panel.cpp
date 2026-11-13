@@ -1,5 +1,5 @@
 #include "ui_calendar_panel.hpp"
-#include "core/scheduling_service.hpp"
+#include "calendar_provider_client.hpp"
 #include "core/calendar_time.hpp"
 #include "overlay_renderer.hpp"
 #include <limits>
@@ -10,10 +10,6 @@ UICalendarPanel::UICalendarPanel() : UIPanel("Calendar",true,"calendar") {
     position={240,180}; size={1160,600}; setVisible(false);
     scroll=std::make_shared<UIScrollBox>();
     addChild(scroll);
-    provider.abi_version=GRIM_SCHEDULE_ABI_V1; provider.struct_size=sizeof(provider);
-    try {
-        auto lease=grim::scheduling::schedulingService().acquire(); provider=lease.provider;
-    } catch (...) {status="Calendar data directory unavailable.";}
     selectedDay=std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now());
     const std::chrono::year_month_day date{selectedDay}; month=date.year()/date.month();
     previousMonth=std::make_shared<UIButton>("< Month",[this]{changeMonth(-1);});
@@ -36,12 +32,13 @@ UICalendarPanel::UICalendarPanel() : UIPanel("Calendar",true,"calendar") {
     previousButton=std::make_shared<UIButton>("Previous",[this]{if(selected) --selected;});
     nextButton=std::make_shared<UIButton>("Next",[this]{if(selected+1<entries.size()) ++selected;});
     deleteButton=std::make_shared<UIButton>("Delete event",[this]{
-        if(!provider.context || entries.empty()) return;
-        const auto& e=entries[selected];
-        auto lease=grim::scheduling::schedulingService().acquire();
-        const auto result=provider.remove_event(provider.context,e.id.c_str(),e.revision);
-        status=result==GRIM_SCHEDULE_OK ? "Event deleted." : "Could not delete event.";
-        lease.lock.unlock(); refresh();
+        if(entries.empty()) return;
+        const auto e=entries[selected];
+        try {
+            GRIM::UI::callSchedule("cancel",{{"id",e.id},{"revision",e.revision}});
+            status="Event deleted."; refresh();
+        } catch(const std::exception& error) {status=error.what();}
+
     });
     addChild(titleBox); addChild(startBox); addChild(endBox);
     addChild(addButton); addChild(previousButton); addChild(nextButton); addChild(deleteButton);
@@ -66,28 +63,32 @@ void UICalendarPanel::chooseDay(std::chrono::sys_days day) {
     refresh();
 }
 void UICalendarPanel::refresh() {
-    try {auto lease=grim::scheduling::schedulingService().acquire();provider=lease.provider;}
-    catch(...) {status="Saved calendar unavailable, locked or invalid.";return;}
-    struct Snapshot {std::vector<Entry> entries;std::array<int,42> counts{};int64_t grid,day;} snapshot;
-    snapshot.grid=std::chrono::duration_cast<std::chrono::milliseconds>(gridStart().time_since_epoch()).count();
-    snapshot.day=std::chrono::duration_cast<std::chrono::milliseconds>(selectedDay.time_since_epoch()).count();
-    auto lease=grim::scheduling::schedulingService().acquire();
-    const auto code=provider.query(provider.context,"local",snapshot.grid,snapshot.grid+42LL*86400000,
-        [](void* target,const GrimScheduleEvent* e)->int32_t {
-            auto& s=*static_cast<Snapshot*>(target);
-            for(size_t i=0;i<42;++i) {auto day=s.grid+int64_t(i)*86400000;
-                if(e->start_utc_ms<day+86400000 && e->end_utc_ms>day) ++s.counts[i];}
-            if(e->start_utc_ms<s.day+86400000 && e->end_utc_ms>s.day)
-                s.entries.push_back({e->id,e->title,grim::scheduling::formatCalendarTime(e->start_utc_ms),
-                    grim::scheduling::formatCalendarTime(e->end_utc_ms),e->revision});
-            return 0;
-        },&snapshot);
-    if(code!=GRIM_SCHEDULE_OK) {status="Could not load events.";return;}
-    entries=std::move(snapshot.entries);counts=snapshot.counts;
-    selected=entries.empty()?0:(std::min)(selected,entries.size()-1);
+    try {
+        std::vector<Entry> nextEntries; std::array<int,42> nextCounts{};
+        const auto grid=std::chrono::duration_cast<std::chrono::milliseconds>(gridStart().time_since_epoch()).count();
+        const auto day=std::chrono::duration_cast<std::chrono::milliseconds>(selectedDay.time_since_epoch()).count();
+        size_t offset=0;
+        for(;;) {
+            const auto page=GRIM::UI::callSchedule("list",{{"kind","event"},{"from_utc_ms",grid},
+                {"until_utc_ms",grid+42LL*86400000},{"limit",200},{"offset",offset}});
+            const auto& rows=page.at("items");
+            for(const auto& e:rows) {
+                const auto start=e.at("start_utc_ms").get<int64_t>(), end=e.at("end_utc_ms").get<int64_t>();
+                for(size_t i=0;i<42;++i) {
+                    const auto cell=grid+int64_t(i)*86400000;
+                    if(start<cell+86400000 && end>cell) ++nextCounts[i];
+                }
+                if(start<day+86400000 && end>day) nextEntries.push_back({e.at("id"),e.at("title"),
+                    grim::scheduling::formatCalendarTime(start),grim::scheduling::formatCalendarTime(end),e.at("revision")});
+            }
+            offset+=rows.size();
+            if(rows.empty() || offset>=page.at("total").get<size_t>()) break;
+        }
+        entries=std::move(nextEntries);counts=nextCounts;
+        selected=entries.empty()?0:(std::min)(selected,entries.size()-1);
+    } catch(const std::exception& error) {entries.clear();counts={};selected=0;status=error.what();}
 }
 void UICalendarPanel::add() {
-    if(!provider.context) return;
     int64_t start,end;
     if(titleText.find_first_not_of(" \t\r\n")==std::string::npos || titleText.size()>120) {status="Enter a title (1-120 characters).";return;}
     if(!grim::scheduling::parseCalendarTime(startText,start) || !grim::scheduling::parseCalendarTime(endText,end) || end<=start) {
@@ -98,13 +99,13 @@ void UICalendarPanel::add() {
     std::ostringstream key;key<<"calendar-"<<std::hex;
     for(int i=0;i<4;++i) key<<random()<<'-';
     const auto id=key.str();
-    GrimScheduleEvent event{id.c_str(),"local",titleText.c_str(),"","Etc/UTC",start,end,0}; uint64_t revision;
-    auto lease=grim::scheduling::schedulingService().acquire();
-    if(provider.put_event(provider.context,&event,&revision)!=GRIM_SCHEDULE_OK) {status="Could not save event; no changes made.";return;}
+    try { GRIM::UI::callSchedule("create",{{"id",id},{"kind","event"},{"title",titleText},
+        {"start_utc_ms",start},{"end_utc_ms",end}}); }
+    catch(const std::exception& error) {status=error.what();return;}
     titleBox->clear(); status="Event saved.";
     selectedDay=std::chrono::floor<std::chrono::days>(std::chrono::sys_time<std::chrono::milliseconds>{std::chrono::milliseconds{start}});
     const std::chrono::year_month_day date{selectedDay};month=date.year()/date.month();
-    selected=0;lease.lock.unlock();refresh();
+    selected=0;refresh();
 }
 void UICalendarPanel::layout() {
     const auto c=getContentRect();

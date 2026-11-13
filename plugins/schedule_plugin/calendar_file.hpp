@@ -27,7 +27,7 @@ inline std::filesystem::path calendarStorePath() {
 #endif
     throw std::runtime_error("Cannot locate calendar data directory");
 }
-// Exclusive process-lifetime writer lease. OS releases it on abnormal exit.
+// Exclusive operation-scoped writer lease. OS releases it on abnormal exit.
 class CalendarFile {
     std::filesystem::path path;
 #ifdef _WIN32

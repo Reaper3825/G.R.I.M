@@ -17,7 +17,7 @@
 bool processEvents(HWND hwnd,
                    std::string& buffer,
                    std::filesystem::path& currentDir,
-                   std::vector<Timer>& uiTimers,
+
                    nlohmann::json& longTermMemory,
                    ConsoleHistory& uiHistory)
 {

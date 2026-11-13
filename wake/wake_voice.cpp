@@ -3,7 +3,6 @@
 #endif
 #include "logger.hpp"
 #include "console_history.hpp"
-#include "timer.hpp"
 #include "resources.hpp"
 #include <vector>
 #include <mutex>

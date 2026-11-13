@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "", [switch]$BuildUIFixture, [switch]$BuildFilesystemFixture, [switch]$BuildApplicationFixture, [switch]$BuildSystemInfoFixture)
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "", [switch]$BuildUIFixture, [switch]$BuildFilesystemFixture, [switch]$BuildApplicationFixture, [switch]$BuildSystemInfoFixture, [string]$SchedulePluginDirectory = "", [switch]$BuildSchedulingFixtures)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -15,6 +15,15 @@ if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
 $common = @('/nologo','/std:c++20','/EHsc','/W3','/DNOMINMAX')
 $common += @('', '/helpers','/core','/commands','/vcpkg_installed/x64-windows/include') | ForEach-Object { '/I"' + $workspace + $_ + '"' }
+if ($BuildSchedulingFixtures) {
+    $TimersPluginDirectory = Join-Path $output 'timers-fixture'
+    $SchedulePluginDirectory = Join-Path $output 'schedule-fixture'
+    foreach ($name in @('timers','schedule')) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $output ($name + '-fixture')) | Out-Null
+        $providerArgs = $common + @('/LD','/DGRIM_BUILD_PLUGIN','/utf-8', ('"' + (Join-Path $workspace ('plugins/' + $name + '_plugin/' + $name + '_plugin.cpp')) + '"'), ('/Fe:' + $name + '-fixture/' + $name + '_plugin.dll'))
+        Set-Content -LiteralPath (Join-Path $output ($name + '-fixture.rsp')) -Value $providerArgs -Encoding ascii
+    }
+}
 if ($BuildFilesystemFixture) {
     $FilesystemPluginDirectory = Join-Path $output 'filesystem-fixture'
     New-Item -ItemType Directory -Force -Path $FilesystemPluginDirectory | Out-Null
@@ -66,7 +75,7 @@ $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
 $apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/host_alias_service_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/perception_plugin_tests.cpp','tests/voice_plugin_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','commands/commands_timers.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/host_alias_service_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/perception_plugin_tests.cpp','tests/voice_plugin_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
@@ -104,7 +113,7 @@ if ($BuildSystemInfoFixture) {
     Set-Content -LiteralPath (Join-Path $output 'system-info-fixture.rsp') -Value $hardwareArgs -Encoding ascii
 }
 $pluginTestCommand = 'plugin_api_ownership_tests.exe integration integration-rejected replacement'
-foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $SystemInfoPluginDirectory, $TimersPluginDirectory, $MemoryPluginDirectory, $PerceptionPluginDirectory, $VoicePluginDirectory, $UIPluginDirectory, $InputPluginDirectory)) {
+foreach ($testDirectory in @($PluginDirectory, $FilesystemPluginDirectory, $UtilityPluginDirectory, $ApplicationPluginDirectory, $ToolInspectionPluginDirectory, $SystemInfoPluginDirectory, $TimersPluginDirectory, $MemoryPluginDirectory, $PerceptionPluginDirectory, $VoicePluginDirectory, $UIPluginDirectory, $InputPluginDirectory, $SchedulePluginDirectory)) {
     $resolvedTestDirectory = if ($testDirectory) { (Resolve-Path -LiteralPath $testDirectory).Path } else { '' }
     $pluginTestCommand += ' "' + $resolvedTestDirectory + '"'
 }
@@ -145,6 +154,10 @@ if ($BuildSystemInfoFixture) {
 }
 if ($BuildFilesystemFixture) {
     $commands = $commands[0..2] + @('cl @filesystem-fixture.rsp', 'if errorlevel 1 exit /b %errorlevel%') + $commands[3..($commands.Length - 1)]
+    Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
+}
+if ($BuildSchedulingFixtures) {
+    $commands = $commands[0..2] + @('cl @timers-fixture.rsp','if errorlevel 1 exit /b %errorlevel%', 'cl @schedule-fixture.rsp','if errorlevel 1 exit /b %errorlevel%') + $commands[3..($commands.Length - 1)]
     Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
 }
 Push-Location $output

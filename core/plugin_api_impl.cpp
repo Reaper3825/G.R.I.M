@@ -6,14 +6,12 @@
 // ============================================================================
 
 #include "plugin_api.hpp"
-#include "local_calendar.hpp"
-#include "scheduling_service.hpp"
 #include "plugin_manager.hpp"
+#include "plugin_notifications.hpp"
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
 #include "aliases.hpp"
-#include "commands/commands_timers.hpp"
 #include "memory/command_memory_services.hpp"
 #include "perception/perception_queries.hpp"
 #include "voice/voice_command_services.hpp"
@@ -677,13 +675,7 @@ static void api_show_notification(const GrimPluginAPI* self, const char* title, 
         std::string full_msg = std::string(title) + ": " + message;
         LOG_DEBUG("Plugin", full_msg);
         
-        // Show popup UI notification (platform-specific UI)
-        #ifdef _WIN32
-        notifyPopupActivity();
-        showPopup();
-        #else
-        // On Linux, just log for now (TODO: implement notification daemon integration)
-        #endif
+        publishPluginNotification(title, message);
     }
 }
 
@@ -762,31 +754,6 @@ static const char* api_query_perception(const GrimPluginAPI* self, GrimPerceptio
             }
         }
         return nlohmann::json{{"available", available}, {"text", std::move(text)}};
-    });
-}
-static const char* api_schedule_service(const GrimPluginAPI* self, const char* operation,
-    const char* arguments, size_t size) noexcept {
-    try {
-        ActiveCall active(pluginContext(self).gate, true);
-        if(!active.entered || !operation || !arguments || size>65536 ||
-            !checkPermission(self, static_cast<GrimPermission>(GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM))) return nullptr;
-        auto request=nlohmann::json::parse(arguments,arguments+size);
-        const auto result=grim::scheduling::schedulingService().execute(operation,request,grim::scheduling::scheduleNow()).dump();
-        return allocateString(result);
-    } catch (...) {return nullptr;}
-}
-static GrimScheduleResult api_create_local_calendar(const GrimPluginAPI* self,
-    uint32_t version, GrimScheduleProviderV1* out) noexcept {
-    try {
-        if (!checkPermission(self, GRIM_PERM_SYSTEM)) return GRIM_SCHEDULE_PERMISSION_DENIED;
-        return grim::scheduling::LocalCalendar::create(version, out);
-    } catch (...) { return GRIM_SCHEDULE_FAILED; }
-}
-static const char* api_schedule_user_timer(const GrimPluginAPI* self, int32_t seconds, const char* message) noexcept {
-    if (seconds <= 0 || !message) return nullptr;
-    return runtimeServiceResponse(self, GRIM_PERM_SYSTEM, [&] {
-        GRIM::UserTimers::schedule(seconds, message);
-        return nlohmann::json(nullptr);
     });
 }
 static const char* api_stage_manual_memory(const GrimPluginAPI* self, const char* raw) noexcept {
@@ -1096,7 +1063,7 @@ static GrimResult api_kill_process(const GrimPluginAPI* self, const char* proces
 // ============================================================================
 
 // ============================================================================
-// Timer Implementation (Stub)
+// Generic callback scheduling
 // ============================================================================
 
 static GrimTimerHandle api_create_timer(const GrimPluginAPI* self, uint64_t interval_ms, bool repeat, GrimTimerCallback callback, void* user_data) {
@@ -1371,9 +1338,6 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.get_tool_snapshot = api_get_tool_snapshot;
     api.get_alias_snapshot = api_get_alias_snapshot;
     api.refresh_aliases = api_refresh_aliases;
-    api.schedule_user_timer = api_schedule_user_timer;
-    api.create_local_calendar = api_create_local_calendar;
-    api.schedule_service = api_schedule_service;
     api.stage_manual_memory = api_stage_manual_memory;
     api.search_memory = api_search_memory;
     api.flush_memory_record_if_present = api_flush_memory_record_if_present;

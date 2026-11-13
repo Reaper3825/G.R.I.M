@@ -359,3 +359,15 @@ cache/geospatial/*.sqlite-wal
 /resources/python/sherlock_sensitive_scanner.py
 /resources/python/temp_sherlock_*.json
 /cache/osint/
+
+# Provider-owned scheduling implementations
+!/plugins/schedule_plugin/*.hpp
+!/plugins/schedule_plugin/*.h
+!/plugins/timers_plugin/*.hpp
+
+!/plugins/schedule_plugin/
+/plugins/schedule_plugin/*
+!/plugins/schedule_plugin/*.cpp
+!/plugins/schedule_plugin/*.hpp
+!/plugins/schedule_plugin/*.h
+!/plugins/schedule_plugin/CMakeLists.txt

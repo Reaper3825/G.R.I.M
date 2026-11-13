@@ -20,6 +20,8 @@ void logDebug(const std::string&, const std::string& message) { std::lock_guard 
 void logError(const std::string&, const std::string& message) { std::lock_guard lock(logsMutex); logs.push_back(message); }
 void notifyPopupActivity() {}
 void showPopup() {}
+std::vector<std::string> pluginNotifications;
+void publishPluginNotification(const std::string& title,const std::string& message) { pluginNotifications.push_back(title+": "+message); }
 namespace Voice {
 void speak(const std::string&, const std::string&) {}
 }
@@ -159,6 +161,7 @@ void runProviderResourceTests() {
     PluginAPI::cleanupPluginContext(second);
 }
 
+void runProviderSchedulingTests(const std::filesystem::path&,const std::filesystem::path&);
 int main(int argc, char** argv) try {
     runProviderResourceTests();
     {
@@ -391,6 +394,7 @@ int main(int argc, char** argv) try {
     if (argc > 13 && *argv[13]) runVoicePluginTests(argv[13]);
     runUIPluginTests(argc > 14 ? argv[14] : "");
     runInputPluginTests(argc > 15 ? argv[15] : "");
+    runProviderSchedulingTests(argc > 10 ? argv[10] : "", argc > 16 ? argv[16] : "");
     ProviderRegistry::instance().retire(collisionOwner.name, collisionOwner.instance);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v7.0
+// G.R.I.M Plugin API v8.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -16,12 +16,11 @@
 
 #include <cstdint>
 #include <cstddef>
-#include "scheduling_api.h"
 
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 7
+#define GRIM_API_VERSION_MAJOR 8
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -348,11 +347,10 @@ typedef struct GrimPluginAPI {
     // Requires FILESYSTEM. Calls the existing synchronous host refresh. The JSON
     // records normal return vs exception; legacy commands ignore returned status.
     const char* (*refresh_aliases)(const GrimPluginAPI* self);
-    // v3.5: host-owned user timer queue (SYSTEM) and manual memory services
+    // Manual memory services
     // (MEMORY). JSON envelope: {format:"grim-runtime-service",version:1,
     // value:...,error:null|{kind,message}}; release with string_free.
     // Null = invalid input, denied permission, or API failure. No command dispatch.
-    const char* (*schedule_user_timer)(const GrimPluginAPI* self, int32_t seconds, const char* message);
     const char* (*stage_manual_memory)(const GrimPluginAPI* self, const char* raw);
     // value is an ordered array of {id,raw}; uses the existing search defaults.
     const char* (*search_memory)(const GrimPluginAPI* self, const char* query);
@@ -385,14 +383,6 @@ typedef struct GrimPluginAPI {
     // Null = invalid input, denied access, unpublished/stopping provider, or API failure.
     const char* (*input_service)(const GrimPluginAPI* self, GrimInputOperation operation,
                                 const char* arguments, size_t arguments_size);
-    // v3.15: SYSTEM permission. Creates an isolated, volatile local calendar.
-    // Caller serializes calls and must destroy it before plugin shutdown.
-    GrimScheduleResult (*create_local_calendar)(const GrimPluginAPI* self,
-        uint32_t version, GrimScheduleProviderV1* out_provider);
-    // v3.16: SYSTEM + FILESYSTEM; shared durable scheduling service.
-    // JSON object input <=64 KiB; host-owned JSON result, release with string_free.
-    const char* (*schedule_service)(const GrimPluginAPI* self, const char* operation,
-        const char* arguments, size_t arguments_size);
     // v3.17: UI permission. Initialization-only declaration of a host panel
     // implementation (1-256 bytes). Copied and staged until provider commit.
     // GRIM_OK accepts the declaration; UI-thread creation is asynchronous.

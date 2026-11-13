@@ -37,13 +37,17 @@ class SchedulingService {
     }
     static Json error(const char* code,const std::string& message) {return {{"success",false},{"error",code},{"message",message}};}
 public:
-    explicit SchedulingService(std::filesystem::path location={}):path(std::move(location)) {}
+    explicit SchedulingService(std::filesystem::path location={}):path(location.empty()?calendarStorePath():std::filesystem::absolute(location)) {}
     ~SchedulingService(){if(provider.context) provider.destroy(provider.context);}
-    struct Lease {std::unique_lock<std::mutex> lock; GrimScheduleProviderV1 provider;};
+    struct Lease {
+        std::unique_lock<std::mutex> lock;
+        GrimScheduleProviderV1& provider;
+        ~Lease() { if (provider.context) { provider.destroy(provider.context); provider = {}; } }
+    };
     Lease acquire(){std::unique_lock lock(mutex);store();return {std::move(lock),provider};}
     Json execute(const std::string& op,const Json& args,int64_t now) {
-        std::lock_guard lock(mutex);
         try {
+            auto lease = acquire();
             if(!args.is_object()) return error("invalid_arguments","Expected a JSON object");
             // Reject misspellings and undeclared fields instead of silently ignoring them.
             std::vector<std::string> allowed;
@@ -56,7 +60,7 @@ public:
                 if(std::find(allowed.begin(),allowed.end(),it.key())==allowed.end()) return error("invalid_arguments","Unknown field: "+it.key());
             auto& s=store();
             if(op=="status" && !args.contains("id")) return {{"success",true},{"persistent",true},{"supported_kinds",{"event","timer","alarm","reminder"}},
-                {"device","local_host"},{"delivery","console_notifications"},{"last_poll_utc_ms",lastPoll},{"delivery_error",deliveryError},{"native_calendar_sync",false},{"background_delivery",false},{"overdue_policy","dispatch_on_next_host_poll"}};
+                {"device","local_host"},{"delivery","console_notifications"},{"last_poll_utc_ms",lastPoll},{"delivery_error",deliveryError},{"native_calendar_sync",false},{"background_delivery",false},{"overdue_policy","dispatch_on_next_provider_poll"}};
             if(op=="list") {
                 auto from=args.contains("from_utc_ms")?number(args,"from_utc_ms"):INT64_MIN;
                 auto until=args.contains("until_utc_ms")?number(args,"until_utc_ms"):INT64_MAX;
@@ -114,9 +118,15 @@ public:
           catch(const std::invalid_argument& e) {return error("invalid_arguments",e.what());}
           catch(const std::exception& e) {return error("unavailable",e.what());}
     }
+    Json resourceState() {
+        auto lease = acquire();
+        Json items = Json::array();
+        for (const auto& [id, event] : store().events) { if (items.size() == 200) break; items.push_back(record(event)); }
+        return {{"items", items}, {"total", store().events.size()}, {"last_poll_utc_ms", lastPoll}, {"delivery_error", deliveryError}};
+    }
     std::vector<std::string> takeDue(int64_t now) {
-        std::lock_guard lock(mutex);
         try {
+            auto lease = acquire();
             lastPoll=now;
             auto& s=store();auto candidate=s.events;auto revision=s.sequence;std::vector<std::string> messages;
             for(auto& [id,e]:candidate) if(e.delivery=="pending" && e.start<=now) {
@@ -125,9 +135,8 @@ public:
             }
             if(!messages.empty()){s.save(candidate,revision);s.events.swap(candidate);s.sequence=revision;}
             deliveryError.clear();return messages;
-        } catch(const std::exception& e) {deliveryError=e.what();return {};}
+        } catch(const std::exception& e) {std::lock_guard lock(mutex);deliveryError=e.what();return {};}
     }
 };
-inline SchedulingService& schedulingService(){static SchedulingService service;return service;}
 inline int64_t scheduleNow(){return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();}
 }

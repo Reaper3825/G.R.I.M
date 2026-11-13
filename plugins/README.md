@@ -84,7 +84,8 @@ They build a tiny synthetic plugin/host dependency fixture, never the GRIM appli
 
 `filesystem_plugin` supplies `pwd`, `cd`, `ls`, `mkdir`, and `rm`. These commands
 are no longer registered by the host. `clean` and `help` come from `utility_plugin`.
-The plugin depends only on the API header and the C++ standard library.
+The plugin uses the API header, C++ standard library, and existing nlohmann JSON
+headers for copied resource publication. It does not call host filesystem services.
 
 Build only this plugin with the existing toolchain:
 
@@ -96,14 +97,18 @@ Validate the real DLL through the loader/API/registry in a temporary directory:
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -FilesystemPluginDirectory .codex-build/filesystem-plugin/plugins
 
 Deploy `.codex-build/filesystem-plugin/plugins/filesystem_plugin.dll` into the
-GRIM root's `plugins/` folder. A host built from the migrated source discovers
-all five tools automatically. An older host that still registers these commands
-will reject the plugin due to tool ID collisions; rebuild the host separately
-before testing inside the application.
+GRIM root's `plugins/` folder only alongside a host and plugins rebuilt for API v8.
+The loader discovers all five tools and the working-directory resource. Older
+API versions are rejected before initialization.
 
 The plugin starts in the process working directory each time it loads. `cd`
 changes only its private working directory, shared by its five tools, and reload
-resets that directory. Paths may be absolute or relative, may contain spaces,
+resets that directory. Its `filesystem.directory` resource exposes a copied UTF-8
+path under resource ID `working_directory`. Failed reload preserves the current
+state; unload removes the resource. For isolated DLL lifecycle tests, run
+`tests/run_plugin_shutdown.ps1 -BuildFilesystemFixture`.
+
+Paths may be absolute or relative, may contain spaces,
 and may have enclosing double quotes. No shell expansion is performed. `ls`
 lists the private working directory; it ignores arguments, as before. `mkdir`
 creates one directory, and `rm` removes one file, symlink, or empty directory.
@@ -230,35 +235,20 @@ can be checked with `tests/run_system_info_native.ps1`.
 
 ## Timers and memory plugins
 
-`timers_plugin` supplies `set_timer`; `memory_plugin` supplies `remember`,
-`recall`, and `forget`. Both use API v3.5 host services; neither imports host C++
-symbols or owns timer/storage state.
+`timers_plugin` owns `set_timer`, countdown state, expiry and `timers.queue`
+resources. SYSTEM and UI permissions are required. Its generic callback runs
+from the host frame pump. Pending countdowns cancel on unload/replacement.
 
-    cmake -S plugins/timers_plugin -B .codex-build/timers-plugin -G "Visual Studio 17 2022" -A x64
-    cmake --build .codex-build/timers-plugin --config Release --target timers_plugin --parallel 2
-    cmake -S plugins/memory_plugin -B .codex-build/memory-plugin -G "Visual Studio 17 2022" -A x64
-    cmake --build .codex-build/memory-plugin --config Release --target memory_plugin --parallel 2
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -TimersPluginDirectory .codex-build/timers-plugin/plugins -MemoryPluginDirectory .codex-build/memory-plugin/plugins
+`memory_plugin` still uses host memory rotation/storage under MEMORY permission.
+Remember stages records; recall searches; forget flushes but does not delete.
+Memory state survives unload.
 
-Deploy each DLL from its build's `plugins/` directory into GRIM's `plugins/` folder.
-Timers require SYSTEM permission; memory commands require MEMORY. Recall remains
-informational; set_timer, remember, and forget retain confirmation metadata.
+Build focused timer/schedule DLL fixtures and run lifecycle checks with:
 
-Timers preserve integer-prefix parsing and enqueue native host timers. Memory
-preserves manual-record fields, rotation staging, search defaults, first-hit
-recall, error messages, voice, colors, and the legacy forget loop. Remember does
-not bypass rotation for immediate durable storage. Pending timers and memory
-survive DLL unload. The new services do not use the old stub memory API slots.
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -BuildSchedulingFixtures
 
-**Existing limitations are unchanged:** forget checks and flushes but does not
-delete records. The current source has no caller for `checkExpiredTimers()`, so
-automatic timer delivery is not introduced by this migration. The tests invoke
-the host expiry checker directly without waiting for a real timer.
-
-The focused suite links the real rotation and storage engine, uses a private
-temporary database, and checks persistence by reloading it. It does not touch the
-user's memory store. The existing generated memory header is copied into the
-test include directory; no schema regeneration or dependency installation occurs.
+These fixtures stay outside the live plugin directory. API v8 requires matching
+host and plugin rebuilds before deployment.
 
 ## Perception plugin
 
@@ -416,14 +406,16 @@ with their handler logic retained for possible host/developer use. They are no
 longer a pending plugin migration set. See
 [retained handlers and rationale](../docs/RETIRED_AGENT_TOOLS.md).
 
-## Scheduling plugin (API v3.16)
+## Scheduling plugin (API v8)
 
-`schedule_plugin` registers `schedule.create`, `schedule.get`, `schedule.list`,
-`schedule.update`, `schedule.cancel`, and `schedule.status` as Model tools.
-It requires SYSTEM and FILESYSTEM permissions and calls the host-owned shared
-schedule_service. See [tool contract](../docs/SCHEDULING_TOOLS.md). Standalone
-and optional host CMake builds include the plugin; deploy through the existing
-plugin deployment mechanism. No built-in duplicate registrations are added.
+`schedule_plugin` owns `schedule.create`, `schedule.get`, `schedule.list`,
+`schedule.update`, `schedule.cancel`, `schedule.status`, durable storage and due
+notification handling. It requires SYSTEM, FILESYSTEM and UI permissions and
+publishes `schedule.state` resources. The Calendar UI invokes its registered tools.
+Saved records survive unload; overdue delivery resumes on the next provider poll.
+There is no host scheduling service or calendar factory.
+See [tool contract](../docs/SCHEDULING_TOOLS.md) and
+[ownership](../docs/SCHEDULING_SUBSYSTEM.md).
 
 ## Application discovery (API v3.18)
 

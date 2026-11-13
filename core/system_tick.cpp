@@ -1,8 +1,6 @@
 #include "system_tick.hpp"
 #include "plugin_manager.hpp"
-#include "scheduling_service.hpp"
-#include "ui/console_panel.hpp"
-#include "popup_ui/popup_ui.hpp"
+#include "plugin_api_impl.hpp"
 
 #include "../geospatial/geospatial_runtime.hpp"
 #include "../helpers/key.hpp"
@@ -57,15 +55,7 @@ void tickApplicationFrame(
 
     UI::processPanelShortcuts();
     PluginManager::tick();
-    static auto nextSchedulePoll=std::chrono::steady_clock::time_point{};
-    if(frameStart>=nextSchedulePoll) {
-        nextSchedulePoll=frameStart+std::chrono::seconds(1);
-        if(auto console=std::dynamic_pointer_cast<ConsolePanel>(UIRoot::get().getPanelByKey("console"))) {
-            const auto notifications=grim::scheduling::schedulingService().takeDue(grim::scheduling::scheduleNow());
-            for(const auto& message:notifications) console->getHistory().push("[Schedule] "+message,0xFF66CCFF,"system");
-            if(!notifications.empty()) {UIRoot::get().setVisible("console",true);showPopup();notifyPopupActivity();}
-        }
-    }
+    PluginAPI::processTimers(); // Dispatch gated plugin callbacks; providers own due-work policy.
 
     Perception::Physical::TickPhysicalEnvironment();
     // Calibration is an exclusive raw-camera workflow. Do not schedule the

@@ -25,7 +25,6 @@ namespace fs = std::filesystem;
 nlohmann::json longTermMemory;
 nlohmann::json aiConfig;
 
-std::vector<Timer> timers;
 std::filesystem::path g_currentDir;
 
 // ====================================================-

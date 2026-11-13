@@ -1,6 +1,7 @@
 // Real DLL -> PluginManager -> API -> ToolRegistry -> filesystem, in a private sandbox.
 #include "core/plugin_manager.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
+#include "MMO/Core/Descriptors/RegisteredResource.hpp"
 #include "commands/command_result.hpp"
 #include <chrono>
 #include <filesystem>

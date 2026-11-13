@@ -102,7 +102,7 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
 // ---------------- Core Loop ----------------
 static void run(whisper_context* ctx,
                 ConsoleHistory* uiHistory,
-                std::vector<Timer>& uiTimers,
+
                 nlohmann::json& uiLongTermMemory)
 {
     LOG_DEBUG("VoiceStream", "Run() thread entered.");
@@ -239,7 +239,7 @@ bool VoiceStream::isRunning() { return g_state.running; }
 
 bool VoiceStream::start(whisper_context* ctx,
                         ConsoleHistory* history,
-                        std::vector<Timer>& timers,
+
                         nlohmann::json& longTermMemory)
 {
     // ------------------------------------------------------------
@@ -270,9 +270,9 @@ bool VoiceStream::start(whisper_context* ctx,
     // Launch new listening thread
     // ------------------------------------------------------------
     g_state.running = true;
-    g_state.thread = std::thread([=, &timers, &longTermMemory]() mutable {
+    g_state.thread = std::thread([=, &longTermMemory]() mutable {
         LOG_DEBUG("VoiceStream", "Voice thread started.");
-        run(ctx, history, timers, longTermMemory);
+        run(ctx, history, longTermMemory);
         LOG_DEBUG("VoiceStream", "Voice thread ended.");
     });
 

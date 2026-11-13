@@ -51,10 +51,10 @@ void shutdown() { cacheEvents.push_back("shutdown"); cacheActive = false; maybeF
 }
 }
 namespace VoiceStream {
-bool start(whisper_context* context, ConsoleHistory* history, std::vector<Timer>& pendingTimers, nlohmann::json& memory) {
+bool start(whisper_context* context, ConsoleHistory* history, nlohmann::json& memory) {
     ++starts; maybeFail();
     if (context != Voice::g_state.ctx || history != &GRIM::MMO::SessionContextManager::instance().displayHistory("default") ||
-        &pendingTimers != &timers || &memory != &longTermMemory) throw std::runtime_error("Streaming host state was copied/replaced");
+        &memory != &longTermMemory) throw std::runtime_error("Streaming host state was copied/replaced");
     if (streamSucceeds) streamRunning = true;
     return streamSucceeds;
 }

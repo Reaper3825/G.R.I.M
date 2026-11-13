@@ -1,12 +1,16 @@
-# G.R.I.M Plugin API v6
+# G.R.I.M Plugin API v8
 
-API version: **6.0.0**.
+API version: **8.0.0**.
 
 Version 5 moved application handling into its plugin and added generic resource
 publication. Version 6 moves system information handling into its plugin and
 removes host hardware services and unused system/CPU/memory query entry points.
-Both are breaking changes: older DLLs must be rebuilt. Retired API fields are
-removed entirely; the v6 table does not preserve their former offsets. See [application ownership](APPLICATION_DISCOVERY.md)
+Version 7 removes the host file API and `GrimFileHandle`; filesystem operations
+and directory state belong to the filesystem plugin. Version 8 removes host
+countdown and scheduling services; both providers own their handling and state.
+These are breaking changes:
+older DLLs must be rebuilt. Retired API fields are removed entirely; the current
+table does not preserve their former offsets. See [application ownership](APPLICATION_DISCOVERY.md)
 and [system information ownership](SYSTEM_INFO_RESOURCES.md).
 
 The host scans the immediate children of its plugins folder for native
@@ -331,7 +335,7 @@ plugin joins its coordinator, which owns worker joins and network cleanup.
 ## Other API services and current limits
 
 The function table retains logging, context, events, timers, output, voice,
-filesystem, process, system-information, allocation, and string utilities.
+process, allocation, string utilities, and generic provider resource publication.
 Check individual implementations before depending on a service: several are
 partial or stubs. Memory store/retrieve/delete remain stubs, and classify_intent
 returns an unmatched result without local classification.
@@ -386,9 +390,9 @@ external changes performed by plugin initialization are not rolled back.
 Initialization should register capabilities and allocate reversible local state;
 reserve external actions for explicitly invoked tool handlers.
 
-Plugin timers are still not scheduled by the application frame loop; timer
-dispatch is available through PluginAPI::processTimers for controlled callers.
-This phase wires plugin reconciliation, not a new general timer scheduler.
+The application frame loop pumps generic plugin callbacks after reconciliation.
+Provider-owned countdown and schedule pollers use this pump; unloading a provider
+removes its callbacks after active calls drain.
 
 ## Generic UI operations (v3.8)
 
@@ -552,16 +556,24 @@ host globals or imported host symbols. `clean` and `help` are provided by the
 separate `utility_plugin`.
 
 The plugin's working directory starts at the process working directory on each
-load; `cd` changes only plugin-local state. Reload resets it. The registry is
-populated solely by discovering and initializing the plugin file. Removing that
-file removes the five registrations. Older hosts that still register these IDs
-reject the plugin batch rather than replacing the built-ins.
+load; `cd` changes only plugin-local state. It publishes a `working_directory`
+resource of kind `filesystem.directory`, with UTF-8 path and provider scope in
+its state. Initial tools and resources commit together. Successful `cd` updates
+the resource before adopting the new path; failed navigation leaves both intact.
+Reload resets the directory in a new provider generation. Failed replacement
+keeps the current generation and directory. Removal withdraws tools and resources.
+
+The v7 API contains no host file-open/close/read/write/existence/deletion service
+or file-handle type. These five tools operate directly through the plugin's C++
+filesystem implementation; they retain no open file handles between calls.
+No additional file-reading or file-writing tools are introduced.
 
 See [plugin build and deployment instructions](../plugins/README.md#filesystem-plugin).
 The optional `-FilesystemPluginDirectory` argument to `tests/run_plugin_shutdown.ps1`
 exercises the built DLL in a private temporary folder, including metadata,
 absolute/relative navigation, paths with spaces, failed operations, nonrecursive
-removal, and removal of the deployed plugin file. No application or model runs.
+removal, resource updates, failed replacement, reload, and DLL removal. Use
+`-BuildFilesystemFixture` to build an isolated fixture first. No application or model runs.
 
 ### Native calculator plugin
 
@@ -716,56 +728,20 @@ The historical v3.4 forwarding contract and v3.19 opt-in contract are removed.
 See [System Information resources](SYSTEM_INFO_RESOURCES.md) for schemas,
 failure handling, native detection and lifecycle validation.
 
-### User timer and manual memory migration (v3.5)
+### Countdown provider and manual memory
 
-`timers_plugin` owns `set_timer`; `memory_plugin` owns `remember`, `recall`, and
-`forget`. The host no longer registers these commands. Four v3.5 services consume
-reserved slots without changing table size or earlier offsets. Existing v3.0-v3.4
-binaries remained supported in v3.5.
+`timers_plugin` owns `set_timer`, its steady-clock countdown queue, expiry
+handling and `timers.queue` resource. It uses generic callback timers and copied
+notification output; pending countdowns cancel on unload or replacement.
+Integer-prefix parsing and existing invalid/nonpositive input results remain.
+SYSTEM and UI permissions are required. No host countdown queue or timer-specific
+service remains in API v8.
 
-Each service returns a host-owned JSON string, released with `string_free`:
-
-```json
-{"format":"grim-runtime-service","version":1,"value":null,"error":null}
-```
-
-Null pointers indicate invalid input, denied permission, or API failure. Host
-standard exceptions are represented by `error:{kind:"exception",message:"..."}`;
-nonstandard exceptions use `kind:"unknown"`. Plugins preserve the corresponding
-original dispatch error responses.
-
-| Service | Permission | Existing host operation |
-|---|---|---|
-| `schedule_user_timer(self, seconds, message)` | SYSTEM | Positive seconds; appends a native Timer to the host queue with steady-clock expiry. |
-| `stage_manual_memory(self, raw)` | MEMORY | Generates ID/time and stages the original USER/STRING/CONVERSATION record in MemoryBufferRotation, with confidence 0.98, original raw text, `remember ` normalized prefix, and manual/remember tags. |
-| `search_memory(self, query)` | MEMORY | Calls the existing storage search with its default result limit/order; returns an array of `{id,raw}` hits. |
-| `flush_memory_record_if_present(self, id)` | MEMORY | Checks `getById`, flushes if present, and returns a presence boolean. It does not delete records. |
-
-Command parsing and result behavior remain unchanged. Timers retain `std::stoi`
-integer-prefix acceptance and the original invalid/nonpositive errors. Manual
-remember parsing still stages the original full text, not a new key/value store.
-Recall selects the first existing search hit. Forget preserves its original
-search/check/flush loop and success text; metadata now explicitly describes the
-absence of deletion. The old `store_memory`/`retrieve_memory`/`delete_memory`
-API slots remain stubs and are not used by these commands.
-
-Timer state, expiry result construction, memory rotation, storage, and persistence
-remain in the host. DLL unload removes registrations without cancelling pending
-user timers or discarding memory. No plugin timer callback or memory worker is
-introduced. The separate plugin-callback timer API remains unchanged.
-
-Two existing limitations are retained: `forget` does not erase records, and no
-current source caller invokes `checkExpiredTimers()`. The migration does not wire
-an expiry scheduler or claim timers are automatically delivered. Direct calls to
-the existing expiry checker still produce and consume the original results.
-
-The focused suite accepts `-TimersPluginDirectory` and `-MemoryPluginDirectory`.
-It uses the real host timer queue, expiry checker, MemoryBufferRotation,
-UnifiedMemoryStorage, and persistence code. Records are written only to a private
-temporary database. Coverage includes permissions, validation/results, staging
-metadata, delayed storage visibility, search ordering, prefix parsing, unload
-survival, exact-once expiry checks, non-deleting forget, and disk reload.
-See [timer and memory build instructions](../plugins/README.md#timers-and-memory-plugins).
+`memory_plugin` still uses `stage_manual_memory`, `search_memory` and
+`flush_memory_record_if_present` under MEMORY permission. Memory rotation,
+storage and persistence remain host-owned. Remember stages the original manual
+record; recall selects the first search hit; forget checks and flushes records
+without deleting them. Memory state survives plugin unload.
 
 ### Perception observation migration (v3.6)
 
@@ -833,7 +809,7 @@ unknown host exceptions preserved. Host-owned strings use `string_free`.
 | Operation group | Request/result and existing host behavior |
 |---|---|
 | CAPTURE | Calls `captureAndTranscribeSpeech(aiConfig)` with the live mutable configuration; returns transcript text. |
-| HAS_STREAM_CONTEXT / START_STREAM | Reads the existing context; starts the existing stream with the default session history and original timer/memory references. |
+| HAS_STREAM_CONTEXT / START_STREAM | Reads the existing context; starts the existing stream with the default session history and original memory reference. |
 | XTTS_ENABLED / LANGUAGE / CONFIG | Reads existing live voice state. CONFIG uses the original `aiConfig["voice"]` access semantics. |
 | SYNTHESIZE_COQUI | `{text,speaker,speed}` returns a WAV path; retains the original default pitch. |
 | PLAY_AUDIO / PLAY_WAV | `{path}` calls the original playback function; PLAY_WAV returns its success boolean. |
@@ -872,17 +848,20 @@ and unload survival. Native COM/SAPI code receives a syntax check. Validation
 does not record audio, play sound, start a model/server, or modify the real cache.
 See [build and deployment instructions](../plugins/README.md#voice-plugin).
 
-## Shared scheduling service (v3.16)
+## Scheduling provider (v8)
 
-`const char* schedule_service(self, operation, arguments, arguments_size)` consumes
-one reserved table slot; total table size is unchanged. Requires SYSTEM and
-FILESYSTEM and a published, accepting plugin call gate. Operations are create,
-get, list, update, cancel and status; input is object JSON, limited to 64 KiB.
-Returns owned JSON with success and either operation data or error/message;
-release via string_free. Null means unavailable/denied/malformed API input.
-No plugin callback survives the call. Durable records remain host-owned on unload.
-The Model-classified schedule_plugin exports the six matching schedule.* tools.
-See [scheduling contract](SCHEDULING_TOOLS.md).
+`schedule_plugin` owns all six `schedule.*` handlers, durable storage, revision
+checks, due-item selection and delivery state. It publishes `schedule.state`
+resources (`items` and `delivery`) through generic resource registration.
+`items` contains at most 200 records plus the total; tools provide paginated access.
+The Calendar UI calls registered tools and retains no provider pointer.
+
+API v8 removes `schedule_user_timer`, `create_local_calendar` and
+`schedule_service` outright. Host and plugins must be rebuilt together.
+The host retains only generic callback scheduling, lifecycle gates and copied
+notification delivery. The frame loop pumps callbacks; provider callbacks decide
+which notifications are due. Saved schedules survive unload; delivery resumes
+on the next provider poll after reload. See [scheduling contract](SCHEDULING_TOOLS.md).
 
 ## Provider panel lifecycle (v3.17)
 

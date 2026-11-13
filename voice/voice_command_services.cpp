@@ -16,7 +16,7 @@ nlohmann::json execute(GrimVoiceOperation operation, const nlohmann::json& reque
         case GRIM_VOICE_HAS_STREAM_CONTEXT: return Voice::g_state.ctx != nullptr;
         case GRIM_VOICE_START_STREAM: {
             auto& history = MMO::SessionContextManager::instance().displayHistory("default");
-            return VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory);
+            return VoiceStream::start(Voice::g_state.ctx, &history, longTermMemory);
         }
         case GRIM_VOICE_XTTS_ENABLED: return Voice::isXTTSv2Enabled();
         case GRIM_VOICE_LANGUAGE: return Voice::getLanguage();

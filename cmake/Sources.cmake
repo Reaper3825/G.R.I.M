@@ -145,7 +145,6 @@ set(GRIM_HEADERS
     aliases.hpp
     synonyms.hpp
     resources.hpp
-    timer.hpp
     error_manager.hpp
     logger.hpp
     location.hpp

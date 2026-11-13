@@ -17,7 +17,6 @@ namespace GRIM {
     class UnifiedMemoryStorage;
 }
 struct LocationInfo;
-struct Timer;
 class ConsoleHistory;
 namespace GRIM::MMO { struct HardwareInventory; }
 
@@ -34,7 +33,6 @@ extern "C" {
     GRIM_EXPORT_SYMBOL GRIM::MMO::HardwareInventory g_hardwareInventory;
     GRIM_EXPORT_SYMBOL LocationInfo g_location;
     GRIM_EXPORT_SYMBOL std::filesystem::path g_currentDir;
-    GRIM_EXPORT_SYMBOL std::vector<Timer> timers;
     GRIM_EXPORT_SYMBOL nlohmann::json aiConfig;
     GRIM_EXPORT_SYMBOL nlohmann::json longTermMemory;
     GRIM_EXPORT_SYMBOL bool g_wifiConnected;
@@ -68,7 +66,7 @@ namespace Voice {
 namespace VoiceStream {
     struct whisper_context;
     GRIM_EXPORT_SYMBOL bool start(whisper_context* ctx, ConsoleHistory* history, 
-                                  std::vector<Timer>& timers, nlohmann::json& cfg, NLP& nlp);
+                                  nlohmann::json& cfg);
 }
 
 namespace Audio {

@@ -4,7 +4,6 @@
 #include "primitives/ui_button.hpp"
 #include "primitives/ui_scrollbox.hpp"
 #include "primitives/ui_grid.hpp"
-#include "core/scheduling_api.h"
 #include <chrono>
 #include <array>
 class UICalendarPanel : public UIPanel {
@@ -17,7 +16,6 @@ public:
     bool drawOverlay(OverlayRenderer&) override;
 private:
     struct Entry { std::string id,title,start,end; uint64_t revision; };
-    GrimScheduleProviderV1 provider{};
     std::vector<Entry> entries;
     size_t selected=0;
     float refreshElapsed=0;

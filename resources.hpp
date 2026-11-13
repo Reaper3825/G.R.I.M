@@ -5,7 +5,6 @@
 #include <system_error>
 #include <nlohmann/json_fwd.hpp>
 #include "console_history.hpp"
-#include "timer.hpp"
 
 // ====================================================
 // Constants
@@ -39,7 +38,6 @@ nlohmann::json saveGrimRuntimeAiConfig(const nlohmann::json& pending);
 // ====================================================
 // Global runtime state
 // ====================================================
-extern std::vector<Timer> timers;          // Active timers
 extern std::filesystem::path g_currentDir; // Filesystem current working dir
 
 // ====================================================
