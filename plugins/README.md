@@ -357,11 +357,14 @@ No model, renderer, training, package installation, or application startup occur
 
 ## Input plugin
 
+For an isolated DLL fixture: `tests/run_plugin_shutdown.ps1 -BuildInputFixture`.
+
 `input_plugin` registers the five existing canonical input tool IDs through API
-v3.9. The plugin depends only on the API, JSON codec, and standard library; it
-imports no host C++ symbols and owns no capture, perception manager, or input
-device. The host retains existing command parsing/execution behind a typed,
-permission-checked input service.
+v8.1. It owns parsing, validation, operation selection and result formatting for
+`move_mouse`, `click`, `type`, and `key`, using parsed input primitives through
+the permission-checked API. It imports no host C++ symbols. The host retains
+live capture, perception manager and input devices, plus legacy handlers for
+host/developer use. `click_on` remains on the grounded host service for now.
 
 | Tool | Raw arguments |
 |---|---|
@@ -372,7 +375,7 @@ permission-checked input service.
 | `click_on` | `[text|object] <exact label>` |
 
 All tools require INPUT permission and confirmation metadata. `click_on` also
-requires SYSTEM for perception/targeting. Complete host results pass through,
+requires SYSTEM for perception/targeting. Its complete host results pass through,
 including voice/colors, failures, exceptions, and structured targeting output.
 The four direct tools retain legacy key/button interpretation and void-input
 success semantics. `click_on` retains checked bounds, ambiguity, freshness, and
@@ -387,7 +390,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_click_target.ps1
 ```
 
 Deploy `.codex-build/input-plugin/plugins/input_plugin.dll` into the application's
-`plugins/` folder after rebuilding the host for API v4. Loading or unloading the DLL does not initialize
+`plugins/` folder after rebuilding the host for API v8.1. Loading or unloading the DLL does not initialize
 or destroy host perception/input state. Unload waits for active handlers and
 removes all five tools; source-file deletion is reconciled normally.
 

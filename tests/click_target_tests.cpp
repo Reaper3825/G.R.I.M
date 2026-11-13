@@ -184,5 +184,13 @@ int main() try {
     check(ExecuteInputCommandService(GRIM_INPUT_CLICK_ON, "object save-button").success && commandKind == ClickTargetKind::Object,
           "Input service did not route grounded targeting");
     check(!ExecuteInputCommandService(static_cast<GrimInputOperation>(999), "").success, "Unknown service operation accepted");
+    check(ExecuteInputPrimitive({{"op","move"},{"x",-99},{"y",42}}) && movedX == -99 && movedY == 42,
+          "Parsed move primitive failed");
+    check(ExecuteInputPrimitive({{"op","click"},{"button","right"}}) && buttonUsed == "right", "Click primitive failed");
+    check(ExecuteInputPrimitive({{"op","type"},{"text"," raw "}}) && rawTyped == " raw " && typingDelay == 15, "Type primitive changed text/delay");
+    check(ExecuteInputPrimitive({{"op","key"},{"key","enter"}}) && keyUsed == "enter", "Key primitive failed");
+    check(ExecuteInputPrimitive({{"op","combo"},{"keys",{"ctrl","c"}}}) && comboUsed == std::vector<std::string>{"ctrl","c"}, "Combo primitive failed");
+    g_contextManager.reset();
+    check(!ExecuteInputPrimitive({{"op","available"}}) && !ExecuteInputPrimitive({{"op","click"},{"button","left"}}), "Primitive ignored missing context");
     std::cout << "Click targeting, geometry, ambiguity, delivery and command-result tests passed\n";
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

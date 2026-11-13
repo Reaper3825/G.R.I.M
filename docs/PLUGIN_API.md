@@ -1,6 +1,31 @@
 # G.R.I.M Plugin API v8
 
-API version: **8.0.0**.
+API version: **8.1.0**.
+
+Version 8.1 adds `input_primitive` in a reserved slot without shifting existing
+fields. The input plugin now owns parsing, validation, operation selection and
+complete result formatting for `move_mouse`, `click`, `type`, and `key`.
+The host retains live input/context ownership and legacy handlers for host use.
+`click_on` continues through the existing grounded command service.
+
+`input_primitive(self, request_json, size)` accepts an object with `op`:
+`available`, `move` (integer `x`, `y`), `click` (string `button`), `type`
+(string `text`), `key` (string `key`), or `combo` (string array `keys`).
+Typing retains a 15 ms delay. It returns the `grim-runtime-service` v1 envelope
+with a boolean value: false means the live context is unavailable; true means
+available/executed using the existing void input interfaces, not verified OS
+or application delivery. Exceptions use the existing runtime-service error
+encoding. Strings must be released with `string_free`.
+
+INPUT permission and an active published provider are required. Calls drain on
+unload. The JSON transport limit is 6 * 65536 + 1024 bytes to allow escaping;
+the plugin retains the 65536-byte raw argument limit. The plugin checks
+availability before argument validation, and the host checks it again before
+execution. Null responses become `ERR_INPUT_SERVICE`. Rebuild the input plugin
+and host for v8.1 together; other v8.0 plugins retain their existing API layout.
+
+Validate with `tests/run_plugin_shutdown.ps1 -BuildInputFixture` and
+`tests/run_click_target.ps1`; both use simulated input, never desktop events.
 
 Version 5 moved application handling into its plugin and added generic resource
 publication. Version 6 moves system information handling into its plugin and
@@ -443,9 +468,9 @@ See [UI panel operations](ui/PANEL_OPERATIONS.md) for stable keys and examples.
 ## Input tool migration (v3.9)
 
 `input_plugin` supplies `move_mouse`, `click`, `type`, `key`, and `click_on`.
-They are no longer registered by the host. The host retains the command handlers
-and their live perception/input services; the plugin owns discovery metadata,
-registered callbacks, and copying complete results into the plugin result writer.
+They are no longer registered by the host. This section describes the retained legacy `input_service` boundary, still used
+by `click_on`. For the four direct tools, see the v8.1 primitive ownership
+contract above. Legacy handlers and live perception/input services remain host-owned.
 
 API v3.9 consumes one reserved pointer slot, retaining table size and previous
 field offsets at the time. The

@@ -1,4 +1,4 @@
-param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "", [switch]$BuildUIFixture, [switch]$BuildFilesystemFixture, [switch]$BuildApplicationFixture, [switch]$BuildSystemInfoFixture, [string]$SchedulePluginDirectory = "", [switch]$BuildSchedulingFixtures)
+param([string]$PluginDirectory = "", [string]$FilesystemPluginDirectory = "", [string]$UtilityPluginDirectory = "", [string]$ApplicationPluginDirectory = "", [string]$ToolInspectionPluginDirectory = "", [string]$SystemInfoPluginDirectory = "", [string]$TimersPluginDirectory = "", [string]$MemoryPluginDirectory = "", [string]$PerceptionPluginDirectory = "", [string]$VoicePluginDirectory = "", [string]$UIPluginDirectory = "", [string]$InputPluginDirectory = "", [switch]$BuildInputFixture, [switch]$BuildUIFixture, [switch]$BuildFilesystemFixture, [switch]$BuildApplicationFixture, [switch]$BuildSystemInfoFixture, [string]$SchedulePluginDirectory = "", [switch]$BuildSchedulingFixtures)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/plugin-shutdown-tests'
@@ -29,6 +29,12 @@ if ($BuildFilesystemFixture) {
     New-Item -ItemType Directory -Force -Path $FilesystemPluginDirectory | Out-Null
     $filesystemArgs = $common + @('/LD', '/DGRIM_BUILD_PLUGIN', '/utf-8', ('"' + (Join-Path $workspace 'plugins/filesystem_plugin/filesystem_plugin.cpp') + '"'), '/Fe:filesystem-fixture/filesystem_plugin.dll')
     Set-Content -LiteralPath (Join-Path $output 'filesystem-fixture.rsp') -Value $filesystemArgs -Encoding ascii
+}
+if ($BuildInputFixture) {
+    $InputPluginDirectory = Join-Path $output 'input-fixture'
+    New-Item -ItemType Directory -Force -Path $InputPluginDirectory | Out-Null
+    $inputArgs = $common + @('/LD', '/utf-8', ('"' + (Join-Path $workspace 'plugins/input_plugin/input_plugin.cpp') + '"'), '/Fe:input-fixture/input_plugin.dll')
+    Set-Content -LiteralPath (Join-Path $output 'input-fixture.rsp') -Value $inputArgs -Encoding ascii
 }
 if ($BuildUIFixture) {
     $UIPluginDirectory = Join-Path $output 'ui-fixture'
@@ -81,7 +87,7 @@ Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding
 $syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
 $syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/application_plugin/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($VoicePluginDirectory) { $syntaxArgs += '"' + (Join-Path $workspace 'voice/voice_platform_queries.cpp') + '"' }
-if ($PerceptionPluginDirectory) {
+if ($PerceptionPluginDirectory -or $BuildInputFixture) {
     $perceptionOpenCvInclude = Join-Path $workspace 'vcpkg_installed/x64-windows/include/opencv4'
     if (-not (Test-Path -LiteralPath (Join-Path $perceptionOpenCvInclude 'opencv2/core.hpp'))) {
         $perceptionOpenCvInclude = Join-Path $workspace 'vcpkg_installed/x64-windows/include'
@@ -89,6 +95,7 @@ if ($PerceptionPluginDirectory) {
     if (-not (Test-Path -LiteralPath (Join-Path $perceptionOpenCvInclude 'opencv2/core.hpp'))) { throw 'Existing OpenCV headers are required for the host perception syntax check.' }
     $syntaxArgs += '/I"' + $perceptionOpenCvInclude + '"'
     $syntaxArgs += '"' + (Join-Path $workspace 'commands/commands_perception.cpp') + '"'
+    $syntaxArgs += '"' + (Join-Path $workspace 'perception/input_command_service.cpp') + '"'
 }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'
@@ -139,6 +146,10 @@ $commands = @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul
     'cl @registry.rsp','if errorlevel 1 exit /b %errorlevel%',
     'tool_registry_tests.exe','if errorlevel 1 exit /b %errorlevel%')
 Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
+if ($BuildInputFixture) {
+    $commands = $commands[0..2] + @('cl @input-fixture.rsp','if errorlevel 1 exit /b %errorlevel%') + $commands[3..($commands.Length - 1)]
+    Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
+}
 if ($BuildUIFixture) {
     $insert = @('cl @ui-fixture.rsp', 'if errorlevel 1 exit /b %errorlevel%')
     $commands = $commands[0..2] + $insert + $commands[3..($commands.Length - 1)]

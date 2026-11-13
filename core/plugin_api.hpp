@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v8.0
+// G.R.I.M Plugin API v8.1
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 8
-#define GRIM_API_VERSION_MINOR 0
+#define GRIM_API_VERSION_MINOR 1
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -399,7 +399,12 @@ typedef struct GrimPluginAPI {
                                    const char* resources_json, size_t size);
     // True only while this generation is the currently published provider.
     bool (*is_provider_current)(const GrimPluginAPI* self);
-    void* reserved[9];
+    // v8.1: parsed input primitives. INPUT permission, active provider only.
+    // Request: object with op = available/move/click/type/key/combo and typed fields.
+    // Response: grim-runtime-service v1, value is availability/execution bool.
+    // No command parsing or presentation; release response with string_free.
+    const char* (*input_primitive)(const GrimPluginAPI* self, const char* request_json, size_t size);
+    void* reserved[8];
     
 } GrimPluginAPI;
 

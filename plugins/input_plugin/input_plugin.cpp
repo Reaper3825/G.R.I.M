@@ -1,4 +1,5 @@
 #include "core/plugin_api.hpp"
+#include "input_commands.hpp"
 #include <nlohmann/json.hpp>
 #include <string>
 #include <stdexcept>
@@ -8,6 +9,25 @@ const GrimPluginAPI* host = nullptr;
 struct UnknownInputException {};
 template<GrimInputOperation Operation>
 GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
+    if constexpr (Operation != GRIM_INPUT_CLICK_ON) {
+        CommandResult value;
+        if (request->arguments_size > 65536 || (request->arguments_size && !request->arguments)) {
+            value = {false, "Host input service unavailable or denied", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
+        } else try {
+            const std::string argument = request->arguments_size ? std::string(request->arguments, request->arguments_size) : std::string{};
+            if constexpr (Operation == GRIM_INPUT_MOVE_MOUSE) value = inputCommands::cmdInputMoveMouse(argument);
+            if constexpr (Operation == GRIM_INPUT_CLICK) value = inputCommands::cmdInputClick(argument);
+            if constexpr (Operation == GRIM_INPUT_TYPE) value = inputCommands::cmdInputType(argument);
+            if constexpr (Operation == GRIM_INPUT_KEY) value = inputCommands::cmdInputKey(argument);
+        } catch (const inputCommands::ServiceUnavailable&) {
+            value = {false, "Host input service unavailable or denied", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
+        }
+        GrimToolResult result;
+        result.success = value.success; result.message = value.message.c_str();
+        result.error_code = value.errorCode.c_str(); result.category = value.category.c_str(); result.voice = value.voice.c_str();
+        result.color_rgb = (value.color.r << 16) | (value.color.g << 8) | value.color.b;
+        return writer->complete(writer, &result);
+    }
     const char* raw = host->input_service(host, Operation, request->arguments, request->arguments_size);
     if (!raw) {
         GrimToolResult result;
@@ -46,8 +66,9 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        !api->input_service) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->input_service || !api->input_primitive) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
+    inputCommands::host = api;
     GrimToolRegistration tools[5];
     tools[0].handler = call<GRIM_INPUT_MOVE_MOUSE>; tools[1].handler = call<GRIM_INPUT_CLICK>;
     tools[2].handler = call<GRIM_INPUT_TYPE>; tools[3].handler = call<GRIM_INPUT_KEY>;
@@ -92,4 +113,4 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     }
     return api->register_tools(api, tools, 5);
 }
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; inputCommands::host = nullptr; }

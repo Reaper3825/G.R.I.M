@@ -1224,6 +1224,21 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
     } catch (...) { return nullptr; }
 }
 
+static const char* api_input_primitive(const GrimPluginAPI* self, const char* text, size_t size) noexcept {
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        ActiveCall active(owner.gate, true);
+        // JSON escaping can expand the legacy 64 KiB raw argument limit sixfold.
+        if (!active.entered || !checkPermission(self, GRIM_PERM_INPUT) || !text || size > 6 * 65536 + 1024)
+            return nullptr;
+        const auto request = nlohmann::json::parse(text, text + size);
+        if (!request.is_object()) return nullptr;
+        return runtimeServiceResponse(self, GRIM_PERM_INPUT, [&] {
+            return nlohmann::json(GRIM::Perception::ExecuteInputPrimitive(request));
+        });
+    } catch (...) { return nullptr; }
+}
+
 static const char* api_input_service(const GrimPluginAPI* self, GrimInputOperation operation,
                                      const char* arguments, size_t size) noexcept {
     try {
@@ -1345,6 +1360,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.voice_service = api_voice_service;
     api.ui_panel_service = api_ui_panel_service;
     api.input_service = api_input_service;
+    api.input_primitive = api_input_primitive;
     api.register_ui_panel = api_register_ui_panel;
     api.get_provider_identity = api_get_provider_identity;
     api.replace_resources = api_replace_resources;
