@@ -58,6 +58,28 @@ not a central list of every provider's panels.
 - Reload MUST NOT promise preservation of unsaved panel-local state without an
   explicit provider-owned persistence contract.
 
+### Approved provider mapping
+
+The migration preserves the seven existing root panels and their tab composition.
+Only Schedule currently exists as the designated provider; the other six require
+new providers. This table assigns the migration targets, not current registration.
+
+| Panel key | Owning provider |
+|---|---|
+| `calendar` | Schedule |
+| `console` | Console (new) |
+| `settings` | Settings (new) |
+| `training_control` | Model Workspace (new) |
+| `data_hub` | DataHub (new) |
+| `storage` | Storage (new) |
+| `geospatial` | GeoSpatial (new) |
+
+Model Workspace retains Home, Knowledge Gaps, Tool Gaps, Model Config, Tokenizer,
+Observatory, World Lab, Assets, and Tools in the existing Training Control panel.
+World Lab does not become a separate provider or root panel in this migration.
+DataHub also retains its existing tabs. Owning a composed panel does not transfer
+the domain services it consumes to that provider.
+
 ### Implementation boundary
 
 The provider/host boundary MUST use versioned ABI data and explicit lifetimes,
@@ -65,10 +87,17 @@ not host C++ panel/widget objects, renderer references, or STL ownership objects
 passed between modules. Domain services stay with their owners; panels consume
 explicit interfaces or copied results rather than restoring retired host services.
 
-The content/update/event ABI, native viewport attachment mechanism, and ownership
-mapping for each existing panel are subsequent implementation decisions. This
-contract does not move the renderer, migrate dynamic surfaces or OSINT, or
-reintroduce removed perception panels.
+The selected content model is copied panel/widget definitions with interaction
+events routed to the owning provider. Native provider rendering/input callbacks
+are not the selected model. Providers author content and behavior; host primitives
+render and route interactions. The exact content/update/event ABI and native
+viewport attachment mechanism must implement that boundary without losing the
+existing panels' functionality.
+
+The API cutover includes migration of all seven panels to their designated
+providers, not a host-owned transition path or renamed host-factory selection.
+This contract does not move the renderer, migrate dynamic surfaces or OSINT,
+or reintroduce removed perception panels.
 
 ### Current gap
 

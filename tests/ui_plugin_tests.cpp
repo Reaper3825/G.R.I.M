@@ -26,13 +26,26 @@ namespace GRIM::UI {
 // Keep the host-service mock linkable as the production boundary grows. These
 // substitutes do not exercise native factory construction or rendering.
 void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                            std::vector<std::string> implementations) {
-    uiTasks.push_back([lease, implementations = std::move(implementations)] {
+                            std::vector<std::string> implementations, std::vector<nlohmann::json> definitions) {
+    uiTasks.push_back([lease, implementations = std::move(implementations), definitions = std::move(definitions)] {
         std::lock_guard lock(lease->mutex);
         if (lease->retired) return;
         for (const auto& implementation : implementations)
             lease->panels.emplace_back(implementation, 1);
+        for (const auto& definition : definitions) {
+            const auto key = definition.at("panel_id").get<std::string>();
+            lease->panels.emplace_back(key, 42);
+            lease->definitionRevisions[key] = definition.at("revision").get<uint64_t>();
+            std::lock_guard eventLock(lease->eventsMutex);
+            lease->events.push_back({{"type", "activated"}, {"panel_id", key}, {"runtime_id", uint64_t{42}}, {"success", true}});
+        }
     });
+}
+void updateProviderPanel(const std::shared_ptr<ProviderPanelLease>& lease, nlohmann::json definition) {
+    std::lock_guard lock(lease->mutex);
+    if (lease->retired || definition.at("runtime_id") != 42 ||
+        !lease->definitionRevisions.count(definition.at("panel_id").get<std::string>()))
+        throw std::invalid_argument("Unknown panel update");
 }
 void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
     std::lock_guard lock(lease->mutex);

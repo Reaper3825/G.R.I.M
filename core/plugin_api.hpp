@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v9.0
+// G.R.I.M Plugin API v12.1
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Plugins should only interact with GRIM through this API to ensure forward
@@ -21,7 +21,7 @@
 // API Versioning
 // ============================================================================
 #define GRIM_API_VERSION_MAJOR 12
-#define GRIM_API_VERSION_MINOR 0
+#define GRIM_API_VERSION_MINOR 1
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -352,7 +352,15 @@ typedef struct GrimPluginAPI {
                                    const char* resources_json, size_t size);
     // True only while this generation is the currently published provider.
     bool (*is_provider_current)(const GrimPluginAPI* self);
-    void* reserved[8];
+    // v12.1: Copied widget definitions; no host implementation key or DLL UI object.
+    // Registration is initialization-only. Updates require the activated runtime
+    // identity and an increasing revision. UI permission is required for all three.
+    GrimResult (*register_panel_definition)(const GrimPluginAPI* self, const char* json, size_t size);
+    GrimResult (*update_panel_definition)(const GrimPluginAPI* self, const char* json, size_t size);
+    // Owned activation/interaction/error events, consumed on read. Free with
+    // string_free. Null reports API failure, not an empty event queue.
+    const char* (*poll_panel_events)(const GrimPluginAPI* self);
+    void* reserved[5];
     
 } GrimPluginAPI;
 

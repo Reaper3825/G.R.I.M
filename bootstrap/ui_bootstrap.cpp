@@ -19,7 +19,6 @@
 #include "../ui/ui_root.hpp"
 #include "../ui/ui_settings_menu.hpp"
 #include "../ui/ui_storage_panel.hpp"
-#include "../ui/ui_calendar_panel.hpp"
 #include "../ui/ui_surface_renderer_bridge.hpp"
 #include "../ui/ui_training_panel.hpp"
 
@@ -146,7 +145,6 @@ UIBootstrapResult bootstrapUI(
     root.registerPanelFactory("ui.settings", "settings", [] { return std::make_shared<UISettingsMenu>(); });
     root.registerPanelFactory("ui.training_control", "training_control", [] { return std::make_shared<UITrainingPanel>(); });
     root.registerPanelFactory("ui.data_hub", "data_hub", [] { return std::make_shared<UIDataHubPanel>(); });
-    root.registerPanelFactory("ui.calendar", "calendar", [] { return std::make_shared<UICalendarPanel>(); });
     root.registerPanelFactory("ui.storage", "storage", [server = &deviceCommServer] {
         auto panel = std::make_shared<UIStoragePanel>();
         panel->setServer(server);

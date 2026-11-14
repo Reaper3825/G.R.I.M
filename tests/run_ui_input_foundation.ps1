@@ -12,6 +12,7 @@ $sources = @('tests/ui_input_foundation_tests.cpp','ui/primitives/ui_inputbox.cp
 $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $sources += 'ui/primitives/ui_panel.cpp', 'ui/primitives/ui_split_pane.cpp', 'tests/ui_split_pane_tests.cpp'
 $sources += 'ui/ui_root_panels.cpp', 'ui/ui_panel_service.cpp', 'ui/dynamic_surface_panel.cpp', 'ui/ui_surface_renderer_bridge.cpp', 'MMO/UI/UISurfaceRegistry.cpp', 'MMO/UI/UISurfaceSpec.cpp', 'tests/ui_panel_operations_tests.cpp'
+$sources += 'ui/provider_defined_panel.cpp'
 $sources += 'ui/primitives/ui_canvas.cpp', 'ui/primitives/ui_node.cpp', 'tests/ui_canvas_tests.cpp'
 $sources += @('MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/Registries/ProviderRegistry.cpp') # Panel resource publication is a base UI dependency.
 if ($Tools) {

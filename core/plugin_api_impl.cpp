@@ -13,6 +13,7 @@
 #include "error_manager.hpp"
 #include "memory/command_memory_services.hpp"
 #include "ui/ui_panel_service.hpp"
+#include "ui/panel_definition.hpp"
 #include "../MMO/Core/Registries/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
 #include "../MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "popup_ui/popup_ui.hpp"
@@ -97,6 +98,7 @@ struct PluginContext {
     bool registration_failed = false;
     std::vector<GRIM::MMO::ToolRegistration> pending;
     std::vector<std::string> pendingPanels;
+    std::vector<nlohmann::json> pendingPanelDefinitions;
     std::mutex resourcesMutex;
     std::map<std::string, GRIM::MMO::ResourceDescriptor> pendingResources;
     std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
@@ -347,6 +349,69 @@ static GrimResult api_register_ui_panel(const GrimPluginAPI* self, const char* i
     } catch (...) {
         if (owner && owner->staging) owner->registration_failed = true;
         return GRIM_ERROR_INVALID_PARAM;
+    }
+}
+
+static nlohmann::json copyPanelDefinition(const char* json, size_t size) {
+    if (!json || !size || size > 262144) throw std::invalid_argument("Panel definition must contain 1..262144 bytes");
+    auto value = nlohmann::json::parse(json, json + size);
+    GRIM::UI::validatePanelDefinition(value);
+    return value;
+}
+
+static GrimResult api_register_panel_definition(const GrimPluginAPI* self, const char* json, size_t size) noexcept {
+    PluginContext* owner = nullptr;
+    try {
+        owner = const_cast<PluginContext*>(&pluginContext(self));
+        std::lock_guard lock(owner->gate->mutex);
+        if (!owner->gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!owner->staging) return GRIM_ERROR_UNSUPPORTED;
+        if (!checkPermission(self, GRIM_PERM_UI)) {
+            owner->registration_failed = true;
+            return GRIM_ERROR_PERMISSION_DENIED;
+        }
+        auto definition = copyPanelDefinition(json, size);
+        if (definition.at("runtime_id").get<uint64_t>() != 0 ||
+            owner->pendingPanelDefinitions.size() + owner->pendingPanels.size() >= 64)
+            throw std::invalid_argument("Invalid initial panel identity or panel limit");
+        for (const auto& existing : owner->pendingPanelDefinitions)
+            if (existing.at("panel_id") == definition.at("panel_id")) throw std::invalid_argument("Duplicate panel declaration");
+        owner->pendingPanelDefinitions.push_back(std::move(definition));
+        return GRIM_OK;
+    } catch (const std::exception& error) {
+        if (owner && owner->staging) owner->registration_failed = true;
+        LOG_ERROR("PluginAPI", error.what());
+        return GRIM_ERROR_INVALID_PARAM;
+    }
+}
+
+static GrimResult api_update_panel_definition(const GrimPluginAPI* self, const char* json, size_t size) noexcept {
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        ActiveCall active(owner.gate, true);
+        if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!checkPermission(self, GRIM_PERM_UI)) return GRIM_ERROR_PERMISSION_DENIED;
+        GRIM::UI::updateProviderPanel(owner.panelLease, copyPanelDefinition(json, size));
+        return GRIM_OK;
+    } catch (const std::exception& error) {
+        LOG_ERROR("PluginAPI", error.what());
+        return GRIM_ERROR_INVALID_PARAM;
+    }
+}
+
+static const char* api_poll_panel_events(const GrimPluginAPI* self) noexcept {
+    try {
+        auto& owner = const_cast<PluginContext&>(pluginContext(self));
+        ActiveCall active(owner.gate, true);
+        if (!active.entered || !checkPermission(self, GRIM_PERM_UI)) return nullptr;
+        std::lock_guard lock(owner.panelLease->eventsMutex);
+        const auto response = nlohmann::json{{"version", 1}, {"events", owner.panelLease->events}};
+        const auto result = allocateString(response.dump());
+        owner.panelLease->events.clear();
+        return result;
+    } catch (const std::exception& error) {
+        LOG_ERROR("PluginAPI", error.what());
+        return nullptr;
     }
 }
 
@@ -1220,6 +1285,9 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.get_provider_identity = api_get_provider_identity;
     api.replace_resources = api_replace_resources;
     api.is_provider_current = api_is_provider_current;
+    api.register_panel_definition = api_register_panel_definition;
+    api.update_panel_definition = api_update_panel_definition;
+    api.poll_panel_events = api_poll_panel_events;
     
     auto* result = &api;
     auto instance = context->instance;
@@ -1259,8 +1327,8 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
     // Queue retirement before replacement creation. Generation-specific leases
     // prevent a later shutdown of the old DLL from removing its replacement.
     if (replacing) GRIM::UI::retireProviderPanels(pluginContext(replacing).panelLease);
-    if (!owner.pendingPanels.empty())
-        GRIM::UI::activateProviderPanels(owner.panelLease, std::move(owner.pendingPanels));
+    if (!owner.pendingPanels.empty() || !owner.pendingPanelDefinitions.empty())
+        GRIM::UI::activateProviderPanels(owner.panelLease, std::move(owner.pendingPanels), std::move(owner.pendingPanelDefinitions));
     if (replacing) {
         const auto& old = pluginContext(replacing);
         std::lock_guard lock(old.gate->mutex);
