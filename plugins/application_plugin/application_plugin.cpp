@@ -1,6 +1,7 @@
 #include "core/plugin_api.hpp"
 #include "application_tools.hpp"
 #include "shell_open.hpp"
+#include "user_aliases.hpp"
 #include <memory>
 #include <string>
 #include <stdexcept>
@@ -8,6 +9,7 @@
 namespace {
 const GrimPluginAPI* host = nullptr;
 std::unique_ptr<GRIM::Applications::Catalog> catalog;
+std::shared_ptr<GRIM::Applications::UserAliases> userAliases;
 
 GrimResult finish(GrimToolResultWriter* writer, bool success, const std::string& message,
                   const char* error, const char* category, const std::string& voice, uint32_t color) {
@@ -36,7 +38,7 @@ GrimResult openApplication(const GrimToolCall* call, GrimToolResultWriter* write
     if (target.empty()) return finish(writer, false, errorMessage("ERR_APP_NO_ARGUMENT"),
         "ERR_APP_NO_ARGUMENT", "error", "Missing application name", 0xFF5050);
 #ifdef _WIN32
-    if (shellOpenTarget(target) <= 32)
+    if (shellOpenTarget(userAliases->resolve(target)) <= 32)
         return finish(writer, false, errorMessage("ERR_APP_LAUNCH_FAILED") + ": " + target,
             "ERR_APP_LAUNCH_FAILED", "error", "Failed to open " + target, 0xFF5050);
     return finish(writer, true, "[App] Launched: " + target,
@@ -77,7 +79,7 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->get_user_error_message || !api->get_provider_identity || !api->replace_resources ||
-        !api->is_provider_current || !api->get_alias_snapshot) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->is_provider_current) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
     try {
         const auto readJson = [api](const char* text) {
@@ -89,12 +91,8 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         const auto identity = readJson(api->get_provider_identity(api));
         GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin,
             identity.at("name"), identity.at("instance"), identity.at("path")};
-        auto backends = GRIM::Applications::systemBackends([api, readJson] {
-            const auto snapshot = readJson(api->get_alias_snapshot(api, nullptr));
-            std::map<std::string, std::string> aliases;
-            for (const auto& entry : snapshot.at("entries")) aliases.emplace(entry.at("name"), entry.at("target"));
-            return aliases;
-        });
+        userAliases = std::make_shared<GRIM::Applications::UserAliases>(GRIM::Applications::UserAliases::defaultDirectory());
+        auto backends = GRIM::Applications::systemBackends([store=userAliases] { return store->reload(); });
         catalog = std::make_unique<GRIM::Applications::Catalog>(owner, std::move(backends),
             GRIM::Applications::launchNative,
             [api](const auto& resources) {
@@ -103,7 +101,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             }, [api] { return api->is_provider_current(api); });
         // Discovery prepares copied resources; nothing is visible until the manager commits.
         catalog->request("refresh", nlohmann::json::object());
-    } catch (...) { catalog.reset(); return GRIM_ERROR_UNKNOWN; }
+    } catch (...) { catalog.reset(); userAliases.reset(); return GRIM_ERROR_UNKNOWN; }
 
     GrimToolRegistration tools[2];
     tools[0].handler = openApplication;
@@ -139,4 +137,4 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const auto result = api->register_tools(api, tools, 2);
     return result == GRIM_OK ? registerApplicationTools(api, *catalog) : result;
 }
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); host = nullptr; }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); userAliases.reset(); host = nullptr; }

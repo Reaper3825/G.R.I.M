@@ -5,7 +5,6 @@
 #include "bootstrap_config.hpp"
 #include "resources.hpp"
 #include "console_history.hpp"
-#include "aliases.hpp"
 #include "device_setups/audio_devices.hpp"
 #include "logger.hpp"
 #include "ai/ai.hpp"
@@ -61,10 +60,6 @@ static void bootstrapConfigAndStatics() {
     endPhaseGroup();
     LOG_PHASE("Configs initialized", true);
 
-    beginPhaseGroup();
-    aliases::init();
-    endPhaseGroup();
-    LOG_PHASE("Aliases bootstrap finished", true);
 
 }
 

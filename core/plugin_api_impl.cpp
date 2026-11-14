@@ -11,7 +11,6 @@
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
-#include "aliases.hpp"
 #include "memory/command_memory_services.hpp"
 #include "ui/ui_panel_service.hpp"
 #include "../MMO/Core/Registries/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
@@ -711,36 +710,6 @@ static const char* api_flush_memory_record_if_present(const GrimPluginAPI* self,
     });
 }
 
-static const char* api_get_alias_snapshot(const GrimPluginAPI* self, const char* key) noexcept {
-    try {
-        (void)pluginContext(self);
-        auto entries = nlohmann::json::array();
-        std::string info;
-        if (key) info = aliases::info(key);
-        else for (const auto& [name, target] : aliases::getAll())
-            entries.push_back({{"name", name}, {"target", target}});
-        return allocateString(nlohmann::json{{"format", "grim-alias-snapshot"}, {"version", 1},
-            {"entries", std::move(entries)}, {"info", info}}.dump());
-    } catch (...) { return nullptr; }
-}
-
-static const char* api_refresh_aliases(const GrimPluginAPI* self) noexcept {
-    try {
-        (void)pluginContext(self);
-        nlohmann::json result{{"format", "grim-alias-refresh"}, {"version", 1},
-            {"completed", false}, {"error", ""}};
-        if (!checkPermission(self, GRIM_PERM_FILESYSTEM)) {
-            result["error"] = "Filesystem permission denied";
-        } else {
-            try {
-                (void)aliases::refreshNow(); // Preserve the old wrapper's ignored status.
-                result["completed"] = true;
-            } catch (const std::exception& error) { result["error"] = error.what(); }
-        }
-        return allocateString(result.dump());
-    } catch (...) { return nullptr; }
-}
-
 static const char* api_get_tool_snapshot(const GrimPluginAPI* self, const char* tool_id) noexcept {
     try {
         (void)pluginContext(self);
@@ -1243,8 +1212,6 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.string_free = api_string_free;
     api.get_user_error_message = api_get_user_error_message;
     api.get_tool_snapshot = api_get_tool_snapshot;
-    api.get_alias_snapshot = api_get_alias_snapshot;
-    api.refresh_aliases = api_refresh_aliases;
     api.stage_manual_memory = api_stage_manual_memory;
     api.search_memory = api_search_memory;
     api.flush_memory_record_if_present = api_flush_memory_record_if_present;

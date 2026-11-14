@@ -36,6 +36,7 @@ Backend nativeBackend() {
         }
     }};
 }
+Backend portableBackend() { return {"portable-applications", [] { return std::vector<Application>{}; }}; }
 void launchNative(const Application& app) {
     if (app.launchKind != "bundle") throw std::invalid_argument("Unsupported macOS application launch kind");
     @autoreleasepool {

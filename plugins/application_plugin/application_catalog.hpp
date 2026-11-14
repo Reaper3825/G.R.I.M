@@ -6,6 +6,7 @@
 #include <mutex>
 #include <map>
 #include <algorithm>
+#include <filesystem>
 
 namespace GRIM::Applications {
 struct Application {
@@ -22,6 +23,8 @@ using Launcher = std::function<void(const Application&)>;
 using AliasSource = std::function<std::map<std::string, std::string>()>;
 std::vector<Backend> systemBackends(AliasSource aliases);
 Backend nativeBackend();
+Backend portableBackend();
+std::vector<Application> scanPortableDirectories(const std::vector<std::filesystem::path>& roots);
 void launchNative(const Application& application);
 
 // Plugin-owned state. The framework receives copied resource descriptions only.

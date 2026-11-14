@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <fstream>
+#include <cstdlib>
 
 // Native discovery and launch fixtures live inside the DLL. The host supplies no application implementation.
 namespace { std::string errorPrefix = "configured:"; }
@@ -19,12 +21,18 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     const auto folder = fs::temp_directory_path() / ("grim-application-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check(fs::create_directory(folder), "Cannot create application test folder");
+    const char* previousConfig=std::getenv("GRIM_APPLICATION_CONFIG_DIR");
+    const bool hadConfig=previousConfig!=nullptr;
+    const std::string oldConfig=previousConfig?previousConfig:"";
+    _putenv_s("GRIM_APPLICATION_CONFIG_DIR",folder.string().c_str());
+    struct RestoreConfig { bool had;std::string value;~RestoreConfig(){_putenv_s("GRIM_APPLICATION_CONFIG_DIR",had?value.c_str():"");} } restore{hadConfig,oldConfig};
     struct Cleanup {
         fs::path folder;
         ~Cleanup() {
             PluginManager::unloadAll();
             std::error_code error;
             fs::remove(folder / "application_plugin.dll", error);
+            fs::remove(folder / "application_aliases.json", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
@@ -35,6 +43,9 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     check(catalogResult.success, "Application list failed");
     auto apps = nlohmann::json::parse(catalogResult.structuredOutputJson).at("value").at("applications");
     check(apps.size() == 1 && GRIM::MMO::ProviderRegistry::instance().snapshot().resourceCount() >= 1, "Application resources not published at plugin commit");
+    { std::ofstream config(folder/"application_aliases.json"); config << R"({"version":1,"aliases":{"editor":"  C:/test folder/app.exe  "}})"; }
+    check(registry.invoke("applications.refresh","{}").success,"User alias refresh failed");
+    check(registry.invoke("open","EDITOR").success,"Plugin did not resolve a user alias before native launch");
     const auto app = apps.at(0);
     const auto applicationId = app.at("resource_id");
     check(registry.invoke("applications.inspect", nlohmann::json{{"resource_id", applicationId}}.dump()).success, "Application inspection failed");

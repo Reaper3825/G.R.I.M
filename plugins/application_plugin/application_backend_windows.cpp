@@ -56,6 +56,28 @@ Backend nativeBackend() {
         return apps;
     }};
 }
+Backend portableBackend() {
+    return {"windows-portable-and-shortcuts", [] {
+        auto apps = scanPortableDirectories({L"D:\\Program Files",L"D:\\Program Files (x86)",L"D:\\Apps",L"D:\\Games",L"C:\\Program Files",L"C:\\Program Files (x86)"});
+        for(const auto folder : {FOLDERID_CommonPrograms,FOLDERID_Programs}) {
+            PWSTR raw=nullptr;
+            if(FAILED(SHGetKnownFolderPath(folder,0,nullptr,&raw)))throw std::runtime_error("Start Menu folder unavailable");
+            std::unique_ptr<wchar_t,FreeTask> owned(raw);
+            const std::filesystem::path root(raw);
+            if(!std::filesystem::exists(root))continue;
+            for(const auto& file:std::filesystem::recursive_directory_iterator(root,std::filesystem::directory_options::skip_permission_denied)) {
+                if(!file.is_regular_file())continue;
+                auto ext=file.path().extension().wstring();
+                std::transform(ext.begin(),ext.end(),ext.begin(),::towlower);
+                if(ext!=L".lnk")continue;
+                const auto target=utf8(file.path().c_str());
+                apps.push_back({"windows.file",target,utf8(file.path().stem().c_str()),"file",target,""});
+                if(apps.size()>10000)throw std::runtime_error("Portable/shortcut application limit exceeded");
+            }
+        }
+        return apps;
+    }};
+}
 void launchNative(const Application& app) {
     Apartment apartment;
     const auto target = wide(app.launchTarget);

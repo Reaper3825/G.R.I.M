@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 11
+#define GRIM_API_VERSION_MAJOR 12
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -312,14 +312,6 @@ typedef struct GrimPluginAPI {
     // Envelope: {"format":"grim-tool-snapshot","version":1,"tools":[...]}
     // Null return means API failure. Read-only; does not dispatch or change stats.
     const char* (*get_tool_snapshot)(const GrimPluginAPI* self, const char* tool_id);
-    // v3.3: application aliases (separate from ToolRegistry command aliases).
-    // Host-owned version-1 JSON; release with string_free. Null return = API failure.
-    // Null key lists entries in the host's existing iteration order; otherwise
-    // returns the host's alias-info text, including existing missing-name behavior.
-    const char* (*get_alias_snapshot)(const GrimPluginAPI* self, const char* key);
-    // Requires FILESYSTEM. Calls the existing synchronous host refresh. The JSON
-    // records normal return vs exception; legacy commands ignore returned status.
-    const char* (*refresh_aliases)(const GrimPluginAPI* self);
     // Manual memory services
     // (MEMORY). JSON envelope: {format:"grim-runtime-service",version:1,
     // value:...,error:null|{kind,message}}; release with string_free.
@@ -329,8 +321,9 @@ typedef struct GrimPluginAPI {
     const char* (*search_memory)(const GrimPluginAPI* self, const char* query);
     // value is presence bool. Retains legacy forget's check+flush, not deletion.
     const char* (*flush_memory_record_if_present)(const GrimPluginAPI* self, uint64_t id);
-    // v3.8: UI permission. Submits copied, stable-key panel requests or polls an
-    // owned request. Always nonblocking. Host-owned grim-ui-panel-response v1
+    // v3.8: UI permission. Submits copied, stable-key panel requests or polls a
+    // caller-owned request, not ownership of the target panel. Always nonblocking.
+    // Host-owned grim-ui-panel-response v1
     // JSON; free with string_free. Null = invalid input, denied access, or failure.
     // Submit: request_id=0; panel_key=null for LIST, required for other operations.
     // Poll: panel_key=null, request_id>0. A completed poll consumes its result.
@@ -343,7 +336,10 @@ typedef struct GrimPluginAPI {
     // v3.17: UI permission. Initialization-only declaration of a host panel
     // implementation (1-256 bytes). Copied and staged until provider commit.
     // GRIM_OK accepts the declaration; UI-thread creation is asynchronous.
-    // The host owns the instance and removes it when this provider retires.
+    // Resource ownership is the calling provider generation; the host owns the
+    // visual instance and removes it when that provider retires.
+    // This selects a host factory, not provider-defined content. Target contract:
+    // docs/ui/PANEL_OPERATIONS.md#provider-defined-panel-ownership-contract
     GrimResult (*register_ui_panel)(const GrimPluginAPI* self, const char* implementation_key);
     // v5.0: Generic provider identity (JSON name/instance/path); string_free releases it.
     const char* (*get_provider_identity)(const GrimPluginAPI* self);

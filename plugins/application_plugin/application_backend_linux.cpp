@@ -97,6 +97,7 @@ Backend nativeBackend() {
         return apps;
     }};
 }
+Backend portableBackend() { return {"portable-applications", [] { return std::vector<Application>{}; }}; }
 void launchNative(const Application& app) {
     if (app.launchKind != "desktop-entry") throw std::invalid_argument("Unsupported Linux launch kind");
     // Delegate Exec field codes, quoting, Terminal, and D-Bus activation to the desktop launcher.

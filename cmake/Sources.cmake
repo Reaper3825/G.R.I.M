@@ -95,7 +95,6 @@ set(GRIM_SOURCES
     main.cpp
     resources.cpp
     synonyms.cpp
-    aliases.cpp
     console_history.cpp
     error_manager.cpp
     logger.cpp
@@ -134,7 +133,6 @@ set(GRIM_SOURCES
 set(GRIM_HEADERS
     console_history.hpp
     intent.hpp
-    aliases.hpp
     synonyms.hpp
     resources.hpp
     error_manager.hpp

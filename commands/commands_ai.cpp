@@ -1,7 +1,6 @@
 #include "commands_ai.hpp"
 #include "error_manager.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
-#include "aliases.hpp"
 #include "nlp/nlp.hpp"
 #include "ai/ai.hpp"
 #include "logger.hpp"

@@ -14,7 +14,7 @@ its catalog through plugin shutdown, then unloads the DLL.
   identity deduplication, generation tracking, atomic resource publication and
   guarded operations. Publication is an injected callback; no registry singleton
   or host implementation is linked into the plugin.
-- `application_backends.cpp`: backend assembly and the existing cached alias adapter.
+- `application_backends.cpp`: native/portable backend assembly and the provider-owned user alias adapter.
 - `application_backend_windows.cpp`: Windows Shell Applications folder enumeration
   with `SHGetKnownFolderItem(FOLDERID_AppsFolder)` and `IEnumShellItems`. Includes
   desktop and packaged apps registered there. Launches the recorded shell item
@@ -34,16 +34,16 @@ No third-party discovery package is required. A future appcatalog or other
 scanner adapter can implement `Backend` without changing resource consumers.
 All files above live under `plugins/application_plugin`. Its native discovery and
 launch implementations are compiled into the DLL, never into the host. Shared
-alias configuration and error text are copied from framework services; their
-interpretation and application handling remain in the plugin.
+error text is copied from a framework service. Alias configuration is read by
+the provider itself; there is no host alias cache or scanner.
 
 ## Resource identity and refresh
 
 Identity is a native namespace plus native ID, not a display name. The resource
 ID is a deterministic hash of that pair; collisions abort publication. Records
 with the same identity merge provenance in backend priority order. Equal names
-with different identities remain separate. Windows Shell entries and legacy
-file aliases use different namespaces and can describe the same application;
+with different identities remain separate. Windows Shell entries, portable files, and user-defined
+aliases use different namespaces and can describe the same application;
 they are deliberately not merged by name or a guessed executable relationship.
 
 A runtime ID remains unchanged across identical scans. Changed metadata or
@@ -59,9 +59,13 @@ kinds are preserved. Stale generations cannot republish.
 
 Discovery runs during staged initialization and explicit `applications.refresh`; there is
 no filesystem watcher or periodic scanning yet. Calls are synchronous and serialized
-per catalog. The alias adapter reads existing cached aliases, filters to existing
-absolute Windows `.exe`/`.lnk` files and does not trigger the old directory scanner.
-Refresh aliases through their existing service before refreshing this catalog.
+per catalog. User aliases reload from provider-owned configuration; only explicit
+user records from the legacy database are retained. Existing absolute Windows
+`.exe`, `.lnk`, `.bat` and `.cmd` alias targets appear with distinct `user.alias`
+identities. Other explicit targets still resolve through raw `open` on Windows.
+The native Windows discovery composition includes Start Menu shortcuts and the
+old program-directory coverage without persisting automatic aliases. See
+[alias configuration and precedence](../plugins/application_plugin/README.md).
 
 ## Tools
 
@@ -90,7 +94,10 @@ tool execution to the viewer or change authored TextWorld episodes.
 ## Coverage and verification
 
 This is a desktop application catalog, not every executable or installed package.
-Unregistered portable apps need an alias or future custom-directory backend.
+Windows portable discovery scans direct files and one subdirectory under
+`D:\Program Files`, `D:\Program Files (x86)`, `D:\Apps`, `D:\Games`,
+`C:\Program Files`, and `C:\Program Files (x86)`. Other locations need an
+explicit user alias.
 macOS custom locations and Linux unregistered AppImages are not scanned. Linux
 currently uses the base desktop-entry name rather than locale-specific names;
 `gio` must already exist to launch applications. Windows/macOS icon rendering is
@@ -124,7 +131,7 @@ observed provider instance and runtime identity before invoking its native launc
 
 The removed `launch_app`, `open_target`, `register_application_catalog` and
 `application_service` API entries and their retired layout slots are removed.
-The current v6 table does not preserve their old offsets. Older DLLs are rejected
+The current v12 table does not preserve their old offsets. Older DLLs are rejected
 before initialization. Rebuild plugins
 against the matching SDK when deploying a rebuilt host. No host runtime or
 watched-folder deployment is part of this migration's tests.

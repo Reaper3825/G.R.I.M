@@ -104,7 +104,6 @@ void runFilesystemPluginTests(const std::filesystem::path&);
 void runUtilityPluginTests(const std::filesystem::path&);
 void runApplicationPluginTests(const std::filesystem::path&);
 void runToolInspectionPluginTests(const std::filesystem::path&);
-void runHostAliasServiceTests();
 void runSystemInfoPluginTests(const std::filesystem::path&);
 void runRuntimePluginTests(const std::filesystem::path&, const std::filesystem::path&);
 void runUIPluginTests(const std::filesystem::path&);
@@ -382,7 +381,6 @@ int main(int argc, char** argv) try {
     if (argc > 6 && *argv[6]) runUtilityPluginTests(argv[6]);
     if (argc > 7 && *argv[7]) runApplicationPluginTests(argv[7]);
     if (argc > 8 && *argv[8]) runToolInspectionPluginTests(argv[8]);
-    runHostAliasServiceTests();
     if (argc > 9 && *argv[9]) runSystemInfoPluginTests(argv[9]);
     if ((argc > 10 && *argv[10]) || (argc > 11 && *argv[11])) runRuntimePluginTests(argc > 10 ? argv[10] : "", argc > 11 ? argv[11] : "");
     runUIPluginTests(argc > 14 ? argv[14] : "");

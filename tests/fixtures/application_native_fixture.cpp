@@ -5,6 +5,7 @@ namespace GRIM::Applications {
 Backend nativeBackend() { return {"fixture", [] {
     return std::vector<Application>{{"fixture", "editor", "Test editor", "fixture", "editor", ""}};
 }}; }
+Backend portableBackend() { return {"portable-fixture", [] { return std::vector<Application>{}; }}; }
 void launchNative(const Application& app) {
     if (app.nativeId != "editor" || app.launchTarget != "editor") throw std::runtime_error("Wrong plugin launch target");
 }

@@ -1,5 +1,87 @@
 # Stable panel identity and host operation foundation
 
+## Provider-defined panel ownership contract
+
+This is the required boundary for the provider-defined panel migration. It is
+not a claim that the current factory-key API already supports provider-defined
+content. The remaining sections describe the current implementation.
+
+### Owners and responsibilities
+
+| Owner | Responsibility |
+|---|---|
+| Individual provider | Registers its own panels; owns their definitions, content, panel-specific state, actions, and lifecycle. |
+| UI provider | Owns its provider state and generic UI discovery/interaction tools. Operating on another provider's panel does not confer ownership of that panel or its domain state. |
+| `UIRoot` | Owns host-side visual instances and executes attachment, layout, rendering, focus, input routing, and detachment on the UI thread. It implements shared UI mechanics, not provider-specific feature logic. |
+| `ProviderRegistry` | Records authoritative provider-generation ownership and copied panel resources. |
+| World Lab | Projects registered ownership into provider rooms and consumes discovered resources. It neither assigns nor transfers panel ownership. |
+
+The panel's owning provider and the provider submitting a UI operation are
+distinct identities. The latter owns that operation's request/result, not its
+target. A panel rendered by the host remains a resource of its declaring
+provider. The UI provider registers only panels that actually belong to it,
+not a central list of every provider's panels.
+
+### Identity and state
+
+- Ownership MUST be derived from the registering provider's API context and
+  bound to its loaded generation; a supplied provider name cannot assign it.
+- Every live panel MUST have an unambiguous stable identity and a distinct
+  runtime identity. Titles are presentation, not identity. Conflicting
+  registrations MUST fail explicitly rather than replace another panel.
+- Panel resources MUST be published under the declaring provider's generation,
+  including when host infrastructure publishes copied visual state on its behalf.
+- Providers own content and domain state. `UIRoot` is authoritative for actual
+  visual state such as geometry, visibility, focus, and ordering. UI tools and
+  World Lab consume snapshots; neither maintains a second authoritative copy.
+- Provider-specific actions MUST route to the owning provider. Generic UI
+  operations remain with the UI provider and do not change resource ownership.
+- Discovery MUST identify the owning provider and generation as well as panel
+  identity. Updates and queued interactions MUST validate the target generation
+  and runtime identity before affecting a live panel.
+
+### Registration and lifetime
+
+- Registration MUST stage under the declaring provider until commit. Acceptance
+  is not activation; construction/attachment failures MUST have an explicit
+  observable result, and MUST NOT appear as a successfully active panel.
+- Attachment, visual mutation, and detachment MUST execute on the UI thread.
+  Provider work MUST NOT block that thread waiting for work queued to itself.
+- Retiring a provider MUST reject new panel work, invalidate its queued work,
+  drain in-flight callbacks, and withdraw its panel resources. No retired
+  generation may modify or remove a replacement generation's panels.
+- All objects, callbacks, workers, and attachments that require provider code
+  MUST be released before its DLL unloads. Deferred host-only visual cleanup
+  may outlive the DLL only when it retains no provider code or data references.
+- Unloading the UI provider MUST cancel its own requests and remove only its
+  own panels. Other providers' panels and registrations MUST remain intact.
+- Reload MUST NOT promise preservation of unsaved panel-local state without an
+  explicit provider-owned persistence contract.
+
+### Implementation boundary
+
+The provider/host boundary MUST use versioned ABI data and explicit lifetimes,
+not host C++ panel/widget objects, renderer references, or STL ownership objects
+passed between modules. Domain services stay with their owners; panels consume
+explicit interfaces or copied results rather than restoring retired host services.
+
+The content/update/event ABI, native viewport attachment mechanism, and ownership
+mapping for each existing panel are subsequent implementation decisions. This
+contract does not move the renderer, migrate dynamic surfaces or OSINT, or
+reintroduce removed perception panels.
+
+### Current gap
+
+`register_ui_panel(self, implementation_key)` already attributes declarations to
+the caller, but selects a host-defined factory rather than provider-authored
+content. The UI plugin currently declares all seven standard panels, so they
+are attributed to that provider. Moving declarations corrects attribution only;
+it does not by itself migrate panel logic or make DLL-owned panel code safe.
+The current discovery response also lacks owner metadata. These limitations
+must be addressed before describing the migration as complete.
+
+## Current panel identity
+
 `UIPanel` has two independent identities:
 
 - `getPanelID()` is the existing numeric runtime identity for focus/input routing.
@@ -23,9 +105,10 @@ they are not generated from titles and require no database.
 | `storage` | Shared Storage |
 | `calendar` | Calendar |
 | `geospatial` | GeoSpatial |
-| `physical_environment` | Physical Environment |
-| `digital_environment` | Digital Environment |
-| `model_registry` | Model Registry, when instantiated |
+
+These are the seven current provider-declared host panels. Physical and digital
+environment panels are no longer registered; the Model Registry panel source is
+excluded from the host build.
 
 Discovery reports instantiated panels, not factories for panels that have not
 been created. Tabs are not separate root panels. Existing unkeyed panels remain
@@ -124,7 +207,7 @@ instance, and are cancelled before execution if that instance unloads.
 
 The old `console`, `toggle_settings`, `ui.show_surface`, and `ui.hide_surface`
 registrations are removed; their handler logic remains for host compatibility.
-Surface creation/destruction remain host-owned tools. No OSINT migration is
+Surface creation/destruction handlers remain host-owned but unregistered. No OSINT migration is
 included. See [API completion/ownership semantics](../PLUGIN_API.md#generic-ui-operations-v38)
 and [plugin build/deployment instructions](../../plugins/README.md#ui-plugin).
 

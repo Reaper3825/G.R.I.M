@@ -406,3 +406,8 @@ cache/geospatial/*.sqlite-wal
 !/plugins/osint_plugin/python/
 /plugins/osint_plugin/python/*
 !/plugins/osint_plugin/python/*.py
+
+# Application alias compatibility schema and ownership documentation
+!/plugins/application_plugin/*.h
+!/plugins/application_plugin/*.fbs
+!/plugins/application_plugin/*.md

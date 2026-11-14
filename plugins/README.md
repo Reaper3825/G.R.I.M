@@ -1,6 +1,6 @@
 # Native GRIM tool plugins
 
-The current host requires plugin ABI v11. Rebuild all older plugin binaries
+The current host requires plugin ABI v12. Rebuild all older plugin binaries
 against [the current API](../docs/PLUGIN_API.md) before loading them.
 
 API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
@@ -219,8 +219,9 @@ World Lab object population remains a separate integration step.
 
 The redundant Aliases plugin and its `alias list`, `alias info`, and `alias refresh`
 tools have been removed. Use the Application plugin's `applications.*` tools for
-application discovery and inspection. The host alias cache remains an additional
-application-discovery source; API v3.3 alias service slots remain compatible.
+application discovery and inspection. API v12 removes the host alias cache and services. Explicit user aliases and
+legacy user-record compatibility reads belong to the Application plugin.
+See [configuration](application_plugin/README.md).
 Remove stale deployed `aliases_plugin.dll` files from plugin load directories.
 
 ## System information plugin

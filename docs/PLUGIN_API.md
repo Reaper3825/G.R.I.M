@@ -1,6 +1,12 @@
-# G.R.I.M Plugin API v11
+# G.R.I.M Plugin API v12
 
-API version: **11.0.0**.
+API version: **12.0.0**.
+
+Version 12 removes `get_alias_snapshot` and `refresh_aliases`. User application
+aliases and portable/Start Menu discovery now belong exclusively to the application
+provider. The old auto cache is ignored; existing user aliases are read without
+rewriting the database. See [user alias configuration](../plugins/application_plugin/README.md).
+All host/plugin binaries must be rebuilt together for the changed table layout.
 
 Version 11 moves native input execution into `input_plugin` and removes
 `input_primitive` and `GrimInputOperation` from the public ABI. OSINT commands,
@@ -722,32 +728,14 @@ rich snapshots, alias lookup, preserved results, statistics parsing, 70-KB
 entries, metadata updates/removals, and DLL removal. See the
 [plugin instructions](../plugins/README.md#tool-inspection-plugin).
 
-### Retained application alias services (v3.3)
+### Application aliases (v12)
 
-The redundant Aliases plugin and its three tools have been removed. Application
-discovery uses the Application plugin. The host retains `aliases.cpp`, its cached
-user/auto data, and these API v3.3 slots for compatibility. These application
-aliases remain separate from ToolRegistry command aliases. Removing the plugin
-does not clear the cache consumed by the application's legacy-aliases backend.
-
-- `get_alias_snapshot(self, key)` returns host-owned version-1 JSON:
-  `{"format":"grim-alias-snapshot","version":1,"entries":[],"info":""}`.
-  A null key copies `aliases::getAll()` into ordered `{name,target}` entries,
-  preserving the host map's current iteration/merge behavior. A supplied key
-  returns `aliases::info(key)` text without plugin-side trimming or normalization.
-  Returned strings must be released with `string_free`; null means API failure.
-- `refresh_aliases(self)` requires `GRIM_PERM_FILESYSTEM` and calls the existing
-  synchronous `aliases::refreshNow()`. It returns host-owned JSON:
-  `{"format":"grim-alias-refresh","version":1,"completed":true,"error":""}`.
-  `completed` means the host function returned normally, not that a scan happened
-  or its returned CommandResult indicated success. A denied permission or caught
-  standard exception produces `completed:false` with error text. Null means API
-  failure. No registered command is dispatched by this service.
-
-Host alias service tests run in the plugin API ownership suite using a controlled
-store/scanner fixture. They cover permissions, snapshots, lookup, and refresh
-normal/busy/failed/exception outcomes without scanning application folders or
-writing the real alias database.
+The application provider owns user alias configuration and reads the legacy
+FlatBuffer user vector without importing automatic records or writing that file.
+Host alias APIs, startup loading, scanning, and cached state are removed.
+`open` resolves explicit user aliases; `applications.refresh` reloads configuration
+and native discovery. ToolRegistry command aliases are unchanged.
+See [provider configuration and compatibility](../plugins/application_plugin/README.md).
 
 ### System information provider (v6)
 
@@ -899,6 +887,12 @@ on the next provider poll after reload. See [scheduling contract](SCHEDULING_TOO
 
 ## Provider panel lifecycle (v3.17)
 
+The [provider-defined panel ownership contract](ui/PANEL_OPERATIONS.md#provider-defined-panel-ownership-contract)
+defines the migration target: individual providers own their panels; the UI
+provider owns generic discovery/interaction tools, not their targets. The
+factory-key mechanism below is the current implementation, not the completed
+provider-defined content boundary.
+
 `GrimResult register_ui_panel(self, implementation_key)` consumes one reserved
 API table slot, preserving table size and earlier member offsets. It requires
 UI permission and is supported only during staged plugin initialization.
@@ -922,20 +916,21 @@ runtime ID. Failed plugin initialization before commit preserves the old panel.
 An activation failure after replacement commit does not restore the old panel.
 Shutdown can discard queued cleanup because `UIRoot::shutdown` destroys all panels.
 
-The UI plugin declares nine host implementations: `ui.console`, `ui.settings`,
-`ui.training_control`, `ui.data_hub`, `ui.storage`, `ui.calendar`, `ui.geospatial`,
-`ui.physical_environment`, and `ui.digital_environment`. Bootstrap registers
+The UI plugin currently declares seven host implementations: `ui.console`,
+`ui.settings`, `ui.training_control`, `ui.data_hub`, `ui.storage`, `ui.calendar`,
+and `ui.geospatial`. Bootstrap registers
 factories and host dependencies, but creates no instances of these panels.
 Dynamic surfaces and OSINT panels have not migrated. Host factories contain no
-DLL callbacks. Rebuild both host and UI plugin: an older UI plugin remains
-ABI-compatible but does not declare this full panel set.
+DLL callbacks. The existing queued retirement relies on this host-only code
+lifetime; it is not sufficient for objects or callbacks implemented in a DLL.
 
 Factories may register a host-only cleanup callback, invoked on removal, host
 shutdown, or failure after construction. GeoSpatial uses this to disconnect its
 native viewport, clear input callbacks via the runtime, release the clear pass,
 and mark the viewport unavailable. Its runtime remains host-owned and continues
-its existing lifecycle. Storage uses the host device server; perception services
-remain host-owned. Training UI commands resolve the live panel on the UI thread
+its existing lifecycle. Storage uses the host device server. Perception services
+are plugin-owned, and physical/digital environment panels are no longer declared.
+Training UI commands resolve the live panel on the UI thread
 instead of holding a global owning pointer. Reloading the UI provider destroys
 and recreates the training panel, including its World Lab/live viewer session;
 unsaved panel-local state is not preserved by this migration. Runtime registration/removal APIs,
