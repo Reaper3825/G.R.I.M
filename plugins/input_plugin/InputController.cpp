@@ -1,5 +1,6 @@
 #include "InputController.hpp"
-#include "checked_click.hpp"
+#include "core/input/checked_click.hpp"
+#include <stdexcept>
 
 #ifdef _WIN32
 #include <thread>
@@ -8,7 +9,7 @@
 namespace GRIM {
 
 void InputController::moveMouse(int x, int y) {
-    SetCursorPos(x, y);
+    if (!SetCursorPos(x, y)) throw std::runtime_error("Pointer movement rejected by OS");
 }
 
 void InputController::click(MouseButton button) {
@@ -74,17 +75,24 @@ void InputController::keyEvent(WORD vk, KeyAction action) {
     if (action == KeyAction::Release)
         input.ki.dwFlags = KEYEVENTF_KEYUP;
 
-    SendInput(1, &input, sizeof(INPUT));
+    if (SendInput(1, &input, sizeof(INPUT)) != 1) throw std::runtime_error("Input event rejected by OS");
 }
 
 void InputController::combo(const std::vector<WORD>& keys) {
-    for (auto key : keys) {
-        keyEvent(key, KeyAction::Press);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
-        keyEvent(*it, KeyAction::Release);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    try {
+        for (auto key : keys) {
+            keyEvent(key, KeyAction::Press);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
+            keyEvent(*it, KeyAction::Release);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    } catch (...) {
+        for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
+            try { keyEvent(*it, KeyAction::Release); } catch (...) {}
+        }
+        throw;
     }
 }
 
@@ -97,15 +105,17 @@ void InputController::typeText(const std::string& text, int delayMs) {
         BYTE shift = (vk >> 8) & 1;
         WORD key = vk & 0xFF;
 
-        if (shift)
-            keyEvent(VK_SHIFT, KeyAction::Press);
-
-        keyEvent(key, KeyAction::Press);
-        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-        keyEvent(key, KeyAction::Release);
-
-        if (shift)
-            keyEvent(VK_SHIFT, KeyAction::Release);
+        try {
+            if (shift) keyEvent(VK_SHIFT, KeyAction::Press);
+            keyEvent(key, KeyAction::Press);
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            keyEvent(key, KeyAction::Release);
+            if (shift) keyEvent(VK_SHIFT, KeyAction::Release);
+        } catch (...) {
+            try { keyEvent(key, KeyAction::Release); } catch (...) {}
+            if (shift) { try { keyEvent(VK_SHIFT, KeyAction::Release); } catch (...) {} }
+            throw;
+        }
     }
 }
 
@@ -116,7 +126,7 @@ void InputController::sendMouseEvent(DWORD flags, int dx, int dy, DWORD data) {
     input.mi.dy = dy;
     input.mi.mouseData = data;
     input.mi.dwFlags = flags;
-    SendInput(1, &input, sizeof(INPUT));
+    if (SendInput(1, &input, sizeof(INPUT)) != 1) throw std::runtime_error("Input event rejected by OS");
 }
 
 } // namespace GRIM

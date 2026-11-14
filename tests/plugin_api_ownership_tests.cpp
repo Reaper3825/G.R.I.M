@@ -22,9 +22,6 @@ void notifyPopupActivity() {}
 void showPopup() {}
 std::vector<std::string> pluginNotifications;
 void publishPluginNotification(const std::string& title,const std::string& message) { pluginNotifications.push_back(title+": "+message); }
-namespace Voice {
-void speak(const std::string&, const std::string&) {}
-}
 std::string normalizeWord(const std::string& word) { return word; }
 namespace GRIMInput {
 std::pair<std::string, std::string> parseInput(const std::string& text) {
@@ -110,7 +107,6 @@ void runToolInspectionPluginTests(const std::filesystem::path&);
 void runHostAliasServiceTests();
 void runSystemInfoPluginTests(const std::filesystem::path&);
 void runRuntimePluginTests(const std::filesystem::path&, const std::filesystem::path&);
-void runVoicePluginTests(const std::filesystem::path&);
 void runUIPluginTests(const std::filesystem::path&);
 void runInputPluginTests(const std::filesystem::path&);
 
@@ -389,7 +385,6 @@ int main(int argc, char** argv) try {
     runHostAliasServiceTests();
     if (argc > 9 && *argv[9]) runSystemInfoPluginTests(argv[9]);
     if ((argc > 10 && *argv[10]) || (argc > 11 && *argv[11])) runRuntimePluginTests(argc > 10 ? argv[10] : "", argc > 11 ? argv[11] : "");
-    if (argc > 13 && *argv[13]) runVoicePluginTests(argv[13]);
     runUIPluginTests(argc > 14 ? argv[14] : "");
     runInputPluginTests(argc > 15 ? argv[15] : "");
     runProviderSchedulingTests(argc > 10 ? argv[10] : "", argc > 16 ? argv[16] : "");

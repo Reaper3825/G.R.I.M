@@ -1,3 +1,5 @@
+> API v11 ownership update: see [the current provider contract](../../plugins/osint_plugin/README.md). Older host/cache/process descriptions below are historical; the host now consumes copied tool results.
+
 # OSINT Sensitive Scanner
 
 Source-reviewed November 8, 2026. Pattern-based defensive review of authorized
@@ -7,9 +9,9 @@ correlation, or permission to bypass authentication.
 ## Sensitive scanning
 
 `osint_scan_secrets <username>` uses a cached audit or obtains one through
-Sherlock. [cmdOsintScanSecrets](../../commands/commands_osint.cpp#L425) returns
+Sherlock. [cmdOsintScanSecrets](../../plugins/osint_plugin/commands_osint.cpp#L425) returns
 an informational success without scanning when no accounts were found.
-[runSensitiveDataScan](../../external_collector/osit_secrets.cpp#L18) converts
+[runSensitiveDataScan](../../plugins/osint_plugin/osit_secrets.cpp#L18) converts
 only `found` entries into site → `{url, status:"Claimed", http_status}` input,
 runs the Python scanner synchronously, and returns its JSONL path.
 The tool does not expose browser/timeout flags.
@@ -28,7 +30,7 @@ Review [tools/cache](TOOLS.md#reports-and-cache) and
 
 ### Standalone input and options
 
-[load_sherlock_json](../../resources/python/sherlock_sensitive_scanner.py#L317)
+[load_sherlock_json](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L317)
 accepts site dictionaries with `status:"Claimed"` and `url`, `exists:true` and
 `url`, or `url_main`; it also accepts site → URL strings and lists of URL
 objects. The cache wrapper `cache\osint\<username>.json` is **not** that format.
@@ -58,7 +60,7 @@ in the current directory. Ensure the output parent exists for standalone use.
 | `--no-robots` | Assigned to a local variable, not the global robots policy; it does not disable the current check |
 
 These wiring limitations are visible in
-[main](../../resources/python/sherlock_sensitive_scanner.py#L398).
+[main](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L398).
 There is no recursive crawl or link-following feature here: the scanner processes
 supplied URLs sequentially, including repeated URLs. Defaults in the script are
 15 seconds for page requests/browser navigation, 0.5 seconds between URLs,
@@ -69,15 +71,15 @@ a supported runtime configuration file. A custom detector belongs in
 
 ## Detection and severity
 
-[HTML extraction](../../resources/python/sherlock_sensitive_scanner.py#L145)
+[HTML extraction](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L145)
 removes script/style/noscript content, includes pre/code text plus the overall
 text, and scans that text rather than all HTML attributes or linked pages.
 Code text can consequently be duplicated. `password_url` means a
 `password/passwd/pwd=...` pattern in extracted text, not comprehensive inspection
 of URLs or hidden form values.
 
-[severity_for_tag](../../resources/python/sherlock_sensitive_scanner.py#L196)
-and [summary buckets](../../external_collector/osit_secrets.cpp#L116) define:
+[severity_for_tag](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L196)
+and [summary buckets](../../plugins/osint_plugin/osit_secrets.cpp#L116) define:
 
 | Detectors | Score | Display bucket |
 |---|---|---|
@@ -111,7 +113,7 @@ NER errors log a warning and return no entities.
 
 ## Browser and request behavior
 
-[scan_url](../../resources/python/sherlock_sensitive_scanner.py#L215) checks
+[scan_url](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L215) checks
 robots, optionally attempts headless Chromium with `networkidle`, then uses
 `requests.Session.get` if browser output is unavailable or fails.
 Browser import success does not prove installed browser assets or page rendering.
@@ -125,7 +127,7 @@ set. The flag is not an unconditional "render every site" guarantee.
 rendering success after a requests fallback. Likewise `used_ner` records
 availability, not successful extraction.
 
-[allowed_by_robots](../../resources/python/sherlock_sensitive_scanner.py#L131)
+[allowed_by_robots](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L131)
 attempts robots.txt compliance but returns allowed on an exception. Robots checks
 are therefore not fail-closed authorization, and neither the request nor browser
 path guarantees site Terms-of-Service compliance. URLs without a scheme receive
@@ -141,7 +143,7 @@ Cleanup is attempted but can fail silently; discovery failures can leave its
 output behind. Neither is a secure temporary-storage guarantee.
 
 Output is `cache\osint\sensitive_<username>.jsonl` for the tool, relative to the
-process working directory. [main's writer](../../resources/python/sherlock_sensitive_scanner.py#L448)
+process working directory. [main's writer](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L448)
 **appends**, so repeated scans accumulate old/new findings and can inflate totals.
 Console/panel summaries read the log, not only the latest invocation.
 One line per attempted URL carries this shape (illustrative, not real findings):
@@ -155,10 +157,10 @@ The console prints "Clean" whenever a URL has no findings, even for blocked/erro
 statuses. A zero scanner exit code, green result, or zero findings does not
 certify successful retrieval or absence of exposure. Empty input returns zero
 without creating a new log; the C++ existence check can then see an older log.
-[C++ parsing](../../external_collector/osit_secrets.cpp#L93) and show-secrets skip
+[C++ parsing](../../plugins/osint_plugin/osit_secrets.cpp#L93) and show-secrets skip
 malformed JSONL; I/O failures are not all fail-hard.
 
-[Redaction](../../resources/python/sherlock_sensitive_scanner.py#L249) masks
+[Redaction](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L249) masks
 selected key/token/private-header/password matches and the extra entropy-pass
 match. Emails, phones, SSNs, card-like strings, dates, IPs, names, Firebase, and
 ordinary base64-like matches can remain **raw**. Context replaces only the

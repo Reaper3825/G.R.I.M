@@ -193,7 +193,6 @@ target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/core
     ${CMAKE_SOURCE_DIR}/ai
     ${CMAKE_SOURCE_DIR}/commands
-    ${CMAKE_SOURCE_DIR}/voice
     ${CMAKE_SOURCE_DIR}/wake
     ${CMAKE_SOURCE_DIR}/memory
     ${CMAKE_SOURCE_DIR}/nlp
@@ -379,36 +378,6 @@ set_target_properties(GRIM PROPERTIES
 # =========================================================
 add_library(GRIM_EXPORT INTERFACE)
 target_link_libraries(GRIM_EXPORT INTERFACE GRIM)
-
-target_include_directories(GRIM PRIVATE
-    ${CMAKE_SOURCE_DIR}/external/porcupine/include
-)
-# Porcupine: platform-specific lib path (picovoice layout)
-if(APPLE)
-  if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
-    set(_porcupine_lib "macos/arm64")
-  else()
-    set(_porcupine_lib "macos/x86_64")
-  endif()
-elseif(WIN32)
-  set(_porcupine_lib "windows/amd64")
-else()
-  set(_porcupine_lib "linux/x86_64")
-endif()
-set(_porcupine_dir "${CMAKE_SOURCE_DIR}/external/porcupine/lib/${_porcupine_lib}")
-if(EXISTS "${_porcupine_dir}" AND EXISTS "${CMAKE_SOURCE_DIR}/external/porcupine/include/pv_porcupine.h")
-  target_link_directories(GRIM PRIVATE "${_porcupine_dir}")
-  target_link_libraries(GRIM PRIVATE pv_porcupine)
-  target_compile_definitions(GRIM PRIVATE GRIM_HAS_PORCUPINE=1)
-else()
-  message(WARNING "[GRIM] Porcupine not found at ${_porcupine_dir} - wake word disabled")
-endif()
-
-# =========================================================
-# Whisper linkage
-# =========================================================
-# Graphics libraries are linked once in cmake/Config.cmake.
-target_link_libraries(GRIM PRIVATE whisper)
 
 # macOS frameworks for platform window layer + Metal BGFX backend
 if(APPLE)

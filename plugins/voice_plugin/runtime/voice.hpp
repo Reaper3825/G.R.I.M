@@ -20,6 +20,7 @@ namespace Voice {
     // Voice core
     // ============================================================
     std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig);
+    bool loadWhisper(const nlohmann::json& config);
     void shutdown();
 
     // ============================================================

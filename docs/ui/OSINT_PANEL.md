@@ -1,3 +1,5 @@
+> API v11: the retained panel reads copied `osint_show_secrets` results. Its UI handler remains unregistered. See [provider ownership](../../plugins/osint_plugin/README.md); direct cache-reading descriptions below are historical.
+
 # OSINT UI Panel Guide
 
 

@@ -13,10 +13,7 @@
 #include "error_manager.hpp"
 #include "aliases.hpp"
 #include "memory/command_memory_services.hpp"
-#include "voice/voice_command_services.hpp"
 #include "ui/ui_panel_service.hpp"
-#include "core/input/input_service.hpp"
-#include "voice/voice_speak.hpp"
 #include "../MMO/Core/Registries/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
 #include "../MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "popup_ui/popup_ui.hpp"
@@ -682,42 +679,6 @@ static void api_show_notification(const GrimPluginAPI* self, const char* title, 
 // Voice Implementation
 // ============================================================================
 
-static GrimResult api_queue_tts(const GrimPluginAPI* self, const char* text, const GrimVoiceParams* params) {
-    if (!checkPermission(self, GRIM_PERM_VOICE)) {
-        return GRIM_ERROR_PERMISSION_DENIED;
-    }
-    
-    if (!text) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    Voice::speak(text, "plugin");
-    return GRIM_OK;
-}
-
-static GrimResult api_stop_tts(const GrimPluginAPI* self) {
-    if (!checkPermission(self, GRIM_PERM_VOICE)) {
-        return GRIM_ERROR_PERMISSION_DENIED;
-    }
-  
-    // TODO: Implement audio stop functionality
-    // Voice::stopAudio();
-    LOG_DEBUG("PluginAPI", "Audio stop not yet implemented");
-    return GRIM_OK;
-}
-
-static bool api_is_speaking(const GrimPluginAPI* self) {
-    if (!checkPermission(self, GRIM_PERM_VOICE)) {
-        return false;
-    }
-    
-    return Voice::isSpeaking();
-}
-
-// ============================================================================
-// Process Management Implementation
-// ============================================================================
-
 template<typename Callback>
 static const char* runtimeServiceResponse(const GrimPluginAPI* self, GrimPermission permission, Callback callback) noexcept {
     try {
@@ -727,16 +688,6 @@ static const char* runtimeServiceResponse(const GrimPluginAPI* self, GrimPermiss
         catch (const std::exception& error) { response["error"] = {{"kind", "exception"}, {"message", error.what()}}; }
         catch (...) { response["error"] = {{"kind", "unknown"}, {"message", ""}}; }
         return allocateString(response.dump());
-    } catch (...) { return nullptr; }
-}
-static const char* api_voice_service(const GrimPluginAPI* self, GrimVoiceOperation operation, const char* arguments_json) noexcept {
-    if (operation > GRIM_VOICE_PATHS) return nullptr;
-    try {
-        const auto request = arguments_json ? nlohmann::json::parse(arguments_json) : nlohmann::json::object();
-        if (!request.is_object()) return nullptr;
-        const bool cache = operation == GRIM_VOICE_CACHE_SHUTDOWN || operation == GRIM_VOICE_CACHE_INIT || operation == GRIM_VOICE_PRECACHE_COMMON;
-        const auto permission = static_cast<GrimPermission>(GRIM_PERM_VOICE | (cache ? GRIM_PERM_FILESYSTEM : 0));
-        return runtimeServiceResponse(self, permission, [&] { return GRIM::VoiceCommandServices::execute(operation, request); });
     } catch (...) { return nullptr; }
 }
 static const char* api_stage_manual_memory(const GrimPluginAPI* self, const char* raw) noexcept {
@@ -1207,20 +1158,6 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
     } catch (...) { return nullptr; }
 }
 
-static const char* api_input_primitive(const GrimPluginAPI* self, const char* text, size_t size) noexcept {
-    try {
-        auto& owner = const_cast<PluginContext&>(pluginContext(self));
-        ActiveCall active(owner.gate, true);
-        // JSON escaping can expand the legacy 64 KiB raw argument limit sixfold.
-        if (!active.entered || !checkPermission(self, GRIM_PERM_INPUT) || !text || size > 6 * 65536 + 1024)
-            return nullptr;
-        const auto request = nlohmann::json::parse(text, text + size);
-        if (!request.is_object()) return nullptr;
-        return runtimeServiceResponse(self, GRIM_PERM_INPUT, [&] {
-            return nlohmann::json(GRIM::Input::ExecuteInputPrimitive(request));
-        });
-    } catch (...) { return nullptr; }
-}
 
 GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string& plugin_path, uint32_t permissions, bool staging, const GrimPluginAPI* replacing) {
     if (plugin_name.empty()) throw std::invalid_argument("Empty plugin identity");
@@ -1280,9 +1217,6 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.show_notification = api_show_notification;
     
     // Voice
-    api.queue_tts = api_queue_tts;
-    api.stop_tts = api_stop_tts;
-    api.is_speaking = api_is_speaking;
     
     // Process Management
     api.launch_process = api_launch_process;
@@ -1314,9 +1248,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.stage_manual_memory = api_stage_manual_memory;
     api.search_memory = api_search_memory;
     api.flush_memory_record_if_present = api_flush_memory_record_if_present;
-    api.voice_service = api_voice_service;
     api.ui_panel_service = api_ui_panel_service;
-    api.input_primitive = api_input_primitive;
     api.register_ui_panel = api_register_ui_panel;
     api.get_provider_identity = api_get_provider_identity;
     api.replace_resources = api_replace_resources;

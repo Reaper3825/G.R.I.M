@@ -3,7 +3,7 @@
 #include "logger.hpp"
 #include "memory/unified_memory.hpp" 
 #include "ai/ai.hpp" 
-#include "external_collector/osit.hpp" 
+#include "commands/commands_core.hpp"
 #include "location.hpp" 
 #include <algorithm>
 #include <sstream>
@@ -1281,54 +1281,8 @@ std::string GRIM::QuestionHandler::fetchWeatherData(double lat, double lon) {
 // ============================================================================
 
 std::string GRIM::QuestionHandler::performOSINTLookup(const std::string& username) {
-    LOG_DEBUG("QuestionHandler", "Performing OSINT lookup for: " + username);
-    
-    // Check if Sherlock is available
-    if (!isSherlockAvailable()) {
-        LOG_ERROR("QuestionHandler", "Sherlock not available");
-        return "OSINT lookup ready for '" + username + "'. Use command: osint lookup " + username;
-    }
-    
-    try {
-        // Run actual OSINT scan
-        OSINTConfig config;
-        config.useCache = true;
-        config.timeoutSeconds = 10; // Quick scan for questions
-        config.verboseOutput = false;
-        
-        LOG_DEBUG("QuestionHandler", "Running Sherlock scan...");
-        OSINTReport report = runSelfAudit(username, config);
-        
-        if (report.success && report.totalFound > 0) {
-            std::ostringstream oss;
-            oss << "Found " << username << " on " << report.totalFound << " platform(s):\n";
-            
-            int count = 0;
-            for (const auto& finding : report.findings) {
-                if (finding.found && count < 5) { // Show top 5
-                    oss << "  • " << finding.platform << ": " << finding.url << "\n";
-                    count++;
-                }
-            }
-            
-            if (report.totalFound > 5) {
-                oss << "  ... and " << (report.totalFound - 5) << " more\n";
-            }
-            
-            oss << "\nUse 'osint lookup " << username << "' for full details.";
-            return oss.str();
-        } else if (report.success) {
-            return "No profiles found for '" + username + "' on checked platforms.";
-        } else {
-            LOG_ERROR("QuestionHandler", "OSINT scan failed: " + report.error);
-            return "OSINT lookup encountered an error. Try: osint lookup " + username;
-        }
-        
-    } catch (const std::exception& e) {
-        LOG_ERROR("QuestionHandler", "OSINT exception: " + std::string(e.what()));
-    }
-    
-    return "OSINT lookup ready for '" + username + "'. Use command: osint lookup " + username;
+    const auto result = dispatchCommand("osint_report", username);
+    return result.success ? result.message : std::string{};
 }
 
 // ============================================================================

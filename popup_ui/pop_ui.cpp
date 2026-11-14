@@ -9,7 +9,6 @@
 #include "objects/popup_obj_loader.hpp"
 #include "logger.hpp"
 #include "pch.hpp"
-#include "voice/voice_speak.hpp"
 #include "ui/ui_root.hpp"
 #include "core/grim_platform.h"
 #include <atomic>
@@ -233,10 +232,10 @@ void runPopupUI(int width, int height)
             if (elapsedMs > g_idleTimerMs)
             {
                 // Don't hide if currently speaking OR if voice intensity is high
-                bool isSpeaking = Voice::isSpeaking();
+                bool isSpeaking = false;
                 bool voiceActive = g_anim.voiceIntensity > 0.1f; // Still animating from recent speech
                 
-                if (!Voice::isPlaying() && !isSpeaking && !voiceActive)
+                if (!isSpeaking && !voiceActive)
                 {
                     hidePopup();
                     g_idleTimerMs = 0;
@@ -301,7 +300,7 @@ void runPopupUI(int width, int height)
         // Animation logic - voice-reactive (OPTIMIZED)
         // Use actual window dimensions!
         // ---------------------------------------------------
-        bool isSpeaking = Voice::isSpeaking();
+        bool isSpeaking = false;
         
         // Update visibility animation
         if (g_popupVisible)

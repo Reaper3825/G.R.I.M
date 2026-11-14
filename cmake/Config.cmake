@@ -270,8 +270,6 @@ target_link_libraries(GRIM PRIVATE
 
 
     # Audio / Speech
-    portaudio
-    whisper
     ggml ggml-base ggml-cpu
 
     # HTTP / Networking

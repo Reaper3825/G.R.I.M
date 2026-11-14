@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <stdexcept>
 namespace GRIM::Input {
 static MouseButton stringToMouseButton(const std::string& button) {
     std::string lower = button;
@@ -10,7 +11,8 @@ static MouseButton stringToMouseButton(const std::string& button) {
     
     if (lower == "right") return MouseButton::Right;
     if (lower == "middle") return MouseButton::Middle;
-    return MouseButton::Left; // default
+    if (lower == "left") return MouseButton::Left;
+    throw std::invalid_argument("Unknown mouse button");
 }
 
 // Helper: Convert string key name to virtual key code
@@ -69,12 +71,18 @@ static WORD stringToVirtualKey(const std::string& key) {
 
 bool ExecuteInputPrimitive(const nlohmann::json& request) {
     const auto op = request.at("op").get<std::string>();
+#ifndef _WIN32
+    if (op == "available") return false;
+    throw std::runtime_error("Native input is unavailable on this platform");
+#else
     if (op == "available") return true;
+#endif
     if (op == "move") InputController::moveMouse(request.at("x").get<int>(), request.at("y").get<int>());
     else if (op == "click") InputController::click(stringToMouseButton(request.at("button").get<std::string>()));
     else if (op == "type") InputController::typeText(request.at("text").get<std::string>(), 15);
     else if (op == "key") {
         const auto vk = stringToVirtualKey(request.at("key").get<std::string>());
+        if (!vk) throw std::invalid_argument("Unknown key");
         if (vk) { InputController::keyEvent(vk, KeyAction::Press);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             InputController::keyEvent(vk, KeyAction::Release); }
@@ -82,9 +90,11 @@ bool ExecuteInputPrimitive(const nlohmann::json& request) {
         std::vector<WORD> keys;
         for (const auto& name : request.at("keys")) {
             const auto vk = stringToVirtualKey(name.get<std::string>());
-            if (vk) keys.push_back(vk);
+            if (!vk) throw std::invalid_argument("Unknown key in combination");
+            keys.push_back(vk);
         }
-        if (!keys.empty()) InputController::combo(keys);
+        if (keys.empty()) throw std::invalid_argument("Empty key combination");
+        InputController::combo(keys);
     } else throw std::invalid_argument("Unknown input primitive");
     return true;
 }

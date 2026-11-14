@@ -83,3 +83,24 @@ Perception now exposes explicit plugin-owned observation tools. Legacy
 `PerceptionContextManager`, host capture/engine lifecycle, automatic visual-memory
 writers, and session projectors were removed rather than adapted. Input devices
 are accessed independently through `core/input/input_service.cpp`.
+
+## Voice ownership break (November 13, 2026)
+
+Voice now owns its runtime in `plugins/voice_plugin`. Streaming and wake detection
+no longer call AI/conversation handlers. Normal typed conversation handling and
+retained AI/NLP handlers remain. `handleCommand` no longer automatically speaks
+its result; speech must be requested explicitly through the voice provider.
+
+## OSINT and input ownership break (November 13, 2026)
+
+API v11 removes the host input primitive and moves native execution into
+`plugins/input_plugin`. Pure targeting geometry and checked-click helpers remain
+under `core/input`; `click_on` stays retired. Host UI keybindings remain host-owned.
+
+OSINT implementation now lives exclusively in `plugins/osint_plugin`. The retained
+question handler invokes `osint_report` through ordinary tool dispatch and consumes
+its copied result; it no longer links the collector or forces a separate 10-second
+configuration. Missing/failed tools return no OSINT answer. Other question logic,
+including conditional memory recording, remains. The handler is not re-registered.
+The retained OSINT panel consumes copied findings from `osint_show_secrets` rather
+than reading provider cache files. Its `osint_show_ui` handler remains unregistered.

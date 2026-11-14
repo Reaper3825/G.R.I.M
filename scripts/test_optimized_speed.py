@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 # Test if bridge is running
-bridge_path = Path("D:/G.R.I.M/resources/python/coqui_bridge.py")
+bridge_path = Path("D:/G.R.I.M/plugins/voice_plugin/python/coqui_bridge.py")
 
 print("=" * 80)
 print("XTTS v2 Optimization Test")

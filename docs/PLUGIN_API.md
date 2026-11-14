@@ -1,6 +1,21 @@
-# G.R.I.M Plugin API v9
+# G.R.I.M Plugin API v11
 
-API version: **9.0.0**.
+API version: **11.0.0**.
+
+Version 11 moves native input execution into `input_plugin` and removes
+`input_primitive` and `GrimInputOperation` from the public ABI. OSINT commands,
+collectors, child execution and Python bridges are exclusively provider-owned.
+The retained question handler consumes `osint_report`; the host findings panel
+consumes copied JSON from `osint_show_secrets`. No host collector implementation
+or direct panel cache reader remains. See [input](../plugins/input_plugin/README.md)
+and [OSINT](../plugins/osint_plugin/README.md). All providers and the host must
+be rebuilt together; v10 binaries are rejected.
+
+Version 10 moves the voice runtime into `voice_plugin`. It removes
+`voice_service`, `GrimVoiceOperation`, `queue_tts`, `stop_tts`, `is_speaking`, and
+`GrimVoiceParams`. New explicit JSON tools and copied status/transcript resources
+replace those connections. See [voice ownership and lifecycle](../plugins/voice_plugin/README.md).
+All providers require a rebuild for the new table layout.
 
 Version 9 is a breaking perception ownership change. `query_perception`,
 `GrimPerceptionQuery`, and raw-command `input_service` are removed from the ABI.
@@ -13,15 +28,10 @@ publication and logging. New tools return copied JSON observations; no OpenCV
 objects, engines, devices, or C++ pointers cross the ABI. See
 [perception ownership and tools](../plugins/perception_plugin/README.md).
 
-The input plugin supplies `move_mouse`, `click`, `type`, and `key` through
-`input_primitive(self, request_json, size)`. Its host implementation is in
-`core/input/input_service.cpp` and calls input devices directly, without a
-perception manager. Requests support `available`, `move` (`x`,`y`), `click`
-(`button`), `type` (`text`), `key` (`key`), and `combo` (`keys`). The existing
-runtime-service envelope carries a boolean or an exception. These are void
-input operations; a true response does not verify the application's reaction.
-INPUT permission and an active provider are required. `click_on` is retired;
-pure targeting geometry and checked click primitives remain under `core/input`.
+The input plugin supplies `move_mouse`, `click`, `type`, and `key` using its
+own native implementation. INPUT permission and an active provider are required.
+Success reports OS acceptance, not an application's reaction. `click_on` remains
+retired; pure targeting geometry and checked-click helpers remain under `core/input`.
 
 Version 5 moved application handling into its plugin and added generic resource
 publication. Version 6 moves system information handling into its plugin and
@@ -93,10 +103,9 @@ matching. Developer inspection, full snapshots, host command discovery, and
 explicit dispatch continue to include all classifications. Classification is
 discovery metadata, not a new authorization or execution gate.
 
-The perception plugin's three command wrappers are Debug. Voice capture and
-streaming are System; voice diagnostics/cache operations are Debug; the
-unimplemented cancellation and embedding-submission placeholders are Ignore.
-Host perception and speech pipelines keep their existing ownership and behavior.
+Perception and voice provider tools are Debug. Their implementations and runtime
+state belong to their respective plugins. Legacy voice cancellation and
+embedding-submission placeholder tools are removed.
 All OSINT and network-test plugin tools, plus the host OSINT results-panel tool,
 are Ignore.
 All alias and filesystem plugin tools are System.
@@ -355,7 +364,7 @@ plugin joins its coordinator, which owns worker joins and network cleanup.
 
 ## Other API services and current limits
 
-The function table retains logging, context, events, timers, output, voice,
+The function table retains logging, context, events, timers, output,
 process, allocation, string utilities, and generic provider resource publication.
 Check individual implementations before depending on a service: several are
 partial or stubs. Memory store/retrieve/delete remain stubs, and classify_intent
@@ -807,7 +816,9 @@ OCR engine, object model, or model server runs during validation. The remaining
 host input-command source receives a syntax check using existing OpenCV headers.
 See [plugin build instructions](../plugins/README.md#perception-plugin).
 
-### Voice and TTS cache migration (v3.7)
+### Historical voice forwarding migration (v3.7; removed in v10)
+
+The following describes the retired boundary, not the current API.
 
 `voice_plugin` supplies eleven former built-ins: `voice`, `voice_stream`,
 `test_tts`, `list_voices`, `test_sapi`, `tts_device`, `nevermind`,

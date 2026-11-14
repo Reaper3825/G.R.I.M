@@ -250,15 +250,15 @@ def get_device():
 # ---------- Voice Reference & Embedding Management ----------
 VOICE_REFERENCES = {
     # Default voice references (you can add custom ones here)
-    "default": "D:/G.R.I.M/resources/voices/default.wav",  # ✅ Default XTTS v2 voice
+    "default": str(Path.cwd() / "resources/voices/default.wav"),  # ✅ Default XTTS v2 voice
     "p225": None,  # Backward compatibility - maps to default
-    "p226": "D:/G.R.I.M/resources/voices/p226_reference.wav",  # ✅ VCTK p226 male voice
-    "grim": "D:/G.R.I.M/resources/voices/grim_reference.wav",  # GRIM AI voice (multi-reference)
+    "p226": str(Path.cwd() / "resources/voices/p226_reference.wav"),  # ✅ VCTK p226 male voice
+    "grim": str(Path.cwd() / "resources/voices/grim_reference.wav"),  # GRIM AI voice (multi-reference)
 }
 
 # ✅ NEW: Speaker embedding cache
 SPEAKER_EMBEDDINGS = {}
-EMBEDDING_DIR = "D:/G.R.I.M/resources/voices/embeddings"
+EMBEDDING_DIR = str(Path.cwd() / "resources/voices/embeddings")
 
 def ensure_embedding_dir():
     """Create embedding directory if it doesn't exist."""

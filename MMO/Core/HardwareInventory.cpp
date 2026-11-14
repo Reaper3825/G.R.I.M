@@ -3,7 +3,6 @@
 //======================================================//
 #include "HardwareInventory.hpp"
 #include "logger.hpp"
-#include "core/audio_core.hpp"
 
 #include <thread>
 #include <algorithm>
@@ -319,8 +318,8 @@ HardwareInventory detectHardware() {
 #endif
 
     // --- Audio ---
-    inv.audio_output_device = Audio::getDefaultOutput();
-    inv.audio_input_device  = Audio::getDefaultInput();
+    inv.audio_output_device = "";
+    inv.audio_input_device  = "";
 
     // --- Whisper suggestion ---
     inv.suggested_whisper_model = chooseWhisperModel(inv);

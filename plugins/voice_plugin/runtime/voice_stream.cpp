@@ -1,10 +1,7 @@
 #include "voice_stream.hpp"
-#include "console_history.hpp"
-#include "ui/ui_helpers.hpp"
-#include "ai/ai.hpp"
-#include "resources.hpp"
+#include "runtime_state.hpp"
 #include "voice.hpp"
-#include "logger.hpp"
+#include "plugins/plugin_logging.hpp"
 #include <whisper.h>
 #include <portaudio.h>
 #include <filesystem>
@@ -16,10 +13,10 @@
 namespace fs = std::filesystem;
 
 // ---------------- Config (from ai_config.json via ai.cpp) ----------------
-extern double g_silenceThreshold;
-extern int g_silenceTimeoutMs;
-extern std::string g_whisperLanguage;
-extern int g_whisperMaxTokens;
+static double g_silenceThreshold = 0.02;
+static int g_silenceTimeoutMs = 1200;
+static std::string g_whisperLanguage = "en";
+static int g_whisperMaxTokens = 128;
 
 // ---------------- State ----------------
 VoiceStream::State VoiceStream::g_state;
@@ -65,11 +62,7 @@ static std::string sanitizeTranscript(const std::string& input) {
 
 // ---------------- Whisper Incremental Processing ----------------
 static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
-    if (buffer.size() <= VoiceStream::g_state.processedSamples) return;
-
-    std::vector<float> newAudio(buffer.begin() + VoiceStream::g_state.processedSamples, buffer.end());
-    VoiceStream::g_state.processedSamples = buffer.size();
-    pcmAccumulator.insert(pcmAccumulator.end(), newAudio.begin(), newAudio.end());
+    pcmAccumulator.insert(pcmAccumulator.end(), buffer.begin(), buffer.end());
 
     if (pcmAccumulator.size() < MIN_SAMPLES) {
         LOG_DEBUG("VoiceStream", "Accumulating (" + std::to_string(pcmAccumulator.size()) +
@@ -100,13 +93,10 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
 }
 
 // ---------------- Core Loop ----------------
-static void run(whisper_context* ctx,
-                ConsoleHistory* uiHistory,
-
-                nlohmann::json& uiLongTermMemory)
+static void run(whisper_context* ctx)
 {
     LOG_DEBUG("VoiceStream", "Run() thread entered.");
-    LOG_PHASE("VoiceStream thread active", true);
+    LOG_DEBUG("Voice", "VoiceStream thread active");
 
     VoiceStream::g_state.partial.clear();
     VoiceStream::g_state.processedSamples = 0;
@@ -115,7 +105,6 @@ static void run(whisper_context* ctx,
     LOG_DEBUG("VoiceStream", "Initializing PortAudio...");
     if (Pa_Initialize() != paNoError) {
         LOG_ERROR("VoiceStream", "Failed to initialize PortAudio!");
-        uiHistory->push("[VoiceStream] ERROR: Failed to initialize PortAudio", 0xFF0000FF);
         VoiceStream::g_state.running = false;
         return;
     }
@@ -126,7 +115,6 @@ static void run(whisper_context* ctx,
 
     if (deviceIndex == paNoDevice || deviceIndex < 0 || deviceIndex >= Pa_GetDeviceCount()) {
         LOG_ERROR("VoiceStream", "No valid input device found!");
-        uiHistory->push("[VoiceStream] ERROR: No valid input device found", 0xFF0000FF);
         Pa_Terminate();
         VoiceStream::g_state.running = false;
         return;
@@ -165,7 +153,6 @@ static void run(whisper_context* ctx,
 
     if (openErr != paNoError || !stream) {
         LOG_ERROR("VoiceStream", std::string("Could not open mic stream: ") + Pa_GetErrorText(openErr));
-        uiHistory->push("[VoiceStream] ERROR: Could not open mic stream", 0xFF0000FF);
         Pa_Terminate();
         VoiceStream::g_state.running = false;
         return;
@@ -175,7 +162,6 @@ static void run(whisper_context* ctx,
     PaError startErr = Pa_StartStream(stream);
     if (startErr != paNoError) {
         LOG_ERROR("VoiceStream", std::string("Failed to start PortAudio stream: ") + Pa_GetErrorText(startErr));
-        uiHistory->push("[VoiceStream] ERROR: Could not start mic stream", 0xFF0000FF);
         Pa_CloseStream(stream);
         Pa_Terminate();
         VoiceStream::g_state.running = false;
@@ -183,7 +169,6 @@ static void run(whisper_context* ctx,
     }
 
     LOG_DEBUG("VoiceStream", "PortAudio stream started successfully.");
-    uiHistory->push("[VoiceStream] Listening...", 0xFFFFC800);
     auto lastSpeechTime = std::chrono::steady_clock::now();
 
     while (VoiceStream::g_state.running) {
@@ -212,9 +197,7 @@ static void run(whisper_context* ctx,
                 std::string clean = sanitizeTranscript(VoiceStream::g_state.partial);
                 LOG_DEBUG("VoiceStream", "Final transcript: " + clean);
 
-                CommandResult result = ai_process(clean);
-                uiHistory->push("[AI] " + result.message,
-                                result.success ? 0xFF00FF00 : 0xFF0000FF);
+                VoiceRuntime::transcript(clean);
 
                 VoiceStream::g_state.partial.clear();
                 // Note: Console now uses ConsolePanel with UIInputBox - no direct buffer access
@@ -229,24 +212,19 @@ static void run(whisper_context* ctx,
     Pa_CloseStream(stream);
     Pa_Terminate();
 
-    LOG_PHASE("VoiceStream stopped cleanly", true);
-    uiHistory->push("[VoiceStream] Stopped.", 0xFFFFC800);
+    LOG_DEBUG("Voice", "VoiceStream stopped cleanly");
 }
 
 
 // ---------------- Control API ----------------
 bool VoiceStream::isRunning() { return g_state.running; }
 
-bool VoiceStream::start(whisper_context* ctx,
-                        ConsoleHistory* history,
-
-                        nlohmann::json& longTermMemory)
+bool VoiceStream::start(whisper_context* ctx)
 {
     // ------------------------------------------------------------
     // Prevent duplicate sessions
     // ------------------------------------------------------------
     if (g_state.running) {
-        history->push("[VoiceStream] Already running", 0xFF00FFFF);
         LOG_DEBUG("VoiceStream", "Start request ignored — already running.");
         return false;
     }
@@ -259,24 +237,30 @@ bool VoiceStream::start(whisper_context* ctx,
         g_state.thread.join();
     }
 
+    g_silenceThreshold=VoiceRuntime::config["voice"].value("silence_threshold",0.02);
+    g_silenceTimeoutMs=VoiceRuntime::config["voice"].value("silence_timeout_ms",1200);
+    g_whisperLanguage=VoiceRuntime::config["whisper"].value("language",std::string("en"));
+    g_whisperMaxTokens=VoiceRuntime::config["whisper"].value("max_tokens",128);
+    g_state.inputDeviceIndex=VoiceRuntime::config["voice"].value("input_device_index",-1);
     // ------------------------------------------------------------
     // Calibrate silence threshold before recording
     // ------------------------------------------------------------
     LOG_DEBUG("VoiceStream", "Calibrating ambient noise threshold...");
     VoiceStream::calibrateSilence();
-    LOG_PHASE("Voice calibration complete", true);
+    LOG_DEBUG("Voice", "Voice calibration complete");
 
     // ------------------------------------------------------------
     // Launch new listening thread
     // ------------------------------------------------------------
     g_state.running = true;
-    g_state.thread = std::thread([=, &longTermMemory]() mutable {
+    g_state.thread = std::thread([ctx]() {
         LOG_DEBUG("VoiceStream", "Voice thread started.");
-        run(ctx, history, longTermMemory);
+        try { run(ctx); } catch(const std::exception& error) { VoiceRuntime::reportError(error.what()); }
+        g_state.running=false;
         LOG_DEBUG("VoiceStream", "Voice thread ended.");
     });
 
-    LOG_PHASE("VoiceStream started", true);
+    LOG_DEBUG("Voice", "VoiceStream started");
     return true;
 }
 
@@ -352,7 +336,7 @@ void VoiceStream::calibrateSilence() {
     double newThreshold = rms * 1.8;
     g_silenceThreshold = (g_silenceThreshold * 0.5) + (newThreshold * 0.5);
 
-    LOG_PHASE("Voice calibration", true);
+    LOG_DEBUG("Voice", "Voice calibration");
     LOG_DEBUG("VoiceStream",
         "Ambient RMS=" + std::to_string(rms) +
         " → new silence threshold=" + std::to_string(g_silenceThreshold));

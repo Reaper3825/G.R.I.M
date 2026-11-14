@@ -1,7 +1,6 @@
 #include "settings_apply.hpp"
 #include "../resources.hpp"
 #include "../logger.hpp"
-#include "../voice/voice_speak.hpp"
 #include <filesystem>
 #include <algorithm>
 
@@ -13,15 +12,6 @@ void applyRuntimeSideEffects(const nlohmann::json& config,
                              const std::unordered_map<std::string, std::string>& fontMap,
                              SetFontFn setFont,
                              SetBlurFn setBlur) {
-    // Speaker
-    if (config.contains("voice") && config["voice"].is_object() &&
-        config["voice"].contains("speaker")) {
-        std::string speaker = config["voice"]["speaker"].get<std::string>();
-        Voice::setSpeaker(speaker);
-        LOG_DEBUG("Settings", "Speaker set to: " + speaker);
-    }
-
-
     // Font
     if (config.contains("ui") && config["ui"].is_object() &&
         config["ui"].contains("font_name") && setFont) {

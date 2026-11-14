@@ -4,7 +4,6 @@
 #include "error_manager.hpp"
 #include "helpers/color.hpp"
 #include "logger.hpp"
-#include "voice/voice_speak.hpp"
 
 namespace {
 constexpr const char* kDefaultSession = "default";
@@ -33,12 +32,6 @@ CommandResult handleCommand(
     }
 
     Logger::logResult(result);
-
-    if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos) {
-        Voice::speak(
-            result.voice,
-            result.category.empty() ? "routine" : result.category);
-    }
 
     LOG_TRACE("HandleCommand", "END raw model input");
     return result;

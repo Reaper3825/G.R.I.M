@@ -7,8 +7,9 @@
 #include "plugins/plugin_logging.hpp"
 #endif
 #include "helpers/color.hpp"
-#include "../external_collector/osit.hpp"
-#include "../external_collector/osit_secrets.hpp"
+#include "osit.hpp"
+#include "provider_paths.hpp"
+#include "osit_secrets.hpp"
 #include <sstream>
 #include <vector>
 #include <string>
@@ -94,7 +95,7 @@ CommandResult cmdProfilePerson(const std::string& args) {
         oss << "⚠ Sherlock bridge not found!\n\n";
         oss << "Please ensure the Sherlock tool is installed:\n";
         oss << "  1. Install Sherlock: pip install sherlock-project\n";
-        oss << "  2. Verify bridge exists at: resources/python/osit_bridge.py\n\n";
+        oss << "  2. Verify bridge exists at: plugins/osint_plugin/python/osit_bridge.py\n\n";
         oss << "Falling back to basic URL listing...\n\n";
         
         // Fallback to simple URL listing
@@ -506,6 +507,7 @@ CommandResult cmdOsintScanSecrets(const std::string& args) {
 
 // Show detailed sensitive findings from log
 CommandResult cmdOsintShowSecrets(const std::string& args) {
+    std::lock_guard<std::recursive_mutex> storageLock(osintProvider::storageMutex);
     LOG_DEBUG("OSINT", "Show secrets command executed");
     
     std::ostringstream oss;
@@ -534,7 +536,7 @@ CommandResult cmdOsintShowSecrets(const std::string& args) {
     }
     
     // Find the log file
-    fs::path logPath = fs::current_path() / "cache" / "osint" / ("sensitive_" + username + ".jsonl");
+    fs::path logPath = osintProvider::cache() / ("sensitive_" + username + ".jsonl");
     
     if (!fs::exists(logPath)) {
         oss << "No sensitive scan results found for: " << username << "\n";
@@ -545,6 +547,7 @@ CommandResult cmdOsintShowSecrets(const std::string& args) {
     try {
         std::ifstream logFile(logPath);
         std::string line;
+        auto copiedEntries = json::array();
         int totalShown = 0;
         int minSeverity = 0;
         
@@ -584,6 +587,10 @@ CommandResult cmdOsintShowSecrets(const std::string& args) {
                 }
                 
                 if (!hasRelevantFindings) continue;
+                auto selected = json::array();
+                for (const auto& finding : findings) if (finding.value("severity",0) >= minSeverity) selected.push_back(finding);
+                entry["findings"] = std::move(selected);
+                copiedEntries.push_back(entry);
                 
                 oss << "─────────────────────────────────────────\n";
                 oss << "Domain: " << domain << "\n";
@@ -629,7 +636,8 @@ CommandResult cmdOsintShowSecrets(const std::string& args) {
         
         return CommandResult{true, oss.str(), "", "osint", 
                             "Displayed " + std::to_string(totalShown) + " findings",
-                            totalShown > 0 ? Colors::Yellow : Colors::Green};
+                            totalShown > 0 ? Colors::Yellow : Colors::Green,
+                            json{{"format","grim-osint-findings"},{"version",1},{"username",username},{"entries",copiedEntries}}.dump()};
                             
     } catch (const std::exception& e) {
         oss << "⚠ Failed to read log: " << e.what() << "\n";

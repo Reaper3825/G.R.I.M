@@ -1,10 +1,21 @@
 // plugins/osint_plugin.cpp - OSINT Self-Audit Plugin (NEW API)
 #include "pch.hpp"
 #include "commands/command_result.hpp"
-#include "commands/commands_osint.hpp"
+#include "commands_osint.hpp"
 #include "core/plugin_api.hpp"
-#include "plugin_logging.hpp"
+#include "plugins/plugin_logging.hpp"
 #include <cstring>
+#include <mutex>
+#include <sstream>
+#include "provider_paths.hpp"
+#include "process.hpp"
+static std::mutex commandsMutex;
+static std::string arguments(const GrimToolCall* call, bool target = true) {
+    if (call->arguments_size > 65536 || (call->arguments_size && !call->arguments)) throw std::invalid_argument("Invalid OSINT arguments");
+    std::string text = call->arguments_size ? std::string(call->arguments,call->arguments_size) : std::string{};
+    if (target && !text.empty()) { std::istringstream stream(text); std::string name; stream >> name; osintProvider::validateTarget(name); }
+    return text;
+}
 
 // Store the API pointer globally for use in command handlers
 static const GrimPluginAPI* g_api = nullptr;
@@ -22,25 +33,39 @@ static GrimResult deliver(GrimToolResultWriter* writer, const CommandResult& val
     return writer->complete(writer, &result);
 }
 static GrimResult handleProfilePerson(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, cmdProfilePerson(std::string(call->arguments, call->arguments_size)));
+    std::lock_guard<std::mutex> lock(commandsMutex);
+    if (!g_api || !g_api->is_provider_current(g_api) || !g_api->has_permission(g_api, GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api, GRIM_PERM_NETWORK) || !g_api->has_permission(g_api, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    return deliver(writer, cmdProfilePerson(arguments(call)));
 }
 static GrimResult handleSherlockSweep(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, cmdSherlockSweep(std::string(call->arguments, call->arguments_size)));
+    std::lock_guard<std::mutex> lock(commandsMutex);
+    if (!g_api || !g_api->is_provider_current(g_api) || !g_api->has_permission(g_api, GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api, GRIM_PERM_NETWORK) || !g_api->has_permission(g_api, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    return deliver(writer, cmdSherlockSweep(arguments(call)));
 }
 static GrimResult handleOsintReport(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, cmdOsintReport(std::string(call->arguments, call->arguments_size)));
+    std::lock_guard<std::mutex> lock(commandsMutex);
+    if (!g_api || !g_api->is_provider_current(g_api) || !g_api->has_permission(g_api, GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api, GRIM_PERM_NETWORK) || !g_api->has_permission(g_api, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    return deliver(writer, cmdOsintReport(arguments(call)));
 }
 static GrimResult handleOsintStatus(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, cmdOsintStatus(std::string(call->arguments, call->arguments_size)));
+    std::lock_guard<std::mutex> lock(commandsMutex);
+    if (!g_api || !g_api->is_provider_current(g_api) || !g_api->has_permission(g_api, GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api, GRIM_PERM_NETWORK) || !g_api->has_permission(g_api, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    return deliver(writer, cmdOsintStatus(arguments(call)));
 }
 static GrimResult handleOsintClearCache(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, cmdOsintClearCache(std::string(call->arguments, call->arguments_size)));
+    std::lock_guard<std::mutex> lock(commandsMutex);
+    if (!g_api || !g_api->is_provider_current(g_api) || !g_api->has_permission(g_api, GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api, GRIM_PERM_NETWORK) || !g_api->has_permission(g_api, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    return deliver(writer, cmdOsintClearCache(arguments(call, false)));
 }
 static GrimResult handleOsintScanSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, cmdOsintScanSecrets(std::string(call->arguments, call->arguments_size)));
+    std::lock_guard<std::mutex> lock(commandsMutex);
+    if (!g_api || !g_api->is_provider_current(g_api) || !g_api->has_permission(g_api, GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api, GRIM_PERM_NETWORK) || !g_api->has_permission(g_api, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    return deliver(writer, cmdOsintScanSecrets(arguments(call)));
 }
 static GrimResult handleOsintShowSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, cmdOsintShowSecrets(std::string(call->arguments, call->arguments_size)));
+    std::lock_guard<std::mutex> lock(commandsMutex);
+    if (!g_api || !g_api->is_provider_current(g_api) || !g_api->has_permission(g_api, GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api, GRIM_PERM_NETWORK) || !g_api->has_permission(g_api, GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    return deliver(writer, cmdOsintShowSecrets(arguments(call)));
 }
 // ============================================================================
 // NEW PLUGIN API IMPLEMENTATION
@@ -52,7 +77,7 @@ static GrimPluginInfo s_plugin_info = {
     "2.1.0",
     "GRIM Project",
     "Privacy-focused OSINT scanning and self-audit tools",
-    GRIM_PERM_FILESYSTEM | GRIM_PERM_NETWORK | GRIM_PERM_UI | GRIM_PERM_PROCESS
+    GRIM_PERM_FILESYSTEM | GRIM_PERM_NETWORK | GRIM_PERM_PROCESS
 };
 
 extern "C" {
@@ -63,9 +88,11 @@ PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 
 PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        api->api_version < GRIM_API_VERSION) {
+        api->api_version < GRIM_API_VERSION || !api->is_provider_current || !api->has_permission) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
+    osintProvider::initializePaths();
+    osintProvider::cancelled = false;
     g_api = api;
     grim::plugin::setLoggingAPI(api);
     
@@ -129,6 +156,7 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
 }
 
 PLUGIN_EXPORT void grim_plugin_shutdown() {
+    osintProvider::cancelled = true;
     shutdownOsintScans();
     if (g_api) {
         g_api->log(g_api, GRIM_LOG_INFO, "OSINT plugin shutting down");

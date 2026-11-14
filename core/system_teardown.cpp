@@ -11,9 +11,7 @@
 #include "../memory/unified_memory.hpp"
 #include "../net/websocket_server.hpp"
 #include "../ui/ui_root.hpp"
-#include "../voice/voice_speak.hpp"
 #include "../wake/wake_key.hpp"
-#include "../wake/wake_voice.hpp"
 #include "platform_clipboard.hpp"
 #include "platform_input.hpp"
 #include "window_manager.hpp"
@@ -97,7 +95,6 @@ void shutdownApplication(
 
     stopMMOIdleTick();
     WakeKey::stop();
-    WakeVoice::stop();
 
     // Plugins may stop workers and use host services during shutdown. Unload
     // them before destroying memory, UI, voice, and orchestration services.
@@ -141,8 +138,6 @@ void shutdownApplication(
 
     stopGRIMTextServer();
 
-    Voice::shutdownQueue();
-    Voice::shutdownTTS();
     Mouse::shutdown();
 
     PlatformInput::shutdown();

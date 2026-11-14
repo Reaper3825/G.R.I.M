@@ -1,7 +1,6 @@
 #include "wake_key.hpp"
 #include "wake.hpp"
 #include "logger.hpp"
-#include "voice/voice.hpp"
 #include "ui/ui_helpers.hpp"
 #include "ui/ui_root.hpp"
 #include "ai/ai.hpp"
@@ -30,15 +29,7 @@ static void captureAndProcessVoiceInput()
     LOG_DEBUG("WakeKey", "Capturing voice input.");
     notifyPopupActivity();
 
-    // Capture speech → text
-    std::string transcript = Voice::captureAndTranscribeSpeech(aiConfig);
-    LOG_DEBUG("WakeKey", "Captured voice transcript: " + transcript);
-
-    // Send transcript through the same raw conversation path as typed input.
-    if (!transcript.empty()) {
-        ai_process(transcript);
-    }
-
+    // Keyboard wake remains an application UI event; capture is an explicit plugin tool.
     g_listening = false;
 }
 

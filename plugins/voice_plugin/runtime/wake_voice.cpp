@@ -1,9 +1,8 @@
 #ifdef GRIM_HAS_PORCUPINE
 #include "pv_porcupine.h"
 #endif
-#include "logger.hpp"
-#include "console_history.hpp"
-#include "resources.hpp"
+#include "plugins/plugin_logging.hpp"
+#include "runtime_state.hpp"
 #include <vector>
 #include <mutex>
 #include <string>
@@ -11,12 +10,8 @@
 #include <atomic>
 #include <filesystem>
 #include <nlohmann/json.hpp>
-#include "commands/commands_core.hpp"
-#include "voice/voice_speak.hpp"
-#include "popup_ui/popup_ui.hpp"
-#include "ai/ai.hpp"
-#include "voice/voice.hpp"
-#include "bootstrap/bootstrap_config.hpp"
+#include "voice_speak.hpp"
+#include "voice.hpp"
 
 // ==== PortAudio ====
 #include <portaudio.h>
@@ -116,7 +111,7 @@ void shutdownWakeWord() {
     if (g_porcupine) {
         pv_porcupine_delete(g_porcupine);
         g_porcupine = nullptr;
-        LOG_TRACE("Porcupine", "Wakeword engine shut down.");
+        LOG_DEBUG("Porcupine", "Wakeword engine shut down.");
     }
 #endif
 }
@@ -197,16 +192,16 @@ void start()
 
     LOG_DEBUG("WakeVoice", "Starting wake-word listener...");
 
-    const std::string accessKey  = "l24x+8ku2pUsbZKcEyICgbx3Aj/15JHoqGj1TQr+JHcyCXA2RSV2LA==";
-    std::string grimRoot = getGrimRootDir();
-    const std::string modelPath  = (std::filesystem::path(grimRoot) / "external/porcupine/lib/common/porcupine_params.pv").string();
-    const std::string keywordPath= (std::filesystem::path(grimRoot) / "resources/wakeword/grim.ppn").string();
-
+    const auto& cfg = VoiceRuntime::config.at("wake");
+    const std::string accessKey = cfg.at("access_key").get<std::string>();
+    const std::string modelPath = cfg.at("model").get<std::string>();
+    const std::string keywordPath = cfg.at("keyword").get<std::string>();
     if (!Voice::initWakeWord(accessKey, modelPath, keywordPath)) {
         LOG_ERROR("WakeVoice", "Failed to initialize wake-word engine.");
         return;
     }
 
+    if (g_thread.joinable()) g_thread.join();
     g_running = true;
     g_thread = std::thread([]() {
         const int frameLen = pv_porcupine_frame_length();
@@ -220,7 +215,7 @@ void start()
             return;
         }
 
-        LOG_PHASE("WakeVoice", "Listening for wake word...");
+        LOG_DEBUG("WakeVoice", "Listening for wake word...");
         
         while (g_running.load()) {
             PaError r = Pa_ReadStream(stream, frame.data(), frameLen);
@@ -230,26 +225,10 @@ void start()
             }
 
             if (Voice::detectWakeWordFrame(frame.data())) {
-                LOG_TRACE("WakeVoice", "Wake word detected!");
-                notifyPopupActivity();
+                LOG_DEBUG("WakeVoice", "Wake word detected!");
+                
 
-                if (g_listening) continue;
-                g_listening = true;
-
-                Voice::speak("Yes?", "wake");
-
-                // Primary command capture
-                std::string transcript = Voice::captureAndTranscribeSpeech(aiConfig);
-                LOG_DEBUG("WakeVoice", "Captured voice transcript: " + transcript);
-
-                LOG_DEBUG("WakeVoice", "captureAndTranscribeSpeech() finished — about to call handleCommand()");
-
-                if (!transcript.empty()) {
-                    handleCommand(transcript);
-                    LOG_DEBUG("WakeVoice", "handleCommand() returned successfully");
-                }
-
-                g_listening = false;
+                VoiceRuntime::reportError("wake_detected");
             }
         }
 
@@ -261,7 +240,6 @@ void start()
 }
 
 void stop() {
-    if (!g_running.load()) return;
     g_running = false;
     if (g_thread.joinable()) g_thread.join();
     Voice::shutdownWakeWord();

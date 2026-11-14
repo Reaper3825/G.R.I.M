@@ -53,25 +53,11 @@ namespace aliases {
     GRIM_EXPORT_SYMBOL std::string info(const std::string& name);
 }
 
-namespace Voice {
-    GRIM_EXPORT_SYMBOL std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig);
-    GRIM_EXPORT_SYMBOL void playAudio(const std::string& file);
-    GRIM_EXPORT_SYMBOL bool isSpeaking();
-    GRIM_EXPORT_SYMBOL std::string coquiSpeak(const std::string& text, const std::string& model, double speed, double pitch = 1.0);
-    
-    struct State;
-    extern GRIM_EXPORT_SYMBOL State g_state;
-}
 
-namespace VoiceStream {
-    struct whisper_context;
-    GRIM_EXPORT_SYMBOL bool start(whisper_context* ctx, ConsoleHistory* history, 
-                                  nlohmann::json& cfg);
-}
 
-namespace Audio {
-    GRIM_EXPORT_SYMBOL bool playWav(const std::string& file);
-}
+
+
+
 
 class ErrorManager {
 public:

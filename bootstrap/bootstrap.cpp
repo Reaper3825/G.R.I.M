@@ -6,10 +6,8 @@
 #include "resources.hpp"
 #include "console_history.hpp"
 #include "aliases.hpp"
-#include "voice/voice_speak.hpp"
 #include "device_setups/audio_devices.hpp"
 #include "logger.hpp"
-#include "voice/voice.hpp"
 #include "ai/ai.hpp"
 #include "ai/grim_text_server_manager.hpp"  // For GRIM-text server
 #include "../MMO/Core/HardwareInventory.hpp"
@@ -35,7 +33,6 @@
 #include <filesystem>
 #include <sstream>
 #include <vector>
-#include <whisper.h>
 
 // Global resource layer (replaces old g_systemInfo)
 GRIM::MMO::HardwareInventory g_hardwareInventory;
@@ -104,47 +101,6 @@ static void bootstrapHardwareAndResources() {
 // Phase 3: Subsystem initialization (voice, RL, server)
 // ================================================================
 static void bootstrapSubsystems() {
-    auto voiceCfg = aiConfig["voice"];
-    const auto isNeuralTTSProvider = [](const std::string& engine) {
-        return engine == "coqui"
-            || engine == "cosyvoice"
-            || engine == "fun-cosyvoice3";
-    };
-    bool needsNeuralTTS = isNeuralTTSProvider(
-        voiceCfg.value("engine", "sapi"));
-
-    if (voiceCfg.contains("rules")) {
-        for (auto& [k, v] : voiceCfg["rules"].items()) {
-            if (isNeuralTTSProvider(v.get<std::string>())) {
-                needsNeuralTTS = true;
-                break;
-            }
-        }
-    }
-
-    if (needsNeuralTTS) {
-        const std::string configuredProvider =
-            voiceCfg.value("engine", "sapi");
-        LOG_PHASE("Neural TTS init", true);
-        LOG_DEBUG("Voice", "Initializing TTS provider: " + configuredProvider);
-        if (!Voice::initTTS()) {
-            LOG_ERROR("Voice", "Failed to initialize TTS provider: " + configuredProvider);
-            LOG_PHASE("Neural TTS init", false);
-        } else {
-            LOG_PHASE("Neural TTS init", true);
-            LOG_DEBUG("Voice",
-                std::string("TTS provider initialized (provider=") +
-                Voice::activeTTSProviderId() +
-                ", speaker=" +
-                voiceCfg.value("speaker", "default") +
-                ", language=" +
-                voiceCfg.value("language", "en") + ")");
-        }
-    } else {
-        LOG_PHASE("Neural TTS skipped", true);
-        LOG_DEBUG("Voice", "Skipping neural TTS init (engine=sapi only)");
-    }
-
     if (aiConfig.value("backend", "auto") == "grim_native") {
         LOG_DEBUG("Bootstrap", "Starting GRIM-text server...");
         if (GRIM::startGRIMTextServer()) {
@@ -337,45 +293,6 @@ static void bootstrapMMOLayer() {
 // ================================================================
 // Phase 5: Warmup and preload scheduling
 // ================================================================
-static void bootstrapWarmup() {
-    LOG_PHASE("Whisper preload begin", true);
-    try {
-        if (Voice::getWhisperContext() == nullptr) {
-            std::string modelName = "ggml-base.en.bin";
-            if (aiConfig.contains("whisper") && aiConfig["whisper"].contains("whisper_model"))
-                modelName = aiConfig["whisper"].value("whisper_model", modelName);
-
-            fs::path modelPath = fs::path(getResourcePath()) / "models" / modelName;
-            LOG_DEBUG("Voice", "Preloading Whisper model: " + modelPath.string());
-
-            if (!fs::exists(modelPath)) {
-                LOG_ERROR("Voice", "Whisper model missing: " + modelPath.string());
-                LOG_PHASE("Whisper preload", false);
-            } else {
-                whisper_context_params wparams = whisper_context_default_params();
-                whisper_context* ctx = whisper_init_from_file_with_params(
-                    modelPath.string().c_str(), wparams);
-
-                if (!ctx) {
-                    LOG_ERROR("Voice", "Failed to initialize Whisper context from: " +
-                             modelPath.string());
-                    LOG_PHASE("Whisper preload", false);
-                } else {
-                    Voice::setWhisperContext(ctx);
-                    LOG_PHASE("Whisper preload complete", true);
-                    LOG_DEBUG("Voice", "Whisper model preloaded successfully (no listening loop)");
-                }
-            }
-        } else {
-            LOG_DEBUG("Voice", "Whisper already loaded, skipping preload");
-            LOG_PHASE("Whisper preload complete", true);
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("Bootstrap", std::string("Whisper preload failed: ") + e.what());
-        LOG_PHASE("Whisper preload", false);
-    }
-}
-
 // ================================================================
 // Public entry point — orchestrates all phases
 // ================================================================
@@ -388,6 +305,5 @@ void runBootstrapChecks(int argc, char** argv) {
     bootstrapHardwareAndResources();            // Phase 2: inventory, signal, coordinator
     bootstrapSubsystems();                      // Phase 3: voice, RL, server
     bootstrapMMOLayer();                        // Phase 4: registry, loader, orchestrator, tools, policy
-    bootstrapWarmup();                          // Phase 5: model warmup, Whisper preload
     LOG_PHASE("Bootstrap complete", true);
 }

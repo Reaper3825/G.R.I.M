@@ -1,5 +1,7 @@
 #include "osit_secrets.hpp"
 #include "osit.hpp"
+#include "provider_paths.hpp"
+#include "process.hpp"
 #include "logger.hpp"
 #ifdef GRIM_BUILD_PLUGIN
 #include "plugins/plugin_logging.hpp"
@@ -16,11 +18,14 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 std::string runSensitiveDataScan(const OSINTReport& report, const OSINTConfig& config) {
+    std::lock_guard<std::recursive_mutex> storageLock(osintProvider::storageMutex);
+    osintProvider::validateTarget(report.username);
     try {
-        fs::path root = fs::current_path();
-        fs::path scannerScript = root / "resources" / "python" / "sherlock_sensitive_scanner.py";
-        fs::path tempJsonFile = root / "resources" / "python" / ("temp_sherlock_" + report.username + ".json");
-        fs::path outputLog = root / "cache" / "osint" / ("sensitive_" + report.username + ".jsonl");
+        fs::path root = osintProvider::root;
+        fs::path scannerScript = osintProvider::scripts() / "sherlock_sensitive_scanner.py";
+        osintProvider::TemporaryFile temporary("sensitive-input-");
+        const auto& tempJsonFile = temporary.path;
+        fs::path outputLog = osintProvider::cache() / ("sensitive_" + report.username + ".jsonl");
         
         // Create cache directory if it doesn't exist
         fs::create_directories(outputLog.parent_path());
@@ -49,22 +54,10 @@ std::string runSensitiveDataScan(const OSINTReport& report, const OSINTConfig& c
         
         // Build command to run scanner
         std::string pythonCmd = config.pythonPath.empty() ? getPythonExecutable() : config.pythonPath;
-        std::ostringstream cmd;
-        
-#ifdef _WIN32
-        cmd << "\"\"" << pythonCmd << "\" \"" << scannerScript.string() << "\" "
-            << "\"" << tempJsonFile.string() << "\" "
-            << "--out \"" << outputLog.string() << "\"\"";
-#else
-        cmd << pythonCmd << " \"" << scannerScript.string() << "\" "
-            << "\"" << tempJsonFile.string() << "\" "
-            << "--out \"" << outputLog.string() << "\"";
-#endif
-        
-        LOG_DEBUG("OSINT", "Running sensitive data scanner: " + cmd.str());
-        
+        LOG_DEBUG("OSINT", "Running provider-owned sensitive scanner");
+
         // Execute scanner
-        int code = std::system(cmd.str().c_str());
+        int code = osintProvider::runProcess({pythonCmd, scannerScript.string(), tempJsonFile.string(), "--out", outputLog.string()}, 600);
         
         // Cleanup temp file
         try {

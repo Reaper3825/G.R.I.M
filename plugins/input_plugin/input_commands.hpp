@@ -1,38 +1,25 @@
 #pragma once
 #include "commands/command_result.hpp"
 #include "core/plugin_api.hpp"
+#include "input_service.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
 
 namespace inputCommands {
-inline const GrimPluginAPI* host = nullptr;
 struct ServiceUnavailable {};
-struct UnknownException {};
 inline CommandResult unavailable() {
-    return {false, "[Input] Perception system not initialized", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
+    return {false, "[Input] Input backend unavailable", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
 }
 inline bool primitive(const nlohmann::json& request) {
-    const auto json = request.dump();
-    const char* raw = host->input_primitive(host, json.data(), json.size());
-    if (!raw) throw ServiceUnavailable{};
-    struct Release { const char* raw; ~Release() { host->string_free(host, raw); } } release{raw};
-    const auto response = nlohmann::json::parse(raw);
-    if (response.at("format") != "grim-runtime-service" || response.at("version") != 1)
-        throw std::runtime_error("Unsupported input primitive response");
-    if (!response.at("error").is_null()) {
-        const auto& error = response.at("error");
-        if (error.at("kind") == "exception") throw std::runtime_error(error.at("message").get<std::string>());
-        throw UnknownException{};
-    }
-    return response.at("value").get<bool>();
+    return GRIM::Input::ExecuteInputPrimitive(request);
 }
 inline CommandResult cmdInputMoveMouse(const std::string& arg) {
     // Expected format: "x,y" or "x y"
 
     if (!primitive({{"op", "available"}})) {
-        return {false, "[Input] Perception system not initialized", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
+        return {false, "[Input] Input backend unavailable", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
     }
 
     // Parse coordinates
@@ -54,7 +41,7 @@ inline CommandResult cmdInputClick(const std::string& arg) {
     // Expected format: "left" | "right" | "middle" | ""
 
     if (!primitive({{"op", "available"}})) {
-        return {false, "[Input] Perception system not initialized", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
+        return {false, "[Input] Input backend unavailable", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
     }
 
     std::string button = arg.empty() ? "left" : arg;
@@ -67,7 +54,7 @@ inline CommandResult cmdInputType(const std::string& arg) {
     // Expected format: "text to type"
 
     if (!primitive({{"op", "available"}})) {
-        return {false, "[Input] Perception system not initialized", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
+        return {false, "[Input] Input backend unavailable", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
     }
 
     if (arg.empty()) {
@@ -83,7 +70,7 @@ inline CommandResult cmdInputKey(const std::string& arg) {
     // Expected format: "enter" | "ctrl+c" | "alt+f4"
 
     if (!primitive({{"op", "available"}})) {
-        return {false, "[Input] Perception system not initialized", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
+        return {false, "[Input] Input backend unavailable", "ERR_INPUT_NOT_INITIALIZED", "error", "Input system not available", Colors::Red};
     }
 
     if (arg.empty()) {

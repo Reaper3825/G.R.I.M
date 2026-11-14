@@ -29,8 +29,8 @@ def find_sherlock():
         pass
     
     # Try local installation in osint\sherlock folder (workspace root)
-    script_dir = Path(__file__).parent  # resources/python
-    workspace_root = script_dir.parent.parent  # Go up to workspace root
+    script_dir = Path(__file__).parent  # plugins/osint_plugin/python
+    workspace_root = script_dir.parent.parent.parent  # Go up to workspace root
     
     # Check for sherlock_project structure (newer Sherlock versions)
     sherlock_dir = workspace_root / "osint" / "sherlock" / "sherlock_project"
@@ -115,7 +115,7 @@ def run_sherlock(username, output_file, timeout=60):
         else:
             # Use local installation
             script_dir = Path(__file__).parent
-            workspace_root = script_dir.parent.parent
+            workspace_root = script_dir.parent.parent.parent
             sherlock_dir = workspace_root / "osint" / "sherlock"
             sherlock_script = Path(sherlock_path)
             

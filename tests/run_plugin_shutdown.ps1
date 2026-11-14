@@ -33,7 +33,7 @@ if ($BuildFilesystemFixture) {
 if ($BuildInputFixture) {
     $InputPluginDirectory = Join-Path $output 'input-fixture'
     New-Item -ItemType Directory -Force -Path $InputPluginDirectory | Out-Null
-    $inputArgs = $common + @('/LD', '/utf-8', ('"' + (Join-Path $workspace 'plugins/input_plugin/input_plugin.cpp') + '"'), '/Fe:input-fixture/input_plugin.dll')
+    $inputArgs = $common + @('/LD', '/utf-8', ('"' + (Join-Path $workspace 'plugins/input_plugin/input_plugin.cpp') + '"'), ('"' + (Join-Path $workspace 'plugins/input_plugin/input_service.cpp') + '"'), ('"' + (Join-Path $workspace 'plugins/input_plugin/InputController.cpp') + '"'), '/Fe:input-fixture/input_plugin.dll', '/link', 'user32.lib')
     Set-Content -LiteralPath (Join-Path $output 'input-fixture.rsp') -Value $inputArgs -Encoding ascii
 }
 if ($BuildUIFixture) {
@@ -81,14 +81,14 @@ $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
 $apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/host_alias_service_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/voice_plugin_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp','voice/voice_command_services.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/host_alias_service_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
-$syntaxArgs = $common + @('/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
-$syntaxArgs += @('plugins/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','commands/commands_osint.cpp','commands/commands_osint_ui.cpp','plugins/application_plugin/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
-if ($VoicePluginDirectory) { $syntaxArgs += '"' + (Join-Path $workspace 'voice/voice_platform_queries.cpp') + '"' }
+$syntaxArgs = $common + @('/DGRIM_BUILD_HOST','/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
+$syntaxArgs += '/I"' + (Join-Path $output 'generated') + '"'
+$syntaxArgs += @('plugins/osint_plugin/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','plugins/osint_plugin/commands_osint.cpp','commands/commands_osint_ui.cpp','commands/commands_question.cpp','ui/ui_osint_results.cpp','plugins/application_plugin/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($BuildInputFixture) {
-    $syntaxArgs += '"' + (Join-Path $workspace 'core/input/input_service.cpp') + '"'
+    $syntaxArgs += '"' + (Join-Path $workspace 'plugins/input_plugin/input_service.cpp') + '"'
 }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'

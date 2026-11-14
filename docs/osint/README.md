@@ -1,3 +1,5 @@
+> API v11 ownership update: see [the current provider contract](../../plugins/osint_plugin/README.md). Older host/cache/process descriptions below are historical; the host now consumes copied tool results.
+
 # OSINT Documentation
 
 Defensive self-audits of accounts you own or are explicitly authorized to audit.
@@ -22,11 +24,11 @@ osint_plugin registration → OSINT command handlers → runSelfAudit/cache
 found URLs → sensitive scanner → local JSONL → console / host results panel
 ```
 
-- [Registration](../../plugins/osint_plugin.cpp#L73) owns seven tools and two
-  aliases. [Handlers](../../commands/commands_osint.cpp#L53) own scan jobs;
-  [collector](../../external_collector/osit.cpp#L224) owns discovery/cache.
-- The actual filenames remain `external_collector\osit.cpp`, `osit.hpp`, and
-  `resources\python\osit_bridge.py`. Do not infer a completed `osint` rename.
+- [Registration](../../plugins/osint_plugin/osint_plugin.cpp#L73) owns seven tools and two
+  aliases. [Handlers](../../plugins/osint_plugin/commands_osint.cpp#L53) own scan jobs;
+  [collector](../../plugins/osint_plugin/osit.cpp#L224) owns discovery/cache.
+- Collector and bridge sources now live under `plugins/osint_plugin`; their
+  existing `osit` filenames are retained.
 - The specialized results panel remains host-owned through
   [cmdOsintShowUI](../../commands/commands_osint_ui.cpp#L9). Generic panel
   operations belong to [the UI guides](../ui/PANEL_OPERATIONS.md), not discovery.

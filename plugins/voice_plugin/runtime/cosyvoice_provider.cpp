@@ -1,6 +1,6 @@
 #include "cosyvoice_provider.hpp"
 
-#include "logger.hpp"
+#include "plugins/plugin_logging.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -225,7 +225,7 @@ bool CosyVoiceProvider::initialize() {
             ", precision=" + response.value("precision", std::string("unknown")) +
             ", speaker=" + response.value("speaker", std::string("unknown")) +
             ", sample_rate=" + std::to_string(response.value("sample_rate", 0)));
-    LOG_PHASE("Fun-CosyVoice 3 bridge ready", true);
+    LOG_DEBUG("Voice", "Fun-CosyVoice 3 bridge ready");
     return true;
 #endif
 }

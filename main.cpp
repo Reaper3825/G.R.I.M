@@ -1,7 +1,6 @@
 #include "bootstrap/bootstrap.hpp"
 #include "logger.hpp"
 #include "wake/wake_key.hpp"
-#include "wake/wake_voice.hpp"
 #include "memory/unified_memory.hpp"
 #include "core/window_manager.hpp"
 #include "core/system_tick.hpp"
@@ -35,7 +34,6 @@ int main(int argc, char* argv[])
     PluginManager::initialize((std::filesystem::path(getGrimRootDir()) / "plugins").string());
     LOG_PHASE("Plugin manager initialized", true);
 
-    bootstrapVoiceSubsystem();
 
     bootstrapMemorySubsystem(g_memoryStorage);
 
@@ -44,8 +42,6 @@ int main(int argc, char* argv[])
     WakeKey::start();
     LOG_PHASE("WakeKey listener started", true);
 
-    WakeVoice::start();
-    LOG_PHASE("WakeVoice listener started", true);
 
     LOG_PHASE("Entering main thread render loop", true);
 

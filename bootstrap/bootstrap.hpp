@@ -31,7 +31,6 @@ void runBootstrapChecks(int argc, char** argv);
 std::unique_ptr<GRIM::DeviceCommServer> bootstrapNetworkServices(
 	GRIM::WebSocketServer& webSocketServer);
 
-void bootstrapVoiceSubsystem();
 
 void bootstrapMemorySubsystem(GRIM::UnifiedMemoryStorage& memoryStorage);
 

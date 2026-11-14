@@ -1,6 +1,6 @@
 #include "tts_cache.hpp"
-#include "logger.hpp"
-#include "resources.hpp"
+#include "plugins/plugin_logging.hpp"
+#include "runtime_state.hpp"
 #include <fstream>
 #include <chrono>
 #include <algorithm>
@@ -136,6 +136,8 @@ namespace TTSCache {
     // Public API
     // =========================================================
     void init() {
+    std::lock_guard<std::mutex> lock(g_cacheMutex);
+    g_cache.clear();
     std::string grimRoot = getGrimRootDir();
     g_cacheDir = fs::path(grimRoot) / "resources/tts_out/cache";
     g_tempDir  = fs::path(grimRoot) / "resources/tts_out/temp";
@@ -149,19 +151,20 @@ namespace TTSCache {
     
     // Migrate old cache files to speaker-specific directories
     // This runs once and moves any loose .wav files into default/ subdirectory
-    migrateToSpeakerDirs("default");
+
 
     // 🔹 Disable cleanup on startup — this was deleting new files before reuse
     // cleanupOldFiles(24);
 
-    LOG_PHASE("TTS Cache initialized (per-speaker organization)", true);
+    LOG_DEBUG("Voice", "TTS Cache initialized (per-speaker organization)");
 }
 
 
     void shutdown() {
         std::lock_guard<std::mutex> lock(g_cacheMutex);
-        saveIndex();
-        LOG_PHASE("TTS Cache shutdown", true);
+        if (!g_indexFile.empty()) saveIndex();
+        g_cache.clear(); g_cacheDir.clear(); g_tempDir.clear(); g_indexFile.clear();
+        LOG_DEBUG("Voice", "TTS Cache shutdown");
     }
 
     // =========================================================

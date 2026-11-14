@@ -3,14 +3,13 @@
 #include "ui_theme.hpp"
 #include "logger.hpp"
 #include "core/input_parser.hpp"  // For InputState
-#include <fstream>
-#include <filesystem>
+#include "commands/commands_core.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <sstream>
+#include <set>
 #include <iomanip>
 
-namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 UIOsintResults::UIOsintResults()
@@ -31,28 +30,27 @@ UIOsintResults::UIOsintResults()
 }
 
 bool UIOsintResults::loadFindings(const std::string& username) {
+    summary = {};
     summary.username = username;
     allFindings.clear();
     filteredFindings.clear();
     
-    // Find the log file
-    fs::path logPath = fs::current_path() / "cache" / "osint" / ("sensitive_" + username + ".jsonl");
+    const auto response = dispatchCommand("osint_show_secrets", username);
     
-    if (!fs::exists(logPath)) {
+    if (!response.success || response.structuredOutputJson.empty()) {
         LOG_ERROR("OSINT-UI", "No scan results found for: " + username);
         return false;
     }
     
     try {
-        std::ifstream logFile(logPath);
-        std::string line;
+        const auto snapshot = json::parse(response.structuredOutputJson);
+        if (snapshot.at("format") != "grim-osint-findings" || snapshot.at("version") != 1) return false;
         std::set<std::string> domains;
         
-        while (std::getline(logFile, line)) {
-            if (line.empty()) continue;
+        for (const auto& entry : snapshot.at("entries")) {
             
             try {
-                json entry = json::parse(line);
+
                 std::string url = entry.value("source_url", "");
                 std::string domain = entry.value("domain", "");
                 auto findings = entry.value("findings", json::array());
@@ -173,13 +171,13 @@ void UIOsintResults::applyFilters() {
 uint32_t UIOsintResults::getSeverityColor(int severity) const {
     using namespace UITheme;
     if (severity >= 9) {
-        return Colors::Danger;
+        return UITheme::Colors::Danger;
     } else if (severity >= 7) {
-        return Colors::Warning;
+        return UITheme::Colors::Warning;
     } else if (severity >= 5) {
-        return Colors::WarningLight;
+        return UITheme::Colors::WarningLight;
     } else {
-        return Colors::Success;
+        return UITheme::Colors::Success;
     }
 }
 
@@ -300,12 +298,12 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
     
     // Draw summary header
     float summaryHeight = 80.0f;
-    renderer.drawRoundedRect({position.x, contentY}, {size.x, summaryHeight}, Colors::ContentAreaBg, Sizes::WidgetRadius);
+    renderer.drawRoundedRect({position.x, contentY}, {size.x, summaryHeight}, UITheme::Colors::ContentAreaBg, Sizes::WidgetRadius);
     
     float summaryX = position.x + 10.0f;
     float summaryY = contentY + 10.0f;
     
-    renderer.drawText({summaryX, summaryY}, "Username: " + summary.username, Colors::TextWhite);
+    renderer.drawText({summaryX, summaryY}, "Username: " + summary.username, UITheme::Colors::TextWhite);
     summaryY += 25.0f;
     
     std::string summaryText = "Total: " + std::to_string(summary.totalFindings) + 
@@ -314,16 +312,16 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
                              " | MEDIUM: " + std::to_string(summary.mediumFindings) +
                              " | LOW: " + std::to_string(summary.lowFindings);
     
-    renderer.drawText({summaryX, summaryY}, summaryText, Colors::TextLight);
+    renderer.drawText({summaryX, summaryY}, summaryText, UITheme::Colors::TextLight);
     summaryY += 25.0f;
     
-    renderer.drawText({summaryX, summaryY}, "Affected Domains: " + std::to_string(summary.affectedDomains.size()), Colors::TextMuted);
+    renderer.drawText({summaryX, summaryY}, "Affected Domains: " + std::to_string(summary.affectedDomains.size()), UITheme::Colors::TextMuted);
     
     contentY += summaryHeight;
     
     // Draw filter buttons
     float filterHeight = 40.0f;
-    renderer.drawRoundedRect({position.x, contentY}, {size.x, filterHeight}, Colors::ContentAreaBg, Sizes::WidgetRadius);
+    renderer.drawRoundedRect({position.x, contentY}, {size.x, filterHeight}, UITheme::Colors::ContentAreaBg, Sizes::WidgetRadius);
     
     float filterX = position.x + 10.0f;
     float filterY = contentY + 8.0f;
@@ -332,62 +330,62 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
     float buttonSpacing = 10.0f;
     
     // Filter button: ALL
-    uint32_t allColor = (currentSeverityFilter == "all") ? Colors::AccentBlue : Colors::WidgetBg;
+    uint32_t allColor = (currentSeverityFilter == "all") ? UITheme::Colors::AccentBlue : UITheme::Colors::WidgetBg;
     renderer.drawRoundedRect({filterX, filterY}, {buttonWidth, buttonHeight}, allColor, Sizes::SmallRadius);
-    renderer.drawText({filterX + 30.0f, filterY + 5.0f}, "ALL", Colors::TextWhite);
+    renderer.drawText({filterX + 30.0f, filterY + 5.0f}, "ALL", UITheme::Colors::TextWhite);
     filterX += buttonWidth + buttonSpacing;
     
     // Filter button: CRITICAL
-    uint32_t critColor = (currentSeverityFilter == "critical") ? Colors::Danger : Colors::WidgetBg;
+    uint32_t critColor = (currentSeverityFilter == "critical") ? UITheme::Colors::Danger : UITheme::Colors::WidgetBg;
     renderer.drawRoundedRect({filterX, filterY}, {buttonWidth, buttonHeight}, critColor, Sizes::SmallRadius);
-    renderer.drawText({filterX + 10.0f, filterY + 5.0f}, "CRITICAL", Colors::TextWhite);
+    renderer.drawText({filterX + 10.0f, filterY + 5.0f}, "CRITICAL", UITheme::Colors::TextWhite);
     filterX += buttonWidth + buttonSpacing;
     
     // Filter button: HIGH
-    uint32_t highColor = (currentSeverityFilter == "high") ? Colors::Warning : Colors::WidgetBg;
+    uint32_t highColor = (currentSeverityFilter == "high") ? UITheme::Colors::Warning : UITheme::Colors::WidgetBg;
     renderer.drawRoundedRect({filterX, filterY}, {buttonWidth, buttonHeight}, highColor, Sizes::SmallRadius);
-    renderer.drawText({filterX + 25.0f, filterY + 5.0f}, "HIGH", Colors::TextWhite);
+    renderer.drawText({filterX + 25.0f, filterY + 5.0f}, "HIGH", UITheme::Colors::TextWhite);
     filterX += buttonWidth + buttonSpacing;
     
     // Filter button: MEDIUM
-    uint32_t medColor = (currentSeverityFilter == "medium") ? Colors::WarningLight : Colors::WidgetBg;
+    uint32_t medColor = (currentSeverityFilter == "medium") ? UITheme::Colors::WarningLight : UITheme::Colors::WidgetBg;
     renderer.drawRoundedRect({filterX, filterY}, {buttonWidth, buttonHeight}, medColor, Sizes::SmallRadius);
-    renderer.drawText({filterX + 15.0f, filterY + 5.0f}, "MEDIUM", Colors::TextWhite);
+    renderer.drawText({filterX + 15.0f, filterY + 5.0f}, "MEDIUM", UITheme::Colors::TextWhite);
     filterX += buttonWidth + buttonSpacing;
     
     // Filter button: LOW
-    uint32_t lowColor = (currentSeverityFilter == "low") ? Colors::Success : Colors::WidgetBg;
+    uint32_t lowColor = (currentSeverityFilter == "low") ? UITheme::Colors::Success : UITheme::Colors::WidgetBg;
     renderer.drawRoundedRect({filterX, filterY}, {buttonWidth, buttonHeight}, lowColor, Sizes::SmallRadius);
-    renderer.drawText({filterX + 30.0f, filterY + 5.0f}, "LOW", Colors::TextWhite);
+    renderer.drawText({filterX + 30.0f, filterY + 5.0f}, "LOW", UITheme::Colors::TextWhite);
     
     contentY += filterHeight;
     
     // Draw table header
-    renderer.drawRect({position.x, contentY}, {size.x, headerHeight}, Colors::TableHeaderBg);
+    renderer.drawRect({position.x, contentY}, {size.x, headerHeight}, UITheme::Colors::TableHeaderBg);
     
     float colX = position.x + 5.0f;
     float headerY = contentY + 10.0f;
     
-    renderer.drawText({colX, headerY}, "Severity", Colors::TextWhite);
+    renderer.drawText({colX, headerY}, "Severity", UITheme::Colors::TextWhite);
     colX += size.x * colWidthSeverity;
     
-    renderer.drawText({colX, headerY}, "Type", Colors::TextWhite);
+    renderer.drawText({colX, headerY}, "Type", UITheme::Colors::TextWhite);
     colX += size.x * colWidthType;
     
-    renderer.drawText({colX, headerY}, "Match", Colors::TextWhite);
+    renderer.drawText({colX, headerY}, "Match", UITheme::Colors::TextWhite);
     colX += size.x * colWidthMatch;
     
-    renderer.drawText({colX, headerY}, "Domain", Colors::TextWhite);
+    renderer.drawText({colX, headerY}, "Domain", UITheme::Colors::TextWhite);
     colX += size.x * colWidthDomain;
     
-    renderer.drawText({colX, headerY}, "Context", Colors::TextWhite);
+    renderer.drawText({colX, headerY}, "Context", UITheme::Colors::TextWhite);
     
     contentY += headerHeight;
     
     // FIX: Early exit if no findings to prevent crashes
     if (filteredFindings.empty()) {
         renderer.drawText({position.x + size.x / 2 - 100, contentY + 50}, 
-                         "No findings match current filter", Colors::TextSecondary);
+                         "No findings match current filter", UITheme::Colors::TextSecondary);
         renderer.popClipRect();
         return true;
     }
@@ -411,9 +409,9 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
         float rowY = contentY + (i - startRow) * rowHeight - (scrollOffset - startRow * rowHeight);
         
         // Row background
-        uint32_t rowColor = (i == selectedRow) ? Colors::RowSelected :
-                           (i == hoveredRow) ? Colors::RowHover :
-                           (i % 2 == 0) ? Colors::RowEven : Colors::RowOdd;
+        uint32_t rowColor = (i == selectedRow) ? UITheme::Colors::RowSelected :
+                           (i == hoveredRow) ? UITheme::Colors::RowHover :
+                           (i % 2 == 0) ? UITheme::Colors::RowEven : UITheme::Colors::RowOdd;
         
         renderer.drawRect({position.x, rowY}, {size.x, rowHeight}, rowColor);
         
@@ -427,7 +425,7 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
         colX += size.x * colWidthSeverity;
         
         // Type
-        renderer.drawText({colX, textY}, finding.tag, Colors::TextLight);
+        renderer.drawText({colX, textY}, finding.tag, UITheme::Colors::TextLight);
         colX += size.x * colWidthType;
         
         // Match (truncate if too long)
@@ -435,11 +433,11 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
         if (match.length() > 30) {
             match = match.substr(0, 27) + "...";
         }
-        renderer.drawText({colX, textY}, match, Colors::TextWhite);
+        renderer.drawText({colX, textY}, match, UITheme::Colors::TextWhite);
         colX += size.x * colWidthMatch;
         
         // Domain
-        renderer.drawText({colX, textY}, finding.domain, Colors::TextLink);
+        renderer.drawText({colX, textY}, finding.domain, UITheme::Colors::TextLink);
         colX += size.x * colWidthDomain;
         
         // Context (truncate)
@@ -447,7 +445,7 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
         if (context.length() > 40) {
             context = context.substr(0, 37) + "...";
         }
-        renderer.drawText({colX, textY}, context, Colors::TextMuted);
+        renderer.drawText({colX, textY}, context, UITheme::Colors::TextMuted);
     }
     
     // Draw scrollbar if needed
@@ -464,7 +462,7 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
             thumbHeight = std::max(20.0f, thumbHeight); // Minimum thumb height
             
             float thumbY = contentY + (scrollOffset / maxScroll) * (scrollbarHeight - thumbHeight);
-            renderer.drawRoundedRect({scrollbarX, thumbY}, {8.0f, thumbHeight}, Colors::ChromeBtn, Sizes::SmallRadius);
+            renderer.drawRoundedRect({scrollbarX, thumbY}, {8.0f, thumbHeight}, UITheme::Colors::ChromeBtn, Sizes::SmallRadius);
         }
     }
     
@@ -491,52 +489,52 @@ void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {
     float panelY = position.y + titleBarHeight + 10.0f;
     
     // Background with shadow
-    renderer.drawRoundedRect({panelX + 3, panelY + 3}, {panelWidth, panelHeight}, Colors::ShadowLight, Sizes::WidgetRadius);
-    renderer.drawRoundedRect({panelX, panelY}, {panelWidth, panelHeight}, Colors::PanelBg, Sizes::WidgetRadius);
+    renderer.drawRoundedRect({panelX + 3, panelY + 3}, {panelWidth, panelHeight}, UITheme::Colors::ShadowLight, Sizes::WidgetRadius);
+    renderer.drawRoundedRect({panelX, panelY}, {panelWidth, panelHeight}, UITheme::Colors::PanelBg, Sizes::WidgetRadius);
     
     // Border
-    renderer.drawRoundedBorder({panelX, panelY}, {panelWidth, panelHeight}, Colors::BorderPrimary, Sizes::WidgetRadius);
+    renderer.drawRoundedBorder({panelX, panelY}, {panelWidth, panelHeight}, UITheme::Colors::BorderPrimary, Sizes::WidgetRadius);
     
     // Title bar
-    renderer.drawRoundedRect({panelX, panelY}, {panelWidth, 30.0f}, Colors::TableHeaderBg, Sizes::WidgetRadius);
-    renderer.drawText({panelX + 10, panelY + 8}, "Finding Details", Colors::TextPrimary);
+    renderer.drawRoundedRect({panelX, panelY}, {panelWidth, 30.0f}, UITheme::Colors::TableHeaderBg, Sizes::WidgetRadius);
+    renderer.drawText({panelX + 10, panelY + 8}, "Finding Details", UITheme::Colors::TextPrimary);
     
     // Close button hint
-    renderer.drawText({panelX + panelWidth - 110, panelY + 8}, "[ESC to close]", Colors::TextSecondary);
+    renderer.drawText({panelX + panelWidth - 110, panelY + 8}, "[ESC to close]", UITheme::Colors::TextSecondary);
     
     float yPos = panelY + 40.0f;
     float xPad = panelX + 15.0f;
     float lineHeight = 25.0f;
     
     // Severity (color-coded)
-    renderer.drawText({xPad, yPos}, "Severity:", Colors::TextLabel);
+    renderer.drawText({xPad, yPos}, "Severity:", UITheme::Colors::TextLabel);
     uint32_t sevColor = getSeverityColor(selectedFinding.severityScore);
     renderer.drawText({xPad + 100, yPos}, selectedFinding.severity + " (" + std::to_string(selectedFinding.severityScore) + "/10)", sevColor);
     yPos += lineHeight;
     
     // Type
-    renderer.drawText({xPad, yPos}, "Type:", Colors::TextLabel);
-    renderer.drawText({xPad + 100, yPos}, selectedFinding.tag, Colors::TextWhite);
+    renderer.drawText({xPad, yPos}, "Type:", UITheme::Colors::TextLabel);
+    renderer.drawText({xPad + 100, yPos}, selectedFinding.tag, UITheme::Colors::TextWhite);
     yPos += lineHeight;
     
     // Domain
-    renderer.drawText({xPad, yPos}, "Domain:", Colors::TextLabel);
-    renderer.drawText({xPad + 100, yPos}, selectedFinding.domain, Colors::TextLink);
+    renderer.drawText({xPad, yPos}, "Domain:", UITheme::Colors::TextLabel);
+    renderer.drawText({xPad + 100, yPos}, selectedFinding.domain, UITheme::Colors::TextLink);
     yPos += lineHeight;
     
     // Entropy (if available)
     if (selectedFinding.entropy > 0) {
-        renderer.drawText({xPad, yPos}, "Entropy:", Colors::TextLabel);
+        renderer.drawText({xPad, yPos}, "Entropy:", UITheme::Colors::TextLabel);
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(2) << selectedFinding.entropy;
-        renderer.drawText({xPad + 100, yPos}, oss.str(), Colors::TextWhite);
+        renderer.drawText({xPad + 100, yPos}, oss.str(), UITheme::Colors::TextWhite);
         yPos += lineHeight;
     }
     
     yPos += 10; // Spacing
     
     // Full URL (wrapped if needed)
-    renderer.drawText({xPad, yPos}, "URL:", Colors::Warning);
+    renderer.drawText({xPad, yPos}, "URL:", UITheme::Colors::Warning);
     yPos += lineHeight;
     
     // Word wrap the URL
@@ -547,7 +545,7 @@ void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {
     
     while (pos < url.length()) {
         std::string line = url.substr(pos, std::min(charsPerLine, url.length() - pos));
-        renderer.drawText({xPad + 10, yPos}, line, Colors::TextLight);
+        renderer.drawText({xPad + 10, yPos}, line, UITheme::Colors::TextLight);
         yPos += 20;
         pos += charsPerLine;
     }
@@ -555,13 +553,13 @@ void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {
     yPos += 10;
     
     // ===== ACTUAL MATCH VALUE (FULL, UNTRUNCATED) =====
-    renderer.drawText({xPad, yPos}, "MATCH (Full Value):", Colors::Danger);
+    renderer.drawText({xPad, yPos}, "MATCH (Full Value):", UITheme::Colors::Danger);
     yPos += lineHeight;
     
     // Draw the FULL match value in a box
     float matchBoxHeight = 60.0f;
-    renderer.drawRoundedRect({xPad, yPos}, {panelWidth - 30, matchBoxHeight}, Colors::ContentAreaBg, Sizes::SmallRadius);
-    renderer.drawRect({xPad, yPos}, {panelWidth - 30, 2}, Colors::Danger);
+    renderer.drawRoundedRect({xPad, yPos}, {panelWidth - 30, matchBoxHeight}, UITheme::Colors::ContentAreaBg, Sizes::SmallRadius);
+    renderer.drawRect({xPad, yPos}, {panelWidth - 30, 2}, UITheme::Colors::Danger);
     
     // Word wrap the match value
     std::string match = selectedFinding.match;
@@ -570,7 +568,7 @@ void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {
     
     while (pos < match.length() && matchY < yPos + matchBoxHeight - 20) {
         std::string line = match.substr(pos, std::min(charsPerLine, match.length() - pos));
-        renderer.drawText({xPad + 10, matchY}, line, Colors::WarningLight);
+        renderer.drawText({xPad + 10, matchY}, line, UITheme::Colors::WarningLight);
         matchY += 18;
         pos += charsPerLine;
     }
@@ -578,13 +576,13 @@ void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {
     yPos += matchBoxHeight + 15;
     
     // ===== FULL CONTEXT (SURROUNDING TEXT) =====
-    renderer.drawText({xPad, yPos}, "CONTEXT (Full Text):", Colors::Success);
+    renderer.drawText({xPad, yPos}, "CONTEXT (Full Text):", UITheme::Colors::Success);
     yPos += lineHeight;
     
     // Draw the FULL context in a box
     float contextBoxHeight = 80.0f;
-    renderer.drawRoundedRect({xPad, yPos}, {panelWidth - 30, contextBoxHeight}, Colors::ContentAreaBg, Sizes::SmallRadius);
-    renderer.drawRect({xPad, yPos}, {panelWidth - 30, 2}, Colors::Success);
+    renderer.drawRoundedRect({xPad, yPos}, {panelWidth - 30, contextBoxHeight}, UITheme::Colors::ContentAreaBg, Sizes::SmallRadius);
+    renderer.drawRect({xPad, yPos}, {panelWidth - 30, 2}, UITheme::Colors::Success);
     
     // Word wrap the context
     std::string context = selectedFinding.context;
@@ -593,7 +591,7 @@ void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {
     
     while (pos < context.length() && contextY < yPos + contextBoxHeight - 20) {
         std::string line = context.substr(pos, std::min(charsPerLine, context.length() - pos));
-        renderer.drawText({xPad + 10, contextY}, line, Colors::TextLight);
+        renderer.drawText({xPad + 10, contextY}, line, UITheme::Colors::TextLight);
         contextY += 18;
         pos += charsPerLine;
     }
@@ -603,9 +601,9 @@ void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {
     // Warning for critical findings
     if (selectedFinding.severityScore >= 9) {
         yPos += 10;
-        renderer.drawRoundedRect({xPad, yPos}, {panelWidth - 30, 50}, Colors::DangerBright, Sizes::SmallRadius);
-        renderer.drawText({xPad + 10, yPos + 5}, "! CRITICAL: This is sensitive data!", Colors::TextWhite);
-        renderer.drawText({xPad + 10, yPos + 25}, "Action required:", Colors::TextWhite);
-        renderer.drawText({xPad + 10, yPos + 40}, "- Rotate/revoke this credential immediately", Colors::TextWhite);
+        renderer.drawRoundedRect({xPad, yPos}, {panelWidth - 30, 50}, UITheme::Colors::DangerBright, Sizes::SmallRadius);
+        renderer.drawText({xPad + 10, yPos + 5}, "! CRITICAL: This is sensitive data!", UITheme::Colors::TextWhite);
+        renderer.drawText({xPad + 10, yPos + 25}, "Action required:", UITheme::Colors::TextWhite);
+        renderer.drawText({xPad + 10, yPos + 40}, "- Rotate/revoke this credential immediately", UITheme::Colors::TextWhite);
     }
 }

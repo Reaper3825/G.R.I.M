@@ -1,3 +1,5 @@
+> API v11 ownership update: see [the current provider contract](../../plugins/osint_plugin/README.md). Older host/cache/process descriptions below are historical; the host now consumes copied tool results.
+
 # OSINT Setup and Troubleshooting
 
 Source-reviewed November 8, 2026. This guide does not install dependencies or
@@ -9,18 +11,18 @@ authorize network scanning. See [tools](TOOLS.md#commands) for self-audit scope.
   [plugin deployment](../../plugins/README.md) and [API](../PLUGIN_API.md).
   Registration metadata is not a sandbox or a substitute for authorization.
 - Launch from the intended repository/process working directory.
-  [isSherlockAvailable](../../external_collector/osit.cpp#L46) looks there for
+  [isSherlockAvailable](../../plugins/osint_plugin/osit.cpp#L46) looks there for
   `resources\python\osit_bridge.py`; cache and intermediate files also use it.
 - A runnable Python interpreter and a Sherlock release with its own supported
   interpreter/dependencies. No universal "Python 3.7+" minimum is established.
-  [getPythonExecutable](../../external_collector/osit.cpp#L24) takes the first
+  [getPythonExecutable](../../plugins/osint_plugin/osit.cpp#L24) takes the first
   `where python` result on Windows, otherwise attempts `python`; non-Windows
   uses `python3`. Internal `OSINTConfig.pythonPath` can override it, but the
   registered tools expose no interpreter-selection flag.
 - Write access to `resources\python`, `cache\osint`, and any chosen export
   directory, plus authorized connectivity to the public sites being audited.
 
-[find_sherlock](../../resources/python/osit_bridge.py#L13) tries, in order:
+[find_sherlock](../../plugins/osint_plugin/python/osit_bridge.py#L13) tries, in order:
 importable `sherlock_project`, importable `sherlock`, then local scripts at
 `osint\sherlock\sherlock_project\sherlock.py`,
 `osint\sherlock\sherlock\sherlock.py`, `osint\sherlock\sherlock.py`, and
@@ -30,7 +32,7 @@ only the alternative `sherlock` import succeeded. The local route changes its
 working directory to `osint\sherlock`. Presence/import detection alone therefore
 does not establish that the selected invocation works.
 
-[Sensitive scanner imports](../../resources/python/sherlock_sensitive_scanner.py#L29)
+[Sensitive scanner imports](../../plugins/osint_plugin/python/sherlock_sensitive_scanner.py#L29)
 require `requests`, `beautifulsoup4` (the `bs4` module), and `tldextract`.
 spaCy plus `en_core_web_sm` enables optional NER; Playwright plus usable Chromium
 browser assets enables optional rendering. An import message is not proof of a

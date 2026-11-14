@@ -1,11 +1,9 @@
 #include "voice_speak.hpp"
 #include "cosyvoice_provider.hpp"
 #include "tts_cache.hpp"  // ? Added
-#include "logger.hpp"
-#include "resources.hpp"
-#include "popup_ui/popup_ui.hpp"
-#include "core/audio_core.hpp"
-#include "ai/ai.hpp"  // ✅ NEW: For AI fallback message generation
+#include "plugins/plugin_logging.hpp"
+#include "runtime_state.hpp"
+#include "audio_core.hpp"
 #include <thread>
 #include <chrono>
 #include <filesystem>
@@ -19,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
+    #include <sapi.h>
     #include <windows.h>  // CreateProcess, pipes, etc.
 #endif
 
@@ -118,7 +117,8 @@ namespace Voice {
         char ch;
         DWORD read = 0, avail = 0;
 
-        while (true) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+        while (!VoiceRuntime::cancel.load() && std::chrono::steady_clock::now() < deadline) {
             if (!PeekNamedPipe(hChildStdoutRd, nullptr, 0, nullptr, &avail, nullptr)) {
                 LOG_ERROR("Voice/Bridge", "PeekNamedPipe failed");
                 break;
@@ -140,7 +140,7 @@ namespace Voice {
     static std::string readJsonLineFromBridge(int timeoutMs = 30000) {
         auto start = std::chrono::steady_clock::now();
 
-        while (true) {
+        while (!VoiceRuntime::cancel.load()) {
             std::string line = readLineFromBridge();
             if (!line.empty()) {
                 if (line[0] == '{')
@@ -155,6 +155,7 @@ namespace Voice {
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
+        return {};
     }
 #endif
 
@@ -216,6 +217,7 @@ namespace Voice {
     }
 
     static void loadVoiceConfiguration() {
+        g_engine="coqui"; g_speaker="default"; g_speed=1.0; g_language="en"; g_xttsV2Enabled=false;
         const fs::path grimRoot = getGrimRootDir();
         g_outputDir = grimRoot / "resources/tts_out";
         g_cosyVoiceConfig.python_executable =
@@ -227,7 +229,7 @@ namespace Voice {
         g_cosyVoiceConfig.text_normalization_path =
             (grimRoot / "resources/models/wetext").string();
         g_cosyVoiceConfig.bridge_script =
-            (grimRoot / "resources/python/cosyvoice_bridge.py").string();
+            (grimRoot / "plugins/voice_plugin/python/cosyvoice_bridge.py").string();
         g_cosyVoiceConfig.output_directory =
             (grimRoot / "resources/tts_out/cosyvoice").string();
         g_cosyVoiceConfig.reference_audio_path.clear();
@@ -238,11 +240,8 @@ namespace Voice {
         g_cosyVoiceConfig.synthesis_timeout_ms = 120000;
 
         try {
-            const fs::path cfgPath = grimRoot / "ai_config.json";
-            if (fs::exists(cfgPath)) {
-                std::ifstream in(cfgPath);
-                json cfg;
-                in >> cfg;
+            const auto& cfg = VoiceRuntime::config;
+            {
                 if (cfg.contains("voice")) {
                     auto& v = cfg["voice"];
                     if (v.contains("engine"))      g_engine    = v["engine"].get<std::string>();
@@ -329,23 +328,18 @@ namespace Voice {
             HANDLE hChildStdinRd = nullptr, hChildStdinWrLocal = nullptr;
             HANDLE hChildStderrRdLocal = nullptr, hChildStderrWr = nullptr;
 
-            // Create pipe for child process's STDOUT
-            if (!CreatePipe(&hChildStdoutRdLocal, &hChildStdoutWr, &saAttr, 0))
-                LOG_ERROR("Voice/Init", "Failed to create stdout pipe");
-
-            SetHandleInformation(hChildStdoutRdLocal, HANDLE_FLAG_INHERIT, 0);
-
-            // Create pipe for child process's STDIN
-            if (!CreatePipe(&hChildStdinRd, &hChildStdinWrLocal, &saAttr, 0))
-                LOG_ERROR("Voice/Init", "Failed to create stdin pipe");
-
-            SetHandleInformation(hChildStdinWrLocal, HANDLE_FLAG_INHERIT, 0);
-
-            // Create pipe for child process's STDERR (separate from STDOUT)
-            if (!CreatePipe(&hChildStderrRdLocal, &hChildStderrWr, &saAttr, 0))
-                LOG_ERROR("Voice/Init", "Failed to create stderr pipe");
-
-            SetHandleInformation(hChildStderrRdLocal, HANDLE_FLAG_INHERIT, 0);
+            auto closePipes = [&] {
+                for(HANDLE handle : {hChildStdoutRdLocal,hChildStdoutWr,hChildStdinRd,hChildStdinWrLocal,hChildStderrRdLocal,hChildStderrWr})
+                    if(handle) CloseHandle(handle);
+            };
+            if (!CreatePipe(&hChildStdoutRdLocal,&hChildStdoutWr,&saAttr,0) ||
+                !CreatePipe(&hChildStdinRd,&hChildStdinWrLocal,&saAttr,0) ||
+                !CreatePipe(&hChildStderrRdLocal,&hChildStderrWr,&saAttr,0)) {
+                closePipes(); return false;
+            }
+            SetHandleInformation(hChildStdoutRdLocal,HANDLE_FLAG_INHERIT,0);
+            SetHandleInformation(hChildStdinWrLocal,HANDLE_FLAG_INHERIT,0);
+            SetHandleInformation(hChildStderrRdLocal,HANDLE_FLAG_INHERIT,0);
 
             // Set up STARTUPINFOA
             STARTUPINFOA si{};
@@ -360,8 +354,8 @@ namespace Voice {
             // Use the virtual environment Python interpreter to ensure dependencies are available
             std::string grimRoot = getGrimRootDir();
             std::string pythonExe = (fs::path(grimRoot) / ".venv/Scripts/python.exe").string();
-            std::string scriptPath = (fs::path(grimRoot) / "resources/python/coqui_bridge.py").string();
-            std::string cmd = pythonExe + " " + scriptPath + " --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu --speaker " + g_speaker + " --language " + g_language;
+            std::string scriptPath = (fs::path(grimRoot) / "plugins/voice_plugin/python/coqui_bridge.py").string();
+            std::string cmd = "\"" + pythonExe + "\" \"" + scriptPath + "\"" + " --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu --speaker " + g_speaker + " --language " + g_language;
             std::vector<char> mutableCmd(cmd.begin(), cmd.end());
             mutableCmd.push_back('\0');
 
@@ -371,16 +365,16 @@ namespace Voice {
                 nullptr,
                 nullptr,
                 TRUE,
-                0,
+                CREATE_NO_WINDOW,
                 nullptr,
-                (fs::path(grimRoot) / "resources/python").string().c_str(),
+                grimRoot.c_str(),
                 &si,
                 &piProcInfo
             );
 
             if (!success) {
                 LOG_ERROR("Voice/Init", "CreateProcessA failed: " + std::to_string(GetLastError()));
-                return false;
+                closePipes(); return false;
             }
 
             // Close the unneeded ends in parent
@@ -421,7 +415,7 @@ namespace Voice {
                     std::string device = resp.value("device", "cpu");
                     std::string model = resp.value("model", "unknown");
                     
-                    LOG_PHASE("Coqui XTTS v2 bridge ready", true);
+                    LOG_DEBUG("Voice", "Coqui XTTS v2 bridge ready");
                     LOG_DEBUG("Voice", "Model: " + model + " | Device: " + device + " | XTTS v2: " + 
                              (g_xttsV2Enabled ? "Yes" : "No"));
                 } else {
@@ -448,7 +442,8 @@ namespace Voice {
             }
         }
 #endif
-        return true;
+        if (g_engine == "sapi") g_ttsReady=true;
+        return g_ttsReady;
     }
 
     static void shutdownLegacyProvider() {
@@ -458,19 +453,15 @@ namespace Voice {
             DWORD written;
             WriteFile(hChildStdinWr, exitCmd.c_str(), (DWORD)exitCmd.size(), &written, nullptr);
         }
-        if (piProcInfo.hProcess) {
+        if (piProcInfo.hProcess && WaitForSingleObject(piProcInfo.hProcess, 2000) == WAIT_TIMEOUT) {
+            TerminateProcess(piProcInfo.hProcess, 1);
             WaitForSingleObject(piProcInfo.hProcess, 2000);
-            CloseHandle(piProcInfo.hProcess);
-            CloseHandle(piProcInfo.hThread);
         }
-        if (hChildStderrRd) {
-            CloseHandle(hChildStderrRd);
-            hChildStderrRd = nullptr;
-        }
-
-        if (stderrReaderThread.joinable()) {
-            // Give the stderr thread a brief moment to finish
-            stderrReaderThread.join();
+        if (stderrReaderThread.joinable()) stderrReaderThread.join();
+        for (HANDLE* handle : {&hChildStdinWr, &hChildStdoutRd, &hChildStderrRd,
+                              &piProcInfo.hProcess, &piProcInfo.hThread}) {
+            if (*handle) CloseHandle(*handle);
+            *handle = nullptr;
         }
 #endif
         // ? Shutdown cache (saves index + cleanup)
@@ -480,7 +471,7 @@ namespace Voice {
         AppleTTS::shutdown();
 #endif
         
-        LOG_PHASE("Voice shutdownTTS complete", true);
+        LOG_DEBUG("Voice", "Voice shutdownTTS complete");
         g_ttsReady = false;
     }
 
@@ -530,6 +521,7 @@ namespace Voice {
 
     bool initTTS() {
         loadVoiceConfiguration();
+        TTSCache::init();
         if (!g_ttsProvider) {
             if (g_engine == "cosyvoice" || g_engine == "fun-cosyvoice3") {
                 g_ttsProvider = createCosyVoiceProvider(g_cosyVoiceConfig);
@@ -545,6 +537,7 @@ namespace Voice {
             g_ttsProvider->shutdown();
             g_ttsProvider.reset();
         }
+        TTSCache::shutdown();
     }
 
     bool isReady() {
@@ -584,16 +577,8 @@ namespace Voice {
     // =========================================================
     // ? NEW: Initialize Pre-cache in Background
     // =========================================================
-    void initPreCache() {
-        if (g_ttsReady) {
-            // Start pre-caching in background thread
-            std::thread([]() {
-                // Wait for model warmup to complete
-                std::this_thread::sleep_for(std::chrono::seconds(3));
-                preCacheCommonPhrases();
-            }).detach();
-        }
-    }
+    // Explicit synchronous precaching: the invoking plugin operation owns its lifetime.
+    void initPreCache() { preCacheCommonPhrases(); }
     // =========================================================
     // Queue worker
     // =========================================================
@@ -626,7 +611,7 @@ namespace Voice {
 #ifdef __APPLE__
             if (engine == "apple") {
                 g_isSpeaking = true;
-                notifyPopupActivity();
+                
                 AppleTTS::speak(item.text,
                                 static_cast<float>(effectiveSpeed),
                                 static_cast<float>(effectivePitch));
@@ -660,14 +645,20 @@ namespace Voice {
             }
 #ifdef _WIN32
             else if (engine == "sapi") {
-                std::string command = "powershell -Command "
-                    "\"Add-Type -AssemblyName System.Speech; "
-                    "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
-                    ".Speak([Console]::In.ReadToEnd())\"";
-                FILE* pipe = _popen(command.c_str(), "w");
-                if (pipe) {
-                    fwrite(item.text.c_str(), 1, item.text.size(), pipe);
-                    _pclose(pipe);
+                const auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+                if(SUCCEEDED(initialized)) {
+                    ISpVoice* voice=nullptr;
+                    if(SUCCEEDED(CoCreateInstance(CLSID_SpVoice,nullptr,CLSCTX_ALL,IID_ISpVoice,reinterpret_cast<void**>(&voice)))) {
+                        const int count=MultiByteToWideChar(CP_UTF8,0,item.text.c_str(),-1,nullptr,0);
+                        std::wstring text(count,L'\0');
+                        MultiByteToWideChar(CP_UTF8,0,item.text.c_str(),-1,text.data(),count);
+                        g_isSpeaking=true;
+                        voice->Speak(text.c_str(),SPF_ASYNC,nullptr);
+                        while(!VoiceRuntime::cancel && voice->WaitUntilDone(50)==S_FALSE) {}
+                        voice->Speak(nullptr,SPF_PURGEBEFORESPEAK,nullptr);
+                        voice->Release(); g_isSpeaking=false;
+                    }
+                    CoUninitialize();
                 }
             }
 #endif
@@ -675,14 +666,16 @@ namespace Voice {
     }
 
     void initQueue() {
+        if (workerThread.joinable()) return;
         workerRunning = true;
-        workerThread = std::thread(speakWorker);
+        workerThread = std::thread([] { try { speakWorker(); } catch(const std::exception& error) { VoiceRuntime::reportError(error.what()); } });
     }
 
     void shutdownQueue() {
         {
             std::lock_guard<std::mutex> lock(queueMutex);
             workerRunning = false;
+            speakQueue = {};
         }
         queueCV.notify_all();
         if (workerThread.joinable()) workerThread.join();
@@ -718,20 +711,23 @@ namespace Voice {
         int alreadyCached = 0;
         
         for (const auto& phrase : commonPhrases) {
+            if (VoiceRuntime::cancel.load()) break;
             // Check if already cached
-            std::string existing = TTSCache::getCached(phrase, "default", 1.0);
+            std::string existing = TTSCache::getCached(phrase, g_speaker, g_speed);
             
             if (existing.empty()) {
                 // Generate and cache
                 TTSSynthesisRequest request;
                 request.text = phrase;
                 request.category = "system";
-                request.voice_id = "default";
+                request.voice_id = g_speaker;
+                request.rate = g_speed;
                 request.language = g_language;
                 TTSSynthesisResult synthesis = synthesize(request);
+                if (!synthesis.success) throw std::runtime_error(synthesis.error_code + ": " + synthesis.error_message);
                 std::string wav = synthesis.audio_path;
                 if (!wav.empty()) {
-                    TTSCache::store(phrase, "default", 1.0, wav);
+                    TTSCache::store(phrase, g_speaker, g_speed, wav);
                     cached++;
                 }
             } else {
@@ -776,7 +772,7 @@ namespace Voice {
         return;
     }
 
-    notifyPopupActivity();
+    
     g_isSpeaking = true;
 
     LOG_DEBUG("Voice/Audio", "Playing via AudioCore: " + path);
@@ -883,25 +879,6 @@ namespace Voice {
                 // ✅ NEW: Handle fallback notice - have AI generate a "hold on" message
                 std::string fallbackMsg = resp.value("message", "Processing...");
                 LOG_DEBUG("Voice/Bridge", "Fallback notice received: " + fallbackMsg);
-                
-                // Generate an AI response for "give me a moment" type message
-                std::string aiPrompt = "Generate a brief, in-character message saying you need a moment to process something. Keep it under 15 words and make it sound natural for your personality.";
-                
-                // Call AI backend asynchronously to generate the message
-                auto aiFuture = callAIAsync(aiPrompt);
-                
-                // Wait for AI response with timeout
-                if (aiFuture.wait_for(std::chrono::seconds(3)) == std::future_status::ready) {
-                    std::string aiResponse = aiFuture.get();
-                    if (!aiResponse.empty()) {
-                        LOG_DEBUG("Voice/Fallback", "AI generated fallback message: " + aiResponse);
-                        // Speak the AI-generated message immediately while processing continues
-                        speak(aiResponse, "system");
-                    }
-                } else {
-                    LOG_DEBUG("Voice/Fallback", "AI timeout, using default message");
-                    speak("Give me just a moment...", "system");
-                }
                 
                 // Continue processing - wait for the actual TTS result
                 response = readJsonLineFromBridge(60000);

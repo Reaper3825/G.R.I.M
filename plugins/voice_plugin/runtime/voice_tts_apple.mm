@@ -5,7 +5,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
 #include "voice_tts_apple.hpp"
-#include "logger.hpp"
+#include "plugins/plugin_logging.hpp"
 #include <atomic>
 #include <mutex>
 #include <condition_variable>

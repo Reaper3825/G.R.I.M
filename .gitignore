@@ -382,3 +382,27 @@ cache/geospatial/*.sqlite-wal
 !/plugins/perception_plugin/*.cpp
 !/plugins/perception_plugin/*.hpp
 !/plugins/perception_plugin/*.md
+
+# Voice provider source ownership
+!/plugins/voice_plugin/**/
+!/plugins/voice_plugin/**/*.cpp
+!/plugins/voice_plugin/**/*.hpp
+!/plugins/voice_plugin/**/*.mm
+!/plugins/voice_plugin/*.cpp
+!/plugins/voice_plugin/*.hpp
+!/plugins/voice_plugin/*.md
+!/plugins/voice_plugin/**/*.py
+
+# Provider-owned OSINT and native input source (never generated binaries/cache).
+!/plugins/input_plugin/*.cpp
+!/plugins/input_plugin/*.hpp
+!/plugins/input_plugin/*.md
+!/plugins/osint_plugin/
+/plugins/osint_plugin/*
+!/plugins/osint_plugin/CMakeLists.txt
+!/plugins/osint_plugin/*.cpp
+!/plugins/osint_plugin/*.hpp
+!/plugins/osint_plugin/*.md
+!/plugins/osint_plugin/python/
+/plugins/osint_plugin/python/*
+!/plugins/osint_plugin/python/*.py

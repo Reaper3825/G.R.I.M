@@ -1,4 +1,7 @@
 #include "osit.hpp"
+#include "provider_paths.hpp"
+#include "process.hpp"
+#include <mutex>
 #include "logger.hpp"
 #ifdef GRIM_BUILD_PLUGIN
 #include "plugins/plugin_logging.hpp"
@@ -18,36 +21,22 @@
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
-static const fs::path CACHE_DIR = fs::current_path() / "cache" / "osint";
+#define CACHE_DIR osintProvider::cache()
 static const std::chrono::hours CACHE_EXPIRY{24}; // 24 hours
 
 std::string getPythonExecutable() {
 #ifdef _WIN32
-    // Try to find python in PATH
-    char buffer[256];
-    FILE* pipe = _popen("where python", "r");
-    if (pipe) {
-        if (fgets(buffer, sizeof(buffer), pipe)) {
-            _pclose(pipe);
-            std::string result(buffer);
-            // Remove newline
-            result.erase(std::remove(result.begin(), result.end(), '\n'), result.end());
-            result.erase(std::remove(result.begin(), result.end(), '\r'), result.end());
-            return result.empty() ? "python" : result;
-        }
-        _pclose(pipe);
-    }
-    return "python";
+    return "python.exe";
 #else
     return "python3";
 #endif
 }
 
 bool isSherlockAvailable() {
-    fs::path root = fs::current_path();
+    fs::path root = osintProvider::root;
     
     // Check for Python bridge
-    fs::path bridge = root / "resources" / "python" / "osit_bridge.py";
+    fs::path bridge = osintProvider::scripts() / "osit_bridge.py";
     if (!fs::exists(bridge)) {
         return false;
     }
@@ -130,6 +119,8 @@ std::string OSINTReport::getDetailedReport() const {
 }
 
 std::optional<OSINTReport> getCachedReport(const std::string& username) {
+    osintProvider::validateTarget(username);
+    std::lock_guard<std::recursive_mutex> storageLock(osintProvider::storageMutex);
     try {
         fs::path cacheFile = CACHE_DIR / (username + ".json");
         if (!fs::exists(cacheFile)) {
@@ -152,7 +143,7 @@ std::optional<OSINTReport> getCachedReport(const std::string& username) {
         
         OSINTReport report;
         report.success = j.value("success", false);
-        report.username = j.value("username", username);
+        report.username = username; // Cache metadata cannot redirect provider file paths.
         report.error = j.value("error", "");
         report.rawJson = j.value("rawJson", "");
         report.totalChecked = j.value("totalChecked", 0);
@@ -179,6 +170,8 @@ std::optional<OSINTReport> getCachedReport(const std::string& username) {
 }
 
 void cacheReport(const OSINTReport& report) {
+    osintProvider::validateTarget(report.username);
+    std::lock_guard<std::recursive_mutex> storageLock(osintProvider::storageMutex);
     try {
         fs::create_directories(CACHE_DIR);
         fs::path cacheFile = CACHE_DIR / (report.username + ".json");
@@ -211,6 +204,7 @@ void cacheReport(const OSINTReport& report) {
 }
 
 void clearOSINTCache() {
+    std::lock_guard<std::recursive_mutex> storageLock(osintProvider::storageMutex);
     try {
         if (fs::exists(CACHE_DIR)) {
             fs::remove_all(CACHE_DIR);
@@ -222,6 +216,8 @@ void clearOSINTCache() {
 }
 
 OSINTReport runSelfAudit(const std::string& username, const OSINTConfig& config) {
+    std::lock_guard<std::recursive_mutex> storageLock(osintProvider::storageMutex);
+    osintProvider::validateTarget(username);
     OSINTReport report;
     report.username = username;
     report.timestamp = std::chrono::system_clock::now();
@@ -235,45 +231,28 @@ OSINTReport runSelfAudit(const std::string& username, const OSINTConfig& config)
     }
     
     try {
-        fs::path root = fs::current_path();
-        fs::path resourcesDir = root / "resources" / "python";
+        fs::path root = osintProvider::root;
+        fs::path resourcesDir = osintProvider::scripts();
         fs::path bridge = resourcesDir / "osit_bridge.py";
         
-        // Create temp output file in resources/python directory
-        fs::path outFile = resourcesDir / ("sherlock_results_" + username + ".json");
+        // Provider-owned unique temporary output, removed on every exit.
+        osintProvider::TemporaryFile temporary("sherlock-");
+        const auto& outFile = temporary.path;
         
         if (!fs::exists(bridge)) {
             report.success = false;
             report.error = std::string("OSINT bridge not found at: ") + bridge.string() + 
-                          std::string("\nExpected location: resources/python/osit_bridge.py");
+                          std::string("\nExpected location: plugins/osint_plugin/python/osit_bridge.py");
             return report;
         }
         
         // Build command
         std::string pythonCmd = config.pythonPath.empty() ? getPythonExecutable() : config.pythonPath;
-        std::ostringstream cmd;
-        
-#ifdef _WIN32
-        // Windows: Quote all paths to handle spaces
-        cmd << "\"\"" << pythonCmd << "\" \"" << bridge.string() << "\" "
-            << "\"" << username << "\" "
-            << "\"" << outFile.string() << "\"\"";
-#else
-        cmd << pythonCmd << " \"" << bridge.string() << "\" "
-            << "\"" << username << "\" "
-            << "\"" << outFile.string() << "\"";
-#endif
-        
-        if (config.timeoutSeconds > 0) {
-            cmd << " --timeout " << config.timeoutSeconds;
-        }
-        
-        // Log the full command for debugging
-        LOG_DEBUG("OSINT", "Executing command: " + cmd.str());
-        
+        LOG_DEBUG("OSINT", "Running provider-owned Sherlock bridge");
+
         // Execute
         auto startTime = std::chrono::steady_clock::now();
-        int code = std::system(cmd.str().c_str());
+        int code = osintProvider::runProcess({pythonCmd, bridge.string(), username, outFile.string(), "--timeout", std::to_string(config.timeoutSeconds)}, std::max(300, config.timeoutSeconds * 15) + 30);
         auto endTime = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
         

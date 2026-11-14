@@ -1,10 +1,7 @@
 #include "voice.hpp"
-#include "resources.hpp"
-#include "ai/ai.hpp"
+#include "runtime_state.hpp"
 #include "voice_speak.hpp"
-#include "error_manager.hpp"
-#include "logger.hpp" 
-#include "popup_ui/popup_ui.hpp"  // ✅ Added
+#include "plugins/plugin_logging.hpp" 
 #include <whisper.h>
 #include <portaudio.h>
 #include <filesystem>
@@ -68,7 +65,7 @@ static bool isSilence(const std::vector<float>& pcm) {
     // ✅ Log RMS for debugging
     static int logCounter = 0;
     if (++logCounter % 100 == 0) { // Log every 100th check to avoid spam
-        LOG_TRACE("Voice", "RMS: " + std::to_string(rms) + " (threshold: " + std::to_string(g_silenceThreshold) + ")");
+        LOG_DEBUG("Voice", "RMS: " + std::to_string(rms) + " (threshold: " + std::to_string(g_silenceThreshold) + ")");
     }
     
     return rms < g_silenceThreshold;
@@ -77,7 +74,7 @@ static bool isSilence(const std::vector<float>& pcm) {
 // ============================================================
 // Lazy Whisper Initialization
 // ============================================================
-static bool ensureWhisperLoaded(const nlohmann::json& aiConfig) {
+bool loadWhisper(const nlohmann::json& aiConfig) {
     if (g_state.ctx) return true;
 
     // Pick model name from config, default to base English
@@ -93,7 +90,7 @@ static bool ensureWhisperLoaded(const nlohmann::json& aiConfig) {
 
     if (!fs::exists(modelPath)) {
         LOG_ERROR("Voice", "Whisper model missing: " + modelPath.string());
-        ErrorManager::report("ERR_VOICE_NOT_INITIALIZED");
+        VoiceRuntime::reportError("ERR_VOICE_NOT_INITIALIZED");
         return false;
     }
 
@@ -110,11 +107,11 @@ static bool ensureWhisperLoaded(const nlohmann::json& aiConfig) {
 
     if (!g_state.ctx) {
         LOG_ERROR("Voice", "Failed to load Whisper model: " + modelPath.string());
-        ErrorManager::report("ERR_VOICE_TRANSCRIBE_FAIL");
+        VoiceRuntime::reportError("ERR_VOICE_TRANSCRIBE_FAIL");
         return false;
     }
 
-    LOG_PHASE("Whisper model load", true);
+    LOG_DEBUG("Voice", "Whisper model load");
     return true;
 }
 
@@ -132,7 +129,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
     g_state.inputDeviceIndex = aiConfig["voice"].value("input_device_index", -1);
 
     // 🔹 Ensure Whisper model is loaded
-    if (!ensureWhisperLoaded(aiConfig)) {
+    if (!loadWhisper(aiConfig)) {
         return "";
     }
     
@@ -156,7 +153,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
         close(old_stderr);
 #endif
         fclose(nul_file);
-        ErrorManager::report("ERR_VOICE_NO_CONTEXT");
+        VoiceRuntime::reportError("ERR_VOICE_NO_CONTEXT");
         return "";
     }
 
@@ -177,7 +174,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
 
     if (deviceIndex == paNoDevice || deviceIndex < 0 || deviceIndex >= Pa_GetDeviceCount()) {
         Pa_Terminate();
-        ErrorManager::report("ERR_VOICE_NO_CONTEXT");
+        VoiceRuntime::reportError("ERR_VOICE_NO_CONTEXT");
         return "";
     }
 
@@ -196,7 +193,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
     if (Pa_OpenStream(&stream, &inputParams, nullptr, 16000, 512,
                       paNoFlag, recordCallback, &data) != paNoError) {
         Pa_Terminate();
-        ErrorManager::report("ERR_VOICE_NO_CONTEXT");
+        VoiceRuntime::reportError("ERR_VOICE_NO_CONTEXT");
         return "";
     }
 
@@ -204,7 +201,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
     LOG_DEBUG("Voice", "Listening...");
     
     // ✅ Show popup when listening starts
-    notifyPopupActivity();
+    
 
     std::vector<float> rollingBuffer;
     auto lastSpeech  = std::chrono::steady_clock::now();
@@ -215,7 +212,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
     // ✅ Maximum listening time (prevents infinite listening)
     const int maxListeningMs = aiConfig["whisper"].value("max_listening_ms", 10000); // 10 seconds default
 
-    while (true) {
+    while (!VoiceRuntime::cancel.load()) {
         {
             std::lock_guard<std::mutex> lock(data.mtx);
             if (data.buffer.size() >= 8000) {
@@ -228,7 +225,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
                         speechStart = std::chrono::steady_clock::now();
                         inSpeech = true;
                         LOG_DEBUG("Voice", "Speech started");
-                        notifyPopupActivity();  // ✅ Keep popup alive during speech
+                          // ✅ Keep popup alive during speech
                     }
                     lastSpeech = std::chrono::steady_clock::now();
                     rollingBuffer.insert(rollingBuffer.end(), chunk.begin(), chunk.end());
@@ -254,7 +251,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
         auto totalListeningTime = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - listeningStart).count();
         
-        if (!inSpeech && totalListeningTime > maxListeningMs) {
+        if (totalListeningTime > maxListeningMs) {
             LOG_DEBUG("Voice", "Max listening timeout reached (" + std::to_string(maxListeningMs) + "ms) - no speech detected");
             break;
         }
@@ -273,7 +270,7 @@ std::string captureAndTranscribeSpeech(nlohmann::json& aiConfig) {
         // captured speech. On a no-speech timeout the idle timer is already
         // fading the popup out, and re-showing here would replay load_in on top
         // of that fade_out.
-        notifyPopupActivity();
+        
 
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         

@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 9
+#define GRIM_API_VERSION_MAJOR 11
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -87,13 +87,6 @@ typedef enum {
     GRIM_PERM_ALL = 0xFFFFFFFF
 } GrimPermission;
 
-// Voice parameters
-typedef struct {
-    float pitch;          // 0.5 - 2.0
-    float speed;          // 0.5 - 2.0
-    float volume;         // 0.0 - 1.0
-    const char* voice_id; // Speaker ID for multi-voice TTS
-} GrimVoiceParams;
 
 // All pointers are borrowed for the duration of the API call. The host copies
 // registration metadata and result data before returning. No STL crosses the ABI.
@@ -170,14 +163,7 @@ struct GrimToolRegistration {
 };
 
 
-enum GrimVoiceOperation : uint32_t {
-    GRIM_VOICE_CAPTURE = 0, GRIM_VOICE_HAS_STREAM_CONTEXT = 1, GRIM_VOICE_START_STREAM = 2,
-    GRIM_VOICE_XTTS_ENABLED = 3, GRIM_VOICE_LANGUAGE = 4, GRIM_VOICE_SYNTHESIZE_COQUI = 5,
-    GRIM_VOICE_PLAY_AUDIO = 6, GRIM_VOICE_CONFIG = 7, GRIM_VOICE_LIST_SAPI = 8,
-    GRIM_VOICE_SAPI_DEVICE = 9, GRIM_VOICE_PLAY_WAV = 10, GRIM_VOICE_IS_SPEAKING = 11,
-    GRIM_VOICE_CACHE_SHUTDOWN = 12, GRIM_VOICE_CACHE_INIT = 13,
-    GRIM_VOICE_PRECACHE_COMMON = 14, GRIM_VOICE_PATHS = 15
-};
+
 
 enum GrimUIPanelOperation : uint32_t {
     GRIM_UI_LIST = 0, GRIM_UI_INSPECT = 1, GRIM_UI_SHOW = 2,
@@ -188,10 +174,6 @@ enum GrimUIPanelOperation : uint32_t {
     GRIM_UI_HIDE_CURRENT = 8 // v3.14: guarded hide, with the same arguments as SHOW_CURRENT.
 };
 
-enum GrimInputOperation : uint32_t {
-    GRIM_INPUT_MOVE_MOUSE = 0, GRIM_INPUT_CLICK = 1, GRIM_INPUT_TYPE = 2,
-    GRIM_INPUT_KEY = 3
-};
 
 // Intent structure (matches your Intent struct)
 typedef struct {
@@ -287,10 +269,6 @@ typedef struct GrimPluginAPI {
     void (*send_response_colored)(const GrimPluginAPI* self, const char* text, uint32_t rgb_color);
     void (*show_notification)(const GrimPluginAPI* self, const char* title, const char* message);
     
-    // Voice synthesis (requires GRIM_PERM_VOICE)
-    GrimResult (*queue_tts)(const GrimPluginAPI* self, const char* text, const GrimVoiceParams* params);
-    GrimResult (*stop_tts)(const GrimPluginAPI* self);
-    bool (*is_speaking)(const GrimPluginAPI* self);
     
     // ========================================================================
     // Process Management (requires GRIM_PERM_PROCESS)
@@ -351,10 +329,6 @@ typedef struct GrimPluginAPI {
     const char* (*search_memory)(const GrimPluginAPI* self, const char* query);
     // value is presence bool. Retains legacy forget's check+flush, not deletion.
     const char* (*flush_memory_record_if_present)(const GrimPluginAPI* self, uint64_t id);
-    // v3.7: VOICE permission; cache lifecycle/precache also require FILESYSTEM.
-    // Optional object-valued JSON arguments; runtime-service JSON response.
-    // Host owns audio/configuration/stream/cache state. No command dispatch.
-    const char* (*voice_service)(const GrimPluginAPI* self, GrimVoiceOperation operation, const char* arguments_json);
     // v3.8: UI permission. Submits copied, stable-key panel requests or polls an
     // owned request. Always nonblocking. Host-owned grim-ui-panel-response v1
     // JSON; free with string_free. Null = invalid input, denied access, or failure.
@@ -382,11 +356,6 @@ typedef struct GrimPluginAPI {
                                    const char* resources_json, size_t size);
     // True only while this generation is the currently published provider.
     bool (*is_provider_current)(const GrimPluginAPI* self);
-    // v8.1: parsed input primitives. INPUT permission, active provider only.
-    // Request: object with op = available/move/click/type/key/combo and typed fields.
-    // Response: grim-runtime-service v1, value is availability/execution bool.
-    // No command parsing or presentation; release response with string_free.
-    const char* (*input_primitive)(const GrimPluginAPI* self, const char* request_json, size_t size);
     void* reserved[8];
     
 } GrimPluginAPI;
@@ -472,9 +441,6 @@ public:
     void showNotification(const char* title, const char* msg) { m_api->show_notification(m_api, title, msg); }
     
     // Voice
-    GrimResult queueTTS(const char* text, const GrimVoiceParams* params = nullptr) {
-        return m_api->queue_tts(m_api, text, params);
-    }
     
     // File operations
     

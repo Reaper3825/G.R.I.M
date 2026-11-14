@@ -1,4 +1,5 @@
 #include "voice_platform_queries.hpp"
+#include "runtime_state.hpp"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -16,9 +17,9 @@
 
 namespace GRIM::VoiceCommandServices {
 nlohmann::json paths() {
-    return {{"test_wav", "resources/test.wav"}, {"embeddings", "D:/G.R.I.M/resources/voices/embeddings"},
-        {"temp", "D:/G.R.I.M/resources/tts_out/temp"}, {"cache", "D:/G.R.I.M/resources/tts_out/cache"},
-        {"cache_index", "D:/G.R.I.M/resources/tts_out/cache_index.json"}};
+    return {{"test_wav", "resources/test.wav"}, {"embeddings", getGrimRootDir() + "/resources/voices/embeddings"},
+        {"temp", getGrimRootDir() + "/resources/tts_out/temp"}, {"cache", getGrimRootDir() + "/resources/tts_out/cache"},
+        {"cache_index", getGrimRootDir() + "/resources/tts_out/cache_index.json"}};
 }
 nlohmann::json listSapiVoices() {
     nlohmann::json result{{"com_ok", false}, {"enumerated", false}, {"count", 0}, {"voices", nlohmann::json::array()}};

@@ -1,10 +1,10 @@
 # Native GRIM tool plugins
 
-The current host requires plugin ABI v9. Rebuild all older plugin binaries
+The current host requires plugin ABI v11. Rebuild all older plugin binaries
 against [the current API](../docs/PLUGIN_API.md) before loading them.
 
 API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
-declares all nine standard panels; bootstrap registers host factories without
+declares seven standard panels; bootstrap registers host factories without
 creating their instances. Rebuild the host and UI plugin together for this
 migration. Older UI DLLs do not declare the full panel set. Dynamic surfaces
 and OSINT panels retain their current paths.
@@ -269,38 +269,11 @@ See [provider ownership, tools and validation](perception_plugin/README.md).
 
 ## Voice plugin
 
-`voice_plugin` supplies `voice`, `voice_stream`, `test_tts`, `list_voices`,
-`test_sapi`, `tts_device`, `nevermind`, `create_embedding`, `list_embeddings`,
-`clear_tts_cache`, and `reset_tts_cache` through API v3.7.
-
-    cmake -S plugins/voice_plugin -B .codex-build/voice-plugin -G "Visual Studio 17 2022" -A x64
-    cmake --build .codex-build/voice-plugin --config Release --target voice_plugin --parallel 2
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -VoicePluginDirectory .codex-build/voice-plugin/plugins
-
-Deploy `.codex-build/voice-plugin/plugins/voice_plugin.dll` into GRIM's `plugins/`
-folder after rebuilding the host for API v4.
-
-The host retains microphone/Whisper context, streaming and its shared default
-session state, voice configuration, synthesis/playback, SAPI queries, and cache
-lifecycle. The plugin retains command results, parsing, file listing/removal, and
-existing confirmation policy. It imports no host C++ or SAPI symbols. All tools
-declare VOICE permission; file-based commands also declare FILESYSTEM. Host cache
-lifecycle operations check both permissions.
-
-Original behavior remains: voice capture returns an unspoken transcript; TTS test
-defaults and status fields are unchanged; device queries and platform errors keep
-their previous results. Cache clear/reset keeps the existing paths and direct
-`.wav` removal rules. Only reset requests common-phrase regeneration.
-
-**Existing placeholders remain:** `nevermind` does not stop playback, and
-`create_embedding` does not send the bridge request. Missing embedding paths can
-still produce the existing dispatch exception. Metadata describes these limits.
-Loading/unloading the DLL does not start/stop host audio, streaming, or cache state.
-
-Tests cover all eleven commands using controlled capture/audio/native-query/cache
-endpoints and private temporary files. They do not record audio, play sound, start
-models, or touch the real voice cache. The production native SAPI helpers receive
-a separate syntax check using the installed Windows SDK.
+API v10 moves capture, transcription, wake detection, TTS, playback, caches and
+bridge processes into the provider. The former host-forwarding command names and
+voice ABI services are removed. Loading is idle; explicit tools configure and
+start runtime work. See [voice provider documentation](voice_plugin/README.md)
+for the tools, breaking application connections and standalone lifecycle tests.
 
 ## UI plugin
 
@@ -345,15 +318,15 @@ No model, renderer, training, package installation, or application startup occur
 
 ## Input plugin
 
-API v9 supplies four tools: `move_mouse`, `click`, `type`, and `key`. The plugin
-owns parsing/results and the host input primitive directly calls InputController.
-It no longer depends on perception initialization. `click_on` is retired with its
-legacy observation bridge; targeting geometry and checked input remain testable
-under `core/input`.
+API v11 moves native input into the provider and removes the host forwarding
+slot. Four Debug tools remain: `move_mouse`, `click`, `type`, and `key`.
+See [ownership and validation](input_plugin/README.md).
 
-Run `tests/run_plugin_shutdown.ps1 -BuildInputFixture` and
-`tests/run_click_target.ps1` for isolated input and targeting checks.
+## OSINT plugin
 
+API v11 consolidates commands, collection, cache, jobs and Python bridges under
+`osint_plugin`. Host consumers read copied tool results. Seven Ignore tools remain;
+`osint_show_ui` remains unregistered. See [ownership and validation](osint_plugin/README.md).
 
 ## Scheduling plugin (API v8)
 

@@ -3,14 +3,20 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <stdexcept>
+#include <mutex>
 
 namespace {
+enum GrimInputOperation { GRIM_INPUT_MOVE_MOUSE, GRIM_INPUT_CLICK, GRIM_INPUT_TYPE, GRIM_INPUT_KEY };
+std::mutex operationMutex;
 const GrimPluginAPI* host = nullptr;
 template<GrimInputOperation Operation>
 GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
+    std::lock_guard<std::mutex> lock(operationMutex);
     CommandResult value;
+    if (!host || !host->has_permission(host, GRIM_PERM_INPUT) || !host->is_provider_current(host))
+        return GRIM_ERROR_PERMISSION_DENIED;
     if (request->arguments_size > 65536 || (request->arguments_size && !request->arguments)) {
-        value = {false, "Host input service unavailable or denied", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
+        value = {false, "Input request unavailable or invalid", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
     } else try {
         const std::string argument = request->arguments_size ? std::string(request->arguments, request->arguments_size) : std::string{};
         if constexpr (Operation == GRIM_INPUT_MOVE_MOUSE) value = inputCommands::cmdInputMoveMouse(argument);
@@ -18,7 +24,7 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
         if constexpr (Operation == GRIM_INPUT_TYPE) value = inputCommands::cmdInputType(argument);
         if constexpr (Operation == GRIM_INPUT_KEY) value = inputCommands::cmdInputKey(argument);
     } catch (const inputCommands::ServiceUnavailable&) {
-        value = {false, "Host input service unavailable or denied", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
+        value = {false, "Input request unavailable or invalid", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
     }
     GrimToolResult result;
     result.success = value.success; result.message = value.message.c_str();
@@ -30,22 +36,21 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
 
 extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
     static const GrimPluginInfo info{GRIM_API_VERSION, "Input Plugin", "1.0.0", "GRIM Project",
-        "Mouse and keyboard input through host device primitives", GRIM_PERM_INPUT};
+        "Mouse and keyboard input through provider-owned device primitives", GRIM_PERM_INPUT};
     return &info;
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        !api->input_primitive) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->has_permission || !api->is_provider_current) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
-    inputCommands::host = api;
     GrimToolRegistration tools[4];
     tools[0].handler = call<GRIM_INPUT_MOVE_MOUSE>; tools[1].handler = call<GRIM_INPUT_CLICK>;
     tools[2].handler = call<GRIM_INPUT_TYPE>; tools[3].handler = call<GRIM_INPUT_KEY>;
     const char* ids[] = {"move_mouse", "click", "type", "key"};
-    const char* descriptions[] = {"Move the pointer to physical desktop coordinates using the existing host input interface",
-        "Click a mouse button at the current pointer position using the existing host input interface",
-        "Type raw text into the focused application using the existing host input interface",
-        "Tap a key or plus-separated key combination using the existing host input interface"};
+    const char* descriptions[] = {"Move the pointer to physical desktop coordinates using the provider-owned native backend",
+        "Click a mouse button at the current pointer position using the provider-owned native backend",
+        "Type raw text into the focused application using the provider-owned native backend",
+        "Tap a key or plus-separated key combination using the provider-owned native backend"};
     const char* usages[] = {"move_mouse <x> <y>", "click [left|right|middle]", "type <text>",
         "key <key|key+key>"};
     const char* summaries[] = {"Move the pointer to specified desktop coordinates",
@@ -54,9 +59,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Press a key or combination of keys"};
     const char* names[] = {"coordinates", "button", "text", "keys"};
     const char* parameterDescriptions[] = {"Two signed integers, comma- or whitespace-separated; uses existing integer-prefix parsing",
-        "Button name; omitted means left; retains existing host interpretation",
-        "Raw text, including surrounding whitespace; host types with a 15 ms delay",
-        "Host key name, or a plus-separated combination; retains existing host key handling"};
+        "Button name; omitted means left; retains existing native interpretation",
+        "Raw text, including surrounding whitespace; provider types with a 15 ms delay",
+        "Native key name, or a plus-separated combination; retains existing native key handling"};
     const char* tags[] = {"input", "computer_control"};
     GrimToolParameter parameters[4];
     for (size_t i = 0; i < 4; ++i) {
@@ -74,4 +79,4 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     }
     return api->register_tools(api, tools, 4);
 }
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; inputCommands::host = nullptr; }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }

@@ -25,7 +25,7 @@ def backup_file(filepath):
 def optimize_coqui_bridge():
     """Apply optimizations to coqui_bridge.py"""
     
-    bridge_path = Path("D:/G.R.I.M/resources/python/coqui_bridge.py")
+    bridge_path = Path("D:/G.R.I.M/plugins/voice_plugin/python/coqui_bridge.py")
     
     if not bridge_path.exists():
         print(f"❌ ERROR: coqui_bridge.py not found at {bridge_path}")
