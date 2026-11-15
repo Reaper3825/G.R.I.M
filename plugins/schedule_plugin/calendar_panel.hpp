@@ -1,29 +1,33 @@
 #pragma once
 #include "schedule_provider.hpp"
 #include "core/calendar_time.hpp"
-#include "ui/ui_theme.hpp"
+#include "core/input_parser.hpp"
+#include "ui/primitives/ui_panel.hpp"
+#include "ui/primitives/ui_button.hpp"
+#include "ui/primitives/ui_inputbox.hpp"
+#include "ui/primitives/ui_scrollbox.hpp"
+#include "ui/overlay_renderer.hpp"
 #include <array>
-#include <map>
 #include <random>
 #include <sstream>
 
 namespace grim::scheduling {
-class CalendarPanel {
+class CalendarPanel : public UIPanel {
     using Json = nlohmann::json;
     const GrimPluginAPI* api_;
     Provider& provider_;
-    GrimTimerHandle timer_ = nullptr;
-    uint64_t runtime_ = 0, revision_ = 1;
-    bool visible_ = false;
-    float width_ = 1148, height_ = 558;
     std::chrono::year_month month_;
     std::chrono::sys_days day_;
     std::chrono::steady_clock::time_point nextRefresh_{};
-    struct Draft { std::string value; uint64_t revision = 1; };
-    std::map<std::string, Draft> drafts_{{"title", {}}, {"start", {}}, {"end", {}}};
     std::vector<Json> entries_;
     std::array<int, 42> counts_{};
     std::string selected_, status_;
+    std::shared_ptr<UIScrollBox> scroll_;
+    std::shared_ptr<UIInputBox> titleInput_, startInput_, endInput_;
+    std::shared_ptr<UIButton> previousMonth_, today_, nextMonth_, add_, previous_, next_, delete_;
+    std::array<std::shared_ptr<UIButton>, 42> days_;
+    struct Label { std::string text; Vec2 position, size; uint32_t color; };
+    std::vector<Label> labels_;
 
     static int64_t milliseconds(std::chrono::sys_days day) {
         return std::chrono::duration_cast<std::chrono::milliseconds>(day.time_since_epoch()).count();
@@ -33,13 +37,14 @@ class CalendarPanel {
         if (year < 1 || year > 9999) throw std::invalid_argument("Calendar date must be in years 1..9999");
         day_ = day;
         selected_.clear();
-        drafts_.at("start") = {formatCalendarTime(milliseconds(day) + 9 * 3600000), drafts_.at("start").revision + 1};
-        drafts_.at("end") = {formatCalendarTime(milliseconds(day) + 10 * 3600000), drafts_.at("end").revision + 1};
+        startInput_->setText(formatCalendarTime(milliseconds(day) + 9 * 3600000));
+        endInput_->setText(formatCalendarTime(milliseconds(day) + 10 * 3600000));
     }
     Json request(const std::string& op, const Json& args) {
         auto result = provider_.execute(op, args);
         if (!result.at("success").get<bool>()) throw std::runtime_error(result.at("message").get<std::string>());
-        if (result.contains("resource_error")) throw std::runtime_error(result.at("resource_error").get<std::string>());
+        if (result.contains("resource_error"))
+            api_->log(api_, GRIM_LOG_ERROR, result.at("resource_error").get_ref<const std::string&>().c_str());
         return result;
     }
     void refresh() {
@@ -73,191 +78,166 @@ class CalendarPanel {
         entries_ = std::move(entries);
         counts_ = counts;
     }
-    void edit(const std::string& id, const Json& value) {
-        auto& draft = drafts_.at(id);
-        if (value.at("value_revision").get<uint64_t>() == draft.revision) {
-            const auto text = value.at("value").get<std::string>();
-            if (text.size() > 16384) throw std::invalid_argument("Calendar input is too long");
-            draft.value = text;
-        }
+    template<class Action> void act(Action action) {
+        try { action(); refresh(); }
+        catch (const std::exception& error) { status_ = error.what(); api_->log(api_, GRIM_LOG_ERROR, error.what()); }
+        nextRefresh_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     }
-    void action(const Json& event) {
-        for (auto it = event.at("values").begin(); it != event.at("values").end(); ++it) edit(it.key(), it.value());
-        const auto& action = event.at("action");
-        const auto op = action.at("op").get<std::string>();
-        if (op == "day") chooseDay(std::chrono::sys_days{std::chrono::days{action.at("day").get<int64_t>()}});
-        else if (op == "month") {
-            const auto next = month_ + std::chrono::months{action.at("offset").get<int>()};
-            if (int(next.year()) < 1 || int(next.year()) > 9999) throw std::invalid_argument("Calendar month is out of range");
-            month_ = next;
-            chooseDay(std::chrono::sys_days{month_ / 1});
-        } else if (op == "today") {
-            const auto today = std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now());
-            const std::chrono::year_month_day date{today}; month_ = date.year() / date.month(); chooseDay(today);
-        } else if (op == "select") selected_ = action.at("id").get<std::string>();
-        else if (op == "delete") {
-            request("cancel", {{"id", action.at("id")}, {"revision", action.at("revision")}});
-            status_ = "Event deleted.";
-        } else if (op == "add") {
-            int64_t start, end;
-            const auto& title = drafts_.at("title").value;
-            if (title.find_first_not_of(" \t\r\n") == std::string::npos || title.size() > 120)
-                throw std::invalid_argument("Enter a title (1-120 bytes).");
-            if (!parseCalendarTime(drafts_.at("start").value, start) || !parseCalendarTime(drafts_.at("end").value, end) || end <= start)
-                throw std::invalid_argument("Use valid UTC dates; end must be after start.");
-            std::random_device random;
-            std::ostringstream key; key << "calendar-" << std::hex;
-            for (int i = 0; i < 4; ++i) key << random() << '-';
-            auto saved = request("create", {{"id", key.str()}, {"kind", "event"}, {"title", title},
-                {"start_utc_ms", start}, {"end_utc_ms", end}});
-            drafts_.at("title") = {"", drafts_.at("title").revision + 1};
-            day_ = std::chrono::floor<std::chrono::days>(std::chrono::sys_time<std::chrono::milliseconds>{std::chrono::milliseconds{start}});
-            const std::chrono::year_month_day date{day_}; month_ = date.year() / date.month();
-            selected_ = saved.at("item").at("id").get<std::string>();
-            status_ = "Event saved.";
-        } else throw std::invalid_argument("Unknown Calendar action");
-        refresh();
+    void changeMonth(int offset) {
+        const auto next = month_ + std::chrono::months{offset};
+        if (int(next.year()) < 1 || int(next.year()) > 9999) throw std::invalid_argument("Calendar month is out of range");
+        month_ = next;
+        chooseDay(std::chrono::sys_days{month_ / 1});
     }
-    void publish() {
-        if (!runtime_) throw std::logic_error("Calendar has not activated");
-        ++revision_;
-        const auto text = definition().dump();
-        if (api_->update_panel_definition(api_, text.data(), text.size()) != GRIM_OK)
-            throw std::runtime_error("Calendar definition update rejected");
-    }
-    static void tick(uint64_t, void* context) noexcept {
-        auto& self = *static_cast<CalendarPanel*>(context);
-        try { self.pump(); }
-        catch (const std::exception& error) { self.api_->log(self.api_, GRIM_LOG_ERROR, error.what()); }
-    }
-public:
-    CalendarPanel(const GrimPluginAPI* api, Provider& provider) : api_(api), provider_(provider) {
-        if (!api_ || !api_->register_panel_definition || !api_->update_panel_definition || !api_->poll_panel_events ||
-            !api_->string_free || !api_->create_timer || !api_->cancel_timer || !api_->log)
-            throw std::invalid_argument("Calendar requires copied panel, timer and logging services");
+    void chooseToday() {
         const auto today = std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now());
-        const std::chrono::year_month_day date{today}; month_ = date.year() / date.month(); chooseDay(today);
-        status_ = "Calendar loading.";
+        const std::chrono::year_month_day date{today};
+        month_ = date.year() / date.month();
+        chooseDay(today);
     }
-    ~CalendarPanel() {
-        if (timer_ && api_->cancel_timer(api_, timer_) != GRIM_OK)
-            api_->log(api_, GRIM_LOG_ERROR, "Calendar timer cancellation failed");
+    auto selectedEntry() {
+        return std::find_if(entries_.begin(), entries_.end(), [&](const auto& e) { return e.at("id") == selected_; });
     }
-    void prepare() {
-        const auto text = definition().dump();
-        if (api_->register_panel_definition(api_, text.data(), text.size()) != GRIM_OK)
-            throw std::runtime_error("Calendar panel registration rejected");
-        timer_ = api_->create_timer(api_, 50, true, tick, this);
-        if (!timer_) throw std::runtime_error("Calendar event timer creation failed");
+    void selectRelative(int offset) {
+        if (entries_.empty()) return;
+        const auto selected = selectedEntry();
+        const auto index = selected == entries_.end() ? 0 : int(selected - entries_.begin());
+        selected_ = entries_[std::clamp(index + offset, 0, int(entries_.size()) - 1)].at("id").get<std::string>();
     }
-    void pump() {
-        const char* raw = api_->poll_panel_events(api_);
-        if (!raw) throw std::runtime_error("Calendar event polling failed");
-        struct Release { const GrimPluginAPI* api; const char* text; ~Release() { api->string_free(api, text); } } release{api_, raw};
-        const auto response = Json::parse(raw);
-        if (response.at("version") != 1) throw std::runtime_error("Unsupported Calendar event version");
-        bool dirty = false;
-        for (const auto& event : response.at("events")) {
-            if (event.at("panel_id") != "calendar") throw std::runtime_error("Foreign panel event delivered to Calendar");
-            const auto type = event.at("type").get<std::string>();
-            if (type == "activated") {
-                if (!event.at("success").get<bool>()) throw std::runtime_error(event.at("error").get<std::string>());
-                runtime_ = event.at("runtime_id").get<uint64_t>();
-                dirty = true;
-                continue;
-            }
-            if (!runtime_ || event.at("runtime_id").get<uint64_t>() != runtime_) continue;
-            try {
-                if (type == "visibility") visible_ = event.at("visible").get<bool>();
-                else if (type == "geometry") { width_ = event.at("width").get<float>(); height_ = event.at("height").get<float>(); }
-                else if (type == "change") { edit(event.at("widget_id").get<std::string>(), event); continue; }
-                else if (type == "click") action(event);
-                else if (type == "error") throw std::runtime_error(event.at("error").get<std::string>());
-                else throw std::runtime_error("Unknown Calendar event");
-            } catch (const std::exception& error) {
-                status_ = error.what();
-                api_->log(api_, GRIM_LOG_ERROR, error.what());
-            }
-            dirty = true;
-        }
-        if (runtime_ && visible_ && std::chrono::steady_clock::now() >= nextRefresh_) {
-            try { refresh(); if (status_ == "Calendar loading.") status_.clear(); }
-            catch (const std::exception& error) { status_ = error.what(); api_->log(api_, GRIM_LOG_ERROR, error.what()); }
-            nextRefresh_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-            dirty = true;
-        }
-        if (runtime_ && dirty) publish();
+    void deleteSelected() {
+        const auto selected = selectedEntry();
+        if (selected == entries_.end()) return;
+        request("cancel", {{"id", selected->at("id")}, {"revision", selected->at("revision")}});
+        status_ = "Event deleted.";
     }
-    Json definition() const {
+    void addEvent() {
+        int64_t start, end;
+        const auto title = titleInput_->getText();
+        if (title.find_first_not_of(" \t\r\n") == std::string::npos || title.size() > 120)
+            throw std::invalid_argument("Enter a title (1-120 bytes).");
+        if (!parseCalendarTime(startInput_->getText(), start) || !parseCalendarTime(endInput_->getText(), end) || end <= start)
+            throw std::invalid_argument("Use valid UTC dates; end must be after start.");
+        std::random_device random;
+        std::ostringstream key; key << "calendar-" << std::hex;
+        for (int i = 0; i < 4; ++i) key << random() << '-';
+        auto saved = request("create", {{"id", key.str()}, {"kind", "event"}, {"title", title},
+            {"start_utc_ms", start}, {"end_utc_ms", end}});
+        titleInput_->clear();
+        day_ = std::chrono::floor<std::chrono::days>(std::chrono::sys_time<std::chrono::milliseconds>{std::chrono::milliseconds{start}});
+        const std::chrono::year_month_day date{day_}; month_ = date.year() / date.month();
+        selected_ = saved.at("item").at("id").get<std::string>();
+        status_ = "Event saved.";
+    }
+    std::shared_ptr<UIButton> button(const std::string& text, std::function<void()> action) {
+        auto result = std::make_shared<UIButton>(text, [this, action = std::move(action)] { act(action); });
+        addChild(result);
+        return result;
+    }
+    void layout() {
         using namespace UITheme;
-        const float width = (std::max)(1.0f, width_ - 40), gridWidth = width >= 900 ? width * 0.46f : width;
+        const auto content = getContentRect();
+        scroll_->setPosition(content.origin); scroll_->setSize(content.size);
+        const float width = (std::max)(1.0f, content.size.x - 40);
         const bool wide = width >= 900;
-        const float gridHeight = wide ? (std::max)(360.0f, height_ - 130) : 360.0f;
+        const float gridWidth = wide ? width * 0.46f : width;
+        const float gridHeight = wide ? (std::max)(360.0f, content.size.y - 130) : 360.0f;
         const float rowHeight = (gridHeight - 100) / 6;
-        const float x = 12, y = 8, editorX = wide ? x + gridWidth + 24 : x;
-        const float editorY = wide ? y : y + gridHeight + 70, editorWidth = wide ? width - gridWidth - 24 : width;
-        Json result = {{"version", 1}, {"panel_id", "calendar"}, {"runtime_id", runtime_}, {"revision", revision_},
-            {"title", "Calendar"}, {"width", 1160}, {"height", 600},
-            {"content_height", wide ? (std::max)(gridHeight + 70, 490.0f) : gridHeight + 560}, {"widgets", Json::array()}};
-        auto& nodes = result["widgets"];
-        const auto node = [&](std::string id, const char* type, std::string text, float px, float py, float w, float h,
-                              uint32_t color, Json action = Json::object(), uint64_t valueRevision = 0) {
-            nodes.push_back({{"id", std::move(id)}, {"type", type}, {"text", std::move(text)}, {"rect", {px, py, w, h}},
-                {"color", color}, {"action", std::move(action)}, {"value_revision", valueRevision}});
+        scroll_->setContentHeight(wide ? (std::max)(gridHeight + 70, 490.0f) : gridHeight + 560);
+        const float x = content.origin.x + 12, y = content.origin.y + 8 - scroll_->getScrollOffset();
+        const float editorX = wide ? x + gridWidth + 24 : x;
+        const float editorY = wide ? y : y + gridHeight + 70;
+        const float editorWidth = wide ? width - gridWidth - 24 : width;
+        auto place = [](Widget& widget, float px, float py, float w, float h) {
+            widget.setPosition(px, py); widget.setSize(w, h);
+        };
+        labels_.clear();
+        auto label = [&](std::string text, float px, float py, float w, uint32_t color = Colors::TextPrimary) {
+            labels_.push_back({std::move(text), {px, py}, {w, 24}, color});
         };
         const char* months[] = {"January","February","March","April","May","June","July","August","September","October","November","December"};
-        node("month", "label", std::string(months[unsigned(month_.month()) - 1]) + " " + std::to_string(int(month_.year())),
-             x, y, gridWidth, 24, Colors::TextPrimary);
+        label(std::string(months[unsigned(month_.month()) - 1]) + " " + std::to_string(int(month_.year())), x, y, gridWidth);
         const float nav = (std::min)(100.0f, (gridWidth - 24) / 3);
-        node("previous-month", "button", "< Month", x, y + 32, nav, 28, Colors::WidgetBg, {{"op", "month"}, {"offset", -1}});
-        node("today", "button", "Today", x + (gridWidth - nav) / 2, y + 32, nav, 28, Colors::WidgetBg, {{"op", "today"}});
-        node("next-month", "button", "Month >", x + gridWidth - nav, y + 32, nav, 28, Colors::WidgetBg, {{"op", "month"}, {"offset", 1}});
-        const char* days[] = {"Mon","Tue","Wed","Thu","Fri","Sat","Sun"};
-        for (int i = 0; i < 7; ++i)
-            node("weekday-" + std::to_string(i), "label", days[i], x + i * gridWidth / 7, y + 76, gridWidth / 7, 24, Colors::TextSecondary);
-        for (size_t i = 0; i < 42; ++i) {
+        place(*previousMonth_, x, y + 32, nav, 28);
+        place(*today_, x + (gridWidth - nav) / 2, y + 32, nav, 28);
+        place(*nextMonth_, x + gridWidth - nav, y + 32, nav, 28);
+        const char* weekdays[] = {"Mon","Tue","Wed","Thu","Fri","Sat","Sun"};
+        for (int i = 0; i < 7; ++i) label(weekdays[i], x + float(i) * gridWidth / 7, y + 76, gridWidth / 7, Colors::TextSecondary);
+        for (size_t i = 0; i < days_.size(); ++i) {
             const auto date = calendarGridStart(month_) + std::chrono::days{int(i)};
-            auto label = std::to_string(unsigned(std::chrono::year_month_day{date}.day()));
-            if (counts_[i] && gridWidth / 7 >= 64) label += " (" + std::to_string(counts_[i]) + ")";
-            node("day-" + std::to_string(i), "button", label, x + float(i % 7) * (gridWidth + 10) / 7,
-                y + 100 + float(i / 7) * rowHeight, (gridWidth - 60) / 7, rowHeight - 10,
-                date == day_ ? Colors::Primary : Colors::WidgetBg, {{"op", "day"}, {"day", date.time_since_epoch().count()}});
+            auto text = std::to_string(unsigned(std::chrono::year_month_day{date}.day()));
+            if (counts_[i] && gridWidth / 7 >= 64) text += " (" + std::to_string(counts_[i]) + ")";
+            days_[i]->setText(text);
+            days_[i]->setColors(date == day_ ? Colors::Primary : Colors::WidgetBg, Colors::WidgetBgHover, Colors::WidgetBgActive);
+            place(*days_[i], x + float(i % 7) * (gridWidth + 10) / 7, y + 100 + float(i / 7) * rowHeight,
+                  (gridWidth - 60) / 7, rowHeight - 10);
         }
-        node("selected-day", "label", "Selected: " + formatCalendarTime(milliseconds(day_)).substr(0,10) + " UTC",
-             x, y + 110 + 6 * rowHeight, gridWidth, 24, Colors::TextPrimary);
-        const auto label = [&](const char* id, float offset, const std::string& text) {
-            node(id, "label", text, editorX, editorY + offset, editorWidth, 24, Colors::TextPrimary);
-        };
-        label("header", 0, "Saved local calendar | UTC");
-        label("title-label", 30, "Title"); label("start-label", 86, "Start (UTC)"); label("end-label", 142, "End (UTC)");
-        for (const auto& field : std::array<std::pair<const char*, float>,3>{{{"title",52},{"start",108},{"end",164}}}) {
-            const auto& draft = drafts_.at(field.first);
-            node(field.first, "input", draft.value, editorX, editorY + field.second, editorWidth, 28,
-                Colors::TextPrimary, Json::object(), draft.revision);
-        }
-        node("add", "button", "Add event", editorX, editorY + 210, 120, 28, Colors::WidgetBg, {{"op", "add"}});
-        label("status", 254, status_);
-        auto selected = std::find_if(entries_.begin(), entries_.end(), [&](const auto& e) { return e.at("id") == selected_; });
-        if (selected == entries_.end()) label("empty", 296, entries_.empty() ? "No events on this day." : "Select an event.");
+        label("Selected: " + formatCalendarTime(milliseconds(day_)).substr(0,10) + " UTC", x, y + 110 + 6 * rowHeight, gridWidth);
+        auto editorLabel = [&](const std::string& text, float offset) { label(text, editorX, editorY + offset, editorWidth); };
+        editorLabel("Saved local calendar | UTC", 0);
+        editorLabel("Title", 30); editorLabel("Start (UTC)", 86); editorLabel("End (UTC)", 142);
+        place(*titleInput_, editorX, editorY + 52, editorWidth, 28);
+        place(*startInput_, editorX, editorY + 108, editorWidth, 28);
+        place(*endInput_, editorX, editorY + 164, editorWidth, 28);
+        place(*add_, editorX, editorY + 210, 120, 28);
+        editorLabel(status_, 254);
+        const auto selected = selectedEntry();
+        delete_->setVisible(selected != entries_.end());
+        previous_->setVisible(!entries_.empty()); next_->setVisible(!entries_.empty());
+        if (selected == entries_.end()) editorLabel(entries_.empty() ? "No events on this day." : "Select an event.", 296);
         else {
-            label("event-index", 290, "Event " + std::to_string(selected - entries_.begin() + 1) + " of " + std::to_string(entries_.size()));
-            label("event-title", 316, selected->at("title").get<std::string>());
-            label("event-start", 348, "Start: " + formatCalendarTime(selected->at("start_utc_ms").get<int64_t>()) + " UTC");
-            label("event-end", 374, "End: " + formatCalendarTime(selected->at("end_utc_ms").get<int64_t>()) + " UTC");
-            node("delete", "button", editorWidth < 400 ? "Delete" : "Delete event",
-                editorX + 2 * (editorWidth + 12) / 3, editorY + 426, (editorWidth - 24) / 3, 28, Colors::WidgetBg,
-                {{"op", "delete"}, {"id", selected->at("id")}, {"revision", selected->at("revision")}});
+            editorLabel("Event " + std::to_string(selected - entries_.begin() + 1) + " of " + std::to_string(entries_.size()), 290);
+            editorLabel(selected->at("title").get<std::string>(), 316);
+            editorLabel("Start: " + formatCalendarTime(selected->at("start_utc_ms").get<int64_t>()), 348);
+            editorLabel("End: " + formatCalendarTime(selected->at("end_utc_ms").get<int64_t>()), 374);
         }
-        if (!entries_.empty()) {
-            auto index = size_t{0};
-            if (selected != entries_.end()) index = size_t(selected - entries_.begin());
-            const size_t previous = index > 0 ? index - 1 : 0, next = (std::min)(index + 1, entries_.size() - 1);
-            node("previous", "button", "Previous", editorX, editorY + 426, (editorWidth - 24) / 3, 28,
-                Colors::WidgetBg, {{"op", "select"}, {"id", entries_[previous].at("id")}});
-            node("next", "button", "Next", editorX + (editorWidth + 12) / 3, editorY + 426, (editorWidth - 24) / 3, 28,
-                Colors::WidgetBg, {{"op", "select"}, {"id", entries_[next].at("id")}});
+        place(*previous_, editorX, editorY + 426, (editorWidth - 24) / 3, 28);
+        place(*next_, editorX + (editorWidth + 12) / 3, editorY + 426, (editorWidth - 24) / 3, 28);
+        place(*delete_, editorX + 2 * (editorWidth + 12) / 3, editorY + 426, (editorWidth - 24) / 3, 28);
+    }
+public:
+    CalendarPanel(const GrimPluginAPI* api, Provider& provider)
+        : UIPanel("Calendar", true, "calendar"), api_(api), provider_(provider) {
+        if (!api_ || !api_->log) throw std::invalid_argument("Calendar requires provider logging");
+        setPosition(240, 180); setSize(1160, 600); setVisible(false);
+        scroll_ = std::make_shared<UIScrollBox>(); addChild(scroll_);
+        titleInput_ = std::make_shared<UIInputBox>(); addChild(titleInput_);
+        startInput_ = std::make_shared<UIInputBox>(); addChild(startInput_);
+        endInput_ = std::make_shared<UIInputBox>(); addChild(endInput_);
+        previousMonth_ = button("< Month", [this] { changeMonth(-1); });
+        today_ = button("Today", [this] { chooseToday(); });
+        nextMonth_ = button("Month >", [this] { changeMonth(1); });
+        for (size_t i = 0; i < days_.size(); ++i)
+            days_[i] = button("", [this, i] { chooseDay(calendarGridStart(month_) + std::chrono::days{int(i)}); });
+        add_ = button("Add event", [this] { addEvent(); });
+        previous_ = button("Previous", [this] { selectRelative(-1); });
+        next_ = button("Next", [this] { selectRelative(1); });
+        delete_ = button("Delete event", [this] { deleteSelected(); });
+        chooseToday();
+        layout();
+    }
+    void setVisible(bool value) override {
+        if (value && !isVisible()) nextRefresh_ = {};
+        UIPanel::setVisible(value);
+    }
+    void update(const InputState& input, float dt) override {
+        if (!isVisible()) return;
+        if (!isMinimized() && std::chrono::steady_clock::now() >= nextRefresh_) act([] {});
+        layout();
+        UIPanel::update(input, dt);
+        layout();
+    }
+    bool drawOverlay(OverlayRenderer& renderer) override {
+        if (!UIPanel::drawOverlay(renderer)) return false;
+        layout();
+        for (const auto& child : children)
+            if (child->isVisible()) child->drawOverlay(renderer, getPosition());
+        for (const auto& label : labels_) {
+            renderer.pushClipRect(label.position, label.size);
+            renderer.drawText(label.position, label.text, label.color);
+            renderer.popClipRect();
         }
-        return result;
+        renderer.popClipRect();
+        return true;
     }
 };
 }

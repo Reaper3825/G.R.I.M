@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 
 #include "helpers/key.hpp"
 #include <atomic>
@@ -31,29 +32,29 @@ struct ActionDefinition {
     Binding defaultBinding;
 };
 
-const std::vector<ActionDefinition>& actions();
-std::optional<ActionDefinition> action(const std::string& actionId);
+GRIM_HOST_API const std::vector<ActionDefinition>& actions();
+GRIM_HOST_API std::optional<ActionDefinition> action(const std::string& actionId);
 
 std::string toConfigString(const Binding& binding);
 std::string toDisplayString(const Binding& binding);
 std::optional<Binding> fromConfigString(const std::string& value);
 std::optional<Binding> capturePressedBinding(const InputState& input);
 
-Binding bindingFromConfig(const nlohmann::json& config, const std::string& actionId);
-void setBindingInConfig(nlohmann::json& config,
+GRIM_HOST_API Binding bindingFromConfig(const nlohmann::json& config, const std::string& actionId);
+GRIM_HOST_API void setBindingInConfig(nlohmann::json& config,
                         const std::string& actionId,
                         const std::optional<Binding>& binding);
-void resetBindingsInConfig(nlohmann::json& config);
-std::optional<std::string> findConflict(const nlohmann::json& config,
+GRIM_HOST_API void resetBindingsInConfig(nlohmann::json& config);
+GRIM_HOST_API std::optional<std::string> findConflict(const nlohmann::json& config,
                                         const std::string& actionId,
                                         const Binding& binding);
 
-void loadRuntimeConfig(const nlohmann::json& config);
+GRIM_HOST_API void loadRuntimeConfig(const nlohmann::json& config);
 bool wasPressed(const std::string& actionId);
 bool isDown(const std::string& actionId);
 
 void beginCapture();
-void endCapture();
+GRIM_HOST_API void endCapture();
 bool isCaptureActive();
 
 } // namespace GRIM::InputBindings

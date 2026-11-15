@@ -51,6 +51,7 @@ void UIRoot::shutdown()
         if (!panel->getPanelKey().empty()) removePanel(panel->getPanelKey());
     m_panels.clear();
     m_panelKeyMap.clear();
+    m_ownedPanels.clear();
     m_panelFactories.clear();
     m_panelCleanups.clear();
     synchronizePanelResources(); // Remove resources now that panel instances are gone.
@@ -109,7 +110,7 @@ void UIRoot::update(const InputState& input, float dt)
         router.focus.panel != pointerPanel) router.focus = {};
     const uint64_t keyboardPanel = router.popup ? router.popup.panel :
         router.focus ? router.focus.panel : pointerPanel;
-    std::shared_ptr<UIPanel> clickedPanel;
+    UIPanel* clickedPanel = nullptr;
     for (auto it = panels.rbegin(); it != panels.rend(); ++it) {
         const auto& panel = *it;
         if (!panel || !panel->isVisible()) continue;

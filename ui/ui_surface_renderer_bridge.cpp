@@ -20,7 +20,7 @@ void UISurfaceRendererBridge::install() {
                     if (!spec) return;
                     auto existing = UIRoot::get().getPanelByKey(surface_id);
                     if (existing) {
-                        if (auto* dynamic = dynamic_cast<DynamicSurfacePanel*>(existing.get()))
+                        if (auto* dynamic = dynamic_cast<DynamicSurfacePanel*>(existing))
                             dynamic->updateSpec(*spec);
                         else LOG_ERROR("UI", "Surface key collides with host panel: " + surface_id);
                         return;
@@ -33,7 +33,7 @@ void UISurfaceRendererBridge::install() {
             case SurfaceEvent::Shown:
                 UIRoot::get().postTask([surface_id]() {
                     auto panel = UIRoot::get().getPanelByKey(surface_id);
-                    if (dynamic_cast<DynamicSurfacePanel*>(panel.get()))
+                    if (dynamic_cast<DynamicSurfacePanel*>(panel))
                         UIRoot::get().setVisible(surface_id, true);
                 });
                 break;
@@ -41,7 +41,7 @@ void UISurfaceRendererBridge::install() {
             case SurfaceEvent::Hidden:
                 UIRoot::get().postTask([surface_id]() {
                     auto panel = UIRoot::get().getPanelByKey(surface_id);
-                    if (dynamic_cast<DynamicSurfacePanel*>(panel.get()))
+                    if (dynamic_cast<DynamicSurfacePanel*>(panel))
                         UIRoot::get().setVisible(surface_id, false);
                 });
                 break;
@@ -52,7 +52,7 @@ void UISurfaceRendererBridge::install() {
                     if (!spec) return;
                     auto existing = UIRoot::get().getPanelByKey(surface_id);
                     if (!existing) return;
-                    auto* dynamic = dynamic_cast<DynamicSurfacePanel*>(existing.get());
+                    auto* dynamic = dynamic_cast<DynamicSurfacePanel*>(existing);
                     if (!dynamic) return;
                     dynamic->updateSpec(*spec);
                     UIRoot::get().setVisible(surface_id, spec->visibility == VisibilityState::Visible);
@@ -61,7 +61,7 @@ void UISurfaceRendererBridge::install() {
             case SurfaceEvent::Destroyed:
                 UIRoot::get().postTask([surface_id]() {
                     auto panel = UIRoot::get().getPanelByKey(surface_id);
-                    if (dynamic_cast<DynamicSurfacePanel*>(panel.get()))
+                    if (dynamic_cast<DynamicSurfacePanel*>(panel))
                         UIRoot::get().removePanel(surface_id);
                 });
                 break;

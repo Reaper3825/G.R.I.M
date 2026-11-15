@@ -14,6 +14,8 @@ add_subdirectory(memory_plugin)
 add_subdirectory(perception_plugin)
 add_subdirectory(voice_plugin)
 add_subdirectory(ui_plugin)
+add_subdirectory(console_plugin)
+add_subdirectory(settings_plugin)
 add_subdirectory(input_plugin)
 
 add_subdirectory(schedule_plugin)

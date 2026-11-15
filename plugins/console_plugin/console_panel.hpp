@@ -1,5 +1,6 @@
 #pragma once
-#include "primitives/ui_panel.hpp"
+#include "ui/primitives/ui_panel.hpp"
+#include "ui/console_notification_target.hpp"
 #include "primitives/ui_button.hpp"
 #include "primitives/ui_inputbox.hpp"
 #include "primitives/ui_layout_box.hpp"
@@ -15,9 +16,11 @@
 
 class OverlayRenderer;
 
-class ConsolePanel : public UIPanel {
+class ConsolePanel : public UIPanel, public ConsoleNotificationTarget {
 public:
     ConsolePanel();
+    ~ConsolePanel() override;
+    void appendNotification(const std::string& text) override;
 
     void update(const InputState& input, float dt) override;
     bool drawOverlay(OverlayRenderer& renderer) override;

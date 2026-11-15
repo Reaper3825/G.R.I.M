@@ -6,7 +6,7 @@
 #include <optional>
 #include <string>
 
-class UIKeybind : public Widget {
+class GRIM_HOST_API UIKeybind : public Widget {
 public:
     using ChangeCallback = std::function<void(const std::optional<GRIM::InputBindings::Binding>&)>;
 

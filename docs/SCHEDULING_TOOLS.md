@@ -65,9 +65,10 @@ is no separate audit log or cancellation tombstone.
 
 Plugin unload removes callbacks and resources but does not cancel saved records.
 The private calendar implementation and storage live in `plugins/schedule_plugin`;
-there is no calendar factory or scheduling service in the host API. Calendar UI
-operations resolve `schedule.*` through ToolRegistry and report unavailability
-when the provider is absent. The provider publishes `items` and `delivery`
+there is no calendar factory or scheduling service in the host API. Calendar's
+native `UIPanel` subclass lives inside Schedule and uses that same service.
+It owns and updates native buttons, inputs and scrolling directly. Calendar is
+removed when Schedule unloads. The provider publishes `items` and `delivery`
 resources of kind `schedule.state`; items is a summary capped at 200 records.
 
 ## Validation
@@ -75,8 +76,8 @@ resources of kind `schedule.state`; items is a summary capped at 200 records.
 `tests/run_schedule_plugin.ps1` exercises all six handlers, structured model
 results, supported kinds, revisions, due boundaries, cancellation and persistence.
 `tests/run_local_calendar.ps1` checks the private store implementation.
-`tests/run_plugin_shutdown.ps1 -BuildSchedulingFixtures` builds isolated DLLs and
-tests real registration, resource updates, callback delivery, failed replacement,
-successful reload, countdown cancellation, durable schedule survival and UI client
-unavailability after removal. UI implementation receives a syntax check.
+`tests/run_ui_input_foundation.ps1` exercises native Calendar controls, add/delete,
+provider ownership, staging, collision validation and generation-safe retirement.
+It builds an isolated native Schedule DLL against the headless test host and
+checks replacement, drawing, failed init and unload before queued activation.
 These tests do not launch GRIM or touch the user's calendar store.

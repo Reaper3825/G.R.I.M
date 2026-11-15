@@ -73,6 +73,11 @@ static void end() { router.endFrame(); }
 
 void runCanvasTests();
 void runPanelOperationsTests();
+void runCalendarPanelTests();
+void runNativeCalendarDllTests(const char*);
+void runNativeConsoleDllTests(const char*);
+void runNativeSettingsDllTests(const char*);
+void runSchedulePluginTests();
 #ifdef GRIM_TOOLS_VIEW_TESTS
 void runTrainingToolsTests();
 #endif
@@ -85,8 +90,13 @@ void runWorldAssetTests();
 #ifdef GRIM_TEXTWORLD_INTEGRATION
 void runTextWorldClientTests();
 #endif
-int main() try {
+int main(int argc, char** argv) try {
     runPanelOperationsTests();
+    runCalendarPanelTests();
+    if (argc > 1) runNativeCalendarDllTests(argv[1]);
+    if (argc > 2) runNativeConsoleDllTests(argv[2]);
+    if (argc > 3) runNativeSettingsDllTests(argv[3]);
+    runSchedulePluginTests();
 #ifdef GRIM_TOOLS_VIEW_TESTS
     runTrainingToolsTests();
 #endif

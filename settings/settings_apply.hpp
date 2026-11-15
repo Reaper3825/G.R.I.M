@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include <nlohmann/json.hpp>
 #include <functional>
 #include <string>
@@ -21,16 +22,16 @@ using SetBlurFn = std::function<void(bool enabled, float opacity, int intensity)
 // `fontMap`   – font-name → path map (caller owns, may be empty).
 // `setFont`   – called when a font change is requested.
 // `setBlur`   – called when blur settings change.
-void applyRuntimeSideEffects(const nlohmann::json& config,
+GRIM_HOST_API void applyRuntimeSideEffects(const nlohmann::json& config,
                              const std::unordered_map<std::string, std::string>& fontMap,
                              SetFontFn setFont,
                              SetBlurFn setBlur);
 
 // Scan for speaker embedding .npz files under the resources voice dir.
-std::vector<std::string> scanSpeakerEmbeddings();
+GRIM_HOST_API std::vector<std::string> scanSpeakerEmbeddings();
 
 // Scan for TTF/OTF fonts under the resources dir.
 // Populates `outFontMap` (name → absolute path) and returns sorted name list.
-std::vector<std::string> scanFonts(std::unordered_map<std::string, std::string>& outFontMap);
+GRIM_HOST_API std::vector<std::string> scanFonts(std::unordered_map<std::string, std::string>& outFontMap);
 
 } // namespace Settings

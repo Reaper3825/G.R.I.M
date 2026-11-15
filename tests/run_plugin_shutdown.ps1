@@ -13,7 +13,7 @@ $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer
 $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
-$common = @('/nologo','/std:c++20','/EHsc','/W3','/DNOMINMAX')
+$common = @('/nologo','/std:c++20','/EHsc','/MD','/W3','/DNOMINMAX')
 $common += @('', '/helpers','/core','/commands','/vcpkg_installed/x64-windows/include') | ForEach-Object { '/I"' + $workspace + $_ + '"' }
 if ($BuildSchedulingFixtures) {
     $TimersPluginDirectory = Join-Path $output 'timers-fixture'
@@ -21,6 +21,7 @@ if ($BuildSchedulingFixtures) {
     foreach ($name in @('timers','schedule')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $output ($name + '-fixture')) | Out-Null
         $providerArgs = $common + @('/LD','/DGRIM_BUILD_PLUGIN','/utf-8', ('"' + (Join-Path $workspace ('plugins/' + $name + '_plugin/' + $name + '_plugin.cpp')) + '"'), ('/Fe:' + $name + '-fixture/' + $name + '_plugin.dll'))
+        if ($name -eq 'schedule') { $providerArgs += @('/link', 'plugin_api_ownership_tests.lib') }
         Set-Content -LiteralPath (Join-Path $output ($name + '-fixture.rsp')) -Value $providerArgs -Encoding ascii
     }
 }
@@ -82,6 +83,10 @@ Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encod
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
 $apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
 $apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+if ($BuildSchedulingFixtures -or $SchedulePluginDirectory) {
+    $apiArgs += @('/DGRIM_NATIVE_UI_TEST_HOST', ('/I"' + $workspace + '/ui"'), ('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
+    $apiArgs += @('tests/ui_native_host_stubs.cpp','ui/primitives/ui_button.cpp','ui/primitives/ui_inputbox.cpp','ui/primitives/ui_scrollbox.cpp','ui/primitives/ui_dropdown.cpp','ui/primitives/ui_panel.cpp','helpers/widget.cpp','helpers/vector2.cpp','ui/ui_focus_manager.cpp','ui/ui_root_panels.cpp','ui/ui_panel_service.cpp','ui/dynamic_surface_panel.cpp','MMO/UI/UISurfaceRegistry.cpp','MMO/UI/UISurfaceSpec.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+}
 $apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/DGRIM_BUILD_HOST','/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
@@ -161,7 +166,9 @@ if ($BuildFilesystemFixture) {
     Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
 }
 if ($BuildSchedulingFixtures) {
-    $commands = $commands[0..2] + @('cl @timers-fixture.rsp','if errorlevel 1 exit /b %errorlevel%', 'cl @schedule-fixture.rsp','if errorlevel 1 exit /b %errorlevel%') + $commands[3..($commands.Length - 1)]
+    $commands = $commands[0..2] + @('cl @timers-fixture.rsp','if errorlevel 1 exit /b %errorlevel%') + $commands[3..($commands.Length - 1)]
+    $nativeInsert = [Array]::IndexOf($commands, $pluginTestCommand)
+    $commands = $commands[0..($nativeInsert - 1)] + @('cl @schedule-fixture.rsp','if errorlevel 1 exit /b %errorlevel%') + $commands[$nativeInsert..($commands.Length - 1)]
     Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
 }
 Push-Location $output

@@ -11,9 +11,13 @@ cancels pending countdowns. It requires SYSTEM and UI permissions.
 
 `schedule_plugin` owns six `schedule.*` tools, persistent UTC records and a
 one-second delivery callback. It requires SYSTEM, FILESYSTEM and UI permissions.
-The Calendar panel invokes these tools through ToolRegistry; no provider pointer
-or store instance is held by the panel. Absent providers produce an unavailable
-result. Generic host callbacks are pumped from the application frame loop.
+API v14 makes Calendar a native `UIPanel` subclass owned by Schedule. It directly
+owns buttons, inputs, scrolling, layout and actions and uses the provider service.
+Constructor registration is staged during provider initialization. After commit,
+the host attaches that same panel and publishes `panel:calendar` under Schedule.
+Unload detaches it synchronously before Schedule destroys it and the DLL unloads.
+UI-plugin unload leaves Calendar intact. Visible Calendar refresh runs every
+500 ms in its UI-thread update; storage operations are synchronous.
 
 The implementation headers `scheduling_service.hpp`, `local_calendar.hpp`,
 `calendar_file.hpp` and `scheduling_api.h` live inside the scheduling plugin. The

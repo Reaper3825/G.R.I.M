@@ -6,7 +6,7 @@
 #include <vector>
 #include <cstdint>
 
-class UITextArea : public Widget {
+class GRIM_HOST_API UITextArea : public Widget {
 public:
     UITextArea(const std::string& label, const std::string& initialText, 
                std::function<void(const std::string&)> onChange);

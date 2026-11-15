@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include <filesystem>
 #include <nlohmann/json.hpp>
 
@@ -16,10 +17,10 @@ void deepMerge(nlohmann::json& base, const nlohmann::json& overlay);
 
 // Load ai_config.json from disk, deep-merge ai_config.local.json, and
 // update the global `aiConfig`. Returns the merged document.
-nlohmann::json loadRuntimeAiConfig();
+GRIM_HOST_API nlohmann::json loadRuntimeAiConfig();
 
 // Deep-merge `pending` edits into the full on-disk document and write back.
 // Updates global `aiConfig`. Returns the saved document.
-nlohmann::json saveRuntimeAiConfig(const nlohmann::json& pending);
+GRIM_HOST_API nlohmann::json saveRuntimeAiConfig(const nlohmann::json& pending);
 
 } // namespace Settings

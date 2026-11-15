@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 
 #include <string>
 #include <functional>
@@ -118,7 +119,7 @@ void setOverlayBlurMask(void* overlayWindowHandle,
 float getMenuBarHeight();
 
 // Update blur style at runtime: toggle, opacity (0..1), and intensity (layer count).
-void setOverlayBlurStyle(void* overlayWindowHandle,
+GRIM_HOST_API void setOverlayBlurStyle(void* overlayWindowHandle,
                           bool enabled,
                           float opacity,
                           int intensity);

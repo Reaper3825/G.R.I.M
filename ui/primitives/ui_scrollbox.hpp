@@ -7,7 +7,7 @@
 class OverlayRenderer;
 struct InputState;
 
-class UIScrollBox : public Widget {
+class GRIM_HOST_API UIScrollBox : public Widget {
 public:
     UIScrollBox();
 

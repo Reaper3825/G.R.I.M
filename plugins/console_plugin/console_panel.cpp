@@ -147,6 +147,28 @@ ConsolePanel::ConsolePanel()
     addTemporarySession();
 }
 
+ConsolePanel::~ConsolePanel()
+{
+    // No queued command may start while this provider is retiring. The async
+    // callable and future state live in this DLL: join before it is unloaded.
+    pendingRequests.clear();
+    if (activeRequest) {
+        try {
+            // A previous get() can have consumed an exceptional result.
+            if (activeRequest->result.valid()) {
+                activeRequest->result.wait();
+                processCompletedRequest();
+            }
+        } catch (...) { /* Destruction must still release DLL-owned future state. */ }
+        activeRequest.reset();
+    }
+}
+
+void ConsolePanel::appendNotification(const std::string& text)
+{
+    getHistory().push(text, 0xFF66CCFF, "system");
+}
+
 bool ConsolePanel::isTitleBarControlAt(const Vec2& point) const
 {
     if (!toolbarBox || !toolbarBox->isVisible()) return false;

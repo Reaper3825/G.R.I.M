@@ -1,6 +1,12 @@
-# G.R.I.M Plugin API v12
+# G.R.I.M Plugin API v14
 
-API version: **12.0.0**.
+API version: **14.0.0**.
+
+Version 14 removes the copied-widget definition/event API. Schedule owns a
+native `CalendarPanel : UIPanel`, including its widgets, drawing and callbacks.
+Native UI plugins import the host UI classes and must match its compiler, CRT
+and UI class ABI. Rebuild the host and plugins together before deployment.
+See [native provider panels](#native-provider-panels-v14).
 
 Version 12 removes `get_alias_snapshot` and `refresh_aliases`. User application
 aliases and portable/Start Menu discovery now belong exclusively to the application
@@ -876,7 +882,8 @@ See [build and deployment instructions](../plugins/README.md#voice-plugin).
 checks, due-item selection and delivery state. It publishes `schedule.state`
 resources (`items` and `delivery`) through generic resource registration.
 `items` contains at most 200 records plus the total; tools provide paginated access.
-The Calendar UI calls registered tools and retains no provider pointer.
+Calendar is a native panel inside Schedule and uses that provider's existing
+service. See [native provider panels](#native-provider-panels-v14).
 
 API v8 removes `schedule_user_timer`, `create_local_calendar` and
 `schedule_service` outright. Host and plugins must be rebuilt together.
@@ -916,8 +923,8 @@ runtime ID. Failed plugin initialization before commit preserves the old panel.
 An activation failure after replacement commit does not restore the old panel.
 Shutdown can discard queued cleanup because `UIRoot::shutdown` destroys all panels.
 
-The UI plugin currently declares seven host implementations: `ui.console`,
-`ui.settings`, `ui.training_control`, `ui.data_hub`, `ui.storage`, `ui.calendar`,
+The UI plugin currently declares four host implementations:
+`ui.training_control`, `ui.data_hub`, `ui.storage`,
 and `ui.geospatial`. Bootstrap registers
 factories and host dependencies, but creates no instances of these panels.
 Dynamic surfaces and OSINT panels have not migrated. Host factories contain no
@@ -950,6 +957,47 @@ shutdown withdraw bindings. `parent_id` is reserved and must currently be empty.
 
 Each migrated panel publishes `panel:<stable-key>` of kind `ui.panel`.
 
+## Native provider panels (v14)
+
+The loader runs plugin initialization in a host-owned panel registration scope
+on the UI/lifecycle thread. A provider constructs its concrete `UIPanel` members
+or owned objects normally. The base constructor stages registration under that
+scope; no panel JSON, factory key, per-panel registration call or event polling
+is needed. UI permission, nonempty stable keys and duplicate keys are checked.
+A caught registration failure still rejects provider commit.
+
+Candidate panels are absent from the live UI until provider commit and the UI
+queue pump. Collision validation permits replacement of the old generation's
+panels only. Activation attaches the same native objects and binds `ui.panel`
+resources to the declaring generation. The host borrows these objects; the
+plugin owns their storage and implementation. UI callbacks run on the UI thread.
+
+Retirement synchronously detaches that generation's panels before plugin
+shutdown destroys them and before the loader unloads the DLL. Queued activation
+checks the retired lease without dereferencing destroyed plugin objects.
+Destruction unregisters the exact instance, including failed construction and
+failed candidate initialization. Old generation cleanup cannot remove a newer
+panel with the same key. Plugin shutdown must destroy every owned native panel.
+
+Native UI plugins use the exported C++ UI interface with a matching compiler,
+CRT and class layout. This is not a compiler-independent C object ABI. Windows
+standalone builds require `GRIM_HOST_IMPORT_LIBRARY`; host-tree builds link
+`GRIM_EXPORT`. Building the host target alone does not build Schedule, since
+Schedule imports the host. An all-target build builds/deploys it after the host.
+
+Calendar uses native buttons, input boxes, scrolling and overlay drawing. It
+refreshes visible, non-minimized content every 500 ms from `update()`. Storage
+operations remain synchronous. Initialization does not open calendar storage;
+saved events survive unload, while unsaved widget drafts do not. The generic UI
+plugin operates on Calendar but does not own it. The other four factory panels
+remain unmigrated.
+
+`tests/run_ui_input_foundation.ps1` tests native controls, provider staging,
+permissions, collision/replacement, and synchronous retirement. It also builds
+an isolated Schedule DLL against the headless test host's exports and tests
+native draw dispatch, DLL replacement, unload-before-activation and failed init.
+No application, renderer backend, model or training process is started.
+
 ## Application provider (v5+)
 
 Application discovery, catalog state, and launch handling live in the application
@@ -961,3 +1009,8 @@ updates use generic resource publication. See [Application discovery](APPLICATIO
 
 Hardware resources use generic publication. The plugin owns its snapshots and
 refresh behavior. See [System Information resources](SYSTEM_INFO_RESOURCES.md).
+
+Console is now a native provider-owned panel in `console_plugin` (provider name
+`Console Plugin`, stable key `console`), using the same initialization lease as
+Calendar. It imports host UI, command, and session services. See
+[Console ownership](ui/CONSOLE.md#provider-ownership).

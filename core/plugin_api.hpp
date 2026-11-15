@@ -1,11 +1,11 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v12.1
+// G.R.I.M Plugin API v14.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
-// Plugins should only interact with GRIM through this API to ensure forward
-// compatibility and system stability.
+// Service plugins use this C table. Native UI plugins additionally import the
+// exported C++ UI classes and require a matching host toolchain and class ABI.
 //
 // Design principles:
 // - ABI-stable C interface with C++ wrappers
@@ -20,8 +20,8 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 12
-#define GRIM_API_VERSION_MINOR 1
+#define GRIM_API_VERSION_MAJOR 14
+#define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -352,15 +352,10 @@ typedef struct GrimPluginAPI {
                                    const char* resources_json, size_t size);
     // True only while this generation is the currently published provider.
     bool (*is_provider_current)(const GrimPluginAPI* self);
-    // v12.1: Copied widget definitions; no host implementation key or DLL UI object.
-    // Registration is initialization-only. Updates require the activated runtime
-    // identity and an increasing revision. UI permission is required for all three.
-    GrimResult (*register_panel_definition)(const GrimPluginAPI* self, const char* json, size_t size);
-    GrimResult (*update_panel_definition)(const GrimPluginAPI* self, const char* json, size_t size);
-    // Owned activation/interaction/error events, consumed on read. Free with
-    // string_free. Null reports API failure, not an empty event queue.
-    const char* (*poll_panel_events)(const GrimPluginAPI* self);
-    void* reserved[5];
+    // v14 removes the copied-widget transport. Native panels use the exported
+    // C++ UI interface and register during the owning provider's init scope.
+    // Native UI plugins must match the host compiler, CRT and UI class ABI.
+    void* reserved[8];
     
 } GrimPluginAPI;
 

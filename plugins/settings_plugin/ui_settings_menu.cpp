@@ -6,8 +6,8 @@
 #include "input_parser.hpp"
 #include "ui_root.hpp"
 #include "core/platform_window.hpp"
-#include "../settings/runtime_ai_config.hpp"
-#include "../settings/settings_apply.hpp"
+#include "settings/runtime_ai_config.hpp"
+#include "settings/settings_apply.hpp"
 #include "core/input/InputBindings.hpp"
 #include <functional>
 

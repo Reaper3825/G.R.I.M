@@ -1,0 +1,48 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Console Plugin",
+  "root": "plugin_console",
+  "entities": [
+    {
+      "id": "plugin_console",
+      "name": "Console room",
+      "kind": "room",
+      "parent": "",
+      "description": "Provider-owned native conversation console.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Console Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.console",
+        "entity_id": "plugin_console",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_ui_console",
+      "name": "Console panel",
+      "kind": "supporter",
+      "parent": "plugin_console",
+      "description": "Console panel fixture addressed by the existing console stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "console"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.console",
+        "entity_id": "plugin_ui_console",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": true,
+        "minimized": false,
+        "maximized": false
+      }
+    }
+  ]
+}

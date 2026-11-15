@@ -8,7 +8,7 @@ enum class LayoutDirection {
     Vertical
 };
 
-class UILayoutBox : public Widget {
+class GRIM_HOST_API UILayoutBox : public Widget {
 public:
     UILayoutBox(LayoutDirection dir, float spacing = 5.0f);
     

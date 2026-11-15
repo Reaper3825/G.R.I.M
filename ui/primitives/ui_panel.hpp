@@ -31,9 +31,15 @@ struct PanelRect {
 
 class GRIM_HOST_API UIPanel : public Widget {
 public:
+    // Construction/destruction register/unregister on the UI thread.
+    // Derived constructors must not pump UI work before initialization finishes.
     UIPanel(const std::string& title = "", bool draggable = true,
             const std::string& panelKey = "");
     ~UIPanel() override;
+    UIPanel(const UIPanel&) = delete;
+    UIPanel& operator=(const UIPanel&) = delete;
+    UIPanel(UIPanel&&) = delete;
+    UIPanel& operator=(UIPanel&&) = delete;
     void setVisible(bool value) override;
     
     static void setCanvasSize(const Vec2& canvasSize);

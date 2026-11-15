@@ -17,6 +17,33 @@ void check(bool value, const char* message) {
 
 void runPanelOperationsTests() {
     auto& root = UIRoot::get();
+    // Registration follows object lifetime without addPanel or shared ownership.
+    {
+        UIPanel automatic("Automatic", true, "test.automatic");
+        check(root.getPanelByKey("test.automatic") == &automatic, "Constructor did not register panel");
+        check(root.requestPanelOperation("test.automatic", UIPanelOperation::Hide).get().success,
+              "Automatically registered panel was not operable");
+    }
+    check(!root.getPanelByKey("test.automatic"), "Destructor retained borrowed panel");
+    struct FailingPanel : UIPanel {
+        FailingPanel() : UIPanel("Failing", true, "test.failing") { throw std::runtime_error("init failed"); }
+    };
+    try { FailingPanel failing; } catch (const std::runtime_error&) {}
+    check(!root.getPanelByKey("test.failing"), "Derived constructor failure retained panel");
+    bool workerRejected = false;
+    std::thread worker([&] {
+        try { UIPanel invalid("Worker", true, "test.worker"); }
+        catch (const std::logic_error&) { workerRejected = true; }
+    });
+    worker.join();
+    check(workerRejected && !root.getPanelByKey("test.worker"), "Worker published partially constructed panel");
+    auto old = std::make_unique<UIPanel>("Old", true, "test.reused");
+    root.removePanel("test.reused");
+    {
+        UIPanel replacement("Replacement", true, "test.reused");
+        old.reset();
+        check(root.getPanelByKey("test.reused") == &replacement, "Old destructor removed replacement");
+    }
     auto first = std::make_shared<UIPanel>("Original title", true, "test.first");
     auto second = std::make_shared<UIPanel>("Same title", true, "test.second");
     auto third = std::make_shared<UIPanel>("Same title", true, "test.third");
@@ -25,12 +52,15 @@ void runPanelOperationsTests() {
     root.addPanel(first); root.addPanel(second); root.addPanel(third); root.addPanel(legacy);
     root.addPanel(first); // Re-adding the same object is idempotent.
     first->setTitle("Renamed title");
-    check(root.getPanelByKey("test.first") == first, "Title change lost stable-key lookup");
-    check(root.getPanel("Renamed title") == first, "Legacy title lookup did not follow rename");
+    check(root.getPanelByKey("test.first") == first.get(), "Title change lost stable-key lookup");
+    check(root.getPanel("Renamed title") == first.get(), "Legacy title lookup did not follow rename");
     check(!root.getPanel("Original title") && !root.getPanel("Same title"), "Stale/ambiguous title resolved");
     check(first->getPanelID() == runtimeId, "Semantic identity changed input-routing ID");
-    root.addPanel(std::make_shared<UIPanel>("Collision", true, "test.first"));
-    check(root.getPanelByKey("test.first") == first, "Duplicate key displaced original panel");
+    bool collisionRejected = false;
+    try { auto collision = std::make_shared<UIPanel>("Collision", true, "test.first"); }
+    catch (const std::logic_error&) { collisionRejected = true; }
+    check(collisionRejected, "Duplicate construction did not fail");
+    check(root.getPanelByKey("test.first") == first.get(), "Duplicate key displaced original panel");
     auto list = root.requestPanelList().get();
     check(list.size() == 3 && list[0].key == "test.first", "Discovery is incomplete, duplicated, or unsorted");
     check(list[0].title == "Renamed title" && list[0].runtimeId == runtimeId, "Discovery metadata is stale");
@@ -72,7 +102,7 @@ void runPanelOperationsTests() {
     check(pending.get().error == "not_found", "Removed target produced stale success");
     auto recreated = std::make_shared<UIPanel>("Recreated", true, "test.first");
     root.addPanel(recreated);
-    check(root.getPanelByKey("test.first") == recreated && recreated->getPanelID() != runtimeId,
+    check(root.getPanelByKey("test.first") == recreated.get() && recreated->getPanelID() != runtimeId,
           "Recreation did not preserve semantic identity independently of runtime identity");
 
     using namespace GRIM::MMO;
@@ -106,7 +136,7 @@ void runPanelOperationsTests() {
     root.processPendingTasks();
     surfaces.hide(spec.surface_id); root.processPendingTasks();
     surfaces.destroy(spec.surface_id); root.processPendingTasks();
-    check(root.getPanelByKey("test.first") == recreated && recreated->isVisible(),
+    check(root.getPanelByKey("test.first") == recreated.get() && recreated->isVisible(),
           "Dynamic lifecycle touched a host panel on a key collision");
 
     auto serviceList = GRIM::UI::submitPanelRequest(GRIM_UI_LIST, "");

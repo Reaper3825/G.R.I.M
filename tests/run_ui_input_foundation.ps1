@@ -9,10 +9,12 @@ $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Componen
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
 $sources = @('tests/ui_input_foundation_tests.cpp','ui/primitives/ui_inputbox.cpp','ui/primitives/ui_textarea.cpp','ui/primitives/ui_button.cpp','ui/primitives/ui_slider.cpp','ui/primitives/ui_scrollbox.cpp','ui/primitives/ui_dropdown.cpp','helpers/widget.cpp','helpers/vector2.cpp','ui/ui_focus_manager.cpp')
-$arguments = @('/nologo','/std:c++20','/EHsc','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
+$arguments = @('/nologo','/std:c++20','/EHsc','/MD','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $sources += 'ui/primitives/ui_panel.cpp', 'ui/primitives/ui_split_pane.cpp', 'tests/ui_split_pane_tests.cpp'
 $sources += 'ui/ui_root_panels.cpp', 'ui/ui_panel_service.cpp', 'ui/dynamic_surface_panel.cpp', 'ui/ui_surface_renderer_bridge.cpp', 'MMO/UI/UISurfaceRegistry.cpp', 'MMO/UI/UISurfaceSpec.cpp', 'tests/ui_panel_operations_tests.cpp'
-$sources += 'ui/provider_defined_panel.cpp'
+$sources += 'tests/calendar_panel_tests.cpp', 'tests/schedule_plugin_tests.cpp'
+$sources += 'tests/settings_panel_tests.cpp', 'tests/settings_host_stubs.cpp', 'ui/primitives/ui_keybind.cpp', 'ui/primitives/ui_toggle.cpp'
+$sources += 'tests/console_panel_tests.cpp', 'tests/console_host_stubs.cpp', 'console_history.cpp', 'ui/primitives/ui_layout_box.cpp'
 $sources += 'ui/primitives/ui_canvas.cpp', 'ui/primitives/ui_node.cpp', 'tests/ui_canvas_tests.cpp'
 $sources += @('MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/Registries/ProviderRegistry.cpp') # Panel resource publication is a base UI dependency.
 if ($Tools) {
@@ -34,11 +36,18 @@ $arguments += ('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"')
 $arguments += $sources | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $arguments += '/Fe:ui_input_foundation_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'compile.rsp') -Value $arguments -Encoding ascii
-Set-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'),'if errorlevel 1 exit /b %errorlevel%','cl @compile.rsp') -Encoding ascii
+$nativeIncludes = @('/core','/helpers','/ui') | ForEach-Object { '/I"' + $workspace + $_ + '"' }
+$nativeArgs = $nativeIncludes + @('/nologo','/std:c++20','/EHsc','/MD','/LD','/DGRIM_BUILD_PLUGIN','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'),('"' + $workspace + '/plugins/schedule_plugin/schedule_plugin.cpp"'),'/Fe:schedule_native_fixture.dll','/link','ui_input_foundation_tests.lib')
+Set-Content -LiteralPath (Join-Path $output 'native.rsp') -Value $nativeArgs -Encoding ascii
+$consoleArgs = $nativeIncludes + @('/nologo','/std:c++20','/EHsc','/MD','/LD','/DGRIM_BUILD_PLUGIN','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'),('"' + $workspace + '/plugins/console_plugin/console_plugin.cpp"'),('"' + $workspace + '/plugins/console_plugin/console_panel.cpp"'),'/Fe:console_native_fixture.dll','/link','ui_input_foundation_tests.lib')
+Set-Content -LiteralPath (Join-Path $output 'console.rsp') -Value $consoleArgs -Encoding ascii
+$settingsArgs = $nativeIncludes + @('/nologo','/std:c++20','/EHsc','/MD','/LD','/DGRIM_BUILD_PLUGIN','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'),('"' + $workspace + '/plugins/settings_plugin/settings_plugin.cpp"'),('"' + $workspace + '/plugins/settings_plugin/ui_settings_menu.cpp"'),'/Fe:settings_native_fixture.dll','/link','ui_input_foundation_tests.lib')
+Set-Content -LiteralPath (Join-Path $output 'settings.rsp') -Value $settingsArgs -Encoding ascii
+Set-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'),'if errorlevel 1 exit /b %errorlevel%','cl @compile.rsp','if errorlevel 1 exit /b %errorlevel%','cl @native.rsp','if errorlevel 1 exit /b %errorlevel%','cl @console.rsp','if errorlevel 1 exit /b %errorlevel%','cl @settings.rsp') -Encoding ascii
 Push-Location $output
 try {
     & $env:ComSpec /d /c build.cmd
     if ($LASTEXITCODE -ne 0) { throw 'Host-only test compilation failed.' }
-    & (Join-Path $output 'ui_input_foundation_tests.exe')
+    & (Join-Path $output 'ui_input_foundation_tests.exe') (Join-Path $output 'schedule_native_fixture.dll') (Join-Path $output 'console_native_fixture.dll') (Join-Path $output 'settings_native_fixture.dll')
     if ($LASTEXITCODE -ne 0) { throw 'Host-only tests failed.' }
 } finally { Pop-Location }

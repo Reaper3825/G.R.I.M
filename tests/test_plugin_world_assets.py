@@ -55,12 +55,12 @@ class PluginWorldAssetsTests(unittest.TestCase):
                 standalone = dict(objects[identity], parent=room["id"])
                 self.assertEqual(entity, standalone)
                 used.add(identity)
-            if room["plugin_binding"]["provider_name"] == "UI Plugin":
+            if room["plugin_binding"]["provider_name"] in {"UI Plugin", "Console Plugin", "Settings Plugin"}:
                 panels = {e["resource_binding"]["key"]: e for e in resources
                           if e["resource_binding"]["type"] == "ui.panel"}
-                self.assertEqual(set(panels), {"console", "settings"})
+                self.assertEqual(set(panels), {"Console Plugin": {"console"}, "Settings Plugin": {"settings"}, "UI Plugin": set()}[room["plugin_binding"]["provider_name"]])
                 for key, entity in panels.items():
-                    source = ROOT / "ui" / ("console_panel.cpp" if key == "console" else "ui_settings_menu.cpp")
+                    source = ROOT / ("plugins/console_plugin/console_panel.cpp" if key == "console" else "plugins/settings_plugin/ui_settings_menu.cpp")
                     self.assertRegex(source.read_text(encoding="utf-8"), r'UIPanel\("[^"]+", true, "' + key + r'"\)')
                     self.assertIsInstance(entity["initial_state"]["visible"], bool)
             if room["plugin_binding"]["provider_name"] == "System Information Plugin":

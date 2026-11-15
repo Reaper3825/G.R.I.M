@@ -27,6 +27,8 @@ GrimPluginAPI* createPluginAPI(
     const GrimPluginAPI* replacing = nullptr
 );
 
+GrimResult initializePlugin(const GrimPluginAPI* api, GrimResult (*init)(const GrimPluginAPI*));
+
 // Publish the staged provider, tools and initial resources after successful initialization.
 bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr);
 bool commitPluginTools(const std::string& plugin_name);

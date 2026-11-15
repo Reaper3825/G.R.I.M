@@ -214,7 +214,7 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
         candidate.api = PluginAPI::createPluginAPI(info->name, path.string(),
             info->required_permissions, true, oldApi);
         initialized = true; // Shutdown must tolerate partially completed init.
-        if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginTools(candidate.api, oldApi))
+        if (PluginAPI::initializePlugin(candidate.api, init) != GRIM_OK || !PluginAPI::commitPluginTools(candidate.api, oldApi))
             throw std::runtime_error("Initialization or provider publication rejected");
         candidate.fingerprint = stamp;
     } catch (const std::exception& error) {

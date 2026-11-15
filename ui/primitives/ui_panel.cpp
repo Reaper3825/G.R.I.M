@@ -17,9 +17,10 @@ UIPanel::UIPanel(const std::string& t, bool drag, const std::string& panelKey)
 {
     // Generate unique panel ID
     panelID = UIFocusManager::getInstance().generateUniqueID();
+    UIRoot::get().registerPanel(this);
 }
 
-UIPanel::~UIPanel() { GRIM::UI::InputRouter::get().forgetPanel(panelID); }
+UIPanel::~UIPanel() { UIRoot::get().unregisterPanel(this); }
 void UIPanel::setVisible(bool value) {
     Widget::setVisible(value);
     if (!value) {

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 
 #include "core/grim_platform.h"
 
@@ -15,7 +16,7 @@ struct ClipRect {
     int x1, y1, x2, y2;
 };
 
-class OverlayRenderer
+class GRIM_HOST_API OverlayRenderer
 {
 public:
     void init(HWND hwnd, int width, int height);

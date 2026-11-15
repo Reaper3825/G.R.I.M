@@ -10,6 +10,7 @@
 // Session state is keyed, not process-global.
 //======================================================//
 #pragma once
+#include "core/host_exports.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -181,15 +182,15 @@ struct ContextSnapshotV2 {
 // =========================================================
 class SessionContextManager {
 public:
-    static SessionContextManager& instance();
+    static GRIM_HOST_API SessionContextManager& instance();
     // State persists until replaced/cleared; console submission copies a per-request snapshot.
-    void setReasoningState(const std::string& session_id, std::optional<GRIM::ReasoningState> state);
-    std::optional<GRIM::ReasoningState> getReasoningState(const std::string& session_id) const;
+    GRIM_HOST_API void setReasoningState(const std::string& session_id, std::optional<GRIM::ReasoningState> state);
+    GRIM_HOST_API std::optional<GRIM::ReasoningState> getReasoningState(const std::string& session_id) const;
 
     // ─── Turn lifecycle ───────────────────────────────────
 
     // Begin a new turn. Creates a TurnRecord and appends it.
-    void beginTurn(const std::string& session_id,
+    GRIM_HOST_API void beginTurn(const std::string& session_id,
                    const std::string& turn_id,
                    const std::string& raw_input,
                    const std::string& normalized_input);
@@ -243,7 +244,7 @@ public:
     void tick(const std::string& session_id);
 
     // Destroy a session's state entirely.
-    void destroySession(const std::string& session_id);
+    GRIM_HOST_API void destroySession(const std::string& session_id);
 
     // Set mood (from PersonalityManager bridge).
     void setMood(const std::string& session_id, const std::string& mood);
@@ -293,7 +294,7 @@ public:
     void trimHistory(const std::string& session_id, size_t max_messages);
 
     // Session-owned display history used by console surfaces.
-    ConsoleHistory& displayHistory(const std::string& session_id);
+    GRIM_HOST_API ConsoleHistory& displayHistory(const std::string& session_id);
 
 private:
     SessionContextManager() = default;

@@ -1,3 +1,4 @@
+#ifndef GRIM_NATIVE_UI_TEST_HOST
 #include "core/plugin_api_impl.hpp"
 #include "core/plugin_manager.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
@@ -25,36 +26,20 @@ namespace GRIM::UI {
 // Controlled host boundary: the API/loader/plugin are real, no native UI is started.
 // Keep the host-service mock linkable as the production boundary grows. These
 // substitutes do not exercise native factory construction or rendering.
+GrimResult initializeProviderPanels(const std::shared_ptr<ProviderPanelLease>&, bool,
+                                   ProviderInit init, const GrimPluginAPI* api) { return init(api); }
+bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
+                            const std::shared_ptr<ProviderPanelLease>&) { return !lease->registrationFailed; }
 void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                            std::vector<std::string> implementations, std::vector<nlohmann::json> definitions) {
-    uiTasks.push_back([lease, implementations = std::move(implementations), definitions = std::move(definitions)] {
-        std::lock_guard lock(lease->mutex);
+                            std::vector<std::string> implementations) {
+    uiTasks.push_back([lease, implementations = std::move(implementations)] {
         if (lease->retired) return;
-        for (const auto& implementation : implementations)
-            lease->panels.emplace_back(implementation, 1);
-        for (const auto& definition : definitions) {
-            const auto key = definition.at("panel_id").get<std::string>();
-            lease->panels.emplace_back(key, 42);
-            lease->definitionRevisions[key] = definition.at("revision").get<uint64_t>();
-            std::lock_guard eventLock(lease->eventsMutex);
-            lease->events.push_back({{"type", "activated"}, {"panel_id", key}, {"runtime_id", uint64_t{42}}, {"success", true}});
-        }
+        for (const auto& implementation : implementations) lease->panels.emplace_back(implementation, 1);
     });
-}
-void updateProviderPanel(const std::shared_ptr<ProviderPanelLease>& lease, nlohmann::json definition) {
-    std::lock_guard lock(lease->mutex);
-    if (lease->retired || definition.at("runtime_id") != 42 ||
-        !lease->definitionRevisions.count(definition.at("panel_id").get<std::string>()))
-        throw std::invalid_argument("Unknown panel update");
 }
 void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
-    std::lock_guard lock(lease->mutex);
-    if (lease->retired) return;
     lease->retired = true;
-    uiTasks.push_back([lease] {
-        std::lock_guard lock(lease->mutex);
-        lease->panels.clear();
-    });
+    lease->panels.clear();
 }
 PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std::string& key, uint64_t expectedRuntimeId) {
     auto promise = std::make_shared<std::promise<nlohmann::json>>();
@@ -183,3 +168,8 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     check(!visible && registry.toolCount() == baseline, "Unload retained UI operations or queued side effects");
     std::cout << "UI plugin metadata, permissions, asynchronous completion, ownership and unload tests passed\n";
 }
+
+#else
+#include <filesystem>
+void runUIPluginTests(const std::filesystem::path&) {} // Mock-operation suite runs in the default host; native lifecycle uses the real host.
+#endif

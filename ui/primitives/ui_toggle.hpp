@@ -3,7 +3,7 @@
 #include <functional>
 #include <string>
 
-class UIToggle : public Widget {
+class GRIM_HOST_API UIToggle : public Widget {
 public:
     UIToggle(const std::string& label, bool initialState, 
              std::function<void(bool)> onChange);

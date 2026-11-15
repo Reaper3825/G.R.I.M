@@ -11,13 +11,11 @@
 #include "../logger.hpp"
 #include "../popup_ui/popup_ui.hpp"
 #include "../resources.hpp"
-#include "../ui/console_panel.hpp"
 #include "../ui/primitives/ui_native_3d_viewport_attachment.hpp"
 #include "../ui/primitives/ui_native_3d_viewport_clear_pass.hpp"
 #include "../ui/ui_data_hub.hpp"
 #include "../ui/ui_geospatial_panel.hpp"
 #include "../ui/ui_root.hpp"
-#include "../ui/ui_settings_menu.hpp"
 #include "../ui/ui_storage_panel.hpp"
 #include "../ui/ui_surface_renderer_bridge.hpp"
 #include "../ui/ui_training_panel.hpp"
@@ -141,8 +139,6 @@ UIBootstrapResult bootstrapUI(
     // the UI plugin decides which live panel instances exist.
     auto geoSpatialRuntime = std::make_shared<GRIM::GeoSpatial::GeoSpatialRuntime>();
     auto& root = UIRoot::get();
-    root.registerPanelFactory("ui.console", "console", [] { return std::make_shared<ConsolePanel>(); });
-    root.registerPanelFactory("ui.settings", "settings", [] { return std::make_shared<UISettingsMenu>(); });
     root.registerPanelFactory("ui.training_control", "training_control", [] { return std::make_shared<UITrainingPanel>(); });
     root.registerPanelFactory("ui.data_hub", "data_hub", [] { return std::make_shared<UIDataHubPanel>(); });
     root.registerPanelFactory("ui.storage", "storage", [server = &deviceCommServer] {

@@ -1,13 +1,13 @@
 # Console and Settings Integration
 
-Source-verified November 8, 2026. The current console is an overlay `ConsolePanel`,
+Source-verified November 15, 2026. The current console is an overlay `ConsolePanel`,
 not the former independent GDI console window and thread.
 
 ## Current source
 
-- [ConsolePanel constructor](../../ui/console_panel.cpp#L29) builds the input box
-  and toolbar. Its Settings button shows the host-owned `Settings` panel.
-- [ConsolePanel::submitPrompt / startNextRequest](../../ui/console_panel.cpp#L431)
+- [ConsolePanel constructor](../../plugins/console_plugin/console_panel.cpp#L29) builds the input box
+  and toolbar. Its Settings button shows the provider-owned `Settings` panel.
+- [ConsolePanel::submitPrompt / startNextRequest](../../plugins/console_plugin/console_panel.cpp#L431)
   queue session-specific prompts and run `handleCommand` asynchronously.
   [handleCommand](../../commands/commands_core.cpp#L39) passes user input to
   `ai_process`; typing a tool-looking string is not automatic direct dispatch.
@@ -27,7 +27,7 @@ configurable in Settings → Controls. Bare Grave is not the documented default.
 Right Ctrl is the default `wake_voice` binding;
 [WakeKey::update](../../wake/wake_key.cpp#L64) initiates capture on its press.
 
-Escape in [ConsolePanel::update](../../ui/console_panel.cpp#L228) hides the console.
+Escape in [ConsolePanel::update](../../plugins/console_plugin/console_panel.cpp#L228) hides the console.
 Panel chrome close also hides it; neither operation exits the host.
 
 ## Agent panel operations
@@ -40,3 +40,26 @@ the host panel service. For example, tool arguments for showing Settings are
 
 The `settings` AI/admin wrapper is retired. The actual Settings panel and host
 configuration services remain; see [retained-handler distinctions](../RETIRED_AGENT_TOOLS.md).
+
+## Provider ownership
+
+`console_plugin` owns the implementation and the `ConsolePanel` instance. It
+constructs the panel during provider initialization; the `UIPanel` constructor
+stages registration under that generation. The stable key remains `console`,
+and the panel starts hidden, matching the former host factory default.
+
+The host attaches, draws, routes input, publishes the `ui.panel` resource, and
+detaches before plugin shutdown. The plugin destroys the panel before DLL unload.
+Queued prompts are discarded at retirement; an active command is joined and its
+result delivered to host session history before destruction completes. Shutdown
+can therefore wait for an active command; this does not add command cancellation.
+
+Conversation handling, session state, and display histories remain host services.
+Notifications use `ConsoleNotificationTarget`, with a fresh UI-thread lookup,
+without importing the plugin's concrete class. Generic `ui.*` operations remain
+in `ui_plugin`. Console no longer has a bootstrap factory or a `register_ui_panel`
+request. Its World Lab resource belongs to the Console Plugin room.
+
+Native UI plugins require matching host/compiler/CRT/UI ABI and host import
+libraries. Focused DLL lifecycle tests run through
+`tests/run_ui_input_foundation.ps1`, with command and render services stubbed.

@@ -411,3 +411,17 @@ cache/geospatial/*.sqlite-wal
 !/plugins/application_plugin/*.h
 !/plugins/application_plugin/*.fbs
 !/plugins/application_plugin/*.md
+
+# Provider-owned Console sources (exclude generated binaries/cache).
+!/plugins/console_plugin/
+/plugins/console_plugin/*
+!/plugins/console_plugin/CMakeLists.txt
+!/plugins/console_plugin/*.cpp
+!/plugins/console_plugin/*.hpp
+
+# Provider-owned Settings sources.
+!/plugins/settings_plugin/
+/plugins/settings_plugin/*
+!/plugins/settings_plugin/CMakeLists.txt
+!/plugins/settings_plugin/*.cpp
+!/plugins/settings_plugin/*.hpp

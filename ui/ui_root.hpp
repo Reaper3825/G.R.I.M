@@ -42,6 +42,7 @@ public:
         return instance;
     }
 
+    void requireUIThread() const;
     void init(HWND hwnd, uint32_t width, uint32_t height);
     void shutdown();
 
@@ -49,10 +50,14 @@ public:
     void updateOverlayInteraction(const InputState& input);
     void draw();
 
+    // Non-owning registration, called by UIPanel construction/destruction on the UI thread.
+    void registerPanel(UIPanel* panel);
+    void unregisterPanel(UIPanel* panel) noexcept;
+    // Compatibility ownership for existing host factories and dynamic/copied surfaces.
     void addPanel(const std::shared_ptr<UIPanel>& panel);
     // Host-only factories. Registering an implementation does not create a panel.
-    // Both calls require the UI thread. Factories must return a fresh, unattached
-    // panel with the declared key; native callbacks never cross the plugin ABI.
+    // Both calls require the UI thread. Factories return a fresh, automatically
+    // registered panel with the declared key; callbacks never cross the plugin ABI.
     // Optional cleanup releases external attachments on removal/shutdown or
     // post-construction failure. Constructors must roll back their own failures.
     using PanelFactory = std::function<std::shared_ptr<UIPanel>()>;
@@ -65,9 +70,10 @@ public:
     void bindPanelResource(const std::string& key, uint64_t runtime,
                            const std::string& provider, const std::string& instance);
     void removePanel(const std::string& name);
-    std::shared_ptr<UIPanel> getPanel(const std::string& name);
+    UIPanel* getPanel(const std::string& name);
+    // Borrowed UI-thread pointers; never retain across panel destruction.
     // Exact stable-key lookup, never falls back to a display title.
-    std::shared_ptr<UIPanel> getPanelByKey(const std::string& key);
+    UIPanel* getPanelByKey(const std::string& key);
     // Thread-safe request submission. Futures complete on the UI thread;
     // callers must not block that thread waiting for queued work.
     std::future<std::vector<UIPanelInfo>> requestPanelList();
@@ -118,15 +124,17 @@ public:
 
 private:
     UIRoot() = default;
-    std::vector<std::shared_ptr<UIPanel>> snapshotPanels() const;
+    ~UIRoot() { m_ownedPanels.clear(); }
+    std::vector<UIPanel*> snapshotPanels() const;
     bool isUIThread() const { return std::this_thread::get_id() == m_uiThreadId; }
     void updateWindowZOrder();  // Helper to adjust window position based on visibility
     
     HWND m_hwnd = nullptr;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
-    std::vector<std::shared_ptr<UIPanel>> m_panels;
-    std::unordered_map<std::string, std::shared_ptr<UIPanel>> m_panelKeyMap;
+    std::vector<UIPanel*> m_panels;
+    std::unordered_map<std::string, UIPanel*> m_panelKeyMap;
+    std::unordered_map<UIPanel*, std::shared_ptr<UIPanel>> m_ownedPanels;
     struct PanelFactoryEntry {
         std::string panelKey;
         PanelFactory construct;

@@ -4,7 +4,6 @@
 #include "commands/command_result.hpp"
 #include <cassert>
 #include <iostream>
-void logError(const std::string&,const std::string&) {}
 using Json=nlohmann::json;
 static int64_t now=grim::scheduling::scheduleNow();
 static std::vector<std::string> notifications;
@@ -36,7 +35,7 @@ static Json invoke(const std::string& operation,Json args) {
         "schedule." + operation, args.dump(),
         {.expected_registry_version = registry.version(), .require_canonical_model = true}).structuredOutputJson);
 }
-int main() {
+void runSchedulePluginTests() {
     const auto root=std::filesystem::temp_directory_path()/("grim-schedule-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     {
 
@@ -46,7 +45,11 @@ int main() {
         api.cancel_timer=[](const GrimPluginAPI*,GrimTimerHandle){return GRIM_OK;};
         api.show_notification=[](const GrimPluginAPI*,const char*,const char* text){notifications.emplace_back(text);};
         api.string_free=[](const GrimPluginAPI*,const char* p){delete[] p;};
+        api.log=[](const GrimPluginAPI*,GrimLogLevel,const char*){};
+        auto oldApi=api;oldApi.api_version=12u<<16;
+        assert(grim_plugin_init(&oldApi)==GRIM_ERROR_API_VERSION_MISMATCH);
         assert(grim_plugin_init(&api)==GRIM_OK);
+        calendarPanel.reset();
         provider=std::make_unique<grim::scheduling::Provider>(&api,root/"events.json");
         provider->prepare();
         assert(GRIM::MMO::ToolRegistry::instance().getModelTools().size()==6);

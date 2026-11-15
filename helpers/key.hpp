@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include <unordered_map>
 #include <vector>
 #include <functional>
@@ -88,7 +89,7 @@ public:
     static void updateFromInput(const struct InputState& input);
 
     static bool isDown(KeyCode code);
-    static bool wasPressed(KeyCode code);
+    static GRIM_HOST_API bool wasPressed(KeyCode code);
     static bool wasReleased(KeyCode code);
 
     // Platform input is normalized to a shared 0-255 logical key space before

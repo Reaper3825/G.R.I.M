@@ -1,0 +1,48 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Settings Plugin",
+  "root": "plugin_settings",
+  "entities": [
+    {
+      "id": "plugin_settings",
+      "name": "Settings room",
+      "kind": "room",
+      "parent": "",
+      "description": "Provider-owned native configuration panel.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Settings Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.settings",
+        "entity_id": "plugin_settings",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_ui_settings",
+      "name": "Settings panel",
+      "kind": "supporter",
+      "parent": "plugin_settings",
+      "description": "Settings panel fixture addressed by the existing settings stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "settings"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.ui.settings",
+        "entity_id": "plugin_ui_settings",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": false,
+        "minimized": false,
+        "maximized": false
+      }
+    }
+  ]
+}

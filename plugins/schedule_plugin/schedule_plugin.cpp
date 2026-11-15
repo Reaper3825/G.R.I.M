@@ -33,7 +33,6 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if(!api || (api->api_version>>16)!=GRIM_API_VERSION_MAJOR || api->api_version<GRIM_API_VERSION ||
         !api->create_timer || !api->cancel_timer || !api->replace_resources || !api->show_notification || !api->register_tools ||
-        !api->register_panel_definition || !api->update_panel_definition || !api->poll_panel_events ||
         !api->string_free || !api->log) return GRIM_ERROR_API_VERSION_MISMATCH;
     provider=std::make_unique<grim::scheduling::Provider>(api);
     using Json=nlohmann::json;
@@ -84,7 +83,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     try {
         provider->prepare();
         calendarPanel = std::make_unique<grim::scheduling::CalendarPanel>(api, *provider);
-        calendarPanel->prepare();
         return GRIM_OK;
     } catch(const std::exception& error) {
         api->log(api, GRIM_LOG_ERROR, error.what());

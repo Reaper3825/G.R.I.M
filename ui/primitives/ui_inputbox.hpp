@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-class UIInputBox : public Widget {
+class GRIM_HOST_API UIInputBox : public Widget {
 public:
     UIInputBox(std::string* bindTarget = nullptr);
 

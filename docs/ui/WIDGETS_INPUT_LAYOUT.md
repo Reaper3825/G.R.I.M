@@ -36,7 +36,7 @@ for model-selectable operations.
 | [UIPanel](../../ui/primitives/ui_panel.hpp) | Panel children, chrome, drag/resize, and content rectangle |
 | [UIScrollBox](../../ui/primitives/ui_scrollbox.hpp) | Child collection, content height/offset, wheel ownership, clipping, and `autoLayoutChildren()` |
 | [UILayoutBox](../../ui/primitives/ui_layout_box.hpp) | Existing layout primitive |
-| [UISettingsMenu](../../ui/ui_settings_menu.cpp) | Tab-specific construction/layout, current scroll content, Save/Cancel, and deferred refresh |
+| [UISettingsMenu](../../plugins/settings_plugin/ui_settings_menu.cpp) | Tab-specific construction/layout, current scroll content, Save/Cancel, and deferred refresh |
 
 The current panel/scrollbox classes provide child APIs directly. There is no
 implemented generic `UIContainer` base to migrate every widget into.

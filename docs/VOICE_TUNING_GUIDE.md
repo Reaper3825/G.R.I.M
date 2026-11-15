@@ -34,7 +34,7 @@ tool selection. Inspect the chosen microphone, RMS gate, capture endpoint, and
 speech cutoffs. Change one consumed field at a time and compare recorded cases;
 temperature/prompt changes cannot guarantee elimination of hallucinations.
 Settings → Audio exposes recognition controls
-([createAudioWidgets](../ui/ui_settings_menu.cpp#L611)); exposed labels alone do
+([createAudioWidgets](../plugins/settings_plugin/ui_settings_menu.cpp#L611)); exposed labels alone do
 not establish decoder strategy or GPU acceleration. The host requests GPU use,
 but actual backend execution needs separate runtime evidence.
 
@@ -61,10 +61,10 @@ No speech/model performance table or current runtime certification is claimed.
 This section owns the voice-specific Settings integration previously documented
 separately from recognition/provider behavior.
 
-- [createVoiceWidgets](../ui/ui_settings_menu.cpp#L473) creates Voice Engine
+- [createVoiceWidgets](../plugins/settings_plugin/ui_settings_menu.cpp#L473) creates Voice Engine
   and Speaker cycle buttons, a Voice Mode dropdown, and speed/confidence
   controls. Speaker is not a Coqui-only embedding dropdown.
-- [cycleSpeaker](../ui/ui_settings_menu.cpp#L164) uses
+- [cycleSpeaker](../plugins/settings_plugin/ui_settings_menu.cpp#L164) uses
   `voice.available_speakers` when present; otherwise it scans embedding names
   and records the resulting list in pending config.
 - [scanSpeakerEmbeddings](../settings/settings_apply.cpp#L59) supplies

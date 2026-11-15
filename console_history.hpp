@@ -1,11 +1,12 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include <string>
 #include <vector>
 #include <deque>
 #include <mutex>
 #include <cstdint>
 
-class ConsoleHistory
+class GRIM_HOST_API ConsoleHistory
 {
 public:
     enum class Alignment : uint8_t {

@@ -1,6 +1,7 @@
 #pragma once
+#include "core/host_exports.hpp"
 
-struct Vec2
+struct GRIM_HOST_API Vec2
 {
     float x;
     float y;

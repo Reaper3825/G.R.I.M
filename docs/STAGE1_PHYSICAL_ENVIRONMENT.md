@@ -34,7 +34,7 @@ single UI surface.
 | Tick orchestrator | `perception/physical/PhysicalEnvironmentLoop.cpp` | `TickPhysicalEnvironment()` called once per main-loop iteration. Drains the active stream into the bus. |
 | UI panel | `ui/ui_physical_environment_panel.cpp` | Refresh / Source dropdown / URL field / Connect / Disconnect / live preview / status / error. |
 | Entry wiring | `main.cpp` | `RegisterPhysicalEnvironmentDeviceServer()`, construct panel, add to `UIRoot`, call `TickPhysicalEnvironment()` in mainloop, call `ShutdownPhysicalEnvironment()` on teardown. |
-| Console button | `ui/console_panel.cpp` | "Camera" button in the toolbox that calls `setVisible(true)` on the panel. |
+| Console button | `plugins/console_plugin/console_panel.cpp` | "Camera" button in the toolbox that calls `setVisible(true)` on the panel. |
 
 ---
 

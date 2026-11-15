@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include "DataCollection/reasoning_state.hpp"
 #include <optional>
 #include <string>
@@ -22,7 +23,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
 
 // Process raw model input and return the response to the owning surface.
 CommandResult handleCommand(const std::string& line);
-CommandResult handleCommand(const std::string& line, const std::string& session_id,
+GRIM_HOST_API CommandResult handleCommand(const std::string& line, const std::string& session_id,
                             std::optional<GRIM::ReasoningState> reasoning_state = std::nullopt);
 
 // ====================================================

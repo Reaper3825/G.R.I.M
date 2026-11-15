@@ -3,7 +3,9 @@
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/RegisteredResource.hpp"
 #include "commands/command_result.hpp"
-#include "ui/calendar_provider_client.hpp"
+#ifdef GRIM_NATIVE_UI_TEST_HOST
+#include "ui/ui_root.hpp"
+#endif
 #include <windows.h>
 #include <chrono>
 #include <filesystem>
@@ -40,6 +42,11 @@ void runProviderSchedulingTests(const std::filesystem::path& timerDirectory,cons
         return GRIM::MMO::RegisteredResource{};
     };
     PluginManager::initialize(root.string());
+#ifdef GRIM_NATIVE_UI_TEST_HOST
+    UIRoot::get().processPendingTasks();
+    check(UIRoot::get().getPanelByKey("calendar") != nullptr, "Native Calendar did not attach through loader");
+    check(resource("Schedule Plugin", "panel:calendar").kind == "ui.panel", "Native panel resource missing");
+#endif
     check(registry.toolCount()==baseline+7,"Scheduling plugins missing tools");
     check(!fs::exists(root/"GRIM/calendar/events.json"),"Initialization accessed durable records before publication");
     check(resource("Timers Plugin","queue").state.at("pending")==0,"Initial timer queue missing");
@@ -49,8 +56,11 @@ void runProviderSchedulingTests(const std::filesystem::path& timerDirectory,cons
     for(const auto* input:{"0","-3"}) check(registry.invoke("set_timer",input).errorCode=="ERR_TIMER_NONPOSITIVE","Nonpositive timer accepted");
     check(registry.invoke("set_timer"," 1suffix").success,"Countdown prefix parsing changed");
     check(resource("Timers Plugin","queue").state.at("pending")==1,"Countdown resource not updated");
-    // The calendar client uses exactly the same provider tools, never a raw scheduler pointer.
-    const auto invoke=[&](const char* op,Json args){return GRIM::UI::callSchedule(op,args);};
+    const auto invoke=[&](const char* op,Json args){
+        const auto result=registry.invoke("schedule."+std::string(op),args.dump());
+        check(result.success,result.message.c_str());
+        return Json::parse(result.structuredOutputJson);
+    };
     auto created=invoke("create",{{"id","due"},{"kind","timer"},{"title","Due notification"},{"duration_seconds",1}});
     check(created.at("success")==true,"Saved timer creation failed");
     const auto before=pluginNotifications.size();
@@ -72,6 +82,10 @@ void runProviderSchedulingTests(const std::filesystem::path& timerDirectory,cons
     fs::copy_file(scheduleDirectory/"schedule_plugin.dll",root/"schedule_plugin.dll",fs::copy_options::overwrite_existing);
     for(const auto* name:{"schedule_plugin.dll","timers_plugin.dll"}) fs::last_write_time(root/name,fs::last_write_time(root/name)+std::chrono::seconds(2));
     PluginManager::checkForHotReload();
+#ifdef GRIM_NATIVE_UI_TEST_HOST
+    UIRoot::get().processPendingTasks();
+    check(UIRoot::get().getPanelByKey("calendar") != nullptr, "Replacement native panel missing");
+#endif
     check(resource("Schedule Plugin","items").provider.instance!=old,"Schedule generation did not replace");
     check(resource("Timers Plugin","queue").state.at("pending")==0,"Reload retained cancelled countdown state");
     check(invoke("get",{{"id","persist"}}).at("item").at("delivery_status")=="pending","Schedule did not reopen saved state");
@@ -81,6 +95,10 @@ void runProviderSchedulingTests(const std::filesystem::path& timerDirectory,cons
     check(invoke("get",{{"id","persist"}}).at("item").at("delivery_status")=="dispatched","Reload dispatch not persisted");
     fs::remove(root/"schedule_plugin.dll");PluginManager::checkForHotReload();
     PluginAPI::processTimers();
+#ifdef GRIM_NATIVE_UI_TEST_HOST
+    check(!UIRoot::get().getPanelByKey("calendar"), "DLL unload left native Calendar attached");
+    UIRoot::get().processPendingTasks();
+#endif
     check(registry.toolCount()==baseline && resource("Schedule Plugin","items").resource_id.empty() &&
           resource("Timers Plugin","queue").resource_id.empty(),"Unload retained scheduling surface");
     bool unavailable=false;try{invoke("list",Json::object());}catch(...){unavailable=true;}

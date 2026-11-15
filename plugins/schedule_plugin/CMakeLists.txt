@@ -5,3 +5,17 @@ find_package(nlohmann_json CONFIG REQUIRED HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_inst
 add_library(schedule_plugin SHARED schedule_plugin.cpp)
 grim_configure_plugin(schedule_plugin)
 target_link_libraries(schedule_plugin PRIVATE nlohmann_json::nlohmann_json)
+
+target_compile_features(schedule_plugin PRIVATE cxx_std_20)
+# Native UI plugins import the host's UI implementation; never compile a second copy.
+if(TARGET GRIM)
+    target_link_libraries(schedule_plugin PRIVATE GRIM_EXPORT)
+elseif(WIN32)
+    set(GRIM_HOST_IMPORT_LIBRARY "" CACHE FILEPATH "Matching GRIM host import library for native UI plugins")
+    if(NOT EXISTS "${GRIM_HOST_IMPORT_LIBRARY}")
+        message(FATAL_ERROR "schedule_plugin requires GRIM_HOST_IMPORT_LIBRARY from a matching host build")
+    endif()
+    target_link_libraries(schedule_plugin PRIVATE "${GRIM_HOST_IMPORT_LIBRARY}")
+elseif(APPLE)
+    target_link_options(schedule_plugin PRIVATE "-undefined" "dynamic_lookup")
+endif()

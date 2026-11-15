@@ -8,7 +8,7 @@ $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Componen
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
 $arguments = @('/nologo','/std:c++20','/EHsc','/W3','/TP','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
-$arguments += @('plugins/schedule_plugin/schedule_plugin.cpp','ui/provider_defined_panel.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$arguments += @('plugins/schedule_plugin/schedule_plugin.cpp','ui/ui_panel_service.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $arguments += '/I"' + $workspace + '/helpers"'
 $arguments += '/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'
 $arguments += @('/Zs','/DGRIM_BUILD_HOST',('/I' + (Join-Path $workspace 'ui')),('/I' + (Join-Path $workspace 'core')))

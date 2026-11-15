@@ -1,5 +1,29 @@
 # Stable panel identity and host operation foundation
 
+## Automatic native panel registration
+
+`UIPanel` registers its address with `UIRoot` during construction and unregisters
+that exact instance during destruction. `m_panels` and the stable-key index are
+non-owning; a provider may own a native panel with a member or `unique_ptr`.
+Copying/moving panels is disabled. Duplicate stable keys throw during construction;
+a derived constructor failure unwinds registration through the base destructor.
+
+Native panel construction, use and destruction must occur on the UI thread.
+Constructors must not reenter the UI pump: registration occurs before derived
+initialization finishes. Worker-thread construction is rejected. Lookup results
+are borrowed pointers and must not survive panel destruction. Worker callers use
+the queued operations returning copied state instead. Owners must destroy native
+panels on the UI thread before unloading their implementation DLL.
+
+`addPanel(shared_ptr<UIPanel>)` remains a compatibility adoption operation for
+existing host factories and dynamic surfaces. It retains
+ownership separately and does not duplicate constructor registration. Removal
+releases this retained ownership after detachment. During provider initialization
+the loader supplies the provider-generation scope.
+Constructor registrations are staged, validated and attached after commit.
+Native provider retirement detaches synchronously before DLL shutdown/unload.
+Calendar now follows this path and owns its native widgets directly.
+
 ## Provider-defined panel ownership contract
 
 This is the required boundary for the provider-defined panel migration. It is
@@ -12,7 +36,7 @@ content. The remaining sections describe the current implementation.
 |---|---|
 | Individual provider | Registers its own panels; owns their definitions, content, panel-specific state, actions, and lifecycle. |
 | UI provider | Owns its provider state and generic UI discovery/interaction tools. Operating on another provider's panel does not confer ownership of that panel or its domain state. |
-| `UIRoot` | Owns host-side visual instances and executes attachment, layout, rendering, focus, input routing, and detachment on the UI thread. It implements shared UI mechanics, not provider-specific feature logic. |
+| `UIRoot` | Borrows provider-owned native panels, owns remaining host factory instances, and executes attachment, layout, rendering, focus, input routing, and detachment on the UI thread. It implements shared UI mechanics, not provider-specific feature logic. |
 | `ProviderRegistry` | Records authoritative provider-generation ownership and copied panel resources. |
 | World Lab | Projects registered ownership into provider rooms and consumes discovered resources. It neither assigns nor transfers panel ownership. |
 
@@ -61,14 +85,14 @@ not a central list of every provider's panels.
 ### Approved provider mapping
 
 The migration preserves the seven existing root panels and their tab composition.
-Only Schedule currently exists as the designated provider; the other six require
-new providers. This table assigns the migration targets, not current registration.
+Schedule now owns Calendar and Console Plugin owns Console; Settings Plugin owns Settings; the other four require new providers. Their entries
+remain migration targets, not current registration.
 
 | Panel key | Owning provider |
 |---|---|
 | `calendar` | Schedule |
-| `console` | Console (new) |
-| `settings` | Settings (new) |
+| `console` | Console Plugin (migrated) |
+| `settings` | Settings Plugin (migrated) |
 | `training_control` | Model Workspace (new) |
 | `data_hub` | DataHub (new) |
 | `storage` | Storage (new) |
@@ -82,32 +106,22 @@ the domain services it consumes to that provider.
 
 ### Implementation boundary
 
-The provider/host boundary MUST use versioned ABI data and explicit lifetimes,
-not host C++ panel/widget objects, renderer references, or STL ownership objects
-passed between modules. Domain services stay with their owners; panels consume
-explicit interfaces or copied results rather than restoring retired host services.
+Providers own concrete `UIPanel` subclasses and their native widgets and callbacks.
+They import the existing host UI implementation through its exported C++ interface.
+Native UI plugins require the matching compiler, CRT and UI class ABI; API v14
+rejects older binaries. Domain services remain with their respective providers.
 
-The selected content model is copied panel/widget definitions with interaction
-events routed to the owning provider. Native provider rendering/input callbacks
-are not the selected model. Providers author content and behavior; host primitives
-render and route interactions. The exact content/update/event ABI and native
-viewport attachment mechanism must implement that boundary without losing the
-existing panels' functionality.
-
-The API cutover includes migration of all seven panels to their designated
-providers, not a host-owned transition path or renamed host-factory selection.
-This contract does not move the renderer, migrate dynamic surfaces or OSINT,
-or reintroduce removed perception panels.
+Calendar in Schedule, Console in Console Plugin, and Settings in Settings Plugin use this path. Constructor registration stages
+ownership under the loader's initialization scope. Commit attaches the same object;
+retirement detaches it before provider shutdown destroys it. No JSON widget tree,
+interaction-event transport or generic copied-content panel remains.
 
 ### Current gap
 
-`register_ui_panel(self, implementation_key)` already attributes declarations to
-the caller, but selects a host-defined factory rather than provider-authored
-content. The UI plugin currently declares all seven standard panels, so they
-are attributed to that provider. Moving declarations corrects attribution only;
-it does not by itself migrate panel logic or make DLL-owned panel code safe.
-The current discovery response also lacks owner metadata. These limitations
-must be addressed before describing the migration as complete.
+The UI plugin still declares four host factory panels through `register_ui_panel`.
+Their provider migrations remain outstanding. Dynamic surfaces and OSINT keep
+their own lifecycle paths. The generic `ui.list` response still lacks owner
+metadata; World Lab reads provider ownership from the resource registry.
 
 ## Current panel identity
 
@@ -135,7 +149,8 @@ they are not generated from titles and require no database.
 | `calendar` | Calendar |
 | `geospatial` | GeoSpatial |
 
-These are the seven current provider-declared host panels. Physical and digital
+These are the seven current provider-declared panels. Calendar belongs to
+Schedule; Console belongs to Console Plugin; Settings belongs to Settings Plugin; the other four still belong to the UI plugin. Physical and digital
 environment panels are no longer registered; the Model Registry panel source is
 excluded from the host build.
 
@@ -252,3 +267,8 @@ effects stubbed. It covers identity, title changes/ambiguity, duplicate keys,
 recreation, queued completion, removed targets, dynamic lifecycle and host-key
 collisions. No GRIM executable, model server, training, or package installation
 is needed.
+
+Console now follows the native provider-owned path; its bootstrap factory and
+UI Plugin factory declaration have been removed. See [Console ownership](CONSOLE.md#provider-ownership).
+
+Settings also follows the native provider-owned path. See [Settings ownership](SETTINGS.md).

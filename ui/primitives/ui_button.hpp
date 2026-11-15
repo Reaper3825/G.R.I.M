@@ -4,7 +4,7 @@
 #include <string>
 #include <functional>
 
-class UIButton : public Widget {
+class GRIM_HOST_API UIButton : public Widget {
 public:
     UIButton(const std::string& label, std::function<void()> onClick);
 

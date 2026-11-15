@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-class UIDropdown : public Widget {
+class GRIM_HOST_API UIDropdown : public Widget {
 public:
     UIDropdown(const std::string& label, const std::vector<std::string>& items, 
                int initialIndex, std::function<void(int, const std::string&)> onChange);

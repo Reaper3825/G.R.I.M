@@ -1,4 +1,5 @@
 #include "ui_root.hpp"
+#include "ui_panel_service.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "dynamic_surface_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
@@ -76,7 +77,7 @@ std::shared_ptr<UIPanel> UIRoot::createPanelFromFactory(
         panel->setVisible(initiallyVisible);
         if (entry.cleanup) m_panelCleanups.emplace(entry.panelKey, entry.cleanup);
         addPanel(panel);
-        if (getPanelByKey(entry.panelKey) != panel)
+        if (getPanelByKey(entry.panelKey) != panel.get())
             throw std::runtime_error("Could not attach factory panel: " + entry.panelKey);
     } catch (...) {
         m_panelCleanups.erase(entry.panelKey);
@@ -84,41 +85,60 @@ std::shared_ptr<UIPanel> UIRoot::createPanelFromFactory(
             try { entry.cleanup(panel); }
             catch (...) { LOG_ERROR("UIRoot", "Factory rollback cleanup failed: " + entry.panelKey); }
         }
-        if (panel && getPanelByKey(entry.panelKey) == panel) removePanel(entry.panelKey);
+        if (panel && getPanelByKey(entry.panelKey) == panel.get()) removePanel(entry.panelKey);
         throw;
     }
     return panel;
 }
 
+void UIRoot::requireUIThread() const {
+    if (!isUIThread()) throw std::logic_error("Native panel lifecycle requires the UI thread");
+}
+
+void UIRoot::registerPanel(UIPanel* panel)
+{
+    // Never publish a partially constructed panel to another execution thread.
+    // Constructors must not reenter the UI pump while constructing derived state.
+    if (!isUIThread()) throw std::logic_error("Panel construction requires the UI thread");
+    if (!panel) throw std::invalid_argument("Cannot register a null panel");
+    if (GRIM::UI::stageNativePanel(panel)) return;
+    std::unique_lock lock(m_panelMutex);
+    if (std::find(m_panels.begin(), m_panels.end(), panel) != m_panels.end()) return;
+    const auto& key = panel->getPanelKey();
+    if (!key.empty() && m_panelKeyMap.count(key))
+        throw std::logic_error("Duplicate panel key: " + key);
+    // Roll back if allocation fails; a throwing base constructor has no destructor.
+    if (!key.empty()) m_panelKeyMap.emplace(key, panel);
+    try { m_panels.push_back(panel); }
+    catch (...) { if (!key.empty()) m_panelKeyMap.erase(key); throw; }
+}
+
+void UIRoot::unregisterPanel(UIPanel* panel) noexcept
+{
+    if (!isUIThread()) std::terminate(); // Borrowed UI pointers require same-thread lifetime.
+    GRIM::UI::forgetNativePanel(panel);
+    GRIM::UI::InputRouter::get().forgetPanel(panel->getPanelID());
+    std::unique_lock lock(m_panelMutex);
+    const auto found = std::find(m_panels.begin(), m_panels.end(), panel);
+    if (found == m_panels.end()) return;
+    const auto& key = panel->getPanelKey();
+    const auto resource = m_panelResources.find(key);
+    if (resource != m_panelResources.end()) {
+        GRIM::MMO::ProviderRegistry::instance().removeResource(resource->second.provider, resource->second);
+        m_panelResources.erase(resource);
+    }
+    m_panelKeyMap.erase(key);
+    m_panels.erase(found);
+    // Destruction does not call derived methods or factory cleanup callbacks.
+    m_panelCleanups.erase(key);
+}
+
 void UIRoot::addPanel(const std::shared_ptr<UIPanel>& panel)
 {
-    auto task = [this, panel]() {
-        if (!panel)
-        {
-            LOG_ERROR("UIRoot", "Attempted to add null panel");
-            return;
-        }
-
-        std::unique_lock lock(m_panelMutex);
-        if (std::find(m_panels.begin(), m_panels.end(), panel) != m_panels.end()) return;
-        const auto& key = panel->getPanelKey();
-        if (!key.empty() && m_panelKeyMap.count(key)) {
-            LOG_ERROR("UIRoot", "Rejected duplicate panel key: " + key);
-            return;
-        }
-        m_panels.push_back(panel);
-        if (!key.empty()) m_panelKeyMap.emplace(key, panel);
-        LOG_DEBUG("UIRoot", "Added panel: " + key + " / " + panel->getTitle());
-    };
-
-    if (!isUIThread())
-    {
-        postTask(task);
-    }
-    else
-    {
-        task();
-    }
+    if (!isUIThread()) throw std::logic_error("Panel adoption requires the UI thread");
+    if (!panel) throw std::invalid_argument("Cannot adopt a null panel");
+    registerPanel(panel.get()); // Idempotent after automatic constructor registration.
+    m_ownedPanels.emplace(panel.get(), panel);
 }
 
 void UIRoot::removePanel(const std::string& name)
@@ -131,7 +151,7 @@ void UIRoot::removePanel(const std::string& name)
         panel->setVisible(false);
         auto cleanup = m_panelCleanups.extract(panel->getPanelKey());
         if (!cleanup.empty()) {
-            try { cleanup.mapped()(panel); }
+            try { cleanup.mapped()(m_ownedPanels.at(panel)); }
             catch (...) { LOG_ERROR("UIRoot", "Panel cleanup failed: " + panel->getPanelKey()); }
         }
         std::unique_lock lock(m_panelMutex);
@@ -152,6 +172,7 @@ void UIRoot::removePanel(const std::string& name)
 
         LOG_DEBUG("UIRoot", "Removed panel: " + name);
         lock.unlock();
+        m_ownedPanels.erase(panel); // Release only after unlocking; destructor unregisters.
         updateWindowZOrder();
     };
 
@@ -162,13 +183,13 @@ void UIRoot::removePanel(const std::string& name)
     }
 }
 
-std::shared_ptr<UIPanel> UIRoot::getPanel(const std::string& name)
+UIPanel* UIRoot::getPanel(const std::string& name)
 {
     std::shared_lock lock(m_panelMutex);
     const auto keyed = m_panelKeyMap.find(name);
     if (keyed != m_panelKeyMap.end()) return keyed->second;
     // Compatibility for existing host callers. Ambiguous titles are not identities.
-    std::shared_ptr<UIPanel> match;
+    UIPanel* match = nullptr;
     for (const auto& panel : m_panels) if (panel->getTitle() == name) {
         if (match) return nullptr;
         match = panel;
@@ -276,7 +297,7 @@ void UIRoot::processPendingTasks()
     }
 }
 
-std::shared_ptr<UIPanel> UIRoot::getPanelByKey(const std::string& key)
+UIPanel* UIRoot::getPanelByKey(const std::string& key)
 {
     std::shared_lock lock(m_panelMutex);
     const auto found = m_panelKeyMap.find(key);
@@ -316,14 +337,14 @@ std::future<UIPanelOperationResult> UIRoot::requestPanelOperation(
         case UIPanelOperation::Inspect: break;
         case UIPanelOperation::Show:
             panel->setVisible(true);
-            if (dynamic_cast<DynamicSurfacePanel*>(panel.get()))
+            if (dynamic_cast<DynamicSurfacePanel*>(panel))
                 GRIM::MMO::UISurfaceRegistry::instance().show(key);
             bringToFront(key);
             updateWindowZOrder();
             break;
         case UIPanelOperation::Hide:
             panel->setVisible(false);
-            if (dynamic_cast<DynamicSurfacePanel*>(panel.get()))
+            if (dynamic_cast<DynamicSurfacePanel*>(panel))
                 GRIM::MMO::UISurfaceRegistry::instance().hide(key);
             updateWindowZOrder();
             break;
@@ -338,7 +359,7 @@ std::future<UIPanelOperationResult> UIRoot::requestPanelOperation(
     return future;
 }
 
-std::vector<std::shared_ptr<UIPanel>> UIRoot::snapshotPanels() const
+std::vector<UIPanel*> UIRoot::snapshotPanels() const
 {
     std::shared_lock lock(m_panelMutex);
     return m_panels;

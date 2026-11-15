@@ -1,14 +1,23 @@
 # Native GRIM tool plugins
 
-The current host requires plugin ABI v12. Rebuild all older plugin binaries
+The current host requires plugin ABI v14. Rebuild all older plugin binaries
 against [the current API](../docs/PLUGIN_API.md) before loading them.
 
 API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
-declares seven standard panels; bootstrap registers host factories without
+declares four standard host panels; bootstrap registers host factories without
 creating their instances. Rebuild the host and UI plugin together for this
 migration. Older UI DLLs do not declare the full panel set. Dynamic surfaces
 and OSINT panels retain their current paths.
 See [provider panel lifecycle](../docs/PLUGIN_API.md#provider-panel-lifecycle-v317).
+
+API v14 replaces Calendar's copied widget/event transport with a native
+`UIPanel` subclass in Schedule. Native UI plugins import host UI classes and
+must match the host compiler, CRT and class ABI. Rebuild matching binaries before
+deployment. See [native panels](../docs/PLUGIN_API.md#native-provider-panels-v14).
+Windows standalone Schedule builds require `-DGRIM_HOST_IMPORT_LIBRARY=<path>`
+to a matching host import library. Host-tree all-target builds link Schedule
+against `GRIM_EXPORT` after building the host; the GRIM target alone cannot build
+its importing plugin. Focused tests use an isolated headless host import library.
 
 API v3.14 adds guarded hide (`GRIM_UI_HIDE_CURRENT`). Like `ui.show`, `ui.hide`
 accepts optional `expected_runtime_id`; World Lab supplies it automatically when
@@ -280,7 +289,9 @@ for the tools, breaking application connections and standalone lifecycle tests.
 
 `ui_plugin` exposes generic operations against the host's existing stable panel
 keys using API v3.8. It owns tool metadata, JSON argument validation, and result
-formatting; panel lifetime, discovery, and UI-thread execution remain in the host.
+formatting. The host executes generic UI operations, but resource lifetime
+belongs to each declaring provider. Calendar is owned by Schedule and survives
+unloading the UI tools provider.
 
 | Tool | JSON arguments |
 |---|---|
@@ -306,7 +317,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps
 ```
 
 Deploy the completed `.codex-build/ui-plugin/plugins/ui_plugin.dll` into the
-application's `plugins/` folder after rebuilding the host for API v4.
+application's `plugins/` folder only with a matching API v14 host and providers.
 This plugin uses the panel operations introduced in v3.8. The new host no longer registers `console`, `toggle_settings`,
 `ui.show_surface`, or `ui.hide_surface`. Existing handler functions are retained.
 Surface lifecycle and OSINT findings panel handlers remain in the host.
@@ -334,7 +345,11 @@ API v11 consolidates commands, collection, cache, jobs and Python bridges under
 `schedule_plugin` owns `schedule.create`, `schedule.get`, `schedule.list`,
 `schedule.update`, `schedule.cancel`, `schedule.status`, durable storage and due
 notification handling. It requires SYSTEM, FILESYSTEM and UI permissions and
-publishes `schedule.state` resources. The Calendar UI invokes its registered tools.
+publishes `schedule.state` resources. It also owns Calendar's controller, drafts,
+selection, native widgets and actions as a `UIPanel` subclass. Construction
+registers it under Schedule; the host attaches it after commit and publishes its
+resource under Schedule for World Lab.
+No Calendar-specific host class, factory, or UI-plugin declaration remains.
 Saved records survive unload; overdue delivery resumes on the next provider poll.
 There is no host scheduling service or calendar factory.
 See [tool contract](../docs/SCHEDULING_TOOLS.md) and
@@ -350,3 +365,33 @@ their original behavior. Rebuild the host and Application plugin together before
 using these services; older hosts reject this newer plugin API version.
 See [Application discovery](../docs/APPLICATION_DISCOVERY.md) for backend boundaries,
 resource identities, guarded launch arguments, testing and platform limitations.
+
+### Console plugin
+
+`console_plugin` owns the native Console panel (`console`), including its widgets,
+input queue, and panel lifetime. It declares no agent tools. Generic panel tools
+remain in `ui_plugin`; conversation/session/history services remain in the host.
+The plugin uses the exported native C++ UI ABI like `schedule_plugin`, so a
+standalone Windows build requires `GRIM_HOST_IMPORT_LIBRARY` from the matching
+host build. Both native UI plugins depend on the host import library and are
+excluded from the host's reverse deployment dependencies to avoid a build cycle.
+
+No host-factory request creates Console. Removing Console Plugin removes its
+panel; notifications still trigger popup activity when the panel is absent.
+See [Console lifecycle](../docs/ui/CONSOLE.md#provider-ownership).
+
+### Settings plugin
+
+`settings_plugin` owns the native Settings panel (`settings`) and all ten existing
+tabs. Constructor registration attaches it through the provider generation lease;
+it has no host factory and declares no agent tools. Generic `ui.*` operations
+remain in UI Plugin. Configuration persistence, runtime side effects and input
+bindings remain shared host services; the plugin imports their native interface.
+
+The matching host/compiler/CRT/UI ABI and Windows `GRIM_HOST_IMPORT_LIBRARY` are
+required, as for Console and Schedule. Unsaved edits are discarded on unload;
+unload never saves or applies configuration. Keybind widgets release their
+capture on destruction. World Lab maps the panel to Settings Plugin.
+
+Focused native DLL tests: `tests/run_ui_input_foundation.ps1` (configuration and
+platform effects stubbed; no application/model runtime started).

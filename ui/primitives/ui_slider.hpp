@@ -3,7 +3,7 @@
 #include <functional>
 #include <string>
 
-class UISlider : public Widget {
+class GRIM_HOST_API UISlider : public Widget {
 public:
     UISlider(const std::string& label, float minVal, float maxVal, float initialVal,
              std::function<void(float)> onChange, float step = 0.0f);
