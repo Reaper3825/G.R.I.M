@@ -138,7 +138,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const auto result = api->register_tools(api, tools, 6);
     if (result != GRIM_OK) return result;
     const char* implementations[] = {
-        "ui.data_hub",
         "ui.geospatial"
     };
     for (const auto* implementation : implementations) {

@@ -22,3 +22,4 @@ add_subdirectory(schedule_plugin)
 
 add_subdirectory(model_workspace_plugin)
 add_subdirectory(storage_plugin)
+add_subdirectory(data_hub_plugin)

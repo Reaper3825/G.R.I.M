@@ -442,3 +442,13 @@ cache/geospatial/*.sqlite-wal
 !/plugins/storage_plugin/CMakeLists.txt
 !/plugins/storage_plugin/*.cpp
 !/plugins/storage_plugin/*.hpp
+
+# Provider-owned DataHub sources.
+!/plugins/data_hub_plugin/
+/plugins/data_hub_plugin/*
+!/plugins/data_hub_plugin/CMakeLists.txt
+!/plugins/data_hub_plugin/*.cpp
+!/plugins/data_hub_plugin/*.hpp
+!/plugins/data_hub_plugin/data_hub/
+!/plugins/data_hub_plugin/data_hub/*.cpp
+!/plugins/data_hub_plugin/data_hub/*.hpp

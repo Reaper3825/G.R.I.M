@@ -8,6 +8,7 @@
 //======================================================//
 
 #pragma once
+#include "core/host_exports.hpp"
 
 #include "concept_block.hpp"
 
@@ -167,7 +168,7 @@ public:
                                    uint64_t iteration,
                                    GeneratorTraversal traversal) const;
 
-    static const char* valueTypeName(GeneratorValueType type);
+    static GRIM_HOST_API const char* valueTypeName(GeneratorValueType type);
     static const char* slotTypeName(GeneratorSlotType type);
     static std::string renderAtom(const GeneratorAtomBinding& atom);
 

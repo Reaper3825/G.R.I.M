@@ -60,6 +60,18 @@ foreach(_cfg IN ITEMS Debug Release)
     )
 endforeach()
 
+# LoadLibraryEx's restricted plugin search does not consult the toolkit PATH.
+if(WIN32 AND GRIM_USE_CUDA)
+    if(NOT CUDAToolkit_FOUND)
+        message(FATAL_ERROR "CUDA-enabled voice dependencies require CUDAToolkit")
+    endif()
+    if(NOT IS_ABSOLUTE "${CUDAToolkit_BIN_DIR}" OR NOT IS_DIRECTORY "${CUDAToolkit_BIN_DIR}")
+        message(FATAL_ERROR "CUDAToolkit_BIN_DIR must be an existing absolute directory")
+    endif()
+    target_compile_definitions(GRIM PRIVATE
+        GRIM_PLUGIN_CUDA_BIN_DIR="${CUDAToolkit_BIN_DIR}")
+endif()
+
 # =========================================================
 # Porcupine DLL
 # =========================================================

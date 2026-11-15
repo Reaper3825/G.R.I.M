@@ -923,9 +923,8 @@ runtime ID. Failed plugin initialization before commit preserves the old panel.
 An activation failure after replacement commit does not restore the old panel.
 Shutdown can discard queued cleanup because `UIRoot::shutdown` destroys all panels.
 
-The UI plugin currently declares two host implementations:
-`ui.data_hub`
-and `ui.geospatial`. Bootstrap registers
+The UI plugin currently declares one host implementation:
+`ui.geospatial`. Bootstrap registers
 factories and host dependencies, but creates no instances of these panels.
 Dynamic surfaces and OSINT panels have not migrated. Host factories contain no
 DLL callbacks. The existing queued retirement relies on this host-only code
@@ -990,8 +989,7 @@ Calendar uses native buttons, input boxes, scrolling and overlay drawing. It
 refreshes visible, non-minimized content every 500 ms from `update()`. Storage
 operations remain synchronous. Initialization does not open calendar storage;
 saved events survive unload, while unsaved widget drafts do not. The generic UI
-plugin operates on Calendar but does not own it. The other two factory panels
-remain unmigrated.
+plugin operates on Calendar but does not own it. GeoSpatial remains unmigrated.
 
 `tests/run_ui_input_foundation.ps1` tests native controls, provider staging,
 permissions, collision/replacement, and synchronous retirement. It also builds
@@ -1025,3 +1023,17 @@ on reload; host connection, device, storage and transfer state survives. The nat
 DLL tests in `tests/run_ui_input_foundation.ps1` exercise both tabs, device actions,
 explicit port validation, resource ownership, replacement and failed initialization
 without starting networking. Matching host/plugin binaries must be rebuilt together.
+
+DataHub Plugin owns `data_hub` and all six tabs. It imports native UI and host
+catalog/service APIs; no domain runtime is compiled into the plugin. The host
+starts `DataHubJobs` with dataset services and drains it at application shutdown.
+HuggingFace downloads and batch structuring continue through provider retirement.
+Search, preview and draft-generation request IDs are released on panel destruction;
+host workers never retain provider callbacks or widgets. A replacement reconnects
+to copied durable status. Batch writes require the captured catalog revision.
+
+Source/configuration persistence is host-owned and atomic. Candidate construction
+and destruction do not save panel state. Live source edits are saved through an
+optimistic merge that retains newly downloaded sources; conflicting external edits
+are reported and require Reload Sources. Settings save after live interaction.
+Canonical rendering and concept supervision semantics are unchanged.

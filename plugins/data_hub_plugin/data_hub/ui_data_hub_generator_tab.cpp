@@ -16,19 +16,16 @@ uint64_t parseUnsignedOr(const std::string& text, uint64_t fallback) {
 }
 
 std::string generatorResourceRelativePath(const char* filename) {
-    return (std::filesystem::path(aiConfig.at("paths").at("grim_text").at("training_data")
+    return (std::filesystem::path(DataHub::config().at("paths").at("grim_text").at("training_data")
         .get<std::string>()) / filename).string();
 }
 
 } // namespace
 
 void UIDataHubPanel::refreshGeneratorState() {
-    if (!creationService_) return;
-    const bool loaded = creationService_->reloadAssets();
-    conceptGenerator_ = creationService_->assets();
-    if (!loaded) addLog("Generator resources: " + creationService_->assetError(), 2);
+    conceptGenerator_ = DataHub::generatorAssets();
     if (!conceptGenerator_) {
-        generatorCatalogStatus_ = creationService_->assetError();
+        generatorCatalogStatus_ = DataHub::generatorError();
         return;
     }
     generatorCatalogStatus_ = std::to_string(conceptGenerator_->groups().size())
@@ -76,8 +73,7 @@ void UIDataHubPanel::rebuildGeneratorGroupViews() {
 }
 
 void UIDataHubPanel::startGeneratorRun() {
-    if (!creationService_) return;
-    if (creationService_->status().paused && creationService_->resume()) return;
+    if (DataHub::generatorStatus().paused && DataHub::resumeGenerator()) return;
     generatorBatchCount_ = std::clamp<uint64_t>(
         parseUnsignedOr(genCountInput_ ? genCountInput_->getText() : "25", 25), 1, 100000);
     if (genCountInput_) genCountInput_->setText(std::to_string(generatorBatchCount_));
@@ -90,34 +86,29 @@ void UIDataHubPanel::startGeneratorRun() {
 }
 
 void UIDataHubPanel::pauseGeneratorRun() {
-    if (creationService_) creationService_->pause();
+    DataHub::pauseGenerator();
 }
 
 void UIDataHubPanel::generateNextFrame() {
-    if (!creationService_) return;
     DatasetCreationService::Request request;
     request.frameIndex = genFrameDropdown_ ? std::max(0, genFrameDropdown_->getSelectedIndex()) : 0;
     request.seed = generatorBaseSeed_;
     request.traversal = genTraversalDropdown_ && genTraversalDropdown_->getSelectedIndex() == 1
         ? GeneratorTraversal::RoundRobin : GeneratorTraversal::SeededRandom;
     if (genDocumentArea_) request.document = {"inline_document", "Inline Document", genDocumentArea_->getText(), ""};
-    if (!creationService_->start(request)) addLog("Generator is busy or its resources are unavailable", 1);
+    if (!DataHub::startGenerator(request)) addLog("Generator is busy or its resources are unavailable", 1);
 }
 
 void UIDataHubPanel::saveGeneratorQueue() {
-    if (!creationService_) return;
     size_t added = 0;
-    if (!creationService_->saveQueue(added)) {
-        addLog("Generator queue save failed: " + datasetTarget_->lastError(), 2);
-        return;
-    }
+    try { added = DataHub::saveGeneratorQueue(); }
+    catch (const std::exception& error) { addLog(error.what(), 2); return; }
     cbFilterDirty_ = true;
     addLog("Saved " + std::to_string(added) + " queued ConceptBlocks", 0);
     updateGeneratorLoop(0.0f);
 }
 
 void UIDataHubPanel::requestGeneratorFill() {
-    if (!creationService_) return;
     DatasetCreationService::Request request;
     request.frameIndex = genFrameDropdown_ ? std::max(0, genFrameDropdown_->getSelectedIndex()) : 0;
     request.seed = generatorBaseSeed_;
@@ -127,12 +118,11 @@ void UIDataHubPanel::requestGeneratorFill() {
     request.traversal = genTraversalDropdown_ && genTraversalDropdown_->getSelectedIndex() == 1
         ? GeneratorTraversal::RoundRobin : GeneratorTraversal::SeededRandom;
     if (genDocumentArea_) request.document = {"inline_document", "Inline Document", genDocumentArea_->getText(), ""};
-    if (!creationService_->start(request)) addLog("Generator is busy or its resources are unavailable", 1);
+    if (!DataHub::startGenerator(request)) addLog("Generator is busy or its resources are unavailable", 1);
 }
 
 void UIDataHubPanel::updateGeneratorLoop(float) {
-    if (!creationService_) return;
-    const auto status = creationService_->status();
+    const auto status = DataHub::generatorStatus();
     if (status.revision == generatorStatusRevision_) return;
     generatorStatusRevision_ = status.revision;
     generatorRunning_ = status.running;

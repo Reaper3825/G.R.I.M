@@ -39,7 +39,8 @@ struct InputState;
 
 #include "DataCollection/dataset_catalog.hpp"
 #include "DataCollection/dataset_creation_service.hpp"
-#include "DataCollection/data_structurer.hpp"
+#include "DataCollection/data_hub_jobs.hpp"
+#include "ui/data_hub_services.hpp"
 #include "DataCollection/concept_generator.hpp"
 #include "DataCollection/concept_binding_adapter.hpp"
 
@@ -119,6 +120,7 @@ private:
     // ═════════════════════════════════════════════════════
 
     std::shared_ptr<UIButton>    btnAddCard_;
+    std::shared_ptr<UIButton>    btnReloadSources_;
 
     // ═════════════════════════════════════════════════════
     //  HuggingFace tab widgets
@@ -179,18 +181,28 @@ private:
     //  Backend services
     // ═════════════════════════════════════════════════════
 
-    std::shared_ptr<GRIM::Pipeline::PipelineOrchestrator> pipelineOrchestrator_;
-    std::shared_ptr<GRIM::DataCollection::HuggingFaceWebhook>    hfWebhook_;
     std::shared_ptr<GRIM::DataCollection::DatasetCatalog>        datasetTarget_;
     uint64_t datasetRevision_ = 0;
     uint64_t sequenceEditorRevision_ = 0;
     uint64_t detailEditorRevision_ = 0;
     uint64_t cbEditorRevision_ = 0;
     std::string cbEditorBlockId_;
-    std::shared_ptr<GRIM::DataCollection::DataStructurer>        structurer_;
     std::shared_ptr<const GRIM::DataCollection::ConceptGenerator> conceptGenerator_;
-    std::shared_ptr<GRIM::DataCollection::DatasetCreationService> creationService_;
     uint64_t generatorStatusRevision_ = 0;
+    nlohmann::json sourceBaseline_ = nlohmann::json::array();
+    nlohmann::json settingsBaseline_ = nlohmann::json::object();
+    uint64_t searchRequest_ = 0, previewRequest_ = 0, structureRequest_ = 0;
+    uint64_t batchRevision_ = 0, downloadsRevision_ = 0;
+    enum class StructureTarget { Output, Card, Concept };
+    StructureTarget structureTarget_ = StructureTarget::Output;
+    size_t structureCard_ = 0;
+    std::string structureMode_, structureDraft_;
+    void pollHostJobs();
+    void requestStructure(const std::string& raw, const std::string& mode,
+                          const std::string& prompt, StructureTarget target, size_t card = 0);
+    void applyCardResult(size_t cardId, const std::string& mode, const std::vector<std::string>& results);
+    void applyConceptResult(const std::vector<std::string>& results);
+    std::string structureDraft() const;
 
     // ═════════════════════════════════════════════════════
     //  Tab draw methods
@@ -307,9 +319,6 @@ private:
     int         hfSelectedResultIndex_ = -1;
     std::string hfPreviewDatasetId_;
     std::string hfPreviewDisplayName_;
-    std::string hfPreviewPendingText_;
-    std::atomic<bool> hfPreviewApply_{false};
-    std::atomic<int>  hfPreviewGen_{0};
 
     struct QueuedDownload {
         std::string datasetId;
@@ -320,7 +329,6 @@ private:
         std::string errorMessage;
     };
     std::vector<QueuedDownload> downloadQueue_;
-    std::mutex                  queueMutex_;
     std::atomic<bool>           queueProcessing_{false};
     std::atomic<int>            currentQueueIndex_{-1};
     int                         hoveredQueueItem_ = -1;
@@ -604,6 +612,5 @@ private:
     void loadUIConfig();
     void saveUIConfig();
     void loadDownloadQueue();
-    void saveDownloadQueue();
     void loadHFTokenFromConfig();
 };

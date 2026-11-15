@@ -1,5 +1,10 @@
 # Data Hub — Implementation Plan
 
+> Historical design plan. Current ownership is documented under
+> [DataHub Plugin](../plugins/README.md#datahub-plugin): six provider-owned tabs,
+> host-owned dataset services and durable jobs. The implementation no longer uses
+> detached panel workers or persists configuration on panel destruction.
+
 > Refactors the monolithic `UIDataCollectionPanel` into a **tabbed Data Hub** (`UIDataHubPanel`) that serves as both a data **collector** and a data **structurer** for the MMO sub-model ecosystem.
 >
 > **Reference file**: `ui_DataCollection.hpp/.cpp` is renamed `ui_DataCollection_OLD.hpp/.cpp` and kept as implementation reference. It is not compiled.

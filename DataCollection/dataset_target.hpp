@@ -14,6 +14,7 @@
 //======================================================//
 
 #pragma once
+#include "core/host_exports.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -53,7 +54,7 @@ struct SearchResult {
     float       relevance = 0.0f;
 };
 
-class DatasetTarget {
+class GRIM_HOST_API DatasetTarget {
 public:
     explicit DatasetTarget(const std::filesystem::path& model_store_root,
                            const std::filesystem::path& mass_dataset_path);

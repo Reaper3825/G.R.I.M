@@ -843,7 +843,7 @@ void UIDataHubPanel::generateForCard(size_t cardId) {
     for (auto& c : sequenceCards_) {
         if (c.cardId == cardId) { card = &c; break; }
     }
-    if (!card || !structurer_) return;
+    if (!card) throw std::runtime_error("DataHub sequence card no longer exists");
 
     std::string raw = rawTextArea_ ? rawTextArea_->getText() : "";
     if (raw.empty()) { addLog("Put raw text in 'Raw Source' first", 1); return; }
@@ -855,13 +855,15 @@ void UIDataHubPanel::generateForCard(size_t cardId) {
     std::string prompt = customPromptArea_ ? customPromptArea_->getText() : "";
     addLog("Generating " + mode + " format...", 0);
 
-    auto results = structurer_->structureEntry(raw, mode, prompt);
-    if (results.empty()) {
-        std::string err = structurer_->lastError();
-        addLog("Generation failed: " + (err.empty() ? "LLM returned no output" : err), 2);
-        return;
-    }
+    requestStructure(raw, mode, prompt, StructureTarget::Card, cardId);
+}
 
+void UIDataHubPanel::applyCardResult(size_t cardId, const std::string& mode,
+                                    const std::vector<std::string>& results) {
+    auto found = std::find_if(sequenceCards_.begin(), sequenceCards_.end(),
+        [cardId](const auto& value) { return value.cardId == cardId; });
+    if (found == sequenceCards_.end()) throw std::runtime_error("DataHub result targets a removed card");
+    auto* card = &*found;
     auto makeField = [](const std::string& prefix, const std::string& text) {
         UIDataHubPanel::SequenceCard::EntryField f;
         f.prefix = prefix;

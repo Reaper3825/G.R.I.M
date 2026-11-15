@@ -30,7 +30,7 @@ struct ActionMenuItem {
     bool                separator  = false;  // true = horizontal line, label/callback ignored
 };
 
-class UIActionMenu : public Widget {
+class GRIM_HOST_API UIActionMenu : public Widget {
 public:
     explicit UIActionMenu(const std::string& title);
 

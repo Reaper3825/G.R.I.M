@@ -12,7 +12,6 @@
 #include "../resources.hpp"
 #include "../ui/primitives/ui_native_3d_viewport_attachment.hpp"
 #include "../ui/primitives/ui_native_3d_viewport_clear_pass.hpp"
-#include "../ui/ui_data_hub.hpp"
 #include "../ui/ui_geospatial_panel.hpp"
 #include "../ui/ui_root.hpp"
 #include "../ui/ui_surface_renderer_bridge.hpp"
@@ -135,7 +134,6 @@ UIBootstrapResult bootstrapUI(
     // the UI plugin decides which live panel instances exist.
     auto geoSpatialRuntime = std::make_shared<GRIM::GeoSpatial::GeoSpatialRuntime>();
     auto& root = UIRoot::get();
-    root.registerPanelFactory("ui.data_hub", "data_hub", [] { return std::make_shared<UIDataHubPanel>(); });
     const auto cleanupGeoSpatial = [geoSpatialRuntime](const std::shared_ptr<UIPanel>& base) {
         geoSpatialRuntime->setViewportReady(false);
         geoSpatialRuntime->setViewportAttachment({});

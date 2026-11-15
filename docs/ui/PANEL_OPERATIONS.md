@@ -85,8 +85,9 @@ not a central list of every provider's panels.
 ### Approved provider mapping
 
 The migration preserves the seven existing root panels and their tab composition.
-Schedule now owns Calendar and Console Plugin owns Console; Settings Plugin owns Settings; Model Workspace owns Training Control; Storage Plugin owns Shared Storage; the other two require new providers. Their entries
-remain migration targets, not current registration.
+Schedule owns Calendar; Console Plugin owns Console; Settings Plugin owns Settings;
+Model Workspace owns Training Control; Storage Plugin owns Shared Storage; DataHub
+Plugin owns DataHub. GeoSpatial remains a migration target.
 
 | Panel key | Owning provider |
 |---|---|
@@ -94,7 +95,7 @@ remain migration targets, not current registration.
 | `console` | Console Plugin (migrated) |
 | `settings` | Settings Plugin (migrated) |
 | `training_control` | Model Workspace Plugin (migrated) |
-| `data_hub` | DataHub (new) |
+| `data_hub` | DataHub Plugin (migrated) |
 | `storage` | Storage Plugin (migrated) |
 | `geospatial` | GeoSpatial (new) |
 
@@ -111,15 +112,15 @@ They import the existing host UI implementation through its exported C++ interfa
 Native UI plugins require the matching compiler, CRT and UI class ABI; API v14
 rejects older binaries. Domain services remain with their respective providers.
 
-Calendar in Schedule, Console in Console Plugin, Settings in Settings Plugin, Training Control in Model Workspace, and Shared Storage in Storage Plugin use this path. Constructor registration stages
+Calendar in Schedule, Console in Console Plugin, Settings in Settings Plugin, Training Control in Model Workspace, Shared Storage in Storage Plugin, and DataHub in DataHub Plugin use this path. Constructor registration stages
 ownership under the loader's initialization scope. Commit attaches the same object;
 retirement detaches it before provider shutdown destroys it. No JSON widget tree,
 interaction-event transport or generic copied-content panel remains.
 
 ### Current gap
 
-The UI plugin still declares two host factory panels through `register_ui_panel`.
-Their provider migrations remain outstanding. Dynamic surfaces and OSINT keep
+The UI plugin still declares GeoSpatial through `register_ui_panel`.
+Its provider migration remains outstanding. Dynamic surfaces and OSINT keep
 their own lifecycle paths. The generic `ui.list` response still lacks owner
 metadata; World Lab reads provider ownership from the resource registry.
 
@@ -150,7 +151,7 @@ they are not generated from titles and require no database.
 | `geospatial` | GeoSpatial |
 
 These are the seven current provider-declared panels. Calendar belongs to
-Schedule; Console belongs to Console Plugin; Settings belongs to Settings Plugin; Training Control belongs to Model Workspace; Shared Storage belongs to Storage Plugin; the other two still belong to the UI plugin. Physical and digital
+Schedule; Console belongs to Console Plugin; Settings belongs to Settings Plugin; Training Control belongs to Model Workspace; Shared Storage belongs to Storage Plugin; DataHub belongs to DataHub Plugin; GeoSpatial still belongs to the UI plugin. Physical and digital
 environment panels are no longer registered; the Model Registry panel source is
 excluded from the host build.
 
@@ -284,3 +285,7 @@ Reload discards panel-local drafts but does not stop transfers or disconnect the
 Malformed explicit hub ports produce visible validation errors without calling
 networking. The existing test command includes Storage DLL snapshot/action,
 ownership, replacement, missing-service, permission and unload-before-activation tests.
+
+DataHub follows the native path with all six existing tabs. See
+[DataHub provider ownership](../../plugins/README.md#datahub-plugin) for host jobs,
+reload-safe persistence and validation. The provider owns no worker threads.

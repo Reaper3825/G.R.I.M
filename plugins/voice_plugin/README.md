@@ -78,9 +78,35 @@ is made. Loading the plugin alone does not test backend availability.
 
 ## Validation
 
+### Windows native dependencies
+
+The host loads private plugin copies with a restricted DLL search path: the
+application directory, plugin source directory, Windows system directories,
+and explicitly registered dependency directories.
+`PATH` alone does not make the CUDA toolkit DLLs available to this loader.
+The Whisper dependency chain includes `ggml-cuda.dll`, `cudart64_*.dll`,
+`cublas64_*.dll`, and `cublasLt64_*.dll` in CUDA-enabled builds.
+For Windows CUDA-enabled hosts, CMake records `CUDAToolkit_BIN_DIR` in the
+loader. Each native plugin load temporarily registers that exact directory
+with `AddDllDirectory`, then removes the registration on success or failure.
+No CUDA DLL copies or unrestricted `PATH` searches are needed. The toolkit
+must remain installed at that location and match the deployed GGML binaries.
+A missing toolkit directory is an explicit load error. Reconfigure and rebuild
+the host when changing toolkit locations; changing `CUDA_PATH` alone after
+building does not change the recorded directory. CPU-only builds do not
+register or require a CUDA directory.
+
+Native load rejections report the platform loader error and the attempted path.
+Win32 error 126 can indicate a missing *transitive* DLL, not a missing plugin;
+127 indicates a missing imported procedure, and 193 an invalid binary format.
+
+`tests\run_plugin_loader.ps1` exercises scoped dependency discovery and cleanup
+with tiny fixture DLLs; it does not build or run the application or voice runtime.
+
 ```powershell
 cmake -S plugins/voice_plugin -B .codex-build/voice-owned -G "Visual Studio 17 2022" -A x64 -DGRIM_DEPLOY_PLUGINS=OFF -DGRIM_VOICE_PROVIDER_TESTS=ON
 cmake --build .codex-build/voice-owned --config Release --target voice_plugin voice_provider_tests --parallel 4
+# This direct-load test uses PATH; the host plugin loader does not.
 # Put existing native dependency DLL directories on PATH.
 ctest --test-dir .codex-build/voice-owned -C Release --output-on-failure
 ```

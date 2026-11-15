@@ -5,6 +5,7 @@
 #include <fstream>
 #include <optional>
 #include <random>
+#include <system_error>
 #include <vector>
 
 #ifdef _WIN32
@@ -69,17 +70,55 @@ void removeCache(const std::filesystem::path& directory) {
     std::error_code error;
     std::filesystem::remove_all(directory, error);
 }
+#ifdef _WIN32
+class ScopedDllDirectory {
+public:
+    explicit ScopedDllDirectory(const std::filesystem::path& path) : path_(path) {
+        if (!path_.is_absolute() || !std::filesystem::is_directory(path_))
+            throw std::runtime_error("Plugin dependency directory must exist and be absolute: " + path_.string());
+        cookie_ = AddDllDirectory(path_.c_str());
+        if (!cookie_) {
+            const auto error = GetLastError();
+            throw std::system_error(error, std::system_category(),
+                "Cannot add plugin dependency directory " + path_.string());
+        }
+    }
+    ~ScopedDllDirectory() {
+        if (!RemoveDllDirectory(cookie_)) {
+            const auto error = GetLastError();
+            LOG_ERROR("PluginManager", "Cannot remove plugin dependency directory " +
+                path_.string() + " (Win32 error " + std::to_string(error) + ")");
+        }
+    }
+    ScopedDllDirectory(const ScopedDllDirectory&) = delete;
+    ScopedDllDirectory& operator=(const ScopedDllDirectory&) = delete;
+private:
+    std::filesystem::path path_;
+    DLL_DIRECTORY_COOKIE cookie_;
+};
+#endif
+
 void* loadLib(const std::filesystem::path& copy, const std::filesystem::path& sourceFolder) {
 #ifdef _WIN32
-    // Search the source directory for companion libraries while loading the
-    // private copy. No persistent change to the application's DLL search path.
-    auto cookie = AddDllDirectory(sourceFolder.c_str());
+    // Only register explicit directories for the duration of the native load.
+    ScopedDllDirectory sourceDirectory(sourceFolder);
+#ifdef GRIM_PLUGIN_CUDA_BIN_DIR
+    ScopedDllDirectory cudaDirectory(GRIM_PLUGIN_CUDA_BIN_DIR);
+#endif
     auto module = LoadLibraryExW(copy.c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS);
-    if (cookie) RemoveDllDirectory(cookie);
+    const auto loadError = GetLastError();
+    if (!module) {
+        throw std::system_error(loadError, std::system_category(),
+            "Cannot load native library " + copy.string() +
+            " (Win32 error " + std::to_string(loadError) +
+            "; dependency directory " + sourceFolder.string() + ")");
+    }
     return module;
 #else
-    return dlopen(copy.c_str(), RTLD_NOW | RTLD_LOCAL);
+    auto* module = dlopen(copy.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!module) throw std::runtime_error("Cannot load native library " + copy.string() + ": " + dlerror());
+    return module;
 #endif
 }
 void unloadLib(void* handle) {
@@ -196,7 +235,6 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
             return false;
         }
         candidate.handle = loadLib(copy, path.parent_path());
-        if (!candidate.handle) throw std::runtime_error("Cannot load native library");
         using GetInfo = const GrimPluginInfo* (*)();
         using Init = GrimResult (*)(const GrimPluginAPI*);
         auto getInfo = reinterpret_cast<GetInfo>(getSymbol(candidate.handle, "grim_plugin_get_info"));

@@ -370,7 +370,7 @@ void UIDataHubPanel::drawHomeTab(OverlayRenderer& renderer, const PanelRect& con
 // =========================================================
 
 void UIDataHubPanel::startCollection(const std::string& mode) {
-    if (pipelineOrchestrator_ && pipelineOrchestrator_->getStatus().isRunning) {
+    if (DataHub::pipelineStatus().isRunning) {
         addLog("Collection already active", 1);
         return;
     }
@@ -385,7 +385,7 @@ void UIDataHubPanel::startCollection(const std::string& mode) {
     else if (mode == "merge")    pipelineMode = GRIM::Pipeline::PipelineMode::MergeOnly;
     else if (mode == "merge-rebuild") pipelineMode = GRIM::Pipeline::PipelineMode::MergeRebuild;
 
-    pipelineOrchestrator_->startPipeline(pipelineMode);
+    DataHub::startPipeline(pipelineMode);
     addLog(mode + " started", 0);
     LOG_DEBUG("DataHub", "Pipeline started: " + mode);
 }
@@ -396,15 +396,13 @@ void UIDataHubPanel::stopCollection() {
         return;
     }
     addLog("Stopping collection...", 0);
-    pipelineOrchestrator_->stopPipeline();
+    DataHub::stopPipeline();
     collectionActive_ = false;
     LOG_DEBUG("DataHub", "Collection stopped by user");
 }
 
 void UIDataHubPanel::pollCollectionManager() {
-    if (!pipelineOrchestrator_) return;
-
-    auto status = pipelineOrchestrator_->getStatus();
+    auto status = DataHub::pipelineStatus();
     if (status.isRunning) collectionActive_ = true;
     currentPhase_          = status.phase;
     currentProgress_       = status.progress;
@@ -425,14 +423,10 @@ void UIDataHubPanel::pollCollectionManager() {
 }
 
 void UIDataHubPanel::updateDatasetStats() {
-    const std::filesystem::path trainingDataPath = resolvePathFromGrimRoot(
-        aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>());
-    const std::filesystem::path checkpointDir = resolvePathFromGrimRoot(
-        aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>());
-
     try {
-        if (std::filesystem::exists(trainingDataPath)) {
-            auto sz = std::filesystem::file_size(trainingDataPath);
+        const auto status = DataHub::statistics();
+        if (status.datasetExists) {
+            auto sz = status.datasetBytes;
             std::stringstream ss;
             if (sz >= 1024ULL * 1024 * 1024)
                 ss << std::fixed << std::setprecision(2) << (sz / (1024.0 * 1024.0 * 1024.0)) << " GB";
@@ -447,16 +441,12 @@ void UIDataHubPanel::updateDatasetStats() {
             hudFileSize_ = "N/A";
         }
 
-        if (std::filesystem::exists(checkpointDir)) {
-            int count = 0;
-            for (const auto& e : std::filesystem::directory_iterator(checkpointDir))
-                if (e.path().extension() == ".ckpt") count++;
-            hudCheckpoints_ = count;
-            checkpointStatsInfo_ = "Checkpoints: " + std::to_string(count);
-        }
-    } catch (const std::exception&) {
+        hudCheckpoints_ = status.checkpoints;
+        checkpointStatsInfo_ = "Checkpoints: " + std::to_string(status.checkpoints);
+    } catch (const std::exception& error) {
         datasetSizeInfo_ = "Dataset: Error";
         hudFileSize_ = "Error";
+        addLog(error.what(), 2);
     }
 }
 
@@ -488,7 +478,7 @@ void UIDataHubPanel::loadDirectoryCollectionPathFromConfig() {
     }
 
     const std::string directoryCollectionPath = resolvePathFromGrimRoot(
-        aiConfig.at("paths").at("grim_text").at("directory_collection").get<std::string>()).string();
+        DataHub::config().at("paths").at("grim_text").at("directory_collection").get<std::string>()).string();
 
     dirPathInput_->setText(directoryCollectionPath);
     dirScanPath_ = directoryCollectionPath;
@@ -503,7 +493,7 @@ void UIDataHubPanel::scanDirectory() {
     if (dirScanPath_.empty()) return;
 
     std::error_code ec;
-    const auto files = listFiles(dirScanPath_, ec);
+    const auto files = DataHub::files(dirScanPath_, ec);
     if (ec == std::errc::no_such_file_or_directory) {
         addLog("Directory collection path does not exist: " + dirScanPath_, 2);
         return;
@@ -535,86 +525,21 @@ void UIDataHubPanel::scanDirectory() {
     addLog("Scanned directory: " + std::to_string(dirFileEntries_.size()) + " file(s)", 0);
 }
 
+
 void UIDataHubPanel::collectFromDirectory() {
-    if (!datasetTarget_) {
-        addLog("Dataset target not initialized", 2);
-        return;
-    }
-    if (dirScanPath_.empty()) {
-        addLog("No directory path specified", 1);
-        return;
-    }
-
-    namespace fs = std::filesystem;
-    int collected = 0;
-    int failed    = 0;
-
-    for (auto it = dirFileEntries_.begin(); it != dirFileEntries_.end(); ) {
+    int collected = 0, failed = 0;
+    for (auto it = dirFileEntries_.begin(); it != dirFileEntries_.end();) {
         if (!it->collect) { ++it; continue; }
-
-        fs::path filePath = it->path;
-        std::error_code ec;
-        if (!fs::exists(filePath, ec) || !fs::is_regular_file(filePath, ec)) {
-            addLog("File not found: " + it->filename, 2);
-            ++failed;
-            ++it;
-            continue;
-        }
-
-        // Read file content
-        std::ifstream ifs(filePath, std::ios::in | std::ios::binary);
-        if (!ifs.is_open()) {
-            addLog("Cannot open: " + it->filename, 2);
-            ++failed;
-            ++it;
-            continue;
-        }
-        std::ostringstream oss;
-        oss << ifs.rdbuf();
-        ifs.close();
-        std::string content = oss.str();
-
-        if (content.empty()) {
-            addLog("Empty file skipped: " + it->filename, 1);
-            ++it;
-            continue;
-        }
-
-        // Determine source type from extension
-        std::string ext = filePath.extension().string();
-        std::string sourceType = "file";
-        if (ext == ".txt")       sourceType = "text_file";
-        else if (ext == ".json") sourceType = "json_file";
-        else if (ext == ".jsonl") sourceType = "jsonl_file";
-        else if (ext == ".md")   sourceType = "markdown_file";
-        else if (ext == ".csv")  sourceType = "csv_file";
-        else if (ext == ".html" || ext == ".htm") sourceType = "html_file";
-
-        if (datasetTarget_->appendStructuredEntry(content, "", sourceType, filePath.string())) {
+        try {
+            DataHub::collectFile(it->path, it->deleteAfter);
             ++collected;
-
-            // Delete the file if flagged
-            if (it->deleteAfter) {
-                std::error_code delEc;
-                fs::remove(filePath, delEc);
-                if (delEc)
-                    addLog("Collected but failed to delete: " + it->filename, 1);
-                it = dirFileEntries_.erase(it);
-                continue;
-            }
-        } else {
-            addLog("Failed to append: " + it->filename, 2);
-            ++failed;
-        }
+            if (it->deleteAfter) { it = dirFileEntries_.erase(it); continue; }
+        } catch (const std::exception& error) { ++failed; addLog(error.what(), 2); }
         ++it;
     }
-
     totalSequences_ = datasetTarget_->massDatasetSize();
     updateDatasetStats();
-
-    addLog("Directory collection: " + std::to_string(collected) + " collected, "
-         + std::to_string(failed) + " failed", collected > 0 ? 0 : 1);
-
-    // Rescan to refresh the file list
+    addLog("Directory collection: " + std::to_string(collected) + " collected, " +
+           std::to_string(failed) + " failed", failed == 0 ? 0 : 2);
     dirNeedsScan_ = true;
 }

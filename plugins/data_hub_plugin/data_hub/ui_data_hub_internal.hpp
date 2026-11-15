@@ -1,9 +1,9 @@
 #pragma once
 
 #include "../ui_data_hub.hpp"
-#include "../overlay_renderer.hpp"
-#include "../ui_draw_helpers.hpp"
-#include "../ui_theme.hpp"
+#include "ui/overlay_renderer.hpp"
+#include "ui/ui_draw_helpers.hpp"
+#include "ui/ui_theme.hpp"
 
 #include "core/input_parser.hpp"
 #include "logger.hpp"
@@ -24,8 +24,10 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
-#include <thread>
 #include <unordered_set>
+
+namespace DataHub = GRIM::UI::DataHub;
+namespace DataHubJobs = GRIM::DataCollection::DataHubJobs;
 
 namespace UIDataHubDetail {
 
@@ -114,14 +116,6 @@ inline std::string detectFetcherFromUrl(const std::string& url) {
         return "huggingface";
     }
     return "html_crawl";
-}
-
-inline std::string getSourceConfigPath() {
-    std::filesystem::path sourcePath = aiConfig.at("paths").at("grim_text").at("source_config").get<std::string>();
-    if (sourcePath.is_relative()) {
-        sourcePath = std::filesystem::path(getGrimRootDir()) / sourcePath;
-    }
-    return sourcePath.string();
 }
 
 inline std::filesystem::path resolvePathFromGrimRoot(const std::string& rawPath) {

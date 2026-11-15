@@ -9,6 +9,9 @@
 #endif
 
 static const GrimPluginAPI* api = nullptr;
+#ifdef FIXTURE_NATIVE_DEPENDENCY
+extern "C" __declspec(dllimport) int grim_test_dependency();
+#endif
 #ifdef FIXTURE_TOOLS
 #ifndef FIXTURE_RESULT
 #define FIXTURE_RESULT "fixture result"
@@ -33,6 +36,9 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value) {
     api = value;
+#ifdef FIXTURE_NATIVE_DEPENDENCY
+    if (grim_test_dependency() != 42) return GRIM_ERROR_UNKNOWN;
+#endif
 #ifdef FIXTURE_TOOLS
     GrimToolRegistration tool;
     tool.handler = run;

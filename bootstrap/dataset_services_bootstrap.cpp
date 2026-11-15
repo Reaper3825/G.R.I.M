@@ -1,5 +1,6 @@
 #include "dataset_services_bootstrap.hpp"
 #include "dataset_bootstrap.hpp"
+#include "DataCollection/data_hub_jobs.hpp"
 #include "resources.hpp"
 #include "logger.hpp"
 
@@ -49,11 +50,18 @@ void bootstrapDatasetServices() {
     if (!directory.is_absolute()) directory = std::filesystem::path(getGrimRootDir()) / directory;
     candidate->creation = std::make_shared<DatasetCreationService>(
         runtimeDatasetCatalog(), std::move(adapter), options, directory);
+    auto checkpoints = std::filesystem::path(
+        aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>());
+    if (checkpoints.is_relative()) checkpoints = std::filesystem::path(getGrimRootDir()) / checkpoints;
+    DataHubJobs::start(candidate->huggingFace, candidate->structurer, runtimeDatasetStream(),
+        checkpoints / "collection_state",
+        std::filesystem::path(getResourcePath()) / "models" / "GRIM-text" / "training" / "data" / "huggingface");
     services = std::move(candidate);
     LOG_PHASE("Dataset creation services initialized", true);
 }
 
 void shutdownDatasetServices() {
+    GRIM::DataCollection::DataHubJobs::shutdown();
     std::shared_ptr<GRIM::DataCollection::DatasetServices> previous;
     {
         std::lock_guard<std::mutex> lock(servicesMutex);

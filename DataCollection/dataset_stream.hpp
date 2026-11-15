@@ -16,7 +16,7 @@ namespace GRIM::DataCollection {
 // are immutable; holding a Snapshot pins that version across later reloads.
 // Authoring and pipeline writes are serialized here and publish verified source
 // state immediately. Background reloads never migrate or rewrite source files.
-class DatasetStream {
+class GRIM_HOST_API DatasetStream {
 public:
     struct Snapshot {
         uint64_t revision = 0;

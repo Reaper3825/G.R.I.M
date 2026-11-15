@@ -154,6 +154,9 @@ void UIDataHubPanel::drawSourcesTab(OverlayRenderer& renderer, const PanelRect& 
     btnAddCard_->setPosition(addBtnX, addBtnY);
     btnAddCard_->setSize(addBtnW, addBtnH);
     btnAddCard_->drawOverlay(renderer, position);
+    btnReloadSources_->setPosition(addBtnX + addBtnW + 10.0f, addBtnY);
+    btnReloadSources_->setSize(150.0f, addBtnH);
+    btnReloadSources_->drawOverlay(renderer, position);
 }
 
 // =========================================================
@@ -216,81 +219,34 @@ void UIDataHubPanel::removeSourceCard(size_t cardId) {
     sourcesDirty_ = true;
 }
 
+
 void UIDataHubPanel::loadSourceCards() {
-    std::string sourcePath = getSourceConfigPath();
-    sourceCards_.clear();
-    try {
-        if (!std::filesystem::exists(sourcePath)) return;
-        std::ifstream f(sourcePath);
-        nlohmann::json data;
-        f >> data;
-        if (!data.contains("data_sources")) return;
-
-        for (const auto& s : data["data_sources"]) {
-            sourceCards_.push_back(buildSourceCard(
-                s.value("name", "Unknown"),
-                s.value("url", ""),
-                s.value("priority", 5),
-                s.value("crawl_depth", 2),
-                s.value("fetch_limit", 100),
-                s.value("enabled", true)
-            ));
-        }
-
-        totalSources_ = 0;
-        for (const auto& c : sourceCards_)
-            if (c.enabled) totalSources_++;
-
-        LOG_DEBUG("DataHub", "Loaded " + std::to_string(sourceCards_.size()) + " source cards");
-    } catch (const std::exception& e) {
-        addLog("Error loading sources: " + std::string(e.what()), 2);
-        sourceCards_.clear();
+    const auto rows = DataHub::sources();
+    std::vector<SourceCard> cards;
+    for (const auto& row : rows) {
+        auto card = buildSourceCard(row.at("name").get<std::string>(), row.at("url").get<std::string>(),
+            row.at("priority").get<int>(), row.at("crawl_depth").get<int>(),
+            row.at("fetch_limit").get<int>(), row.at("enabled").get<bool>());
+        card.requiresAuth = row.value("requires_auth", false);
+        cards.push_back(std::move(card));
     }
+    sourceCards_ = std::move(cards);
+    sourceBaseline_ = rows;
+    sourcesDirty_ = false;
+    totalSources_ = static_cast<int>(std::count_if(sourceCards_.begin(), sourceCards_.end(),
+        [](const auto& card) { return card.enabled; }));
 }
-
 void UIDataHubPanel::saveSourceCards() {
-    std::string sourcePath = getSourceConfigPath();
+    nlohmann::json rows = nlohmann::json::array();
+    for (const auto& card : sourceCards_)
+        rows.push_back({{"name",card.name},{"url",card.url},{"source_type",detectFetcherFromUrl(card.url)},
+            {"priority",card.priority},{"enabled",card.enabled},{"crawl_depth",card.crawlDepth},
+            {"fetch_limit",card.fetchLimit},{"requires_auth",card.requiresAuth}});
     try {
-        nlohmann::json data;
-        std::ifstream inFile(sourcePath);
-        if (inFile.good()) {
-            inFile >> data;
-            inFile.close();
-        } else {
-            data["version"]     = "1.0.0";
-            data["description"] = "GRIM Web Data Collection Configuration";
-        }
-
-        data["data_sources"] = nlohmann::json::array();
-        for (const auto& card : sourceCards_) {
-            data["data_sources"].push_back({
-                {"name",         card.name},
-                {"url",          card.url},
-                {"source_type",  detectFetcherFromUrl(card.url)},
-                {"priority",     card.priority},
-                {"enabled",      card.enabled},
-                {"crawl_depth",  card.crawlDepth},
-                {"fetch_limit",  card.fetchLimit},
-                {"requires_auth", card.requiresAuth}
-            });
-        }
-
-        std::ofstream outFile(sourcePath);
-        if (outFile.is_open()) {
-            outFile << data.dump(2);
-            addLog("Sources saved (" + std::to_string(sourceCards_.size()) + " entries)", 0);
-        }
-
-        totalSources_ = 0;
-        for (const auto& c : sourceCards_)
-            if (c.enabled) totalSources_++;
-
-    } catch (const std::exception& e) {
-        addLog("Error saving sources: " + std::string(e.what()), 2);
-    }
+        const auto saved = DataHub::saveSources(rows, sourceBaseline_);
+        sourceBaseline_ = saved;
+        if (saved.size() != rows.size()) loadSourceCards();
+        addLog("Sources saved", 0);
+    } catch (const std::exception& error) { addLog(error.what(), 2); }
     sourcesDirty_ = false;
 }
-
-// =========================================================
-// HuggingFace tab actions
-// =========================================================

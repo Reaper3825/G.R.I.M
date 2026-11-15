@@ -4,7 +4,7 @@ The current host requires plugin ABI v14. Rebuild all older plugin binaries
 against [the current API](../docs/PLUGIN_API.md) before loading them.
 
 API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
-declares two standard host panels; bootstrap registers host factories without
+declares the remaining GeoSpatial host panel; bootstrap registers its factory without
 creating their instances. Rebuild the host and UI plugin together for this
 migration. Older UI DLLs do not declare the full panel set. Dynamic surfaces
 and OSINT panels retain their current paths.
@@ -426,3 +426,43 @@ UI plugins together to remove the old factory declaration.
 Focused native DLL validation: `tests/run_ui_input_foundation.ps1`. Network and
 storage effects are substituted by the headless fixture; no application, model
 runtime or network server is started.
+
+### DataHub plugin
+
+`data_hub_plugin` owns `data_hub`, preserving Home, Sources, HuggingFace,
+Structurer, Generator and Curriculum. It owns native widgets, drafts, selections
+and display caches, not authoritative dataset or job state. It registers no tools.
+Generic `ui.*` operations remain owned by UI Plugin.
+
+Host boundaries:
+
+- `ui/data_hub_services.*`: catalog clients, copied configuration/status,
+  source/settings persistence, directory collection, environments and rendering.
+- `DataCollection/data_hub_jobs.*`: serialized host HF and structuring lanes,
+  bounded transient requests, durable downloads and revision-checked batch writes.
+- Existing dataset stream, pipeline and generator services retain their lifetimes.
+
+Downloads and batch structuring survive provider unload/reload. A replacement
+reads their latest status; it does not restart them. Search/preview/draft results
+have host-issued IDs and are discarded when their panel retires. Draft results
+are also rejected if their destination changed while generation was pending.
+No job captures plugin code, a widget or a panel pointer.
+
+Source edits persist during live interaction, not candidate construction or
+destruction. Successful downloads add source records in the host, never widgets
+from a worker thread. Source writes retain newly appended download records and
+reject conflicting external edits; Reload Sources explicitly discards local drafts.
+Settings and queue persistence use atomic host writes. Unsaved generation/editor
+drafts are not preserved across reload.
+
+Native builds require the matching host/compiler/CRT ABI and Windows
+`GRIM_HOST_IMPORT_LIBRARY`. Rebuild the host, DataHub and UI plugins together.
+Do not compile duplicate dataset, HTTP or job implementations into the DLL.
+
+Focused validation (no application, training, model server or real HTTP):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -DataHub
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_data_hub_jobs.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_dataset_stream.ps1
+```

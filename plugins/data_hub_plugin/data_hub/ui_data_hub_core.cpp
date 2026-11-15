@@ -1,7 +1,4 @@
 #include "ui_data_hub_internal.hpp"
-#include "bootstrap/dataset_bootstrap.hpp"
-#include "bootstrap/dataset_services_bootstrap.hpp"
-#include "ui/world_lab/environment_registry.hpp"
 
 using namespace UIDataHubDetail;
 
@@ -76,8 +73,8 @@ UIDataHubPanel::UIDataHubPanel()
         sourcesDirty_ = true;
         addLog("Added new source card", 0);
     });
-
-    sourcesWidgets_ = { btnAddCard_ };
+    btnReloadSources_ = std::make_shared<UIButton>("Reload Sources", [this]() { loadSourceCards(); });
+    sourcesWidgets_ = { btnAddCard_, btnReloadSources_ };
 
     // ── HuggingFace tab widgets ─────────────────────────
 
@@ -182,58 +179,13 @@ UIDataHubPanel::UIDataHubPanel()
 
     structureActionMenu_ = std::make_shared<UIActionMenu>("Structure");
     structureActionMenu_->addItem("Structure", [this]() {
-        if (!structurer_ || !rawTextArea_) return;
         std::string raw = rawTextArea_->getText();
         if (raw.empty()) { addLog("No raw text to structure", 1); return; }
-        auto results = structurer_->structureEntry(raw);
-        if (results.empty()) {
-            addLog("Structuring failed — LLM returned no output", 2);
-            return;
-        }
-        std::string combined;
-        for (size_t i = 0; i < results.size(); ++i) {
-            if (i > 0) combined += "\n\n---\n\n";
-            combined += results[i];
-        }
-        if (structuredTextArea_) structuredTextArea_->setText(combined);
-        addLog("Structured into " + std::to_string(results.size()) + " pair(s)", 0);
+        requestStructure(raw, "", "", StructureTarget::Output);
     });
     structureActionMenu_->addItem("Structure All", [this]() {
-        if (!structurer_ || !datasetTarget_) return;
-        addLog("Structure All — running in background...", 0);
-        std::thread([this]() {
-            std::vector<std::string> texts;
-            size_t count = datasetTarget_->massDatasetSize();
-            for (size_t i = 0; i < count; ++i) {
-                auto seq = datasetTarget_->getSequence(i);
-                if (!seq.is_structured) texts.push_back(seq.content);
-            }
-            if (texts.empty()) { addLog("No unstructured sequences found", 1); return; }
-            auto result = structurer_->structureBatch(texts,
-                [this](size_t done, size_t total) {
-                    addLog("Structuring: " + std::to_string(done) + "/" + std::to_string(total), 0);
-                });
-            size_t writeIdx = 0;
-            for (size_t i = 0; i < datasetTarget_->massDatasetSize() && writeIdx < result.structured.size(); ++i) {
-                auto seq = datasetTarget_->getSequence(i);
-                if (seq.is_structured) continue;
-                const auto& pairs = result.structured[writeIdx++];
-                if (!pairs.empty()) {
-                    std::string combined;
-                    for (size_t p = 0; p < pairs.size(); ++p) {
-                        if (p > 0) combined += "\n\n---\n\n";
-                        combined += pairs[p];
-                    }
-                    datasetTarget_->writeStructuredOutput(i, combined);
-                }
-            }
-            structuredCount_ = 0;
-            for (size_t i = 0; i < datasetTarget_->massDatasetSize(); ++i)
-                if (datasetTarget_->getSequence(i).is_structured) structuredCount_++;
-            failedCount_ = result.failed;
-            addLog("Structure All complete: " + std::to_string(result.succeeded) + " ok, "
-                 + std::to_string(result.failed) + " failed", 0);
-        }).detach();
+        try { DataHubJobs::startBatch(); addLog("Structure All submitted to host", 0); }
+        catch (const std::exception& error) { addLog(error.what(), 2); }
     });
 
     datasetActionMenu_ = std::make_shared<UIActionMenu>("Data");
@@ -299,7 +251,6 @@ UIDataHubPanel::UIDataHubPanel()
     });
 
     btnGenerate_ = std::make_shared<UIButton>("Generate", [this]() {
-        if (!structurer_ || !rawTextArea_) return;
         std::string raw = rawTextArea_->getText();
         if (raw.empty()) { addLog("No raw text to generate from", 1); return; }
 
@@ -308,19 +259,7 @@ UIDataHubPanel::UIDataHubPanel()
         std::string mode = (fmtIdx >= 0 && fmtIdx < 5) ? modes[fmtIdx] : "qa";
         std::string prompt = customPromptArea_ ? customPromptArea_->getText() : "";
 
-        auto results = structurer_->structureEntry(raw, mode, prompt);
-        if (results.empty()) {
-            std::string err = structurer_->lastError();
-            addLog("Generation failed: " + (err.empty() ? "LLM returned no output" : err), 2);
-            return;
-        }
-        std::string combined;
-        for (size_t i = 0; i < results.size(); ++i) {
-            if (i > 0) combined += "\n\n---\n\n";
-            combined += results[i];
-        }
-        if (structuredTextArea_) structuredTextArea_->setText(combined);
-        addLog("Generated " + std::to_string(results.size()) + " pair(s) in " + mode + " format", 0);
+        requestStructure(raw, mode, prompt, StructureTarget::Output);
     });
 
     btnAddSequence_ = std::make_shared<UIButton>("+ Add Sequence", [this]() {
@@ -520,7 +459,7 @@ UIDataHubPanel::UIDataHubPanel()
                 auto course=datasetTarget_->getCourseById(activeCourseId_);
                 if(course.id.empty())throw std::runtime_error("Selected course no longer exists");
                 const auto id=cbCourseEnvironmentIds_[index];
-                if(!id.empty())GRIM::WorldLab::EnvironmentRegistry(std::filesystem::path(getResourcePath())/"models"/"games").resolve(id);
+                if(!id.empty())DataHub::requireEnvironment(id);
                 course.environment_id=id;
                 if(!datasetTarget_->saveCourse(course))throw std::runtime_error("Failed to save course environment assignment");
                 addLog(id.empty()?"Cleared course environment":"Assigned course environment: "+id,0);
@@ -1027,13 +966,10 @@ UIDataHubPanel::UIDataHubPanel()
 
     // ── Backend services ────────────────────────────────
 
-    const auto services = GRIM::DataCollection::runtimeDatasetServices();
-    datasetTarget_ = std::make_shared<GRIM::DataCollection::DatasetCatalog>(
-        GRIM::DataCollection::runtimeDatasetStream(), true);
-    pipelineOrchestrator_ = services->pipeline;
-    hfWebhook_ = services->huggingFace;
-    structurer_ = services->structurer;
-    creationService_ = services->creation;
+    datasetTarget_ = DataHub::catalog();
+    if (!datasetTarget_) throw std::runtime_error("DataHub host catalog is unavailable");
+    (void)DataHubJobs::downloads();
+    (void)DataHub::pipelineStatus();
 
     loadUIConfig();
     loadDirectoryCollectionPathFromConfig();
@@ -1056,10 +992,8 @@ UIDataHubPanel::UIDataHubPanel()
 // =========================================================
 
 UIDataHubPanel::~UIDataHubPanel() {
-    saveUIConfig();
-    if (sourcesDirty_) saveSourceCards();
-    saveDownloadQueue();
-    LOG_DEBUG("DataHub", "Panel destroyed — config saved");
+    for (const auto request : {searchRequest_, previewRequest_, structureRequest_})
+        if (request != 0) DataHubJobs::release(request);
 }
 
 // =========================================================
@@ -1114,6 +1048,7 @@ void UIDataHubPanel::setView(DataHubView view) {
 // =========================================================
 
 void UIDataHubPanel::update(const InputState& input, float dt) {
+    pollHostJobs();
     if (!isVisible()) return;
     if (datasetTarget_ && datasetTarget_->revision() != datasetRevision_) {
         datasetTarget_->pinLatest();
@@ -1189,6 +1124,7 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
 
         case DataHubView::Sources: {
             btnAddCard_->update(input, dt);
+            btnReloadSources_->update(input, dt);
 
             for (auto& card : sourceCards_) {
                 card.nameInput->update(input, dt);
@@ -1199,6 +1135,8 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                 card.enabledToggle->update(input, dt);
                 card.deleteBtn->update(input, dt);
 
+                if (card.name != card.nameInput->getText() || card.url != card.urlInput->getText())
+                    sourcesDirty_ = true;
                 card.name       = card.nameInput->getText();
                 card.url        = card.urlInput->getText();
                 card.priority   = static_cast<int>(card.prioritySlider->getValue());
@@ -1234,9 +1172,6 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
         }
 
         case DataHubView::HuggingFace:
-            if (hfPreviewApply_.exchange(false) && hfPreviewArea_) {
-                hfPreviewArea_->setText(hfPreviewPendingText_);
-            }
             hfSearchInput_->update(input, dt);
             hfSearchBuffer_ = hfSearchInput_->getText();
             hfTokenInput_->update(input, dt);
@@ -1244,7 +1179,6 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                 std::string newToken = hfTokenInput_->getText();
                 if (newToken != hfTokenBuffer_) {
                     hfTokenBuffer_ = newToken;
-                    if (hfWebhook_) hfWebhook_->setApiToken(hfTokenBuffer_);
                 }
             }
             btnSearchHF_->update(input, dt);
@@ -1582,6 +1516,12 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             break;
         }
     }
+    if (sourcesDirty_) saveSourceCards();
+    if (input.mousePressed[0] || input.mouseReleased[0] || !input.textInput.empty()) {
+        try { saveUIConfig(); }
+        catch (const std::exception& error) { addLog(error.what(), 2); }
+    }
+
 }
 
 // =========================================================
@@ -1710,12 +1650,9 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
 // =========================================================
 
 void UIDataHubPanel::loadUIConfig() {
-    std::string path = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state" / "ui_config.json").string();
     try {
-        if (!std::filesystem::exists(path)) return;
-        std::ifstream f(path);
-        nlohmann::json cfg;
-        f >> cfg;
+        auto cfg = DataHub::loadSettings();
+        settingsBaseline_ = cfg;
 
         if (cfg.contains("fetchLimit"))             { fetchLimit_ = cfg["fetchLimit"]; }
         if (cfg.contains("verificationThreshold"))  { verificationThreshold_ = cfg["verificationThreshold"]; }
@@ -1738,94 +1675,41 @@ void UIDataHubPanel::loadUIConfig() {
 
         addLog("UI config loaded", 0);
     } catch (const std::exception& e) {
-        addLog("Error loading config: " + std::string(e.what()), 1);
+        throw std::runtime_error("DataHub settings load failed: " + std::string(e.what()));
     }
 }
+
 
 void UIDataHubPanel::saveUIConfig() {
-    std::string stateDir = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state").string();
-    std::string path = stateDir + "/ui_config.json";
-    try {
-        std::filesystem::create_directories(stateDir);
-        nlohmann::json cfg;
-        cfg["fetchLimit"]             = fetchLimit_;
-        cfg["verificationThreshold"]  = verificationThreshold_;
-        cfg["maxHFResults"]           = maxHFResults_;
-        cfg["generatorSeed"]          = generatorBaseSeed_;
-        cfg["generatorCount"]         = generatorBatchCount_;
-        cfg["generatorRunMode"]       = genRunModeDropdown_ ? genRunModeDropdown_->getSelectedIndex() : 0;
-        cfg["generatorSeedPolicy"]    = genSeedPolicyDropdown_ ? genSeedPolicyDropdown_->getSelectedIndex() : 0;
-        cfg["generatorTraversal"]     = genTraversalDropdown_ ? genTraversalDropdown_->getSelectedIndex() : 0;
-        std::ofstream f(path);
-        f << std::setw(2) << cfg << std::endl;
-    } catch (const std::exception& e) {
-        LOG_ERROR("DataHub", "Failed to save UI config: " + std::string(e.what()));
-    }
+    nlohmann::json settings{
+        {"fetchLimit", fetchLimit_}, {"verificationThreshold", verificationThreshold_},
+        {"maxHFResults", maxHFResults_}, {"generatorSeed", generatorBaseSeed_},
+        {"generatorCount", generatorBatchCount_}, {"generatorRunMode", genRunModeDropdown_->getSelectedIndex()},
+        {"generatorSeedPolicy", genSeedPolicyDropdown_->getSelectedIndex()},
+        {"generatorTraversal", genTraversalDropdown_->getSelectedIndex()}};
+    if (settings == settingsBaseline_) return;
+    DataHub::saveSettings(settings);
+    settingsBaseline_ = std::move(settings);
 }
+
 
 void UIDataHubPanel::loadDownloadQueue() {
-    std::string path = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state" / "download_queue.json").string();
-    try {
-        if (!std::filesystem::exists(path)) return;
-        std::ifstream f(path);
-        nlohmann::json j;
-        f >> j;
-        std::lock_guard<std::mutex> lock(queueMutex_);
-        downloadQueue_.clear();
-        if (j.contains("queue") && j["queue"].is_array()) {
-            for (const auto& item : j["queue"]) {
-                QueuedDownload qd;
-                qd.datasetId    = item.value("datasetId", "");
-                qd.displayName  = item.value("displayName", "");
-                qd.status       = item.value("status", "pending");
-                qd.progress     = item.value("progress", 0.0f);
-                qd.retryCount   = item.value("retryCount", 0);
-                qd.errorMessage = item.value("errorMessage", "");
-                if (qd.status == "downloading") { qd.status = "pending"; qd.progress = 0.0f; }
-                if (qd.status == "pending" || qd.status == "failed")
-                    downloadQueue_.push_back(qd);
-            }
-            addLog("Restored " + std::to_string(downloadQueue_.size()) + " queue items", 0);
-        }
-    } catch (const std::exception& e) {
-        addLog("Error loading queue: " + std::string(e.what()), 1);
+    const auto snapshot = DataHubJobs::downloads();
+    if (snapshot.revision == downloadsRevision_) return;
+    downloadsRevision_ = snapshot.revision;
+    queueProcessing_.store(snapshot.processing);
+    currentQueueIndex_.store(-1);
+    downloadQueue_.clear();
+    for (const auto& item : snapshot.items) {
+        if (item.datasetId == snapshot.activeId)
+            currentQueueIndex_.store(static_cast<int>(downloadQueue_.size()));
+        downloadQueue_.push_back({item.datasetId, item.displayName, item.status,
+            item.progress, item.retryCount, item.errorMessage});
     }
-}
-
-void UIDataHubPanel::saveDownloadQueue() {
-    std::string stateDir = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state").string();
-    std::string path = stateDir + "/download_queue.json";
-    try {
-        std::filesystem::create_directories(stateDir);
-        nlohmann::json j;
-        nlohmann::json arr = nlohmann::json::array();
-        {
-            std::lock_guard<std::mutex> lock(queueMutex_);
-            for (const auto& item : downloadQueue_) {
-                arr.push_back({
-                    {"datasetId", item.datasetId}, {"displayName", item.displayName},
-                    {"status", item.status}, {"progress", item.progress},
-                    {"retryCount", item.retryCount}, {"errorMessage", item.errorMessage}
-                });
-            }
-        }
-        j["queue"] = arr;
-        std::ofstream f(path);
-        f << std::setw(2) << j << std::endl;
-    } catch (const std::exception& e) {
-        LOG_ERROR("DataHub", "Failed to save queue: " + std::string(e.what()));
-    }
+    if (!snapshot.error.empty()) addLog(snapshot.error, 2);
 }
 
 void UIDataHubPanel::loadHFTokenFromConfig() {
-    try {
-        std::string token = resolveHuggingFaceApiToken();
-        if (token.empty()) return;
-        hfTokenInput_->setText(token);
-        hfTokenBuffer_ = token;
-        if (hfWebhook_) hfWebhook_->setApiToken(token);
-        addLog("HF token loaded (HF_TOKEN / HUGGINGFACE_HUB_TOKEN or ai_config)", 0);
-    } catch (const std::exception& e) {
-        addLog("Error loading HF token: " + std::string(e.what()), 1);
-    }
+    hfTokenBuffer_ = DataHub::token();
+    hfTokenInput_->setText(hfTokenBuffer_);
 }

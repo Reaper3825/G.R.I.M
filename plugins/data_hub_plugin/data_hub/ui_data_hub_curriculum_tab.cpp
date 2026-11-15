@@ -1,5 +1,4 @@
 #include "ui_data_hub_internal.hpp"
-#include "ui/world_lab/environment_registry.hpp"
 
 using namespace UIDataHubDetail;
 
@@ -954,14 +953,10 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
 }
 
 std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const {
-    return conceptMode
-        ? GRIM::ConceptCanonical::render(cb, aiConfig.at("training").at("config").at("concept_spans")
-              .get<GRIM::NamedConceptSpanDefinitions>()).text
-        : GRIM::ConceptCanonical::renderPlainText(cb);
+    return DataHub::trainingPreview(cb, conceptMode);
 }
 
 void UIDataHubPanel::generateConceptBlock() {
-    if (!structurer_ || !cbPromptArea_) return;
     std::string input = cbPromptArea_->getText();
     if (input.empty()) {
         addLog("Enter a prompt to generate from", 1);
@@ -969,13 +964,10 @@ void UIDataHubPanel::generateConceptBlock() {
     }
 
     std::string customPrompt = cbCustomPromptArea_ ? cbCustomPromptArea_->getText() : "";
-    auto results = structurer_->structureEntry(input, "concept_block", customPrompt);
-    if (results.empty()) {
-        std::string err = structurer_->lastError();
-        addLog("Generation failed: " + (err.empty() ? "LLM returned no output" : err), 2);
-        return;
-    }
+    requestStructure(input, "concept_block", customPrompt, StructureTarget::Concept);
+}
 
+void UIDataHubPanel::applyConceptResult(const std::vector<std::string>& results) {
     std::vector<std::string> intermediates;
     std::string prompt;
     std::string answer;
@@ -1040,20 +1032,8 @@ void UIDataHubPanel::layoutCBListTypeDropdownInList(float listX, float listY, fl
 
 void UIDataHubPanel::populateCBModelDropdown() {
     if (!cbModelDropdown_) return;
-    namespace fs = std::filesystem;
-    fs::path modelStoreRoot = resolvePathFromGrimRoot(
-        aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
-
-    std::vector<std::string> names;
-    try {
-        if (fs::exists(modelStoreRoot)) {
-            for (const auto& entry : fs::directory_iterator(modelStoreRoot)) {
-                if (entry.is_directory())
-                    names.push_back(entry.path().filename().string());
-            }
-        }
-    } catch (...) {}
-
+    const auto available = DataHub::modelDirectories();
+    auto names = available;
     if (names.empty()) names.push_back("(none)");
     cbModelDropdown_->setItems(names);
 
@@ -1146,11 +1126,9 @@ void UIDataHubPanel::populateCourseEnvironments(bool discover) {
     std::vector<std::string> ids{""},labels{"No environment"};int selected=0;
     const auto course=datasetTarget_->getCourseById(activeCourseId_);
     try {
-        const GRIM::WorldLab::EnvironmentRegistry registry(std::filesystem::path(getResourcePath())/"models"/"games");
-        if(discover)try{registry.indexDirectory();}catch(const std::exception& error){addLog(error.what(),2);}
-        for(const auto& entry:registry.entries()) {
+        for(const auto& entry:DataHub::environments(discover)) {
             std::string label;
-            try{label=registry.resolve(entry.id).title+" ["+entry.id+"]";}
+            try{DataHub::requireEnvironment(entry.id);label=entry.title+" ["+entry.id+"]";}
             catch(const std::exception& error){label="Unresolved: "+entry.title+" ["+entry.id+"]";if(entry.id==course.environment_id)addLog(error.what(),2);}
             if(entry.id==course.environment_id)selected=static_cast<int>(ids.size());
             ids.push_back(entry.id);labels.push_back(std::move(label));
