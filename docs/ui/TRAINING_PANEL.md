@@ -1,23 +1,23 @@
 # Training Panel: Current Connections and Legacy Control API
 
-Source-verified November 8, 2026. Distinguish implemented server routes from
+Source-verified November 15, 2026. Distinguish implemented server routes from
 actual UI callers. The current panel does not launch/monitor a local training
 session through the old training-control API.
 
 ## Current source: connected UI
 
-[UITrainingPanel::setView / update / pollServer](../../ui/ui_training_panel.cpp#L276)
+[UITrainingPanel::setView / update / pollServer](../../plugins/model_workspace_plugin/ui_training_panel.cpp#L276)
 dispatch the panel tabs. `pollServer` calls
-`TokenizerClient(GRIMTextServerManager::getServerURL()).isServerRunning()`.
+`TokenizerClient(modelWorkspaceServerURL()).isServerRunning()`.
 Polling occurs on entering Tokenizer and periodically while that tab is active;
 `serverConnected` is tokenizer bridge health, not training progress.
 
-[beginConfigCompile / compileConfigPreset](../../ui/training_panel/ui_training_panel_training_tab.cpp#L556)
+[beginConfigCompile / compileConfigPreset](../../plugins/model_workspace_plugin/training_panel/ui_training_panel_training_tab.cpp#L556)
 run the host-only `compile_model_config` utility asynchronously to create
 `<model-store>\<model-id>\model.grimcfg` from edited model-schema JSON.
 They do not POST a training-start request or launch the trainer.
 
-[Tokenizer tab callers](../../ui/training_panel/ui_training_panel_tokenizer_tab.cpp#L21)
+[Tokenizer tab callers](../../plugins/model_workspace_plugin/training_panel/ui_training_panel_tokenizer_tab.cpp#L21)
 invoke `TokenizerClient::runTokenizer` and `encodeText` in background work;
 `applyTokenizerResults` consumes their futures on the UI thread.
 [TokenizerClient](../../control/tokenizer_client.hpp#L15) actually calls:
@@ -72,3 +72,43 @@ and config-compiler call sites. It did not launch a server/trainer, perform SSH
 training, certify status-file freshness, or validate the retained control
 server's ability to run today's trainer. No runtime/build instructions from the
 obsolete local-training tutorial remain.
+
+## Model Workspace provider ownership
+
+`plugins/model_workspace_plugin` owns the `UITrainingPanel` implementation and
+instance. Its provider name is **Model Workspace Plugin**, and its stable panel
+key remains `training_control`. Home, Knowledge Gaps, Tool Gaps, Model Config,
+Tokenizer, Observatory, World Lab, Assets, and Tools remain in this one panel.
+
+Initialization constructs the panel; the base constructor stages registration
+under the provider generation. Commit attaches the same instance and publishes
+its `ui.panel` resource. Host retirement detaches it before plugin shutdown.
+The bootstrap factory and UI Plugin's `ui.training_control` request are removed.
+Generic panel operations remain in UI Plugin.
+
+The panel owns its composed view instances. Observatory, World Lab, Assets, and
+Tools reuse host UI component implementations through explicit native exports.
+Their callbacks are released before unload. Model registry/loading, resource
+sampling, configuration persistence, and dataset services remain host services.
+`ui/model_workspace_services.*` supplies borrowed services and copied configuration
+and server URL data; it also supplies host-owned World Lab goal-access callbacks.
+This migration does not transfer model/server/dataset service ownership.
+
+Shutdown destroys composed views and waits for tokenizer-health, tokenizer-run,
+encode, and configuration-compile futures before unloading provider code. These
+operations are not detached or canceled; an in-flight request/compiler can delay
+unload. Unsaved panel-local edits and queues are not preserved across reload.
+
+Native builds require matching host/compiler/CRT/UI ABI and a matching Windows
+host import library, as with Console and Settings.
+
+Validation:
+
+- `tests/check_model_workspace_ui.ps1`: syntax-checks all provider sources and the
+  host service adapter, without building or running model/training targets.
+- `tests/run_ui_input_foundation.ps1 -ModelWorkspace`: loads the real provider DLL
+  against a focused test host, tests registration/replacement/unload and eight
+  non-tokenizer tabs. Model/server operations are disabled and Observatory's
+  native viewport is stubbed. World Lab, Assets, and Tools use real UI components.
+- `tests/test_plugin_world_assets.py`: checks the authored Model Workspace room
+  and `training_control` resource mapping.

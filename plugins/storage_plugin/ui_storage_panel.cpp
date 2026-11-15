@@ -1,10 +1,10 @@
 #include "ui_storage_panel.hpp"
 #include "ui_theme.hpp"
-#include "control/devices/server/device_comm_server.hpp"
-#include "control/devices/storage/storage_index.hpp"
-#include "control/devices/transfer/file_transfer_manager.hpp"
-#include "control/devices/registry/device_snapshot.hpp"
+#include "ui/storage_panel_services.hpp"
 #include "overlay_renderer.hpp"
+#include <charconv>
+
+namespace Storage = GRIM::UI::Storage;
 
 namespace {
     constexpr float kTabBarY     = 35.0f;
@@ -47,8 +47,7 @@ UIStoragePanel::UIStoragePanel()
 
     // Regenerate local code button
     btn_regenerate_code_ = std::make_shared<UIButton>("Regenerate", [this]() {
-        if (!server_) return;
-        server_->regenerateLocalCode();
+        Storage::regenerateCode();
     });
     btn_regenerate_code_->setSize(100.0f, 28.0f);
 
@@ -58,8 +57,12 @@ UIStoragePanel::UIStoragePanel()
     device_code_input_->setSize(180.0f, 28.0f);
 
     btn_link_device_ = std::make_shared<UIButton>("Link", [this]() {
-        if (!server_ || device_code_buffer_.empty()) return;
-        if (server_->addPendingDeviceWithCode(device_code_buffer_)) {
+        if (device_code_buffer_.empty()) {
+            link_status_msg_ = "Enter a device code";
+            link_status_timer_ = 4.0f;
+            return;
+        }
+        if (Storage::linkDevice(device_code_buffer_)) {
             link_status_msg_ = "Code accepted — waiting for device";
             device_code_buffer_.clear();
             refreshDevices();
@@ -76,33 +79,41 @@ UIStoragePanel::UIStoragePanel()
     hub_address_input_->setSize(240.0f, 28.0f);
 
     btn_connect_hub_ = std::make_shared<UIButton>("Connect", [this]() {
-        if (!server_) return;
-
         // Toggle: disconnect if already connected
-        if (server_->isConnectedToHub()) {
-            server_->disconnectFromHub();
+        if (Storage::status().connected) {
+            Storage::disconnectHub();
             hub_status_msg_ = "Disconnected";
             hub_status_timer_ = 3.0f;
             refreshDevices();
             return;
         }
 
-        if (hub_address_buffer_.empty()) return;
+        if (hub_address_buffer_.empty()) {
+            hub_status_msg_ = "Enter a hub address";
+            hub_status_timer_ = 5.0f;
+            return;
+        }
 
         // Parse host:port (default port 11437)
         std::string host = hub_address_buffer_;
         uint16_t port = 11437;
         auto colon = host.rfind(':');
         if (colon != std::string::npos) {
-            try {
-                port = static_cast<uint16_t>(std::stoi(host.substr(colon + 1)));
-                host = host.substr(0, colon);
-            } catch (...) {
-                // No valid port after colon — treat entire string as host
+            unsigned parsedPort = 0;
+            const char* first = host.data() + colon + 1;
+            const char* last = host.data() + host.size();
+            const auto parsed = std::from_chars(first, last, parsedPort);
+            if (colon == 0 || parsed.ec != std::errc{} || parsed.ptr != last ||
+                parsedPort == 0 || parsedPort > 65535) {
+                hub_status_msg_ = "Invalid hub address: expected host:port with port 1-65535";
+                hub_status_timer_ = 5.0f;
+                return;
             }
+            port = static_cast<uint16_t>(parsedPort);
+            host.resize(colon);
         }
 
-        auto result = server_->registerWithHub(host, port);
+        auto result = Storage::connectHub(host, port);
         hub_status_msg_ = result.message;
         hub_status_timer_ = 5.0f;
         if (result.success) refreshDevices();
@@ -114,19 +125,12 @@ UIStoragePanel::UIStoragePanel()
 
     // Set initial tab visibility (hides Devices tab widgets)
     setView(StorageView::MyFiles);
-}
-
-UIStoragePanel::~UIStoragePanel() = default;
-
-// ─── Server binding ──────────────────────────────────────
-
-void UIStoragePanel::setServer(GRIM::DeviceCommServer* server) {
-    server_ = server;
 
     // Pre-fill hub address from saved connection state
-    if (server_ && server_->isConnectedToHub()) {
-        hub_address_buffer_ = server_->connectedHubHost();
-        uint16_t port = server_->connectedHubPort();
+    const auto state = Storage::status();
+    if (state.connected) {
+        hub_address_buffer_ = state.hubHost;
+        uint16_t port = state.hubPort;
         if (port != 0 && port != 11437) {
             hub_address_buffer_ += ":" + std::to_string(port);
         }
@@ -135,6 +139,8 @@ void UIStoragePanel::setServer(GRIM::DeviceCommServer* server) {
     refreshListing();
     refreshDevices();
 }
+
+UIStoragePanel::~UIStoragePanel() = default;
 
 // ─── View switching ──────────────────────────────────────
 
@@ -310,8 +316,8 @@ void UIStoragePanel::drawFilesView(OverlayRenderer& renderer, const PanelRect& c
 
     // Footer: disk usage
     float footerY = content.origin.y + content.size.y - 20.0f;
-    if (server_) {
-        uint64_t usage = server_->storageManager().getDiskUsage();
+    {
+        uint64_t usage = Storage::status().diskUsage;
         std::string usageStr;
         if (usage < 1024*1024) usageStr = std::to_string(usage/1024) + " KB used";
         else usageStr = std::to_string(usage/(1024*1024)) + " MB used";
@@ -351,7 +357,8 @@ void UIStoragePanel::drawDevicesView(OverlayRenderer& renderer, const PanelRect&
     renderer.drawText({row1X, row1Y + 6.0f}, "Your Device Code:",
                       UITheme::Colors::TextSecondary);
 
-    std::string localCode = server_ ? server_->localDeviceCode() : "----";
+    const auto state = Storage::status();
+    const std::string& localCode = state.localCode;
     renderer.drawText({row1X + 140.0f, row1Y + 6.0f}, localCode,
                       UITheme::Colors::Primary);
 
@@ -375,11 +382,11 @@ void UIStoragePanel::drawDevicesView(OverlayRenderer& renderer, const PanelRect&
     // ── Row 3: [Hub address...] [Connect/Disconnect]  (status msg) ──
     float row3Y = row2Y + 34.0f;
 
-    bool hubConnected = server_ && server_->isConnectedToHub();
+    bool hubConnected = state.connected;
 
     if (hubConnected) {
-        std::string connLabel = "Connected to " + server_->connectedHubHost()
-                              + ":" + std::to_string(server_->connectedHubPort());
+        std::string connLabel = "Connected to " + state.hubHost
+                              + ":" + std::to_string(state.hubPort);
         renderer.drawText({row1X, row3Y + 6.0f}, connLabel,
                           UITheme::Colors::Success);
         btn_connect_hub_->setText("Disconnect");
@@ -505,9 +512,7 @@ void UIStoragePanel::navigateUp() {
 
 void UIStoragePanel::refreshListing() {
     cached_files_.clear();
-    if (!server_) return;
-
-    auto listing = server_->storageManager().index().listDirectory(currentPath());
+    auto listing = Storage::listDirectory(currentPath());
     cached_files_.reserve(listing.size());
     for (const auto& entry : listing) {
         FileRow row;
@@ -522,9 +527,7 @@ void UIStoragePanel::refreshListing() {
 
 void UIStoragePanel::refreshDevices() {
     cached_devices_.clear();
-    if (!server_) return;
-
-    auto snapshots = server_->listDeviceSnapshots();
+    auto snapshots = Storage::listDevices();
     cached_devices_.reserve(snapshots.size());
     for (const auto& snap : snapshots) {
         DeviceRow row;
@@ -549,9 +552,7 @@ void UIStoragePanel::refreshDevices() {
 
 void UIStoragePanel::refreshTransfers() {
     active_transfers_.clear();
-    if (!server_) return;
-
-    auto transfers = server_->transferManager().listActive();
+    auto transfers = Storage::listTransfers();
     active_transfers_.reserve(transfers.size());
     for (const auto& t : transfers) {
         TransferProgress tp;

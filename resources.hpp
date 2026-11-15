@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -16,8 +17,8 @@ inline constexpr const char* AI_CONFIG_LOCAL_FILE = "ai_config.local.json";
 // ====================================================
 // Resource loading
 // ====================================================
-std::string getGrimRootDir();  // Get GRIM root directory path
-std::string getResourcePath();
+GRIM_HOST_API std::string getGrimRootDir();  // Get GRIM root directory path
+GRIM_HOST_API std::string getResourcePath();
 std::string loadTextResource(const std::string& filename, int argc, char** argv);
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history = nullptr);
 
@@ -32,8 +33,8 @@ extern nlohmann::json aiConfig;
 std::string resolveHuggingFaceApiToken();
 std::filesystem::path getGrimAiConfigPath();
 std::filesystem::path getGrimLocalAiConfigPath();
-nlohmann::json loadGrimRuntimeAiConfig();
-nlohmann::json saveGrimRuntimeAiConfig(const nlohmann::json& pending);
+GRIM_HOST_API nlohmann::json loadGrimRuntimeAiConfig();
+GRIM_HOST_API nlohmann::json saveGrimRuntimeAiConfig(const nlohmann::json& pending);
 
 // ====================================================
 // Global runtime state

@@ -26,8 +26,8 @@
 #include "primitives/ui_scrollbox.hpp"
 #include "control/tokenizer_client.hpp"
 #include "control/hyperparameter_registry.hpp"
-#include "../MMO/Shared/MMD.hpp"
-#include "../MMO/Core/ToolGapPlanner.hpp"
+#include "MMO/Shared/MMD.hpp"
+#include "MMO/Core/ToolGapPlanner.hpp"
 #include <future>
 #include <memory>
 #include <string>

@@ -4,7 +4,7 @@ The current host requires plugin ABI v14. Rebuild all older plugin binaries
 against [the current API](../docs/PLUGIN_API.md) before loading them.
 
 API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
-declares four standard host panels; bootstrap registers host factories without
+declares two standard host panels; bootstrap registers host factories without
 creating their instances. Rebuild the host and UI plugin together for this
 migration. Older UI DLLs do not declare the full panel set. Dynamic surfaces
 and OSINT panels retain their current paths.
@@ -395,3 +395,34 @@ capture on destruction. World Lab maps the panel to Settings Plugin.
 
 Focused native DLL tests: `tests/run_ui_input_foundation.ps1` (configuration and
 platform effects stubbed; no application/model runtime started).
+
+### Model Workspace plugin
+
+`model_workspace_plugin` owns Training Control (`training_control`) and preserves
+all nine tabs. It imports shared host UI components and existing host model,
+configuration, resource, and dataset services. No agent tools are added. Its
+native build requires the matching host import library; it is excluded from
+reverse host deployment dependencies to avoid a build cycle. See
+[Training panel ownership and validation](../docs/ui/TRAINING_PANEL.md#model-workspace-provider-ownership).
+
+### Storage plugin
+
+`storage_plugin` owns Shared Storage (`storage`) and its My Files/Devices tabs.
+Its native panel is staged during initialization and detached before DLL shutdown.
+UI Plugin supplies generic operations but neither declares nor owns this panel.
+No agent tools are added.
+
+The DLL imports host UI and copied storage-service operations; DeviceCommServer,
+its network workers, storage index and transfers remain host-owned. The host binds
+the service before loading plugins and unbinds it after their retirement. Missing
+service initialization is a logged failure. Reload discards widget drafts but does
+not stop transfers, clear devices, or disconnect the host hub connection.
+
+Build with the matching host compiler/CRT/UI ABI and `GRIM_HOST_IMPORT_LIBRARY`
+for standalone Windows builds. Like the other native panel plugins, Storage is
+excluded from reverse host deployment dependencies. Rebuild the host, Storage and
+UI plugins together to remove the old factory declaration.
+
+Focused native DLL validation: `tests/run_ui_input_foundation.ps1`. Network and
+storage effects are substituted by the headless fixture; no application, model
+runtime or network server is started.

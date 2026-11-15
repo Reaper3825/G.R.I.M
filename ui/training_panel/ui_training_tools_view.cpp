@@ -212,3 +212,5 @@ void UITrainingToolsView::hide() {
     for (auto* dropdown : {&usageFilter_, &pluginFilter_}) { dropdown->cancelInput(); dropdown->collapse(); }
     refreshTimer_ = 2.0f;
 }
+
+UITrainingToolsView::~UITrainingToolsView() = default;

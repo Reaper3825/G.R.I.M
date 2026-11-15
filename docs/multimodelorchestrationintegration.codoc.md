@@ -144,7 +144,7 @@ and deleted-reference checks; no host/model runtime build or deployment.
 - `core/plugin_api_impl.cpp`
 - `core/grim_exports.hpp`
 - `ui/ui_root.cpp`
-- `ui/ui_training_panel.cpp`
+- `plugins/model_workspace_plugin/ui_training_panel.cpp`
 - `perception/multi_monitor.hpp`
 - `perception/multi_monitor.cpp`
 

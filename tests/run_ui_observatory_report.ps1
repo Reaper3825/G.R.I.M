@@ -28,7 +28,7 @@ if ($CheckPanelSyntax) {
     $syntax += '/I"' + $generated + '"'
     # Match the desktop target's GLM contract (including Cesium's XYZW-only vectors).
     $syntax += @('/DGLM_FORCE_XYZW_ONLY','/DGLM_FORCE_EXPLICIT_CTOR','/DGLM_FORCE_INTRINSICS','/DGLM_ENABLE_EXPERIMENTAL')
-    $syntax += @('ui/observatory/observatory_viewport.cpp','ui/observatory/ui_observatory_view.cpp','ui/ui_training_panel.cpp','resources/models/GRIM-text/Shared/ModelConfig/CompiledModelConfig.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+    $syntax += @('ui/observatory/observatory_viewport.cpp','ui/observatory/ui_observatory_view.cpp','plugins/model_workspace_plugin/ui_training_panel.cpp','resources/models/GRIM-text/Shared/ModelConfig/CompiledModelConfig.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
     Set-Content -LiteralPath (Join-Path $output 'panel-syntax.rsp') -Value $syntax -Encoding ascii
     $commands += @('cl @panel-syntax.rsp','if errorlevel 1 exit /b %errorlevel%')
 }

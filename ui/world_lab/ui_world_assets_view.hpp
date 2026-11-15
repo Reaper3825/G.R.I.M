@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include "world_asset.hpp"
 #include "ui_world_actions.hpp"
 #include "ui_world_canvas.hpp"
@@ -13,11 +14,12 @@
 
 class UIWorldAssetsView {
 public:
-    explicit UIWorldAssetsView(std::filesystem::path directory);
-    void update(const InputState&,float,const PanelRect&,uint64_t);
-    void draw(OverlayRenderer&,const PanelRect&);
-    void hide();
-    void capture(const GRIM::WorldLab::Document&,const std::string& root);
+    GRIM_HOST_API ~UIWorldAssetsView();
+    explicit GRIM_HOST_API UIWorldAssetsView(std::filesystem::path directory);
+    GRIM_HOST_API void update(const InputState&,float,const PanelRect&,uint64_t);
+    GRIM_HOST_API void draw(OverlayRenderer&,const PanelRect&);
+    GRIM_HOST_API void hide();
+    GRIM_HOST_API void capture(const GRIM::WorldLab::Document&,const std::string& root);
     std::function<void(const GRIM::WorldLab::Asset&)> onInsert;
     const GRIM::WorldLab::Document& document() const {return editor_.document();}
 private:

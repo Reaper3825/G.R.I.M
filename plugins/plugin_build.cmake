@@ -39,7 +39,7 @@ function(grim_configure_plugin target)
             DEPENDS ${target}
             COMMENT "Checking deployment of ${target}"
             VERBATIM)
-        if(TARGET GRIM AND NOT target STREQUAL "schedule_plugin" AND NOT target STREQUAL "console_plugin" AND NOT target STREQUAL "settings_plugin")
+        if(TARGET GRIM AND NOT target STREQUAL "schedule_plugin" AND NOT target STREQUAL "console_plugin" AND NOT target STREQUAL "settings_plugin" AND NOT target STREQUAL "model_workspace_plugin" AND NOT target STREQUAL "storage_plugin")
             add_dependencies(GRIM deploy_${target})
         endif()
     endif()

@@ -85,7 +85,7 @@ not a central list of every provider's panels.
 ### Approved provider mapping
 
 The migration preserves the seven existing root panels and their tab composition.
-Schedule now owns Calendar and Console Plugin owns Console; Settings Plugin owns Settings; the other four require new providers. Their entries
+Schedule now owns Calendar and Console Plugin owns Console; Settings Plugin owns Settings; Model Workspace owns Training Control; Storage Plugin owns Shared Storage; the other two require new providers. Their entries
 remain migration targets, not current registration.
 
 | Panel key | Owning provider |
@@ -93,9 +93,9 @@ remain migration targets, not current registration.
 | `calendar` | Schedule |
 | `console` | Console Plugin (migrated) |
 | `settings` | Settings Plugin (migrated) |
-| `training_control` | Model Workspace (new) |
+| `training_control` | Model Workspace Plugin (migrated) |
 | `data_hub` | DataHub (new) |
-| `storage` | Storage (new) |
+| `storage` | Storage Plugin (migrated) |
 | `geospatial` | GeoSpatial (new) |
 
 Model Workspace retains Home, Knowledge Gaps, Tool Gaps, Model Config, Tokenizer,
@@ -111,14 +111,14 @@ They import the existing host UI implementation through its exported C++ interfa
 Native UI plugins require the matching compiler, CRT and UI class ABI; API v14
 rejects older binaries. Domain services remain with their respective providers.
 
-Calendar in Schedule, Console in Console Plugin, and Settings in Settings Plugin use this path. Constructor registration stages
+Calendar in Schedule, Console in Console Plugin, Settings in Settings Plugin, Training Control in Model Workspace, and Shared Storage in Storage Plugin use this path. Constructor registration stages
 ownership under the loader's initialization scope. Commit attaches the same object;
 retirement detaches it before provider shutdown destroys it. No JSON widget tree,
 interaction-event transport or generic copied-content panel remains.
 
 ### Current gap
 
-The UI plugin still declares four host factory panels through `register_ui_panel`.
+The UI plugin still declares two host factory panels through `register_ui_panel`.
 Their provider migrations remain outstanding. Dynamic surfaces and OSINT keep
 their own lifecycle paths. The generic `ui.list` response still lacks owner
 metadata; World Lab reads provider ownership from the resource registry.
@@ -150,7 +150,7 @@ they are not generated from titles and require no database.
 | `geospatial` | GeoSpatial |
 
 These are the seven current provider-declared panels. Calendar belongs to
-Schedule; Console belongs to Console Plugin; Settings belongs to Settings Plugin; the other four still belong to the UI plugin. Physical and digital
+Schedule; Console belongs to Console Plugin; Settings belongs to Settings Plugin; Training Control belongs to Model Workspace; Shared Storage belongs to Storage Plugin; the other two still belong to the UI plugin. Physical and digital
 environment panels are no longer registered; the Model Registry panel source is
 excluded from the host build.
 
@@ -272,3 +272,15 @@ Console now follows the native provider-owned path; its bootstrap factory and
 UI Plugin factory declaration have been removed. See [Console ownership](CONSOLE.md#provider-ownership).
 
 Settings also follows the native provider-owned path. See [Settings ownership](SETTINGS.md).
+
+Storage follows the same native path and retains My Files and Devices. The plugin
+owns widgets, drafts and presentation caches; the host retains DeviceCommServer,
+its storage index, transfers and network lifecycle. UI-thread functions in
+`ui/storage_panel_services.*` return copied snapshots and execute explicit device
+operations without exposing a server pointer to the DLL. Network bootstrap binds
+the service before plugin initialization; teardown unbinds after all plugins retire.
+Missing services reject initialization with a logged error, not an empty panel.
+Reload discards panel-local drafts but does not stop transfers or disconnect the hub.
+Malformed explicit hub ports produce visible validation errors without calling
+networking. The existing test command includes Storage DLL snapshot/action,
+ownership, replacement, missing-service, permission and unload-before-activation tests.

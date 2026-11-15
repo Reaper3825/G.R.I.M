@@ -11,6 +11,7 @@
 // never probes hardware independently.
 //======================================================//
 #pragma once
+#include "core/host_exports.hpp"
 
 #include "Registries/ModelRegistry.hpp"
 #include "ResourceCoordinator.hpp"
@@ -37,7 +38,7 @@ enum class ResidencyState : uint8_t {
     Unloading     = 6
 };
 
-const char* residencyStateToString(ResidencyState s);
+GRIM_HOST_API const char* residencyStateToString(ResidencyState s);
 
 // =========================================================
 // Per-model runtime record (internal to ModelLoader)
@@ -74,7 +75,7 @@ enum class LoadResult : uint8_t {
     Unavailable           = 4   // ERR_MMO_MODEL_UNAVAILABLE
 };
 
-const char* loadResultToString(LoadResult r);
+GRIM_HOST_API const char* loadResultToString(LoadResult r);
 
 // =========================================================
 // ModelLoader
@@ -101,7 +102,7 @@ public:
     // Submits a resource claim, handles eviction if needed,
     // and transitions the model through the state machine.
     // Returns Unavailable on failure — never silently reroutes.
-    LoadResult ensureLoaded(const std::string& model_id);
+    GRIM_HOST_API LoadResult ensureLoaded(const std::string& model_id);
 
     // Mark a loaded model as actively serving a request.
     // Prevents eviction. Throws if model is not in Loaded/Idle/EvictEligible state.
@@ -113,7 +114,7 @@ public:
 
     // Explicitly unload a model (shutdown or forced eviction).
     // Throws if model is InUse.
-    void unload(const std::string& model_id);
+    GRIM_HOST_API void unload(const std::string& model_id);
 
     // Tick idle timers — call periodically (e.g. from resource signal loop
     // or a dedicated maintenance timer). Transitions Idle → EvictEligible
@@ -121,7 +122,7 @@ public:
     void tickIdleTimers();
 
     // Query the current state of a model.
-    ResidencyState getState(const std::string& model_id) const;
+    GRIM_HOST_API ResidencyState getState(const std::string& model_id) const;
 
     // Query the slot record for a model (or nullptr if unknown).
     const ModelSlot* getSlot(const std::string& model_id) const;

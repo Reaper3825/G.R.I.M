@@ -10,7 +10,7 @@
 //           status, pairing management, "Add Device".
 //
 //  UI owns layout + events only. All data comes from
-//  DeviceCommServer snapshots + StorageIndex queries.
+//  Copied host storage-service snapshots and explicit operations.
 //======================================================//
 
 #pragma once
@@ -24,14 +24,6 @@
 #include "primitives/ui_button.hpp"
 #include "primitives/ui_inputbox.hpp"
 #include "primitives/ui_scrollbox.hpp"
-
-// Forward declarations — avoid pulling device headers into UI
-namespace GRIM {
-    class DeviceCommServer;
-    struct DeviceSnapshot;
-    struct DirectoryEntry;
-    struct ActiveTransfer;
-}
 
 class OverlayRenderer;
 struct InputState;
@@ -54,9 +46,6 @@ public:
     UIStoragePanel();
     ~UIStoragePanel() override;
 
-    // Bind server reference (call once from main.cpp after construction)
-    void setServer(GRIM::DeviceCommServer* server);
-
     void update(const InputState& input, float dt) override;
     bool drawOverlay(OverlayRenderer& renderer) override;
 
@@ -69,7 +58,6 @@ private:
     // ═══════════════════════════════════════════════════
 
     StorageView active_view_ = StorageView::MyFiles;
-    GRIM::DeviceCommServer* server_ = nullptr;
 
     // ═══════════════════════════════════════════════════
     //  Tab buttons (always visible)

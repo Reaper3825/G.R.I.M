@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "ui/primitives/ui_inputbox.hpp"
 #include "ui/primitives/ui_scrollbox.hpp"
@@ -10,10 +11,11 @@
 // Registry inspection only. This view never dispatches or changes tools.
 class UITrainingToolsView {
 public:
-    UITrainingToolsView();
-    void update(const InputState&, float dt, const PanelRect&, uint64_t panelId);
-    void draw(OverlayRenderer&, const PanelRect&);
-    void hide();
+    GRIM_HOST_API ~UITrainingToolsView();
+    GRIM_HOST_API UITrainingToolsView();
+    GRIM_HOST_API void update(const InputState&, float dt, const PanelRect&, uint64_t panelId);
+    GRIM_HOST_API void draw(OverlayRenderer&, const PanelRect&);
+    GRIM_HOST_API void hide();
 private:
     void layout(const PanelRect&);
     void refresh();

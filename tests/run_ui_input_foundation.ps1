@@ -1,5 +1,6 @@
-param([switch]$WorldLab, [switch]$TextWorld, [switch]$Tools)
+param([switch]$WorldLab, [switch]$TextWorld, [switch]$Tools, [switch]$ModelWorkspace)
 $ErrorActionPreference = 'Stop'
+if ($ModelWorkspace) { $WorldLab = $true; $Tools = $true }
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/ui-input-tests'
 New-Item -ItemType Directory -Force -Path $output | Out-Null
@@ -15,8 +16,13 @@ $sources += 'ui/ui_root_panels.cpp', 'ui/ui_panel_service.cpp', 'ui/dynamic_surf
 $sources += 'tests/calendar_panel_tests.cpp', 'tests/schedule_plugin_tests.cpp'
 $sources += 'tests/settings_panel_tests.cpp', 'tests/settings_host_stubs.cpp', 'ui/primitives/ui_keybind.cpp', 'ui/primitives/ui_toggle.cpp'
 $sources += 'tests/console_panel_tests.cpp', 'tests/console_host_stubs.cpp', 'console_history.cpp', 'ui/primitives/ui_layout_box.cpp'
+$sources += 'tests/storage_panel_tests.cpp'
 $sources += 'ui/primitives/ui_canvas.cpp', 'ui/primitives/ui_node.cpp', 'tests/ui_canvas_tests.cpp'
 $sources += @('MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/Registries/ProviderRegistry.cpp') # Panel resource publication is a base UI dependency.
+if ($ModelWorkspace) {
+    $sources += 'tests/model_workspace_panel_tests.cpp', 'tests/model_workspace_host_stubs.cpp', 'MMO/Core/Registries/ModelRegistry.cpp', 'ui/primitives/ui_progress_bar.cpp', 'ui/primitives/ui_label.cpp'
+    $arguments += '/DGRIM_MODEL_WORKSPACE_TESTS'
+}
 if ($Tools) {
     $sources += 'ui/training_panel/ui_training_tools_view.cpp', 'tests/ui_training_tools_tests.cpp'
     $arguments += '/DGRIM_TOOLS_VIEW_TESTS'
@@ -43,11 +49,24 @@ $consoleArgs = $nativeIncludes + @('/nologo','/std:c++20','/EHsc','/MD','/LD','/
 Set-Content -LiteralPath (Join-Path $output 'console.rsp') -Value $consoleArgs -Encoding ascii
 $settingsArgs = $nativeIncludes + @('/nologo','/std:c++20','/EHsc','/MD','/LD','/DGRIM_BUILD_PLUGIN','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'),('"' + $workspace + '/plugins/settings_plugin/settings_plugin.cpp"'),('"' + $workspace + '/plugins/settings_plugin/ui_settings_menu.cpp"'),'/Fe:settings_native_fixture.dll','/link','ui_input_foundation_tests.lib')
 Set-Content -LiteralPath (Join-Path $output 'settings.rsp') -Value $settingsArgs -Encoding ascii
+$storageArgs = $nativeIncludes + @('/nologo','/std:c++20','/EHsc','/MD','/LD','/utf-8','/DGRIM_BUILD_PLUGIN','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'),('"' + $workspace + '/plugins/storage_plugin/storage_plugin.cpp"'),('"' + $workspace + '/plugins/storage_plugin/ui_storage_panel.cpp"'),'/Fe:storage_native_fixture.dll','/link','ui_input_foundation_tests.lib')
+Set-Content -LiteralPath (Join-Path $output 'storage.rsp') -Value $storageArgs -Encoding ascii
+if ($ModelWorkspace) {
+    $workspaceSources = @('plugins/model_workspace_plugin/model_workspace_plugin.cpp','plugins/model_workspace_plugin/ui_training_panel.cpp')
+    $workspaceSources += Get-ChildItem -LiteralPath (Join-Path $workspace 'plugins/model_workspace_plugin/training_panel') -Filter '*.cpp' | ForEach-Object { 'plugins/model_workspace_plugin/training_panel/' + $_.Name }
+    $workspaceArgs = $nativeIncludes + @('/nologo','/std:c++20','/EHsc','/MD','/LD','/utf-8','/DGRIM_BUILD_PLUGIN','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
+    $workspaceArgs += $workspaceSources | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+    $workspaceArgs += @('/Fe:model_workspace_native_fixture.dll','/link','ui_input_foundation_tests.lib','ws2_32.lib','crypt32.lib')
+    Set-Content -LiteralPath (Join-Path $output 'workspace.rsp') -Value $workspaceArgs -Encoding ascii
+}
 Set-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul'),'if errorlevel 1 exit /b %errorlevel%','cl @compile.rsp','if errorlevel 1 exit /b %errorlevel%','cl @native.rsp','if errorlevel 1 exit /b %errorlevel%','cl @console.rsp','if errorlevel 1 exit /b %errorlevel%','cl @settings.rsp') -Encoding ascii
+Add-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('if errorlevel 1 exit /b %errorlevel%', 'cl @storage.rsp') -Encoding ascii
+if ($ModelWorkspace) { Add-Content -LiteralPath (Join-Path $output 'build.cmd') -Value @('if errorlevel 1 exit /b %errorlevel%', 'cl @workspace.rsp') -Encoding ascii }
 Push-Location $output
 try {
     & $env:ComSpec /d /c build.cmd
     if ($LASTEXITCODE -ne 0) { throw 'Host-only test compilation failed.' }
-    & (Join-Path $output 'ui_input_foundation_tests.exe') (Join-Path $output 'schedule_native_fixture.dll') (Join-Path $output 'console_native_fixture.dll') (Join-Path $output 'settings_native_fixture.dll')
+    $workspaceFixture = if ($ModelWorkspace) { Join-Path $output 'model_workspace_native_fixture.dll' } else { '' }
+    & (Join-Path $output 'ui_input_foundation_tests.exe') (Join-Path $output 'schedule_native_fixture.dll') (Join-Path $output 'console_native_fixture.dll') (Join-Path $output 'settings_native_fixture.dll') (Join-Path $output 'storage_native_fixture.dll') $workspaceFixture
     if ($LASTEXITCODE -ne 0) { throw 'Host-only tests failed.' }
 } finally { Pop-Location }

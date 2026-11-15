@@ -3,6 +3,7 @@
 // Consumers read the latest snapshot atomically; they never probe hardware themselves.
 //======================================================//
 #pragma once
+#include "core/host_exports.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -98,7 +99,7 @@ public:
     void stop();
 
     // Read the latest snapshot. Lock-free on the read path.
-    ResourceSnapshot latest() const;
+    GRIM_HOST_API ResourceSnapshot latest() const;
 
     // Force an immediate update (useful after model load/unload).
     void forceUpdate();

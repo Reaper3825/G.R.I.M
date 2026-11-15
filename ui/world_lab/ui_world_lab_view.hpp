@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include "ui_world_canvas.hpp"
 #include "ui/primitives/ui_panel.hpp"
 #include "ui/primitives/ui_button.hpp"
@@ -15,14 +16,14 @@
 
 class UIWorldLabView {
 public:
-    explicit UIWorldLabView(std::filesystem::path recoveryPath = {}, std::filesystem::path gamesDirectory = {}, std::filesystem::path assetsDirectory = {});
-    ~UIWorldLabView();
+    explicit GRIM_HOST_API UIWorldLabView(std::filesystem::path recoveryPath = {}, std::filesystem::path gamesDirectory = {}, std::filesystem::path assetsDirectory = {});
+    GRIM_HOST_API ~UIWorldLabView();
     const GRIM::WorldLab::Document& document() const { return editor_.document(); }
-    void update(const InputState&, float dt, const PanelRect&, uint64_t panel);
-    void draw(OverlayRenderer&, const PanelRect&);
-    void hide();
+    GRIM_HOST_API void update(const InputState&, float dt, const PanelRect&, uint64_t panel);
+    GRIM_HOST_API void draw(OverlayRenderer&, const PanelRect&);
+    GRIM_HOST_API void hide();
     void setGoalAccess(GRIM::WorldLab::GoalAccess access) { session_->setGoalAccess(std::move(access)); }
-    void insertAsset(const GRIM::WorldLab::Asset&);
+    GRIM_HOST_API void insertAsset(const GRIM::WorldLab::Asset&);
     void saveEnvironment(const std::filesystem::path&, bool independentCopy = false);
     void openEnvironment(const std::string& id);
     std::function<void(const GRIM::WorldLab::Document&,const std::string&)> onSaveAsset;

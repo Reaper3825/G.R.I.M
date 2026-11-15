@@ -37,7 +37,7 @@ int main(int argc, char* argv[])
 
     bootstrapMemorySubsystem(g_memoryStorage);
 
-    auto ui = bootstrapUI(*g_deviceCommServer, argc, argv);
+    auto ui = bootstrapUI(argc, argv);
 
     WakeKey::start();
     LOG_PHASE("WakeKey listener started", true);

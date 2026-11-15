@@ -12,7 +12,10 @@ Reusable widget primitives live here:
 - `ui_label.*`, `ui_progress_bar.*`, `ui_scrollbox.*`, `ui_textarea.*`, `ui_graph.*`, `ui_consoleview.*` — display and content widgets.
 - `ui_layout_box.*`, `ui_action_menu.*` — reusable layout/menu primitives.
 
-Feature panels such as `ui_training_panel.*`, `ui_data_hub.*`, `ui_storage_panel.*`, and `ui_physical_environment_panel.*` include primitives via `primitives/<file>.hpp` and remain at `ui/` root for now.
+Remaining host panels such as `ui_data_hub.*` and `ui_geospatial_panel.*` include
+primitives via `primitives/<file>.hpp`. Shared Storage now lives in
+`plugins/storage_plugin`; `storage_panel_services.*` retains the host-owned
+device-service boundary, returning copies rather than exposing server ownership.
 
 ## Include rule
 
@@ -45,3 +48,6 @@ rows fitted to its available day area.
 
 The container owns child layout, input and rendering, not tile selection or domain
 state. Calendar continues to own dates, selection, labels and event counts.
+
+Training Control is provider-owned in `plugins/model_workspace_plugin`; its shared
+composed view components remain in the host UI library.

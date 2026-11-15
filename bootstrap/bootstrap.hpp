@@ -40,7 +40,6 @@ struct UIBootstrapResult {
 };
 
 UIBootstrapResult bootstrapUI(
-	GRIM::DeviceCommServer& deviceCommServer,
 	int argc,
 	char** argv);
 

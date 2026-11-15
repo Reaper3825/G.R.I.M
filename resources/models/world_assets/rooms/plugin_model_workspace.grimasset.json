@@ -1,0 +1,48 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Plugin - Model Workspace Plugin",
+  "root": "plugin_model_workspace",
+  "entities": [
+    {
+      "id": "plugin_model_workspace",
+      "name": "Model Workspace room",
+      "kind": "room",
+      "parent": "",
+      "description": "Provider-owned model and training workspace with its existing composed tabs.",
+      "state": "open",
+      "plugin_binding": {
+        "provider_name": "Model Workspace Plugin",
+        "contract": "grim-plugin-room",
+        "version": 1
+      },
+      "asset_source": {
+        "asset_id": "grim.plugin.model_workspace",
+        "entity_id": "plugin_model_workspace",
+        "version": 1
+      }
+    },
+    {
+      "id": "plugin_model_workspace_training_control",
+      "name": "Training Control panel",
+      "kind": "supporter",
+      "parent": "plugin_model_workspace",
+      "description": "Model Workspace panel addressed by the training_control stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "training_control"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.model_workspace.training_control",
+        "entity_id": "plugin_model_workspace_training_control",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": false,
+        "minimized": false,
+        "maximized": false
+      }
+    }
+  ]
+}

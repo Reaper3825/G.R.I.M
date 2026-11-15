@@ -77,6 +77,10 @@ void runCalendarPanelTests();
 void runNativeCalendarDllTests(const char*);
 void runNativeConsoleDllTests(const char*);
 void runNativeSettingsDllTests(const char*);
+void runNativeStorageDllTests(const char*);
+#ifdef GRIM_MODEL_WORKSPACE_TESTS
+void runNativeModelWorkspaceDllTests(const char*);
+#endif
 void runSchedulePluginTests();
 #ifdef GRIM_TOOLS_VIEW_TESTS
 void runTrainingToolsTests();
@@ -96,6 +100,10 @@ int main(int argc, char** argv) try {
     if (argc > 1) runNativeCalendarDllTests(argv[1]);
     if (argc > 2) runNativeConsoleDllTests(argv[2]);
     if (argc > 3) runNativeSettingsDllTests(argv[3]);
+    if (argc > 4) runNativeStorageDllTests(argv[4]);
+#ifdef GRIM_MODEL_WORKSPACE_TESTS
+    if (argc > 5) runNativeModelWorkspaceDllTests(argv[5]);
+#endif
     runSchedulePluginTests();
 #ifdef GRIM_TOOLS_VIEW_TESTS
     runTrainingToolsTests();

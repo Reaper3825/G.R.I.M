@@ -11,6 +11,7 @@
 #include "../memory/unified_memory.hpp"
 #include "../net/websocket_server.hpp"
 #include "../ui/ui_root.hpp"
+#include "../ui/storage_panel_services.hpp"
 #include "../wake/wake_key.hpp"
 #include "platform_clipboard.hpp"
 #include "platform_input.hpp"
@@ -99,6 +100,9 @@ void shutdownApplication(
     // Plugins may stop workers and use host services during shutdown. Unload
     // them before destroying memory, UI, voice, and orchestration services.
     PluginManager::unloadAll();
+    if (!deviceCommServer)
+        throw std::runtime_error("Storage panel teardown requires the host device server");
+    UI::Storage::unbindServer(*deviceCommServer);
     shutdownDatasetServices();
 
 

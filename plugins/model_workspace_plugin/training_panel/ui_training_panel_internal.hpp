@@ -1,9 +1,9 @@
 #pragma once
 
 #include "../ui_training_panel.hpp"
-#include "../overlay_renderer.hpp"
-#include "../ui_draw_helpers.hpp"
-#include "../ui_theme.hpp"
+#include "ui/overlay_renderer.hpp"
+#include "ui/ui_draw_helpers.hpp"
+#include "ui/ui_theme.hpp"
 
 #include "core/grim_platform.h"
 #include "core/input_parser.hpp"
@@ -27,8 +27,7 @@
 #include <sstream>
 #include <thread>
 
-extern GRIM::MMO::ModelLoader* g_modelLoader;
-extern GRIM::MMO::ResourceSignal* g_resourceSignal;
+#include "ui/model_workspace_services.hpp"
 
 namespace UITrainingPanelDetail {
 

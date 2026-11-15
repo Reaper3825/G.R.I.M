@@ -1,6 +1,5 @@
 #include "bootstrap.hpp"
 
-#include "../control/devices/server/device_comm_server.hpp"
 #include "../core/input/InputBindings.hpp"
 #include "../core/platform_clipboard.hpp"
 #include "../core/platform_input.hpp"
@@ -16,9 +15,7 @@
 #include "../ui/ui_data_hub.hpp"
 #include "../ui/ui_geospatial_panel.hpp"
 #include "../ui/ui_root.hpp"
-#include "../ui/ui_storage_panel.hpp"
 #include "../ui/ui_surface_renderer_bridge.hpp"
-#include "../ui/ui_training_panel.hpp"
 
 #include <filesystem>
 #include <chrono>
@@ -72,7 +69,6 @@ void loadUIFonts(int argc, char** argv)
 } // namespace
 
 UIBootstrapResult bootstrapUI(
-    GRIM::DeviceCommServer& deviceCommServer,
     int argc,
     char** argv)
 {
@@ -139,13 +135,7 @@ UIBootstrapResult bootstrapUI(
     // the UI plugin decides which live panel instances exist.
     auto geoSpatialRuntime = std::make_shared<GRIM::GeoSpatial::GeoSpatialRuntime>();
     auto& root = UIRoot::get();
-    root.registerPanelFactory("ui.training_control", "training_control", [] { return std::make_shared<UITrainingPanel>(); });
     root.registerPanelFactory("ui.data_hub", "data_hub", [] { return std::make_shared<UIDataHubPanel>(); });
-    root.registerPanelFactory("ui.storage", "storage", [server = &deviceCommServer] {
-        auto panel = std::make_shared<UIStoragePanel>();
-        panel->setServer(server);
-        return panel;
-    });
     const auto cleanupGeoSpatial = [geoSpatialRuntime](const std::shared_ptr<UIPanel>& base) {
         geoSpatialRuntime->setViewportReady(false);
         geoSpatialRuntime->setViewportAttachment({});

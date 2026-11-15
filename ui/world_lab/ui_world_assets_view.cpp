@@ -169,3 +169,5 @@ void UIWorldAssetsView::draw(OverlayRenderer& r,const PanelRect& area) {
     r.drawText({area.origin.x+8,area.origin.y+area.size.y-34},status_,TextSecondary,12);
     if(library_->isExpanded())library_->drawExpandedList(r,{});r.popClipRect();
 }
+
+UIWorldAssetsView::~UIWorldAssetsView() = default;

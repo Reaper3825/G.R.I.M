@@ -168,21 +168,21 @@ void UITrainingPanel::handleModelAction(const std::string& model_id,
     auto& registry = GRIM::MMO::ModelRegistry::instance();
 
     if (action == "load") {
-        if (g_modelLoader) {
-            auto result = g_modelLoader->ensureLoaded(model_id);
+        if (GRIM::UI::modelWorkspaceLoader()) {
+            auto result = GRIM::UI::modelWorkspaceLoader()->ensureLoaded(model_id);
             LOG_DEBUG("UITrainingPanel", "ensureLoaded('" + model_id + "') → "
                 + std::string(GRIM::MMO::loadResultToString(result)));
         }
     } else if (action == "unload") {
-        if (g_modelLoader) {
-            g_modelLoader->unload(model_id);
+        if (GRIM::UI::modelWorkspaceLoader()) {
+            GRIM::UI::modelWorkspaceLoader()->unload(model_id);
             LOG_DEBUG("UITrainingPanel", "unloaded '" + model_id + "'");
         }
     } else if (action == "remove") {
-        if (g_modelLoader) {
-            auto state = g_modelLoader->getState(model_id);
+        if (GRIM::UI::modelWorkspaceLoader()) {
+            auto state = GRIM::UI::modelWorkspaceLoader()->getState(model_id);
             if (state != GRIM::MMO::ResidencyState::Unloaded) {
-                g_modelLoader->unload(model_id);
+                GRIM::UI::modelWorkspaceLoader()->unload(model_id);
             }
         }
         registry.removeModel(model_id);
@@ -289,7 +289,7 @@ void UITrainingPanel::submitNewModel() {
     {
         namespace fs = std::filesystem;
         fs::path modelStoreRoot = resolvePathFromGrimRoot(
-            aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
+            GRIM::UI::modelWorkspaceConfig().at("paths").at("grim_text").at("model_store").get<std::string>());
         fs::path modelDir = modelStoreRoot / bufId_;
         std::error_code ec;
         fs::create_directories(modelDir, ec);
@@ -454,8 +454,8 @@ void UITrainingPanel::refreshModelList() {
         entry.vram_mb  = model->estimated_vram_mb;
         entry.is_router = (router && model->id == router->id);
 
-        if (g_modelLoader) {
-            auto state = g_modelLoader->getState(model->id);
+        if (GRIM::UI::modelWorkspaceLoader()) {
+            auto state = GRIM::UI::modelWorkspaceLoader()->getState(model->id);
             entry.status      = GRIM::MMO::residencyStateToString(state);
             entry.statusColor = residencyStatusColor(state);
         } else {
@@ -527,9 +527,9 @@ bool UITrainingPanel::removeSubModelFromConfig(const std::string& model_id) {
 }
 
 void UITrainingPanel::updateResourceBars() {
-    if (!g_resourceSignal) return;
+    if (!GRIM::UI::modelWorkspaceResources()) return;
 
-    auto snap = g_resourceSignal->latest();
+    auto snap = GRIM::UI::modelWorkspaceResources()->latest();
 
     totalRamMb_ = static_cast<float>(snap.ram_used_mb + snap.ram_available_mb);
     usedRamMb_  = static_cast<float>(snap.ram_used_mb);

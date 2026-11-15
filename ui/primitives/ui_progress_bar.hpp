@@ -3,7 +3,7 @@
 #include "../ui_theme.hpp"
 #include <string>
 
-class UIProgressBar : public Widget {
+class GRIM_HOST_API UIProgressBar : public Widget {
 public:
     UIProgressBar(const std::string& label, float maxVal = 100.0f);
 

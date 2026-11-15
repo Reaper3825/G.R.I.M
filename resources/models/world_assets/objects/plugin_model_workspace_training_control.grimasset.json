@@ -1,0 +1,30 @@
+{
+  "format": "grim-world-asset",
+  "version": 1,
+  "name": "Training Control panel",
+  "root": "plugin_model_workspace_training_control",
+  "entities": [
+    {
+      "id": "plugin_model_workspace_training_control",
+      "name": "Training Control panel",
+      "kind": "supporter",
+      "parent": "",
+      "description": "Model Workspace panel addressed by the training_control stable key.",
+      "state": "open",
+      "resource_binding": {
+        "type": "ui.panel",
+        "key": "training_control"
+      },
+      "asset_source": {
+        "asset_id": "grim.resource.model_workspace.training_control",
+        "entity_id": "plugin_model_workspace_training_control",
+        "version": 1
+      },
+      "initial_state": {
+        "visible": false,
+        "minimized": false,
+        "maximized": false
+      }
+    }
+  ]
+}

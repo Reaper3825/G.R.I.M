@@ -5,9 +5,6 @@
 #include "world_lab/ui_world_assets_view.hpp"
 #include "training_panel/ui_training_tools_view.hpp"
 #include "resources.hpp"
-#include "ai/grim_text_server_manager.hpp"
-#include "bootstrap/dataset_bootstrap.hpp"
-#include "resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp"
 
 using namespace GRIMText;
 using namespace UITheme;
@@ -68,23 +65,7 @@ UITrainingPanel::UITrainingPanel()
     });
     tabWorldLabBtn_->setSize(100.0f, 28.0f);
     worldLab_ = std::make_unique<UIWorldLabView>(std::filesystem::path{}, std::filesystem::path(getResourcePath()) / "models" / "games", std::filesystem::path(getResourcePath()) / "models" / "world_assets");
-    const auto catalog = GRIM::DataCollection::runtimeDatasetCatalog();
-    worldLab_->setGoalAccess({[catalog](const std::string& query){return catalog->goalSelections(query);},
-                            [catalog](const nlohmann::json& value){catalog->importGoal(value);},
-                            [catalog]{return catalog->curriculumRegistry();},
-                            [catalog](const std::string& id){return catalog->conceptBlock(id);},
-                            [](const nlohmann::json& input){
-                                return GRIM::SpanText::renderInput(input, aiConfig.at("training").at("config")
-                                    .at("concept_spans").get<GRIM::NamedConceptSpanDefinitions>());
-                            },
-                            [](std::string text) {
-                                const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
-                                return std::async(std::launch::async, [url, text = std::move(text)]() -> GRIM::WorldLab::PreviewTokenResult {
-                                    const auto result = TokenizerClient(url).encodeText(text);
-                                    if (!result.success) return {std::nullopt, result.error};
-                                    return {result.token_count, {}};
-                                });
-                            }});
+    worldLab_->setGoalAccess(GRIM::UI::modelWorkspaceGoalAccess());
     tabAssetsBtn_ = std::make_shared<UIButton>("Assets", [this]() {setView(TrainingPanelTab::Assets);});
     tabAssetsBtn_->setSize(80.0f,28.0f);
     worldAssets_ = std::make_unique<UIWorldAssetsView>(std::filesystem::path(getResourcePath()) / "models" / "world_assets");
@@ -266,7 +247,20 @@ UITrainingPanel::UITrainingPanel()
     tokenizerScrollBox_->setSize(600.0f, 300.0f);
 }
 
-UITrainingPanel::~UITrainingPanel() = default;
+UITrainingPanel::~UITrainingPanel() {
+    // The host has detached this panel. Release composed callbacks and join all
+    // plugin-owned workers before the loader can unload their code.
+    if (worldLab_) worldLab_->onSaveAsset = {};
+    if (worldAssets_) worldAssets_->onInsert = {};
+    worldLab_.reset();
+    worldAssets_.reset();
+    observatory_.reset();
+    toolsView_.reset();
+    if (tokenizerHealthFuture_.valid()) tokenizerHealthFuture_.wait();
+    if (tokenizerFuture_.valid()) tokenizerFuture_.wait();
+    if (encodeFuture_.valid()) encodeFuture_.wait();
+    if (configCompileFuture_.valid()) configCompileFuture_.wait();
+}
 
 // ============================================================
 // View Control (DataHub pattern)
@@ -439,7 +433,7 @@ void UITrainingPanel::update(const InputState& input, float dt) {
 
 void UITrainingPanel::pollServer() {
     if (tokenizerHealthFuture_.valid()) return;
-    const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
+    const auto url = GRIM::UI::modelWorkspaceServerURL();
     tokenizerHealthFuture_ = std::async(std::launch::async, [url]() {
         return GRIMText::TokenizerClient(url).isServerRunning();
     });

@@ -2,7 +2,7 @@
 #include "widget.hpp"
 #include <string>
 
-class UILabel : public Widget {
+class GRIM_HOST_API UILabel : public Widget {
 public:
     UILabel(const std::string& text = "", uint32_t color = 0xFFFFFFFF);
 

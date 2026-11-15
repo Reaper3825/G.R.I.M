@@ -1,6 +1,5 @@
 // UITrainingPanel: Tokenizer tab
 #include "ui_training_panel_internal.hpp"
-#include "ai/grim_text_server_manager.hpp"
 
 using namespace GRIMText;
 using namespace UITheme;
@@ -20,7 +19,7 @@ void drawCenteredTokenizerText(OverlayRenderer& renderer, float x, float y, floa
 
 void UITrainingPanel::handleRunTokenizer() {
     if (tokenizerFuture_.valid()) return;
-    const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
+    const auto url = GRIM::UI::modelWorkspaceServerURL();
     tokenizerRunning_ = true;
     tokenizerComplete_ = false;
     tokenizerSuccess_ = false;
@@ -326,7 +325,7 @@ void UITrainingPanel::drawTokenizerBottomBar(OverlayRenderer& renderer, float ba
 
 void UITrainingPanel::handleEncodeText() {
     if (encodeFuture_.valid() || encodeInputBuffer_.empty()) return;
-    const auto url = GRIM::GRIMTextServerManager::getInstance().getServerURL();
+    const auto url = GRIM::UI::modelWorkspaceServerURL();
     const auto text = encodeInputBuffer_;
     encodeRunning_ = true;
     encodeComplete_ = false;

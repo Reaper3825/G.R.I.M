@@ -444,7 +444,7 @@ directory and atomic destination replacement; failed writes preserve the old fil
 
 | Source | Responsibility / when to change it |
 |---|---|
-| `ui/ui_training_panel.hpp`, `.cpp` | Top-level tab registration, view ownership, dispatch, and cross-tab callbacks/lifecycle. |
+| `plugins/model_workspace_plugin/ui_training_panel.hpp`, `.cpp` | Top-level tab registration, view ownership, dispatch, and cross-tab callbacks/lifecycle. |
 | `ui/world_lab/world_document.hpp`, `.cpp` | Entity/passage/condition schema, structural validation, ID allocation, history, version migration, JSON persistence. |
 | `ui/world_lab/environment_registry.hpp` | Atomic ID/location index, validated resolution, saved-file discovery, missing/mismatched/duplicate identity diagnostics. |
 | `ui/world_lab/ui_world_lab_view.hpp`, `.cpp` | World toolbar, inspector, game discovery, recovery, selection capture and asset insertion. |

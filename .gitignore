@@ -425,3 +425,20 @@ cache/geospatial/*.sqlite-wal
 !/plugins/settings_plugin/CMakeLists.txt
 !/plugins/settings_plugin/*.cpp
 !/plugins/settings_plugin/*.hpp
+
+# Provider-owned Model Workspace sources.
+!/plugins/model_workspace_plugin/
+/plugins/model_workspace_plugin/*
+!/plugins/model_workspace_plugin/CMakeLists.txt
+!/plugins/model_workspace_plugin/*.cpp
+!/plugins/model_workspace_plugin/*.hpp
+!/plugins/model_workspace_plugin/training_panel/
+!/plugins/model_workspace_plugin/training_panel/*.cpp
+!/plugins/model_workspace_plugin/training_panel/*.hpp
+
+# Provider-owned Storage sources.
+!/plugins/storage_plugin/
+/plugins/storage_plugin/*
+!/plugins/storage_plugin/CMakeLists.txt
+!/plugins/storage_plugin/*.cpp
+!/plugins/storage_plugin/*.hpp

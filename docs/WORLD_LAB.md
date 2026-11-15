@@ -377,7 +377,7 @@ is a single per-user snapshot, not a multi-process document library.
 - `ui/world_lab/ui_world_canvas.*`: maps rooms to generic nodes and owns object presentation, hit testing,
   drag previews, compass connections, selection, canvas shortcuts.
 - `ui/world_lab/ui_world_lab_view.*`: inspector, toolbar, recovery and lifecycle.
-- `ui/ui_training_panel.*`: World Lab registration and Goal database callbacks.
+- `plugins/model_workspace_plugin/ui_training_panel.*`: World Lab registration and Goal database callbacks.
 - `ui/world_lab/world_goal.hpp`: Goal selection boundary, legacy conversion,
   bounded versioned episode-record reads, and safe record filenames.
 - `ui/world_lab/ui_world_session.*`: selection, immutable snapshots, Play lifecycle,

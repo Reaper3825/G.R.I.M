@@ -3,6 +3,7 @@
 #include "../control/devices/server/device_comm_server.hpp"
 #include "../logger.hpp"
 #include "../net/websocket_server.hpp"
+#include "../ui/storage_panel_services.hpp"
 
 #include <cstdlib>
 #include <stdexcept>
@@ -44,5 +45,6 @@ std::unique_ptr<GRIM::DeviceCommServer> bootstrapNetworkServices(
     }
     LOG_PHASE("Device comm server started", true);
     LOG_DEBUG("Bootstrap", "Heap check mode: Manual (removed CHECK_ALWAYS for debugging)");
+    GRIM::UI::Storage::bindServer(*deviceCommServer);
     return deviceCommServer;
 }

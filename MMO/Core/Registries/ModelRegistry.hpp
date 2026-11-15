@@ -7,6 +7,7 @@
 //   - All required fields must be populated
 //======================================================//
 #pragma once
+#include "core/host_exports.hpp"
 
 #include "../../Shared/MMD.hpp"
 
@@ -40,7 +41,7 @@ struct MMOConfig {
 // =========================================================
 class ModelRegistry {
 public:
-    static ModelRegistry& instance();
+    static GRIM_HOST_API ModelRegistry& instance();
 
     // Load and validate models from ai_config.json root object.
     // Throws std::runtime_error on any invariant violation.
@@ -49,10 +50,10 @@ public:
     // --- Queries --------------------------------------------------------
 
     // The router model (never null after successful load).
-    const ModelInfo* getRouter() const;
+    GRIM_HOST_API const ModelInfo* getRouter() const;
 
     // Lookup by exact model id. Returns nullptr if not found.
-    const ModelInfo* getModelById(const std::string& id) const;
+    GRIM_HOST_API const ModelInfo* getModelById(const std::string& id) const;
 
     // All sub-models (excludes router).
     std::vector<const ModelInfo*> getSubModels() const;
@@ -71,7 +72,7 @@ public:
     std::vector<const ModelInfo*> getModelsBySubjectTag(const std::string& tag) const;
 
     // All registered models (router + sub-models).
-    std::vector<const ModelInfo*> getAllModels() const;
+    GRIM_HOST_API std::vector<const ModelInfo*> getAllModels() const;
 
     // Number of registered models (router + sub-models).
     size_t modelCount() const;
@@ -87,16 +88,16 @@ public:
     // Register a new sub-model at runtime. Validates invariants
     // (no LoRA, unique ID, required fields). Throws on violation.
     // Returns a const pointer to the newly inserted model.
-    const ModelInfo* registerModel(ModelInfo model);
+    GRIM_HOST_API const ModelInfo* registerModel(ModelInfo model);
 
     // Remove a sub-model by ID. Throws if the ID is the router
     // (router cannot be removed at runtime) or if the ID is unknown.
-    void removeModel(const std::string& id);
+    GRIM_HOST_API void removeModel(const std::string& id);
 
     // --- Serialization --------------------------------------------------
 
     // Serialize a ModelInfo to JSON (for config persistence).
-    static nlohmann::json serializeModelToJson(const ModelInfo& model);
+    static GRIM_HOST_API nlohmann::json serializeModelToJson(const ModelInfo& model);
 
     // Serialize the full mmo section (for rewriting ai_config.json).
     nlohmann::json serializeMMOSection() const;
@@ -112,7 +113,7 @@ public:
     static BackendType parseBackendType(const std::string& str);
 
     // Convert BackendType to config string.
-    static std::string backendTypeToString(BackendType bt);
+    static GRIM_HOST_API std::string backendTypeToString(BackendType bt);
 
     // ModelKind <-> string
     static ModelKind   parseModelKind(const std::string& str);

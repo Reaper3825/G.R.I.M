@@ -923,8 +923,8 @@ runtime ID. Failed plugin initialization before commit preserves the old panel.
 An activation failure after replacement commit does not restore the old panel.
 Shutdown can discard queued cleanup because `UIRoot::shutdown` destroys all panels.
 
-The UI plugin currently declares four host implementations:
-`ui.training_control`, `ui.data_hub`, `ui.storage`,
+The UI plugin currently declares two host implementations:
+`ui.data_hub`
 and `ui.geospatial`. Bootstrap registers
 factories and host dependencies, but creates no instances of these panels.
 Dynamic surfaces and OSINT panels have not migrated. Host factories contain no
@@ -935,7 +935,8 @@ Factories may register a host-only cleanup callback, invoked on removal, host
 shutdown, or failure after construction. GeoSpatial uses this to disconnect its
 native viewport, clear input callbacks via the runtime, release the clear pass,
 and mark the viewport unavailable. Its runtime remains host-owned and continues
-its existing lifecycle. Storage uses the host device server. Perception services
+its existing lifecycle. Storage Plugin imports copied host device-service operations
+and owns its native panel; it has no host factory. Perception services
 are plugin-owned, and physical/digital environment panels are no longer declared.
 Training UI commands resolve the live panel on the UI thread
 instead of holding a global owning pointer. Reloading the UI provider destroys
@@ -989,7 +990,7 @@ Calendar uses native buttons, input boxes, scrolling and overlay drawing. It
 refreshes visible, non-minimized content every 500 ms from `update()`. Storage
 operations remain synchronous. Initialization does not open calendar storage;
 saved events survive unload, while unsaved widget drafts do not. The generic UI
-plugin operates on Calendar but does not own it. The other four factory panels
+plugin operates on Calendar but does not own it. The other two factory panels
 remain unmigrated.
 
 `tests/run_ui_input_foundation.ps1` tests native controls, provider staging,
@@ -1014,3 +1015,13 @@ Console is now a native provider-owned panel in `console_plugin` (provider name
 `Console Plugin`, stable key `console`), using the same initialization lease as
 Calendar. It imports host UI, command, and session services. See
 [Console ownership](ui/CONSOLE.md#provider-ownership).
+
+Storage Plugin owns the native Shared Storage panel (`storage`), including My Files
+and Devices. It imports the host UI and `ui/storage_panel_services.*`; it registers
+no tools and never owns or stops DeviceCommServer. Network bootstrap binds that
+service before plugin initialization, and shutdown unbinds it after provider
+retirement. Snapshots cross the boundary by value. Panel-local drafts are discarded
+on reload; host connection, device, storage and transfer state survives. The native
+DLL tests in `tests/run_ui_input_foundation.ps1` exercise both tabs, device actions,
+explicit port validation, resource ownership, replacement and failed initialization
+without starting networking. Matching host/plugin binaries must be rebuilt together.

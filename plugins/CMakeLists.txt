@@ -19,3 +19,6 @@ add_subdirectory(settings_plugin)
 add_subdirectory(input_plugin)
 
 add_subdirectory(schedule_plugin)
+
+add_subdirectory(model_workspace_plugin)
+add_subdirectory(storage_plugin)
