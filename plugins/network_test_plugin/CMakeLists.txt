@@ -6,7 +6,8 @@ find_package(nlohmann_json CONFIG REQUIRED
     HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
 add_library(network_test_plugin SHARED network_test_plugin.cpp)
 target_link_libraries(network_test_plugin PRIVATE nlohmann_json::nlohmann_json)
-grim_configure_plugin(network_test_plugin)
+grim_configure_plugin(network_test_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/network_test_plugin.tools.json")
 target_link_libraries(network_test_plugin PRIVATE Threads::Threads)
 if(WIN32)
     target_link_libraries(network_test_plugin PRIVATE ws2_32)

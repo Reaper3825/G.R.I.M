@@ -7,13 +7,14 @@
 #include <iostream>
 extern "C" GrimResult grim_plugin_init(const GrimPluginAPI*);
 extern "C" void grim_plugin_shutdown();
+extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
 namespace {
-struct RegisteredHandler { GrimToolHandler handler; void* user_data; };
-std::vector<RegisteredHandler> tools; bool permitted=true,current=true; std::vector<std::string> effects;
+constexpr const char* tools[] = {"move_mouse", "click", "type", "key"};
+ bool permitted=true,current=true; std::vector<std::string> effects;
 void check(bool value,const char* message){if(!value) throw std::runtime_error(message);}
 GrimToolResult result; std::string message,error;
 GrimResult complete(GrimToolResultWriter*,const GrimToolResult* r){result=*r;message=r->message?r->message:"";error=r->error_code?r->error_code:"";return GRIM_OK;}
-GrimResult invoke(size_t index,const std::string& text){GrimToolCall call{};call.arguments=text.data();call.arguments_size=text.size();GrimToolResultWriter writer{};writer.complete=complete;return tools[index].handler(&call,&writer,tools[index].user_data);}
+GrimResult invoke(size_t index,const std::string& text){GrimToolCall call{};call.arguments=text.data();call.arguments_size=text.size();GrimToolResultWriter writer{};writer.complete=complete;return grim_plugin_dispatch_tool(tools[index], &call, &writer);}
 }
 namespace GRIM {
 void InputController::moveMouse(int x,int y){effects.push_back(std::to_string(x)+","+std::to_string(y));}
@@ -26,9 +27,8 @@ int main(){
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
  api.has_permission=[](const GrimPluginAPI*,GrimPermission){return permitted;};
  api.is_provider_current=[](const GrimPluginAPI*){return current;};
- api.register_tools=[](const GrimPluginAPI*,const GrimToolRegistration* t,size_t n){tools.clear(); for (size_t i = 0; i < n; ++i) tools.push_back({t[i].handler, t[i].user_data});return GRIM_OK;};
  auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
- check(grim_plugin_init(&api)==GRIM_OK && tools.size()==4,"Registration failed");check(effects.empty(),"Initialization injected input");
+ check(grim_plugin_init(&api)==GRIM_OK,"Initialization failed");check(effects.empty(),"Initialization injected input");
  permitted=false;check(invoke(1,"")==GRIM_ERROR_PERMISSION_DENIED && effects.empty(),"Permission bypass");permitted=true;
  current=false;check(invoke(1,"")==GRIM_ERROR_PERMISSION_DENIED && effects.empty(),"Inactive provider injected input");current=true;
 #ifndef _WIN32

@@ -9,7 +9,8 @@ add_library(osint_plugin SHARED process.cpp
     "${CMAKE_CURRENT_LIST_DIR}/osint_plugin.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/osit.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/osit_secrets.cpp")
-grim_configure_plugin(osint_plugin)
+grim_configure_plugin(osint_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/osint_plugin.tools.json")
 target_link_libraries(osint_plugin PRIVATE nlohmann_json::nlohmann_json Threads::Threads)
 
 option(GRIM_OSINT_PROVIDER_TESTS "Build isolated OSINT provider tests" OFF)

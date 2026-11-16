@@ -1,4 +1,5 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
+#include "core/plugin_api.hpp"
 #include "snapshot_registry.hpp"
 #include "plugins/plugin_logging.hpp"
 
@@ -26,39 +27,18 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         !api->get_tool_snapshot) return GRIM_ERROR_API_VERSION_MISMATCH;
     inspection::host = api;
     grim::plugin::setLoggingAPI(api);
-    GRIM::PluginToolRegistration tools[3];
-    tools[0].handler = call<cmdListTools>;
-    tools[1].handler = call<cmdToolInfo>;
-    tools[2].handler = call<cmdToolStats>;
-    const char* ids[] = {"list_tools", "tool_info", "tool_stats"};
-    const char* descriptions[] = {"List all registered commands/tools", "Show detailed information about a tool", "Show tool usage statistics"};
-    const char* usages[] = {"list_tools [category]", "tool_info {t}", "tool_stats [limit]"};
-    const char* summaries[] = {"List registered tools and their documented descriptions",
-        "Inspect a registered tool and its usage documentation",
-        "Show recorded tool execution counts and success rates"};
-    const std::map<std::string, std::string> toolBindings = {{"t", "t"}};
-    tools[1].descriptor.bindings = toolBindings;
-    const char* names[] = {"category", "command_name", "limit"};
-    const char* parameterDescriptions[] = {"Exact category; omitted lists all tools", "Canonical tool ID, display name, or registered alias", "Maximum rows; defaults to 20; retains existing integer-prefix parsing"};
-    GRIM::MMO::ToolParameter parameters[3];
-    for (size_t i = 0; i < 3; ++i) {
-        auto& d = tools[i].descriptor;
-        tools[i].descriptor.short_description = summaries[i];
-        d.tool_id = d.display_name = ids[i];
-        d.version = "1.0.0";
-        d.description = descriptions[i];
-        d.usage = usages[i];
-        d.category = "information";
-        d.argument_format = "raw_text";
-        d.is_informational = 1;
-        parameters[i].name = names[i];
-        parameters[i].type = i == 2 ? "number" : "string";
-        parameters[i].description = parameterDescriptions[i];
-        parameters[i].required = i == 1;
-        d.parameters = {parameters[i]};
-    }
-    return GRIM::registerPluginTools(api, tools, 3);
+    return GRIM_OK;
 }
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "list_tools") return call<cmdListTools>(request, writer, nullptr);
+    if (id == "tool_info") return call<cmdToolInfo>(request, writer, nullptr);
+    if (id == "tool_stats") return call<cmdToolStats>(request, writer, nullptr);
+    return GRIM_ERROR_NOT_FOUND;
+}
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     grim::plugin::setLoggingAPI(nullptr);
     inspection::host = nullptr;

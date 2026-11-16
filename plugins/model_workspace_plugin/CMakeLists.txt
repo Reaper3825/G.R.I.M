@@ -8,7 +8,8 @@ add_library(model_workspace_plugin SHARED model_workspace_plugin.cpp ui_training
     training_panel/ui_training_panel_tool_gaps_tab.cpp
     training_panel/ui_training_panel_training_tab.cpp
     training_panel/ui_training_panel_tokenizer_tab.cpp)
-grim_configure_plugin(model_workspace_plugin)
+grim_configure_plugin(model_workspace_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/model_workspace_plugin.tools.json")
 target_compile_features(model_workspace_plugin PRIVATE cxx_std_20)
 target_include_directories(model_workspace_plugin PRIVATE "${GRIM_PLUGIN_ROOT}/ui")
 target_link_libraries(model_workspace_plugin PRIVATE nlohmann_json::nlohmann_json)

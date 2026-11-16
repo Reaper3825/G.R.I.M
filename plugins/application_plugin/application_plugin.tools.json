@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "provider": "Application Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "open",
+      "description": "Open an application or file",
+      "short_description": "Open a selected entity through its available handler",
+      "usage": "open {t}",
+      "bindings": { "t": "t" },
+      "category": "action",
+      "permissions": ["process"],
+      "is_informational": false,
+      "needs_confirmation": true,
+      "argument_format": "raw_text",
+      "parameters": [
+        {
+          "name": "target",
+          "type": "string",
+          "description": "Application or file passed unchanged to the OS opener",
+          "required": true
+        }
+      ]
+    },
+    {
+      "tool_id": "search",
+      "description": "Search the web for information",
+      "short_description": "Search the web for information matching a query",
+      "usage": "search <query>",
+      "category": "information",
+      "permissions": ["process"],
+      "is_informational": true,
+      "needs_confirmation": false,
+      "argument_format": "raw_text",
+      "parameters": [
+        {
+          "name": "query",
+          "type": "string",
+          "description": "Search text with surrounding whitespace trimmed",
+          "required": true
+        }
+      ]
+    },
+    {
+      "tool_id": "applications.list",
+      "description": "List application resources discovered on this system",
+      "usage": "applications.list",
+      "category": "application",
+      "permissions": ["system", "filesystem"],
+      "is_informational": true,
+      "needs_confirmation": false,
+      "argument_format": "json",
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "applications.refresh",
+      "description": "Refresh application discovery and live resources",
+      "usage": "applications.refresh",
+      "category": "application",
+      "permissions": ["system", "filesystem"],
+      "is_informational": true,
+      "needs_confirmation": false,
+      "argument_format": "json",
+      "argument_schema": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "applications.inspect",
+      "description": "Inspect an application resource and its launch identity",
+      "usage": "applications.inspect {t}",
+      "bindings": { "t": "t" },
+      "category": "application",
+      "permissions": ["system", "filesystem"],
+      "is_informational": true,
+      "needs_confirmation": false,
+      "argument_format": "json",
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "resource_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "applications.launch",
+      "description": "Launch a discovered application using its current generation",
+      "usage": "applications.launch {t}",
+      "bindings": { "t": "t" },
+      "category": "application",
+      "permissions": ["system", "filesystem", "process"],
+      "is_informational": false,
+      "needs_confirmation": true,
+      "argument_format": "json",
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "resource_id": {
+            "type": "string"
+          },
+          "provider_instance": {
+            "type": "string"
+          },
+          "runtime_id": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "resource_id",
+          "provider_instance",
+          "runtime_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

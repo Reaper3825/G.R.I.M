@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "provider": "Tool Inspection Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "list_tools",
+      "argument_format": "raw_text",
+      "category": "information",
+      "description": "List all registered commands/tools",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "Exact category; omitted lists all tools",
+          "name": "category",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "short_description": "List registered tools and their documented descriptions",
+      "usage": "list_tools [category]",
+      "permissions": []
+    },
+    {
+      "tool_id": "tool_info",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "information",
+      "description": "Show detailed information about a tool",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "Canonical tool ID, display name, or registered alias",
+          "name": "command_name",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Inspect a registered tool and its usage documentation",
+      "usage": "tool_info {t}",
+      "permissions": []
+    },
+    {
+      "tool_id": "tool_stats",
+      "argument_format": "raw_text",
+      "category": "information",
+      "description": "Show tool usage statistics",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "Maximum rows; defaults to 20; retains existing integer-prefix parsing",
+          "name": "limit",
+          "required": false,
+          "type": "number"
+        }
+      ],
+      "short_description": "Show recorded tool execution counts and success rates",
+      "usage": "tool_stats [limit]",
+      "permissions": []
+    }
+  ]
+}

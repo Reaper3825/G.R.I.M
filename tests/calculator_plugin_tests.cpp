@@ -1,9 +1,10 @@
-#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "core/plugin_api.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include <nlohmann/json.hpp>
 #include <iostream>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 #ifdef _WIN32
@@ -14,22 +15,25 @@
 
 using Json = nlohmann::json;
 using namespace GRIM::MMO;
-static GrimToolHandler handler;
+static GrimToolDispatch dispatch;
 static void check(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
-static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration* tools, size_t count) {
-    check(count == 1, "Expected one calculator tool");
-    const auto& tool = tools[0];
-    const auto descriptor = Json::parse(tool.descriptor_json,
-        tool.descriptor_json + tool.descriptor_size).get<ToolDescriptor>();
-    check(descriptor.usage_type == ToolUsage::Model && descriptor.is_informational &&
-          !descriptor.needs_confirmation && !descriptor.permission_bits, "Invalid tool policy");
-    check(descriptor.parameters.size() == 1 && descriptor.parameters[0].required &&
-          descriptor.parameters[0].name == "expression", "Missing expression parameter");
-    check(descriptor.bindings.size() == 1, "Missing tool documentation");
-    handler = tool.handler;
+static bool publishCalculator(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    check(static_cast<bool>(input), "Missing calculator manifest");
+    const auto entries = Json::parse(input).at("tools");
+    check(entries.size() == 1, "Expected one calculator tool");
+    const auto& entry = entries[0];
+    check(entry.value("usage_type", 1) == 1 && entry.at("is_informational") == true &&
+          entry.at("needs_confirmation") == false && entry.at("permissions").empty(), "Invalid tool policy");
+    check(entry.at("parameters").size() == 1 && entry.at("parameters")[0].at("required") == true &&
+          entry.at("parameters")[0].at("name") == "expression", "Missing expression parameter");
+    ToolDescriptor descriptor;
+    descriptor.tool_id = entry.at("tool_id").get<std::string>();
+    descriptor.usage = entry.at("usage").get<std::string>();
+    descriptor.bindings = entry.at("bindings").get<decltype(descriptor.bindings)>();
     return ProviderRegistry::instance().publish({ToolProviderType::Plugin, "Calculator Plugin", "calculator-test", {}}, {{descriptor,
         [](const std::string& arguments) {
             struct Capture { CommandResult result; int completions = 0; } capture;
@@ -47,10 +51,10 @@ static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration
             GrimToolCall call;
             call.arguments = arguments.data();
             call.arguments_size = arguments.size();
-            check(handler(&call, &writer, nullptr) == GRIM_OK, "Handler failed at ABI boundary");
+            check(dispatch("calculate", &call, &writer) == GRIM_OK, "Handler failed at ABI boundary");
             check(capture.completions == 1, "Handler must complete exactly once");
             return capture.result;
-        }}}) ? GRIM_OK : GRIM_ERROR_ALREADY_EXISTS;
+        }}});
 }
 
 static Json invoke(const std::string& expression, bool success) {
@@ -87,10 +91,11 @@ int main(int argc, char** argv) {
         api.api_version = GRIM_API_VERSION - 0x100;
         check(pluginInit(&api) == GRIM_ERROR_API_VERSION_MISMATCH, "Old API accepted");
         api.api_version = GRIM_API_VERSION;
-        check(pluginInit(&api) == GRIM_ERROR_INVALID_PARAM, "Missing registration callback accepted");
-        api.register_tools = registerTools;
-        check(pluginInit(&api) == GRIM_OK, "Plugin registration failed");
-        check(pluginInit(&api) == GRIM_ERROR_ALREADY_EXISTS, "Registration failure not propagated");
+        dispatch = reinterpret_cast<GrimToolDispatch>(symbol("grim_plugin_dispatch_tool"));
+        check(dispatch != nullptr, "Missing dispatcher export");
+        check(pluginInit(&api) == GRIM_OK, "Plugin initialization failed");
+        check(publishCalculator(std::filesystem::path(argv[1]).replace_extension(".tools.json")),
+              "Calculator manifest did not publish");
         check(ToolRegistry::instance().getModelTools().size() == 1, "Tool missing from model discovery");
 
         for (const auto& entry : std::initializer_list<std::pair<const char*, const char*>>{
@@ -125,9 +130,9 @@ int main(int argc, char** argv) {
         check(invoke(std::string(4095, ' ') + "1", true).at("value") == 1, "Input boundary failed");
         GrimToolCall bad;
         GrimToolResultWriter writer;
-        check(handler(nullptr, &writer, nullptr) == GRIM_ERROR_INVALID_PARAM, "Null call accepted");
-        check(handler(&bad, nullptr, nullptr) == GRIM_ERROR_INVALID_PARAM, "Null writer accepted");
-        check(handler(&bad, &writer, nullptr) == GRIM_ERROR_INVALID_PARAM, "Null completion accepted");
+        check(dispatch("calculate", nullptr, &writer) == GRIM_ERROR_INVALID_PARAM, "Null call accepted");
+        check(dispatch("calculate", &bad, nullptr) == GRIM_ERROR_INVALID_PARAM, "Null writer accepted");
+        check(dispatch("calculate", &bad, &writer) == GRIM_ERROR_INVALID_PARAM, "Null completion accepted");
         pluginShutdown();
         ProviderRegistry::instance().retire("Calculator Plugin", "calculator-test");
         check(!ToolRegistry::instance().isRegistered("calculate"), "Provider removal failed");

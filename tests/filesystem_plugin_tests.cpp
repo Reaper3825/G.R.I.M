@@ -36,7 +36,7 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
             std::error_code error;
             fs::current_path(originalDirectory, error);
             // Only known fixture paths are removed. No recursive cleanup.
-            for (const auto* name : {"plugins/filesystem_plugin.dll", "sample.txt", "new folder", "nonempty/keep.txt", "nonempty", "plugins"})
+            for (const auto* name : {"plugins/filesystem_plugin.dll", "plugins/filesystem_plugin.tools.json", "sample.txt", "new folder", "nonempty/keep.txt", "nonempty", "plugins"})
                 fs::remove(path / name, error);
             fs::remove(path, error);
         }
@@ -46,6 +46,7 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     fs::create_directory(sandbox / "plugins");
     const auto deployed = sandbox / "plugins/filesystem_plugin.dll";
     fs::copy_file(pluginDirectory / "filesystem_plugin.dll", deployed);
+    fs::copy_file(pluginDirectory / "filesystem_plugin.tools.json", deployed.parent_path() / "filesystem_plugin.tools.json");
     PluginManager::initialize((sandbox / "plugins").string());
     check(registry.toolCount() == baseline + 3, "Filesystem DLL did not register exactly three tools");
     check(!registry.isRegistered("cd") && !registry.isRegistered("pwd"), "Retired navigation tools registered");

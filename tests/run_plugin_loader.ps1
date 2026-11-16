@@ -24,6 +24,8 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     if ($fixture -eq 'legacy') { $argsForFixture += '/DFIXTURE_API_VERSION=65536' }
     if ($fixture -eq 'alpha') { $argsForFixture += @('/DFIXTURE_NATIVE_DEPENDENCY', '/link', '"toolkit bin\grim_test_dependency.lib"') }
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
+    @{schema_version = 1; provider = "Declared-$fixture"; version = '1.0'; tools = @()} |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output "$folder/$fixture.tools.json") -Encoding ascii
     $commands += @("cl @$fixture.rsp", 'if errorlevel 1 exit /b %errorlevel%')
 }
 $testArgs = $common + @('/DGRIM_BUILD_HOST', ('/D"GRIM_PLUGIN_CUDA_BIN_DIR=\"' + $toolkit.Replace('\', '/') + '\""'))

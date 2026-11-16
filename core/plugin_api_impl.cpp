@@ -5,7 +5,7 @@
 // function table. These are the actual implementations that plugins call.
 // ============================================================================
 
-#include "plugin_api.hpp"
+#include "plugin_api_impl.hpp"
 #include "plugin_manager.hpp"
 #include "plugin_notifications.hpp"
 #include "logger.hpp"
@@ -22,6 +22,7 @@
 #include <cstring>
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 #include <memory>
 #include <stdexcept>
@@ -71,8 +72,7 @@ struct PluginContext {
     GrimPluginAPI api{};
     std::shared_ptr<CallGate> gate = std::make_shared<CallGate>();
     bool staging = false;
-    bool registration_failed = false;
-    std::vector<GRIM::MMO::ToolRegistration> pending;
+    bool resource_staging_failed = false;
     std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
         std::make_shared<GRIM::UI::ProviderPanelLease>();
     std::mutex panelRequestsMutex;
@@ -192,23 +192,36 @@ struct ActiveCall {
         if (--gate->active == 0) gate->idle.notify_all();
     }
 };
-static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& source, const PluginContext& owner) {
+static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
+                                                     const char* version, uint32_t providerPermissions) {
     using namespace GRIM::MMO;
-    if (source.struct_size != sizeof(source) || !source.handler || !source.descriptor_json ||
-        !source.descriptor_size ||
-        std::memchr(source.descriptor_json, 0, source.descriptor_size))
-        throw std::invalid_argument("Invalid tool registration");
-    auto wire = nlohmann::json::parse(source.descriptor_json, source.descriptor_json + source.descriptor_size);
-    const auto& permissions = wire.at("permission_bits");
-    if (!permissions.is_number_unsigned() || permissions > UINT32_MAX)
-        throw std::invalid_argument("Invalid permission bits");
-    // The descriptor codec also reads registry snapshots. Initialize host-owned statistics here.
-    wire["usage_count"] = 0;
-    wire["success_count"] = 0;
-    wire["failure_count"] = 0;
-    wire["success_rate"] = 1.0f;
-    ToolDescriptor out = wire.get<ToolDescriptor>();
-    if ((out.permission_bits & owner.permissions) != out.permission_bits)
+    static const std::unordered_map<std::string, uint32_t> permissionFlags{
+        {"filesystem", GRIM_PERM_FILESYSTEM}, {"process", GRIM_PERM_PROCESS},
+        {"network", GRIM_PERM_NETWORK}, {"memory", GRIM_PERM_MEMORY}, {"voice", GRIM_PERM_VOICE},
+        {"ui", GRIM_PERM_UI}, {"system", GRIM_PERM_SYSTEM}, {"input", GRIM_PERM_INPUT}
+    };
+    ToolDescriptor out;
+    for (const auto& name : entry.at("permissions").get<std::vector<std::string>>())
+        out.permission_bits |= permissionFlags.at(name);
+    readToolDescriptorMetadata(entry, out, version);
+
+    if (out.argument_format == "json") {
+        const auto& schema = entry.at("argument_schema");
+        if (!schema.is_object()) throw std::invalid_argument("Tool argument schema must be an object");
+        out.argument_schema_json = schema.dump();
+        if (out.parameters.empty()) {
+            const auto properties = schema.value("properties", nlohmann::json::object());
+            if (!properties.is_object()) throw std::invalid_argument("Invalid argument schema properties");
+            const auto required = schema.value("required", std::unordered_set<std::string>{});
+            for (const auto& [name, property] : properties.items()) {
+                if (!property.is_object()) throw std::invalid_argument("Invalid argument schema property");
+                const auto type = property.value("type", nlohmann::json());
+                out.parameters.push_back({name, type.is_string() ? type.get<std::string>() : "any",
+                    property.value("description", name), required.count(name) != 0});
+            }
+        }
+    }
+    if ((out.permission_bits & providerPermissions) != out.permission_bits)
         throw std::invalid_argument("Tool requires undeclared permissions");
 
     const auto validateText = [](const std::string& value, bool required = true) {
@@ -221,11 +234,6 @@ static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& 
     if (out.argument_format != "raw_text" && out.argument_format != "json")
         throw std::invalid_argument("Unsupported argument format");
     validateText(out.argument_schema_json, false);
-    if (out.argument_schema_json.empty()) {
-        if (out.argument_format == "json") throw std::invalid_argument("JSON tools require a schema");
-    } else if (!nlohmann::json::parse(out.argument_schema_json).is_object()) {
-        throw std::invalid_argument("Schema must be an object");
-    }
     if (out.parameters.size() > 256) throw std::invalid_argument("Too many tool parameters");
     std::unordered_set<std::string> parameters;
     for (const auto& parameter : out.parameters) {
@@ -238,42 +246,40 @@ static GRIM::MMO::ToolRegistration copyRegistration(const GrimToolRegistration& 
         if (list->size() > 256) throw std::invalid_argument("Too many tool metadata entries");
         for (const auto& value : *list) validateText(value);
     }
-    auto gate = owner.gate;
-    auto handler = source.handler;
-    auto data = source.user_data;
-    auto invoke = [gate, handler, data](const std::string& arguments) -> CommandResult {
-        ActiveCall active(gate);
-        if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
-        ResultCapture capture;
-        GrimToolResultWriter writer{sizeof(GrimToolResultWriter), &capture, completeResult};
-        GrimToolCall call{sizeof(GrimToolCall), arguments.c_str(), arguments.size()};
-        const auto delivered = handler(&call, &writer, data);
-        if (delivered != GRIM_OK || !capture.completed || capture.invalid)
-            return {false, "Plugin did not deliver a valid result", "ERR_PLUGIN_RESULT"};
-        return std::move(capture.value);
-    };
-    return {std::move(out), std::move(invoke)};
+    return out;
 }
-static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRegistration* tools, size_t count) noexcept {
-    PluginContext* owner = nullptr;
-    try {
-        owner = const_cast<PluginContext*>(&pluginContext(self));
-        {
-            std::lock_guard lock(owner->gate->mutex);
-            if (!owner->gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-        }
-        if (!owner->staging) return GRIM_ERROR_UNSUPPORTED;
-        if (!tools || !count || count > 256) throw std::invalid_argument("Invalid batch");
-        std::vector<GRIM::MMO::ToolRegistration> copied;
-        copied.reserve(count);
-        for (size_t i = 0; i < count; ++i)
-            copied.push_back(copyRegistration(tools[i], *owner));
-        owner->pending.insert(owner->pending.end(), copied.begin(), copied.end());
-        return GRIM_OK;
-    } catch (...) {
-        if (owner && owner->staging) owner->registration_failed = true;
-        return GRIM_ERROR_INVALID_PARAM;
+
+std::vector<GRIM::MMO::ToolRegistration> readToolManifest(
+    const std::filesystem::path& path, const GrimPluginAPI* api, const char* version, GrimToolDispatch dispatch) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("Cannot open tool manifest: " + path.string());
+    const auto manifest = nlohmann::json::parse(input);
+    const auto& owner = pluginContext(api);
+    const auto& schemaVersion = manifest.at("schema_version");
+    if (!schemaVersion.is_number_integer() || schemaVersion != 1 ||
+        manifest.at("provider") != owner.identity->name || manifest.at("version") != version)
+        throw std::invalid_argument("Tool manifest version or provider identity mismatch");
+    const auto& entries = manifest.at("tools");
+    if (!entries.is_array() || entries.size() > 256 || (!entries.empty() && !dispatch))
+        throw std::invalid_argument("Invalid tool manifest entries or missing dispatcher");
+    std::vector<GRIM::MMO::ToolRegistration> tools;
+    tools.reserve(entries.size());
+    for (const auto& entry : entries) {
+        auto descriptor = decodeManifestTool(entry, version, owner.permissions);
+        auto invoke = [gate = owner.gate, dispatch, id = descriptor.tool_id](const std::string& arguments) -> CommandResult {
+            ActiveCall active(gate);
+            if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
+            ResultCapture capture;
+            GrimToolResultWriter writer{sizeof(GrimToolResultWriter), &capture, completeResult};
+            GrimToolCall call{sizeof(GrimToolCall), arguments.c_str(), arguments.size()};
+            const auto delivered = dispatch(id.c_str(), &call, &writer);
+            if (delivered != GRIM_OK || !capture.completed || capture.invalid)
+                return {false, "Plugin did not deliver a valid result", "ERR_PLUGIN_RESULT"};
+            return std::move(capture.value);
+        };
+        tools.push_back({std::move(descriptor), std::move(invoke)});
     }
+    return tools;
 }
 
 // Provider-neutral bridge: copied descriptions only; implementation and state stay in the DLL.
@@ -323,7 +329,7 @@ static GrimResult api_replace_resources(const GrimPluginAPI* self, const char* k
             *owner.identity, resourceKind, resources)
             ? GRIM_OK : GRIM_ERROR_PLUGIN_NOT_LOADED;
     } catch (...) {
-        if (context && context->staging) context->registration_failed = true;
+        if (context && context->staging) context->resource_staging_failed = true;
         return GRIM_ERROR_INVALID_PARAM;
     }
 }
@@ -685,7 +691,6 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.log = api_log;
     
     // Commands
-    api.register_tools = api_register_tools;
     api.unregister_command = api_unregister_command;
     api.execute_command = api_execute_command;
     
@@ -751,9 +756,10 @@ static GrimPluginAPI* uniquePlugin(const std::string& name) {
     if (!result) throw std::invalid_argument("Missing plugin context");
     return result;
 }
-bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing) {
+bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing,
+                            const std::vector<GRIM::MMO::ToolRegistration>& tools) {
     auto& owner = const_cast<PluginContext&>(pluginContext(api));
-    if (owner.registration_failed || !owner.staging ||
+    if (owner.resource_staging_failed || !owner.staging ||
         !GRIM::UI::validateProviderPanels(owner.panelLease, replacing ? pluginContext(replacing).panelLease : nullptr)) return false;
     auto& providers = GRIM::MMO::ProviderRegistry::instance();
     // Handlers may become reachable as soon as the registry swaps its entries,
@@ -764,7 +770,7 @@ bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* repla
     try {
         committed = providers.publish(
             *owner.identity,
-            owner.pending, replacing ? pluginContext(replacing).identity->instance : std::string{});
+            tools, replacing ? pluginContext(replacing).identity->instance : std::string{});
     } catch (...) {
         owner.staging = true;
         owner.panelLease->acceptingPanels = true;
@@ -785,7 +791,6 @@ bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* repla
         std::lock_guard lock(old.gate->mutex);
         old.gate->accepting = false;
     }
-    owner.pending.clear();
     owner.staging = false;
     { std::lock_guard lock(owner.gate->mutex); owner.gate->published = true; }
     return true;

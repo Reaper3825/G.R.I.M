@@ -5,4 +5,5 @@ find_package(nlohmann_json CONFIG REQUIRED
     HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
 add_library(utility_plugin SHARED utility_plugin.cpp)
 target_link_libraries(utility_plugin PRIVATE nlohmann_json::nlohmann_json)
-grim_configure_plugin(utility_plugin)
+grim_configure_plugin(utility_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/utility_plugin.tools.json")

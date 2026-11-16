@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "provider": "Calculator Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "calculate",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "math",
+      "description": "Evaluate finite double-precision arithmetic: + - * / % ^, parentheses, pi, e; abs, sqrt, sin, cos, tan, asin, acos, atan, ln, log/log10, exp, floor, ceil, round, min(a,b), max(a,b), pow(a,b). Trigonometric angles are radians; ^ is right-associative. Maximum 4096 input bytes and 64 active recursive parsing levels. Returns an answer and numeric value, or an error code, message, and zero-based byte offset.",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "Raw mathematical expression to evaluate",
+          "name": "expression",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Evaluate arithmetic expressions with constants and mathematical functions",
+      "usage": "calculate {t}",
+      "permissions": []
+    }
+  ]
+}

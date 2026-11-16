@@ -1,5 +1,7 @@
 #pragma once
 #include "plugin_api.hpp"
+#include "../MMO/Core/Registries/ProviderRegistry.hpp"
+#include <filesystem>
 #include <string>
 
 // ============================================================================
@@ -28,7 +30,10 @@ GrimPluginAPI* createPluginAPI(
 );
 
 // Publish the staged provider, tools and initial resources after successful initialization.
-bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr);
+std::vector<GRIM::MMO::ToolRegistration> readToolManifest(
+    const std::filesystem::path& path, const GrimPluginAPI* api, const char* version, GrimToolDispatch dispatch);
+bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr,
+                            const std::vector<GRIM::MMO::ToolRegistration>& tools = {});
 bool commitPluginGeneration(const std::string& plugin_name);
 // Host lifecycle thread only; never call from inside a plugin callback.
 void beginPluginShutdown(const GrimPluginAPI* api);

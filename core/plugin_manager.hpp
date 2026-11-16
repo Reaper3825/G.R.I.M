@@ -27,22 +27,27 @@ private:
 
         bool operator==(const Fingerprint&) const = default;
     };
+    struct PluginFingerprint {
+        Fingerprint library;
+        Fingerprint manifest;
+        bool operator==(const PluginFingerprint&) const = default;
+    };
     struct LoadedPlugin {
         void* handle = nullptr;
         GrimPluginAPI* api = nullptr;
-        Fingerprint fingerprint;
+        PluginFingerprint fingerprint;
         std::filesystem::path cacheDirectory;
     };
     static inline std::filesystem::path pluginDir;
     static inline std::unordered_map<std::string, LoadedPlugin> loadedPlugins;
-    struct Attempt { Fingerprint fingerprint; uint64_t surfaceRevision = 0; };
+    struct Attempt { PluginFingerprint fingerprint; uint64_t surfaceRevision = 0; };
     static inline std::unordered_map<std::string, Attempt> attempted;
     static inline uint64_t surfaceRevision = 0;
     static inline std::mutex requestMutex;
     static inline std::unordered_set<const GrimPluginAPI*> reloadRequests;
     static inline std::chrono::steady_clock::time_point nextPoll;
     static std::optional<Fingerprint> fingerprint(const std::filesystem::path& path);
-    static bool loadPlugin(const std::filesystem::path& path, const Fingerprint& fingerprint);
+    static bool loadPlugin(const std::filesystem::path& path, const PluginFingerprint& fingerprint);
     static void retire(LoadedPlugin& plugin);
     static void unloadPlugin(const std::string& name);
 };

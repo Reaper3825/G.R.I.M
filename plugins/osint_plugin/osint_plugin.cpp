@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 // plugins/osint_plugin.cpp - OSINT Self-Audit Plugin (NEW API)
 #include "pch.hpp"
 #include "commands/command_result.hpp"
@@ -99,60 +99,21 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     
     api->log(api, GRIM_LOG_INFO, "OSINT Self-Audit plugin v2.1.0 loading");
     
-    struct Entry { const char* id; const char* description; const char* usage; GrimToolHandler handler; bool informational; bool required; };
-    const Entry entries[] = {
-        {"profile_person", "Profile a username across public sources", "profile_person {t} [--no-cache] [--verbose]", handleProfilePerson, false, true},
-        {"sherlock_sweep", "Search public sites for a username", "sherlock_sweep {t} [--async]", handleSherlockSweep, false, true},
-        {"osint_report", "Read a username report and optionally export it", "osint_report {t} [--export {o}]", handleOsintReport, false, true},
-        {"osint_status", "Read scan status and consume completed results", "osint_status [{t}]", handleOsintStatus, false, false},
-        {"osint_clear_cache", "Delete cached OSINT reports", "osint_clear_cache", handleOsintClearCache, false, false},
-        {"osint_scan_secrets", "Scan discovered URLs for exposed sensitive data", "osint_scan_secrets {t}", handleOsintScanSecrets, false, true},
-        {"osint_show_secrets", "Read discovered sensitive data for a username", "osint_show_secrets {t} [--severity <level>]", handleOsintShowSecrets, true, true}
-    };
-    constexpr size_t toolCount = sizeof(entries) / sizeof(entries[0]);
-    GRIM::PluginToolRegistration tools[toolCount];
-    GRIM::MMO::ToolParameter arguments[toolCount];
-    const char* summaries[] = {"Build a public source profile for a username",
-        "Search public websites for accounts matching a username",
-        "Read a username report and optionally export findings",
-        "Check scan status and collect completed scan results",
-        "Delete locally cached reports from previous public searches",
-        "Scan discovered web addresses for exposed sensitive information",
-        "Read sensitive information findings for a selected username"};
-    const char* reportAliases[] = {"osint"};
-    const char* sweepAliases[] = {"sherlock"};
-    for (size_t i = 0; i < toolCount; ++i) {
-        tools[i].descriptor.usage_type = GRIM::MMO::ToolUsage::Ignore;
-        tools[i].descriptor.short_description = summaries[i];
-        if (i != 4) {
-            tools[i].descriptor.bindings = {{"t", "t"}};
-            if (i == 2) tools[i].descriptor.bindings.emplace("o", "o");
-        }
-        const auto& entry = entries[i];
-        tools[i].handler = entry.handler;
-        auto& d = tools[i].descriptor;
-        d.tool_id = d.display_name = entry.id;
-        d.description = entry.description;
-        d.usage = entry.usage;
-        d.version = "2.1.0";
-        d.category = "osint";
-        d.argument_format = "raw_text";
-        d.permission_bits = s_plugin_info.required_permissions;
-        d.is_informational = entry.informational;
-        d.needs_confirmation = !entry.informational;
-        const char* args = std::strchr(entry.usage, ' ');
-        if (args) {
-            arguments[i].name = "arguments";
-            arguments[i].type = "string";
-            arguments[i].description = args + 1;
-            arguments[i].required = entry.required;
-            d.parameters = {arguments[i]};
-        }
-    }
-    tools[1].descriptor.aliases.assign(sweepAliases, sweepAliases + 1);
-    tools[2].descriptor.aliases.assign(reportAliases, reportAliases + 1);
-    return GRIM::registerPluginTools(api, tools, toolCount);
+    return GRIM_OK;
+}
 
+PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "profile_person") return handleProfilePerson(request, writer, nullptr);
+    if (id == "sherlock_sweep") return handleSherlockSweep(request, writer, nullptr);
+    if (id == "osint_report") return handleOsintReport(request, writer, nullptr);
+    if (id == "osint_status") return handleOsintStatus(request, writer, nullptr);
+    if (id == "osint_clear_cache") return handleOsintClearCache(request, writer, nullptr);
+    if (id == "osint_scan_secrets") return handleOsintScanSecrets(request, writer, nullptr);
+    if (id == "osint_show_secrets") return handleOsintShowSecrets(request, writer, nullptr);
+    return GRIM_ERROR_NOT_FOUND;
 }
 
 PLUGIN_EXPORT void grim_plugin_shutdown() {

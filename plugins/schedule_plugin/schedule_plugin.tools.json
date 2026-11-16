@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "provider": "Schedule Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "schedule.create",
+      "argument_format": "json",
+      "capability_tags": [
+        "scheduling",
+        "calendar"
+      ],
+      "category": "scheduling",
+      "description": "Create an event (start/end UTC), timer (duration_seconds), alarm or reminder (start UTC). Optional caller id supports safe retries: on conflict use get. Local notifications require GRIM running; overdue items dispatch on restart. No native alarm or remote-device delivery.",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Create a saved event or local notification",
+      "usage": "schedule.create <json>",
+      "permissions": [
+        "filesystem",
+        "ui",
+        "system"
+      ],
+      "argument_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "event"
+              }
+            },
+            "required": [
+              "start_utc_ms",
+              "end_utc_ms"
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "timer"
+              }
+            },
+            "required": [
+              "duration_seconds"
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "alarm",
+                  "reminder"
+                ]
+              }
+            },
+            "required": [
+              "start_utc_ms"
+            ]
+          }
+        ],
+        "properties": {
+          "description": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "duration_seconds": {
+            "maximum": 31536000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "end_utc_ms": {
+            "description": "UTC milliseconds since Unix epoch; resolve the user's timezone before calling",
+            "type": "integer"
+          },
+          "id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "event",
+              "timer",
+              "alarm",
+              "reminder"
+            ],
+            "type": "string"
+          },
+          "start_utc_ms": {
+            "description": "UTC milliseconds since Unix epoch; resolve the user's timezone before calling",
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "schedule.get",
+      "argument_format": "json",
+      "capability_tags": [
+        "scheduling",
+        "calendar"
+      ],
+      "category": "scheduling",
+      "description": "Get the complete saved item, current revision and delivery status by id.",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "short_description": "Retrieve a scheduled item by its identifier",
+      "usage": "schedule.get <json>",
+      "permissions": [
+        "filesystem",
+        "ui",
+        "system"
+      ],
+      "argument_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "schedule.list",
+      "argument_format": "json",
+      "capability_tags": [
+        "scheduling",
+        "calendar"
+      ],
+      "category": "scheduling",
+      "description": "List items overlapping [from_utc_ms,until_utc_ms), ordered by start then id. Optional kind filter; limit defaults to 50, maximum 200; offset pagination is not a snapshot.",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "short_description": "Find scheduled items by time and kind",
+      "usage": "schedule.list <json>",
+      "permissions": [
+        "filesystem",
+        "ui",
+        "system"
+      ],
+      "argument_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "from_utc_ms": {
+            "description": "UTC milliseconds since Unix epoch; resolve the user's timezone before calling",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "event",
+              "timer",
+              "alarm",
+              "reminder"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "until_utc_ms": {
+            "description": "UTC milliseconds since Unix epoch; resolve the user's timezone before calling",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "schedule.update",
+      "argument_format": "json",
+      "capability_tags": [
+        "scheduling",
+        "calendar"
+      ],
+      "category": "scheduling",
+      "description": "Patch fields on an item with matching revision. Kind cannot change. Timer duration restarts from now; changing alarm/reminder start rearms delivery. Title-only changes do not rearm. Fetch again on conflict.",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Modify a scheduled item using its revision",
+      "usage": "schedule.update <json>",
+      "permissions": [
+        "filesystem",
+        "ui",
+        "system"
+      ],
+      "argument_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "duration_seconds": {
+            "maximum": 31536000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "end_utc_ms": {
+            "description": "UTC milliseconds since Unix epoch; resolve the user's timezone before calling",
+            "type": "integer"
+          },
+          "id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "start_utc_ms": {
+            "description": "UTC milliseconds since Unix epoch; resolve the user's timezone before calling",
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "schedule.cancel",
+      "argument_format": "json",
+      "capability_tags": [
+        "scheduling",
+        "calendar"
+      ],
+      "category": "scheduling",
+      "description": "Delete an item with matching revision. Prevents future dispatch; cannot recall a notification already handed to the host. Missing ids return not_found.",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Cancel a scheduled item using its revision",
+      "usage": "schedule.cancel <json>",
+      "permissions": [
+        "filesystem",
+        "ui",
+        "system"
+      ],
+      "argument_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "schedule.status",
+      "argument_format": "json",
+      "capability_tags": [
+        "scheduling",
+        "calendar"
+      ],
+      "category": "scheduling",
+      "description": "With id, inspect the item and delivery state. Without id, inspect supported kinds and device delivery capabilities. Dispatched means handed to the host, not acknowledged or delivered by a native device.",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "short_description": "Inspect scheduler capabilities and item delivery status",
+      "usage": "schedule.status <json>",
+      "permissions": [
+        "filesystem",
+        "ui",
+        "system"
+      ],
+      "argument_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    }
+  ]
+}

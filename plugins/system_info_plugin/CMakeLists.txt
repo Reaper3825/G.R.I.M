@@ -5,7 +5,8 @@ find_package(nlohmann_json CONFIG REQUIRED
     HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
 add_library(system_info_plugin SHARED system_info_plugin.cpp system_info_command.cpp
     system_info_provider.cpp hardware_detection.cpp)
-grim_configure_plugin(system_info_plugin)
+grim_configure_plugin(system_info_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/system_info_plugin.tools.json")
 target_link_libraries(system_info_plugin PRIVATE nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
 
 target_compile_features(system_info_plugin PRIVATE cxx_std_20)

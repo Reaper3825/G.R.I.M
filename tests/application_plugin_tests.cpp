@@ -32,11 +32,13 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
             PluginManager::unloadAll();
             std::error_code error;
             fs::remove(folder / "application_plugin.dll", error);
+            fs::remove(folder / "application_plugin.tools.json", error);
             fs::remove(folder / "application_aliases.json", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
     fs::copy_file(pluginDirectory / "application_plugin.dll", folder / "application_plugin.dll");
+    fs::copy_file(pluginDirectory / "application_plugin.tools.json", folder / "application_plugin.tools.json");
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 6, "Application plugin did not publish six tools");
     auto catalogResult = registry.invoke("applications.list", "{}");

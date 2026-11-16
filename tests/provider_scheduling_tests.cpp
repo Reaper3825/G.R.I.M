@@ -28,12 +28,13 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
         ~Cleanup(){
             PluginManager::unloadAll();SetEnvironmentVariableW(L"LOCALAPPDATA",previous.empty()?nullptr:previous.c_str());
             std::error_code e;
-            for(const auto* p:{"schedule_plugin.dll","GRIM/calendar/events.json", "GRIM/calendar/events.json.lock", "GRIM/calendar/events.json.tmp", "GRIM/calendar", "GRIM"}) fs::remove(root/p,e);
+            for(const auto* p:{"schedule_plugin.dll","schedule_plugin.tools.json","GRIM/calendar/events.json", "GRIM/calendar/events.json.lock", "GRIM/calendar/events.json.tmp", "GRIM/calendar", "GRIM"}) fs::remove(root/p,e);
             fs::remove(root,e);
         }
     } cleanup{root,previous};
     SetEnvironmentVariableW(L"LOCALAPPDATA",root.c_str());
     fs::copy_file(scheduleDirectory/"schedule_plugin.dll",root/"schedule_plugin.dll");
+    fs::copy_file(scheduleDirectory/"schedule_plugin.tools.json",root/"schedule_plugin.tools.json");
     auto& registry=GRIM::MMO::ToolRegistry::instance();const auto baseline=registry.toolCount();
     const auto resource=[&](const char* name,const char* id){
         for(const auto& group:GRIM::MMO::ProviderRegistry::instance().snapshot().providers)

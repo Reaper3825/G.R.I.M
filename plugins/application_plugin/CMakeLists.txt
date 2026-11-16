@@ -21,7 +21,8 @@ else()
 endif()
 target_link_libraries(application_plugin PRIVATE nlohmann_json::nlohmann_json flatbuffers::flatbuffers)
 target_compile_definitions(application_plugin PRIVATE GRIM_APPLICATION_ROOT="${GRIM_PLUGIN_ROOT}")
-grim_configure_plugin(application_plugin)
+grim_configure_plugin(application_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/application_plugin.tools.json")
 
 # Catalog uses C++20 value comparisons and UTF-8 filesystem paths.
 target_compile_features(application_plugin PRIVATE cxx_std_20)

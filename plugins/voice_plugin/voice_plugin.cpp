@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 #include "core/plugin_api.hpp"
 #include "plugins/plugin_logging.hpp"
 #include "runtime/runtime_state.hpp"
@@ -35,13 +35,13 @@ void stop() {
  Audio::stopAll(); Voice::shutdownQueue(); Voice::shutdownTTS(); Voice::shutdown(); Audio::shutdown();
  tts=false; VoiceRuntime::cancel=false;
 }
-GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,void* context) {
+GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const char* toolId) {
  std::lock_guard<std::mutex> lock(operationMutex);
  GrimToolResult result; std::string message,output; nlohmann::json detail;
  try {
   auto args=request->arguments_size ? nlohmann::json::parse(request->arguments,request->arguments+request->arguments_size) : nlohmann::json::object();
   if(!args.is_object()) throw std::invalid_argument("Expected JSON object");
-  const std::string op=static_cast<const char*>(context);
+  const std::string op=toolId;
   if(op=="voice.configure") {
    const auto root=std::filesystem::path(args.at("root").get<std::string>());
    if(!root.is_absolute() || !std::filesystem::is_directory(root)) throw std::invalid_argument("root must name an existing absolute directory");
@@ -106,27 +106,23 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
  static const GrimPluginInfo info{GRIM_API_VERSION,"Voice Plugin","2.0.0","GRIM Project","Provider-owned capture, transcription, wake detection, synthesis and playback",permissions}; return &info;
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
- if(!api || api->api_version!=GRIM_API_VERSION || !api->register_tools || !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
+ if(!api || api->api_version!=GRIM_API_VERSION || !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
  std::lock_guard<std::mutex> lock(operationMutex);
  host=api; configured=false; tts=false; VoiceRuntime::reset(); grim::plugin::setLoggingAPI(api);
  try {
-  GRIM::PluginToolRegistration registrations[15];
-  const char* descriptions[]={"Read voice status and the latest 64 transcript/wake/error events","Configure provider root, voice and whisper settings without starting devices",
-   "Capture and transcribe speech without executing it","Start continuous transcription without conversation dispatch","Stop streaming transcription",
-   "Explicitly initialize the configured TTS provider","Queue text for speech","Play a WAV file","Stop voice workers, models and playback",
-   "Generate and cache common phrases synchronously","Start wake detection without command dispatch","Stop wake detection","Enumerate audio devices","Synthesize text to an audio file without playback","Read provider cache statistics"};
-  for(size_t i=0;i<15;++i) {
-   auto& r=registrations[i]; auto& d=r.descriptor; r.handler=call; r.user_data=const_cast<char*>(ids[i]);
-   r.descriptor.usage_type=GRIM::MMO::ToolUsage::Debug; r.descriptor.short_description=descriptions[i];
-   d.tool_id=d.display_name=d.usage=ids[i]; d.version="2.0.0"; d.description=descriptions[i]; d.category="voice";
-   d.argument_format="json"; d.argument_schema_json=R"({"type":"object"})";
-   d.permission_bits=permissions; d.is_informational=i==0 || i==12 || i==14; d.needs_confirmation=!d.is_informational;
-  }
-  publish(); const auto registered=GRIM::registerPluginTools(api,registrations,15);
-  if(registered!=GRIM_OK) { host=nullptr; grim::plugin::setLoggingAPI(nullptr); }
-  return registered;
+  publish();
+  return GRIM_OK;
  } catch(...) { host=nullptr; grim::plugin::setLoggingAPI(nullptr); return GRIM_ERROR_UNKNOWN; }
 }
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    for (const auto* supported : ids)
+        if (id == supported) return call(request, writer, supported);
+    return GRIM_ERROR_NOT_FOUND;
+}
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
  VoiceRuntime::cancel=true;
  std::lock_guard<std::mutex> lock(operationMutex);

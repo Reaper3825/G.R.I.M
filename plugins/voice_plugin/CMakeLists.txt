@@ -7,7 +7,8 @@ find_library(VOICE_WHISPER_LIBRARY NAMES whisper HINTS "${GRIM_PLUGIN_ROOT}/deps
 find_library(VOICE_PORTAUDIO_LIBRARY NAMES portaudio HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/lib" REQUIRED)
 file(GLOB VOICE_RUNTIME CONFIGURE_DEPENDS "runtime/*.cpp")
 add_library(voice_plugin SHARED voice_plugin.cpp ${VOICE_RUNTIME})
-grim_configure_plugin(voice_plugin)
+grim_configure_plugin(voice_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/voice_plugin.tools.json")
 target_compile_features(voice_plugin PRIVATE cxx_std_20)
 target_include_directories(voice_plugin PRIVATE "${GRIM_PLUGIN_ROOT}/deps/include" "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/include")
 target_link_libraries(voice_plugin PRIVATE nlohmann_json::nlohmann_json Threads::Threads ${VOICE_WHISPER_LIBRARY} ${VOICE_PORTAUDIO_LIBRARY})

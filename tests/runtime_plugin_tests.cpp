@@ -34,7 +34,7 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
             g_memoryStorage.shutdown();
             MemoryBufferRotation::instance().clear();
             std::error_code error;
-            for (const auto* name : {"memory_plugin.dll", "records.fb", "records.json", "records.idx",
+            for (const auto* name : {"memory_plugin.dll", "memory_plugin.tools.json", "records.fb", "records.json", "records.idx",
                                      "records.fb.tmp", "records.json.tmp", "records.idx.tmp"}) fs::remove(folder / name, error);
             fs::remove(folder, error);
         }
@@ -59,6 +59,7 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     if (!memoryDirectory.empty()) {
         g_memoryStorage.initialize((folder / "records.fb").string());
         fs::copy_file(memoryDirectory / "memory_plugin.dll", folder / "memory_plugin.dll");
+        fs::copy_file(memoryDirectory / "memory_plugin.tools.json", folder / "memory_plugin.tools.json");
     }
     PluginManager::initialize(folder.string());
     const auto expectedCount = baseline + (memoryDirectory.empty() ? 0 : 3);

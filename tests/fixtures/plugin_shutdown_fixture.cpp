@@ -1,6 +1,6 @@
-#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 #include <string>
+#include <string_view>
 
 #ifndef FIXTURE_NAME
 #define FIXTURE_NAME "Shutdown fixture"
@@ -41,25 +41,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value)
     if (grim_test_dependency() != 42) return GRIM_ERROR_UNKNOWN;
 #endif
 #ifdef FIXTURE_TOOLS
-    GRIM::PluginToolRegistration tool;
-    tool.handler = run;
-    auto& d = tool.descriptor;
-    d.tool_id = d.display_name = FIXTURE_NAME;
-    d.description = "Fixture tool";
-    d.version = "1.0";
-    d.usage = FIXTURE_NAME;
-    d.category = "test";
-    d.argument_format = "raw_text";
-    d.is_informational = false;
-#ifdef FIXTURE_COLLISION
-    const char* aliases[] = {"reserved_fixture_tool"};
-    d.aliases.assign(aliases, aliases + 1);
-#endif
-    if (GRIM::registerPluginTools(api, &tool, 1) != GRIM_OK) return GRIM_ERROR_INVALID_PARAM;
-#ifdef FIXTURE_EXTRA
-    tool.descriptor.tool_id = tool.descriptor.display_name = FIXTURE_NAME "-extra";
-    if (GRIM::registerPluginTools(api, &tool, 1) != GRIM_OK) return GRIM_ERROR_INVALID_PARAM;
-#endif
     api->subscribe_event(api, "fixture_event", event, nullptr);
     if (const auto result = api->subscribe_system_tick(api, tick, nullptr); result != GRIM_OK)
         return result;
@@ -69,6 +50,17 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value)
 #endif
     return GRIM_OK;
 }
+#ifdef FIXTURE_TOOLS
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* call, GrimToolResultWriter* writer) {
+    const std::string_view id(tool_id);
+    if (id == FIXTURE_NAME) return run(call, writer, nullptr);
+#ifdef FIXTURE_EXTRA
+    if (id == FIXTURE_NAME "-extra") return run(call, writer, nullptr);
+#endif
+    return GRIM_ERROR_NOT_FOUND;
+}
+#endif
 #ifdef FIXTURE_ACTIVATION
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI* value) {
     if (!value->is_provider_current(value)) return GRIM_ERROR_UNKNOWN;

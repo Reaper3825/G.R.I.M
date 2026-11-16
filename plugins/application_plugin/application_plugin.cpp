@@ -1,4 +1,3 @@
-#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 #include "application_tools.hpp"
 #include "shell_open.hpp"
@@ -104,37 +103,16 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         catalog->request("refresh", nlohmann::json::object());
     } catch (...) { catalog.reset(); userAliases.reset(); return GRIM_ERROR_UNKNOWN; }
 
-    GRIM::PluginToolRegistration tools[2];
-    tools[0].handler = openApplication;
-    tools[1].handler = searchWeb;
-    const char* ids[] = {"open", "search"};
-    const char* descriptions[] = {"Open an application or file", "Search the web for information"};
-    const char* usages[] = {"open {t}", "search <query>"};
-    const char* summaries[] = {"Open a selected entity through its available handler",
-        "Search the web for information matching a query"};
-    const std::map<std::string, std::string> openBindings = {{"t", "t"}};
-    tools[0].descriptor.bindings = openBindings;
-    GRIM::MMO::ToolParameter parameters[2];
-    for (size_t i = 0; i < 2; ++i) {
-        auto& d = tools[i].descriptor;
-        d.tool_id = d.display_name = ids[i];
-        d.version = "1.0.0";
-        d.description = descriptions[i];
-        tools[i].descriptor.short_description = summaries[i];
-        d.usage = usages[i];
-        d.category = i == 0 ? "action" : "information";
-        d.argument_format = "raw_text";
-        d.permission_bits = GRIM_PERM_PROCESS;
-        d.is_informational = i == 1;
-        d.needs_confirmation = i == 0;
-        parameters[i].name = i == 0 ? "target" : "query";
-        parameters[i].type = "string";
-        parameters[i].description = i == 0 ? "Application or file passed unchanged to the OS opener" :
-            "Search text; surrounding whitespace is trimmed before opening the original Google search URL";
-        parameters[i].required = 1;
-        d.parameters = {parameters[i]};
-    }
-    const auto result = GRIM::registerPluginTools(api, tools, 2);
-    return result == GRIM_OK ? registerApplicationTools(api, *catalog) : result;
+    return GRIM_OK;
 }
+
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* call, GrimToolResultWriter* writer) {
+    const std::string_view id(tool_id);
+    if (id == "open") return openApplication(call, writer, nullptr);
+    if (id == "search") return searchWeb(call, writer, nullptr);
+    if (!catalog) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+    return dispatchApplicationTool(id, call, writer, *catalog);
+}
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); userAliases.reset(); host = nullptr; }

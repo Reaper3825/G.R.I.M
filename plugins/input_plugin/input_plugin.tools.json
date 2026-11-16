@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "provider": "Input Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "move_mouse",
+      "argument_format": "raw_text",
+      "capability_tags": [
+        "input",
+        "computer_control"
+      ],
+      "category": "action",
+      "description": "Move the pointer to physical desktop coordinates using the provider-owned native backend",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Two signed integers, comma- or whitespace-separated; uses existing integer-prefix parsing",
+          "name": "coordinates",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Move the pointer to specified desktop coordinates",
+      "usage": "move_mouse <x> <y>",
+      "usage_type": 0,
+      "permissions": [
+        "input"
+      ]
+    },
+    {
+      "tool_id": "click",
+      "argument_format": "raw_text",
+      "capability_tags": [
+        "input",
+        "computer_control"
+      ],
+      "category": "action",
+      "description": "Click a mouse button at the current pointer position using the provider-owned native backend",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Button name; omitted means left; retains existing native interpretation",
+          "name": "button",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "short_description": "Click a mouse button at the current position",
+      "usage": "click [left|right|middle]",
+      "usage_type": 0,
+      "permissions": [
+        "input"
+      ]
+    },
+    {
+      "tool_id": "type",
+      "argument_format": "raw_text",
+      "capability_tags": [
+        "input",
+        "computer_control"
+      ],
+      "category": "action",
+      "description": "Type raw text into the focused application using the provider-owned native backend",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Raw text, including surrounding whitespace; provider types with a 15 ms delay",
+          "name": "text",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Type supplied text into the focused application",
+      "usage": "type <text>",
+      "usage_type": 0,
+      "permissions": [
+        "input"
+      ]
+    },
+    {
+      "tool_id": "key",
+      "argument_format": "raw_text",
+      "capability_tags": [
+        "input",
+        "computer_control"
+      ],
+      "category": "action",
+      "description": "Tap a key or plus-separated key combination using the provider-owned native backend",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Native key name, or a plus-separated combination; retains existing native key handling",
+          "name": "keys",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Press a key or combination of keys",
+      "usage": "key <key|key+key>",
+      "usage_type": 0,
+      "permissions": [
+        "input"
+      ]
+    }
+  ]
+}

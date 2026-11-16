@@ -11,7 +11,8 @@ add_library(data_hub_plugin SHARED data_hub_plugin.cpp
     data_hub/ui_data_hub_generator_tab.cpp
     data_hub/ui_data_hub_curriculum_tab.cpp
     data_hub/ui_data_hub_jobs.cpp)
-grim_configure_plugin(data_hub_plugin)
+grim_configure_plugin(data_hub_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/data_hub_plugin.tools.json")
 target_compile_features(data_hub_plugin PRIVATE cxx_std_20)
 target_include_directories(data_hub_plugin PRIVATE "${GRIM_PLUGIN_ROOT}/ui")
 target_link_libraries(data_hub_plugin PRIVATE nlohmann_json::nlohmann_json)

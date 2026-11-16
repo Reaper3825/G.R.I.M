@@ -151,7 +151,6 @@ void runNativeCalendarDllTests(const char* dllPath) {
         Module(const std::filesystem::path& path, const std::string& generation) {
             lease->owner = generation;
             api.api_version = GRIM_API_VERSION;
-            api.register_tools = [](const GrimPluginAPI*, const GrimToolRegistration*, size_t count) { return count == 6 ? GRIM_OK : GRIM_ERROR_INVALID_PARAM; };
             api.subscribe_system_tick = [](const GrimPluginAPI*, GrimSystemTickCallback, void*) { return GRIM_OK; };
             api.replace_resources = [](const GrimPluginAPI*, const char*, const char*, size_t) { return GRIM_OK; };
             api.show_notification = [](const GrimPluginAPI*, const char*, const char*) {};

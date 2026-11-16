@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "provider": "System Information Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "system_info",
+      "argument_format": "raw_text",
+      "category": "information",
+      "description": "Display system hardware and software information",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "short_description": "Display information about system hardware and software",
+      "usage": "system_info",
+      "permissions": [
+        "system"
+      ]
+    }
+  ]
+}

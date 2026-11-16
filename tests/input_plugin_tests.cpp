@@ -10,6 +10,7 @@ void runInputPluginTests(const std::filesystem::path& directory) {
  const auto folder=fs::absolute(directory).parent_path()/"input-plugin-test-deployment";
  fs::create_directories(folder);
  fs::copy_file(fs::absolute(directory)/"input_plugin.dll",folder/"input_plugin.dll",fs::copy_options::overwrite_existing);
+ fs::copy_file(fs::absolute(directory)/"input_plugin.tools.json",folder/"input_plugin.tools.json",fs::copy_options::overwrite_existing);
  auto& registry=GRIM::MMO::ToolRegistry::instance(); auto baseline=registry.toolCount();
  PluginManager::initialize(folder.string());
  check(registry.toolCount()==baseline+4,"Input DLL registration failed");
@@ -24,4 +25,5 @@ void runInputPluginTests(const std::filesystem::path& directory) {
  PluginManager::initialize(folder.string());
  fs::remove(folder/"input_plugin.dll"); PluginManager::checkForHotReload();
  check(registry.toolCount()==baseline,"Input tools survived removal"); PluginManager::unloadAll();
+ fs::remove(folder/"input_plugin.tools.json");
 }

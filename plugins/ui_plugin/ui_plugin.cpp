@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 #include "core/plugin_api.hpp"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -87,55 +87,19 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
         !api->ui_panel_service) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
-    GRIM::PluginToolRegistration tools[6];
-    const char* ids[] = {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front", "ui.poll"};
-    const char* descriptions[] = {
-        "Queue discovery of instantiated panels and their stable IDs; poll for completion",
-        "Queue a panel state snapshot by stable ID; poll for completion",
-        "Queue showing a panel and bringing it forward; poll to verify completion",
-        "Queue hiding a panel; poll to verify completion",
-        "Queue bringing a panel forward without changing visibility; poll to verify completion",
-        "Read an owned UI request status without blocking; a completed result is consumed"};
-    const char* usages[] = {"ui.list", "ui.inspect {t}",
-        "ui.show {t}", "ui.hide {t}", "ui.bring_to_front {t}", "ui.poll <request_id>"};
-    const char* summaries[] = {"Request a list of instantiated interface panels",
-        "Request current state for a selected interface panel",
-        "Request showing a panel and bringing it forward",
-        "Request hiding a selected interface panel from view",
-        "Request bringing a panel ahead of other panels",
-        "Check completion of an earlier interface panel request"};
-    const std::map<std::string, std::string> panelBindings = {{"t", "t"}};
-    for (size_t i = 1; i < 5; ++i) {
-        tools[i].descriptor.bindings = panelBindings;
-    }
-    tools[0].handler = call<GRIM_UI_LIST>; tools[1].handler = call<GRIM_UI_INSPECT>;
-    tools[2].handler = call<GRIM_UI_SHOW>; tools[3].handler = call<GRIM_UI_HIDE>;
-    tools[4].handler = call<GRIM_UI_BRING_TO_FRONT>; tools[5].handler = call<GRIM_UI_POLL>;
-    GRIM::MMO::ToolParameter parameters[6];
-    const char* preconditions[] = {"Host UI initialized and processing frames"};
-    const char* tags[] = {"ui", "panels"};
-    for (size_t i = 0; i < 6; ++i) {
-        auto& d = tools[i].descriptor;
-        tools[i].descriptor.short_description = summaries[i];
-        d.tool_id = d.display_name = ids[i]; d.version = "1.0.0";
-        d.description = descriptions[i]; d.usage = usages[i]; d.category = "ui";
-        d.argument_format = "json"; d.permission_bits = GRIM_PERM_UI;
-        d.is_informational = i < 2 || i == 5; d.needs_confirmation = !d.is_informational;
-        d.preconditions.assign(preconditions, preconditions + 1); d.capability_tags.assign(tags, tags + 2);
-        if (i == 0) {
-            d.argument_schema_json = R"({"type":"object","properties":{},"additionalProperties":false})";
-        } else {
-            auto& p = parameters[i];
-            p.name = i == 5 ? "request_id" : "panel_id";
-            p.type = i == 5 ? "integer" : "string"; p.required = 1;
-            p.description = i == 5 ? "Positive request ID returned to this plugin instance" : "Exact stable panel key from ui.list";
-            d.parameters = {p};
-            d.argument_schema_json = i == 5
-                ? R"({"type":"object","properties":{"request_id":{"type":"integer","minimum":1},"cancel":{"type":"boolean"}},"required":["request_id"],"additionalProperties":false})"
-                : R"({"type":"object","properties":{"panel_id":{"type":"string","minLength":1,"maxLength":256}},"required":["panel_id"],"additionalProperties":false})";
-            if (i == 2 || i == 3) d.argument_schema_json = R"({"type":"object","properties":{"panel_id":{"type":"string","minLength":1,"maxLength":256},"expected_runtime_id":{"type":"integer","minimum":1}},"required":["panel_id"],"additionalProperties":false})";
-        }
-    }
-    return GRIM::registerPluginTools(api, tools, 6);
+    return GRIM_OK;
 }
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "ui.list") return call<GRIM_UI_LIST>(request, writer, nullptr);
+    if (id == "ui.inspect") return call<GRIM_UI_INSPECT>(request, writer, nullptr);
+    if (id == "ui.show") return call<GRIM_UI_SHOW>(request, writer, nullptr);
+    if (id == "ui.hide") return call<GRIM_UI_HIDE>(request, writer, nullptr);
+    if (id == "ui.bring_to_front") return call<GRIM_UI_BRING_TO_FRONT>(request, writer, nullptr);
+    if (id == "ui.poll") return call<GRIM_UI_POLL>(request, writer, nullptr);
+    return GRIM_ERROR_NOT_FOUND;
+}
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }

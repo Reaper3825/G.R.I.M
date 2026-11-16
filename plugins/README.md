@@ -1,7 +1,6 @@
 # Native GRIM tool plugins
 
-The current host requires plugin ABI v15. Rebuild all older plugin binaries
-against [the current API](../docs/PLUGIN_API.md) before loading them.
+The current host requires [plugin ABI v17](../docs/PLUGIN_API.md).
 
 API v15 uses native provider-owned panels. Native UI plugins import host UI
 classes and must match the host compiler, CRT and class ABI. See
@@ -26,18 +25,10 @@ No table or registration layout changes. World Lab uses these to protect observe
 panel references and release interrupted requests. See
 [manual UI dispatch](../docs/WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
 
-Use `GRIM::MMO::ToolDescriptor` for tool metadata and
-`GRIM::registerPluginTools` to submit registrations. Set `short_description`
-to an authored 5–12 word catalog summary, `bindings` to world binding labels
-such as `{{"t", "t"}}` for `open {t}`, and `usage_type` to the applicable
-`ToolUsage` value. The default usage type is `Model`. See
-[tool registration](../docs/PLUGIN_API.md#tool-registration).
-
-Use the standalone build to produce API v4 plugin libraries without configuring
-or building GRIM:
-
-    cmake -S plugins -B .codex-build/plugins-standalone -G "Visual Studio 17 2022" -A x64
-    cmake --build .codex-build/plugins-standalone --config Release --target osint_plugin network_test_plugin --parallel 2
+Pair each provider library with a `<library-stem>.tools.json` sidecar.
+Set `TOOL_MANIFEST` on `grim_configure_plugin` to copy the manifest alongside
+the library in the build output and deployment folder. See
+[tool manifests](../docs/PLUGIN_API.md#tool-registration).
 
 Existing installed dependencies are required; this build installs nothing.
 The output folder is .codex-build/plugins-standalone/plugins by default.

@@ -18,6 +18,7 @@ $common += @('', '/helpers','/core','/commands','/vcpkg_installed/x64-windows/in
 if ($BuildSchedulingFixtures) {
     $SchedulePluginDirectory = Join-Path $output 'schedule-fixture'
     New-Item -ItemType Directory -Force -Path $SchedulePluginDirectory | Out-Null
+    Copy-Item -LiteralPath (Join-Path $workspace 'plugins/schedule_plugin/schedule_plugin.tools.json') -Destination $SchedulePluginDirectory
     $providerArgs = $common + @('/LD', '/DGRIM_BUILD_PLUGIN', '/utf-8',
         ('"' + (Join-Path $workspace 'plugins/schedule_plugin/schedule_plugin.cpp') + '"'),
         '/Fe:schedule-fixture/schedule_plugin.dll', '/link', 'plugin_api_ownership_tests.lib')
@@ -26,31 +27,55 @@ if ($BuildSchedulingFixtures) {
 if ($BuildFilesystemFixture) {
     $FilesystemPluginDirectory = Join-Path $output 'filesystem-fixture'
     New-Item -ItemType Directory -Force -Path $FilesystemPluginDirectory | Out-Null
+    Copy-Item -LiteralPath (Join-Path $workspace 'plugins/filesystem_plugin/filesystem_plugin.tools.json') -Destination $FilesystemPluginDirectory
     $filesystemArgs = $common + @('/LD', '/DGRIM_BUILD_PLUGIN', '/utf-8', ('"' + (Join-Path $workspace 'plugins/filesystem_plugin/filesystem_plugin.cpp') + '"'), '/Fe:filesystem-fixture/filesystem_plugin.dll')
     Set-Content -LiteralPath (Join-Path $output 'filesystem-fixture.rsp') -Value $filesystemArgs -Encoding ascii
 }
 if ($BuildInputFixture) {
     $InputPluginDirectory = Join-Path $output 'input-fixture'
     New-Item -ItemType Directory -Force -Path $InputPluginDirectory | Out-Null
+    Copy-Item -LiteralPath (Join-Path $workspace 'plugins/input_plugin/input_plugin.tools.json') -Destination $InputPluginDirectory
     $inputArgs = $common + @('/LD', '/utf-8', ('"' + (Join-Path $workspace 'plugins/input_plugin/input_plugin.cpp') + '"'), ('"' + (Join-Path $workspace 'plugins/input_plugin/input_service.cpp') + '"'), ('"' + (Join-Path $workspace 'plugins/input_plugin/InputController.cpp') + '"'), '/Fe:input-fixture/input_plugin.dll', '/link', 'user32.lib')
     Set-Content -LiteralPath (Join-Path $output 'input-fixture.rsp') -Value $inputArgs -Encoding ascii
 }
 if ($BuildUIFixture) {
     $UIPluginDirectory = Join-Path $output 'ui-fixture'
     New-Item -ItemType Directory -Force -Path $UIPluginDirectory | Out-Null
+    Copy-Item -LiteralPath (Join-Path $workspace 'plugins/ui_plugin/ui_plugin.tools.json') -Destination $UIPluginDirectory
     $uiFixtureArgs = $common + @('/LD', ('"' + (Join-Path $workspace 'plugins/ui_plugin/ui_plugin.cpp') + '"'), '/Fe:ui-fixture/ui_plugin.dll')
     Set-Content -LiteralPath (Join-Path $output 'ui-fixture.rsp') -Value $uiFixtureArgs -Encoding ascii
+}
+function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switch]$Extra, [switch]$Collision) {
+    $entries = @()
+    if ($Tools) {
+        $entry = @{
+            tool_id = $provider; description = 'Fixture tool'; usage = $provider;
+            category = 'test'; argument_format = 'raw_text'; permissions = @();
+            is_informational = $false; needs_confirmation = $false
+        }
+        if ($Collision) { $entry.aliases = @('reserved_fixture_tool') }
+        $entries += $entry
+        if ($Extra) {
+            $extraTool = $entry.Clone()
+            $extraTool.tool_id = $provider + '-extra'
+            $entries += $extraTool
+        }
+    }
+    @{schema_version = 1; provider = $provider; version = '1.0'; tools = $entries} |
+        ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output "$folder/$stem.tools.json") -Encoding ascii
 }
 $fixtureSource = '"' + (Join-Path $workspace 'tests/fixtures/plugin_shutdown_fixture.cpp') + '"'
 foreach ($fixture in @('alpha', 'beta')) {
     $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:fixtures/' + $fixture + '.dll'))
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
+    Write-FixtureManifest 'fixtures' $fixture ('Declared-' + $fixture)
 }
 foreach ($fixture in @('failed', 'legacy')) {
     $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:rejected/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
     else { $argsForFixture += '/DFIXTURE_API_VERSION=65536' }
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
+    Write-FixtureManifest 'rejected' $fixture ('Declared-' + $fixture)
 }
 foreach ($folder in @('integration', 'integration-rejected')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output $folder) | Out-Null
@@ -61,6 +86,7 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
     if ($fixture -eq 'legacy') { $argsForFixture += '/DFIXTURE_API_VERSION=393216' }
     Set-Content -LiteralPath (Join-Path $output ('integration-' + $fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
+    Write-FixtureManifest $folder $fixture ('Declared-' + $fixture) -Tools
 }
 $variants = @{
     old = @('/DFIXTURE_EXTRA', '/DFIXTURE_RESULT=\"old-result\"');
@@ -74,6 +100,7 @@ foreach ($variant in $variants.Keys) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output ('replacement/' + $variant)) | Out-Null
     $variantArgs = $common + @('/LD','/DFIXTURE_TOOLS','/DFIXTURE_ACTIVATION','/DFIXTURE_NAME=\"Declared-alpha\"',$fixtureSource,('/Fe:replacement/' + $variant + '/alpha.dll')) + $variants[$variant]
     Set-Content -LiteralPath (Join-Path $output ('replacement-' + $variant + '.rsp')) -Value $variantArgs -Encoding ascii
+    Write-FixtureManifest ('replacement/' + $variant) 'alpha' 'Declared-alpha' -Tools -Extra:($variant -eq 'old') -Collision:($variant -eq 'collision')
 }
 $testArgs = $common + '/DGRIM_BUILD_HOST'
 $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
@@ -106,11 +133,13 @@ if ($BuildApplicationFixture) {
     $applicationArgs = $common + @('/LD', '/DGRIM_BUILD_PLUGIN', '/utf-8')
     $applicationArgs += @('plugins/application_plugin/application_plugin.cpp', 'plugins/application_plugin/application_tools.cpp', 'plugins/application_plugin/application_catalog.cpp', 'plugins/application_plugin/application_backends.cpp', 'plugins/application_plugin/user_aliases.cpp', 'plugins/application_plugin/portable_applications.cpp', 'tests/fixtures/application_native_fixture.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
     $applicationArgs += '/Fe:application-fixture/application_plugin.dll'
+    Copy-Item -LiteralPath (Join-Path $workspace 'plugins/application_plugin/application_plugin.tools.json') -Destination $applicationFixture
     Set-Content -LiteralPath (Join-Path $output 'application-fixture.rsp') -Value $applicationArgs -Encoding ascii
 }
 if ($BuildSystemInfoFixture) {
     $SystemInfoPluginDirectory = Join-Path $output 'system-info-fixture'
     New-Item -ItemType Directory -Force -Path $SystemInfoPluginDirectory | Out-Null
+    Copy-Item -LiteralPath (Join-Path $workspace 'plugins/system_info_plugin/system_info_plugin.tools.json') -Destination $SystemInfoPluginDirectory
     $hardwareArgs = $common + @('/LD', '/DGRIM_BUILD_PLUGIN', '/utf-8')
     $hardwareArgs += @('plugins/system_info_plugin/system_info_plugin.cpp', 'plugins/system_info_plugin/system_info_command.cpp', 'plugins/system_info_plugin/system_info_provider.cpp', 'tests/fixtures/system_info_hardware_fixture.cpp', 'plugins/plugin_logging.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
     $hardwareArgs += '/Fe:system-info-fixture/system_info_plugin.dll'

@@ -1,9 +1,10 @@
-#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "core/plugin_api.hpp"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <iostream>
-#include <map>
+#include <filesystem>
+#include <fstream>
+#include <set>
 #include <filesystem>
 #include <chrono>
 #include <string>
@@ -13,21 +14,13 @@
 #include <dlfcn.h>
 #endif
 namespace {
-struct Tool { GrimToolHandler handler; void* context; };
-std::map<std::string,Tool> registered;
+GrimToolDispatch dispatch = nullptr;
+std::set<std::string> declared;
 std::string output;
 bool success=false;
 int publications=0;
 void check(bool ok,const char* text) { if (!ok) throw std::runtime_error(text); }
-GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration* tools,size_t count) {
-    for(size_t i=0;i<count;++i) {
-        const auto& tool = tools[i];
-        const auto descriptor = nlohmann::json::parse(tool.descriptor_json,
-            tool.descriptor_json + tool.descriptor_size).get<GRIM::MMO::ToolDescriptor>();
-        registered.emplace(descriptor.tool_id, Tool{tool.handler, tool.user_data});
-    }
-    return GRIM_OK;
-}
+
 GrimResult publish(const GrimPluginAPI*,const char*,const char* json,size_t size) {
     const auto value=nlohmann::json::parse(json,json+size);
     check(value.is_array(),"Resources were not structured"); ++publications; return GRIM_OK;
@@ -37,9 +30,10 @@ GrimResult complete(GrimToolResultWriter*,const GrimToolResult* result) {
     success=result->success;output=result->structured_output_json ? result->structured_output_json : "";return GRIM_OK;
 }
 void invoke(const char* id,const std::string& args) {
-    const auto& t=registered.at(id);GrimToolCall call;call.arguments=args.data();call.arguments_size=args.size();
+    check(declared.count(id) == 1, "Tool missing from manifest");
+    GrimToolCall call;call.arguments=args.data();call.arguments_size=args.size();
     GrimToolResultWriter writer;writer.complete=complete;
-    check(t.handler(&call,&writer,t.context)==GRIM_OK,"Handler failed transport");
+    check(dispatch(id, &call, &writer)==GRIM_OK,"Handler failed transport");
 }
 }
 int main(int argc,char** argv) try {
@@ -53,17 +47,24 @@ int main(int argc,char** argv) try {
 #endif
     auto init=reinterpret_cast<GrimResult(*)(const GrimPluginAPI*)>(symbol("grim_plugin_init"));
     auto stop=reinterpret_cast<void(*)()>(symbol("grim_plugin_shutdown"));
+    dispatch = reinterpret_cast<GrimToolDispatch>(symbol("grim_plugin_dispatch_tool"));
+    check(dispatch != nullptr, "Missing dispatcher export");
+    auto sidecar = std::filesystem::path(argv[1]).replace_extension(".tools.json");
+    std::ifstream manifestFile(sidecar);
+    check(static_cast<bool>(manifestFile), "Missing tool manifest");
+    const auto manifest = nlohmann::json::parse(manifestFile);
+    for (const auto& tool : manifest.at("tools")) declared.insert(tool.at("tool_id").get<std::string>());
     check(init&&stop,"Missing exports");
-    GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;api.register_tools=registerTools;
+    GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
     api.replace_resources=publish;api.log=log;
     auto old=api;old.api_version=9<<16;check(init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
     const auto testRoot=std::filesystem::temp_directory_path() / ("grim-voice-owned-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check(std::filesystem::create_directory(testRoot),"Cannot create private cache fixture");
     struct Cleanup { std::filesystem::path root; ~Cleanup() { std::error_code error; std::filesystem::remove_all(root,error); } } cleanup{testRoot};
     for(int pass=0;pass<2;++pass) {
-        registered.clear();check(init(&api)==GRIM_OK,"Initialization failed");
-        check(registered.size()==15,"Tool ownership incorrect");
-        check(!registered.count("nevermind")&&!registered.count("voice"),"Legacy wrappers retained");
+        check(init(&api)==GRIM_OK,"Initialization failed");
+        check(declared.size()==15,"Tool ownership incorrect");
+        check(!declared.count("nevermind")&&!declared.count("voice"),"Legacy wrappers retained");
         invoke("voice.status","{}");check(success,"Idle status failed");
         auto state=nlohmann::json::parse(output);
         check(!state.at("configured").get<bool>()&&!state.at("streaming").get<bool>()&&!state.at("tts_ready").get<bool>()&&!state.at("wake_listening").get<bool>(),"Init started runtime");

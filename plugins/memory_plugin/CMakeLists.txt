@@ -3,5 +3,6 @@ project(memory_plugin LANGUAGES CXX)
 include("${CMAKE_CURRENT_LIST_DIR}/../plugin_build.cmake")
 find_package(nlohmann_json CONFIG REQUIRED HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
 add_library(memory_plugin SHARED memory_plugin.cpp memory_commands.cpp)
-grim_configure_plugin(memory_plugin)
+grim_configure_plugin(memory_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/memory_plugin.tools.json")
 target_link_libraries(memory_plugin PRIVATE nlohmann_json::nlohmann_json)

@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "provider": "Perception Plugin",
+  "version": "2.0.0",
+  "tools": [
+    {
+      "tool_id": "perception.observe",
+      "argument_format": "json",
+      "category": "perception",
+      "description": "Read latest structured perception observations",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "short_description": "Read latest structured perception observations",
+      "usage": "perception.observe",
+      "usage_type": 0,
+      "permissions": [
+        "system"
+      ],
+      "argument_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "perception.digital.start",
+      "argument_format": "json",
+      "category": "perception",
+      "description": "Start digital capture and primitives",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Start digital capture and primitives",
+      "usage": "perception.digital.start",
+      "usage_type": 0,
+      "permissions": [
+        "filesystem",
+        "network",
+        "system"
+      ],
+      "argument_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "perception.digital.stop",
+      "argument_format": "json",
+      "category": "perception",
+      "description": "Stop digital capture and primitives",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Stop digital capture and primitives",
+      "usage": "perception.digital.stop",
+      "usage_type": 0,
+      "permissions": [
+        "filesystem",
+        "network",
+        "system"
+      ],
+      "argument_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "perception.physical.open",
+      "argument_format": "json",
+      "category": "perception",
+      "description": "Open a physical camera source",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Open a physical camera source",
+      "usage": "perception.physical.open",
+      "usage_type": 0,
+      "permissions": [
+        "filesystem",
+        "network",
+        "system"
+      ],
+      "argument_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "perception.physical.close",
+      "argument_format": "json",
+      "category": "perception",
+      "description": "Close physical capture and processing",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Close physical capture and processing",
+      "usage": "perception.physical.close",
+      "usage_type": 0,
+      "permissions": [
+        "filesystem",
+        "network",
+        "system"
+      ],
+      "argument_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "perception.configure",
+      "argument_format": "json",
+      "category": "perception",
+      "description": "Configure a plugin-owned perception operator",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Configure a plugin-owned perception operator",
+      "usage": "perception.configure",
+      "usage_type": 0,
+      "permissions": [
+        "filesystem",
+        "network",
+        "system"
+      ],
+      "argument_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "tool_id": "perception.calibrate",
+      "argument_format": "json",
+      "category": "perception",
+      "description": "Begin physical camera calibration",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Begin physical camera calibration",
+      "usage": "perception.calibrate",
+      "usage_type": 0,
+      "permissions": [
+        "filesystem",
+        "network",
+        "system"
+      ],
+      "argument_schema": {
+        "type": "object"
+      }
+    }
+  ]
+}

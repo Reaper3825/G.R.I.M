@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "provider": "Memory Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "remember",
+      "argument_format": "raw_text",
+      "category": "action",
+      "description": "Stage manual information in the host memory rotation pipeline",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Original manual memory text staged in the host rotation pipeline",
+          "name": "text",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Stage supplied information for the host memory pipeline",
+      "usage": "remember <text>",
+      "permissions": [
+        "memory"
+      ]
+    },
+    {
+      "tool_id": "recall",
+      "argument_format": "raw_text",
+      "category": "information",
+      "description": "Retrieve information from memory",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "Unmodified query for the existing host memory search",
+          "name": "query",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Retrieve stored information matching the supplied memory query",
+      "usage": "recall <query>",
+      "permissions": [
+        "memory"
+      ]
+    },
+    {
+      "tool_id": "forget",
+      "argument_format": "raw_text",
+      "category": "action",
+      "description": "Request legacy forget behavior: check and flush matching records without deleting them",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Unmodified query for the existing host memory search",
+          "name": "query",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Check and flush matching memories without deleting records",
+      "usage": "forget <query>",
+      "permissions": [
+        "memory"
+      ]
+    }
+  ]
+}

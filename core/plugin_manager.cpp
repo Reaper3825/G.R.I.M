@@ -23,6 +23,10 @@ constexpr const char* pluginExtension = ".dylib";
 constexpr const char* pluginExtension = ".so";
 #endif
 
+std::filesystem::path toolManifestPath(std::filesystem::path library) {
+    return library.replace_extension(".tools.json");
+}
+
 }
 
 std::optional<PluginManager::Fingerprint> PluginManager::fingerprint(const std::filesystem::path& path) {
@@ -198,17 +202,19 @@ void PluginManager::checkForHotReload() {
         }
         for (const auto& path : files) {
             const auto name = path.filename().string();
-            const auto current = fingerprint(path);
-            if (!current) continue; // Still being written or temporarily unreadable.
+            const auto library = fingerprint(path);
+            const auto manifest = fingerprint(toolManifestPath(path));
+            if (!library || !manifest) continue; // Wait for a readable candidate pair.
+            const PluginFingerprint current{*library, *manifest};
             const auto old = loadedPlugins.find(name);
             const bool requested = old != loadedPlugins.end() && requests.count(old->second.api);
-            if (!requested && old != loadedPlugins.end() && old->second.fingerprint == *current) continue;
-            if (!requested && attempted.count(name) && attempted.at(name).fingerprint == *current &&
+            if (!requested && old != loadedPlugins.end() && old->second.fingerprint == current) continue;
+            if (!requested && attempted.count(name) && attempted.at(name).fingerprint == current &&
                 attempted.at(name).surfaceRevision == surfaceRevision) continue;
             // Retry a rejection when another plugin changes the available surface:
             // its previous identity/alias collision may have disappeared.
-            attempted[name] = {*current, surfaceRevision};
-            loadPlugin(path, *current);
+            attempted[name] = {current, surfaceRevision};
+            loadPlugin(path, current);
         }
     } catch (const std::exception& error) {
         LOG_ERROR("PluginManager", std::string("Plugin reconciliation failed: ") + error.what());
@@ -221,7 +227,7 @@ void PluginManager::unloadAll() {
     std::lock_guard lock(requestMutex);
     reloadRequests.clear();
 }
-bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerprint& stamp) {
+bool PluginManager::loadPlugin(const std::filesystem::path& path, const PluginFingerprint& stamp) {
     const auto name = path.filename().string();
     auto previous = loadedPlugins.find(name);
     const auto* oldApi = previous == loadedPlugins.end() ? nullptr : previous->second.api;
@@ -233,9 +239,14 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
         candidate.cacheDirectory = createCacheDirectory();
         const auto copy = candidate.cacheDirectory / path.filename();
         std::filesystem::copy_file(path, copy);
+        const auto manifest = toolManifestPath(path);
+        const auto manifestCopy = toolManifestPath(copy);
+        std::filesystem::copy_file(manifest, manifestCopy);
         const auto copied = fingerprint(copy);
-        if (fingerprint(path) != std::optional<Fingerprint>(stamp) || !copied ||
-            copied->hash != stamp.hash) {
+        const auto copiedManifest = fingerprint(manifestCopy);
+        if (fingerprint(path) != stamp.library || fingerprint(manifest) != stamp.manifest ||
+            !copied || copied->hash != stamp.library.hash ||
+            !copiedManifest || copiedManifest->hash != stamp.manifest.hash) {
             attempted.erase(name); // Retry once a complete write is visible.
             removeCache(candidate.cacheDirectory);
             return false;
@@ -255,19 +266,29 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
             throw std::runtime_error("Invalid plugin identity");
         candidate.api = PluginAPI::createPluginAPI(info->name, path.string(),
             info->required_permissions, true, oldApi);
+        const auto dispatch = reinterpret_cast<GrimToolDispatch>(getSymbol(candidate.handle, "grim_plugin_dispatch_tool"));
+        const auto tools = PluginAPI::readToolManifest(manifestCopy, candidate.api, info->version, dispatch);
         initialized = true; // Shutdown must tolerate partially completed init.
-        if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginGeneration(candidate.api, oldApi))
+        if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginGeneration(candidate.api, oldApi, tools))
             throw std::runtime_error("Initialization or provider publication rejected");
         candidate.fingerprint = stamp;
     } catch (const std::exception& error) {
         LOG_ERROR("PluginManager", "Rejected " + name + ": " + error.what());
         if (initialized) retire(candidate);
-        else { unloadLib(candidate.handle); removeCache(candidate.cacheDirectory); }
+        else {
+            if (candidate.api) PluginAPI::cleanupPluginContext(candidate.api);
+            unloadLib(candidate.handle);
+            removeCache(candidate.cacheDirectory);
+        }
         return false;
     } catch (...) {
         LOG_ERROR("PluginManager", "Exception initializing " + name);
         if (initialized) retire(candidate);
-        else { unloadLib(candidate.handle); removeCache(candidate.cacheDirectory); }
+        else {
+            if (candidate.api) PluginAPI::cleanupPluginContext(candidate.api);
+            unloadLib(candidate.handle);
+            removeCache(candidate.cacheDirectory);
+        }
         return false;
     }
     const bool replaced = previous != loadedPlugins.end();

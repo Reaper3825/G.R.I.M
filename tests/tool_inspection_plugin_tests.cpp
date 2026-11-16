@@ -26,6 +26,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
             if (api) PluginAPI::cleanupPluginContext(api);
             std::error_code error;
             fs::remove(folder / "tool_inspection_plugin.dll", error);
+            fs::remove(folder / "tool_inspection_plugin.tools.json", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
@@ -43,6 +44,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     check(snapshot().size() == baseline && snapshot("missing").empty(), "Empty/missing snapshot semantics incorrect");
     check(api->get_tool_snapshot(nullptr, nullptr) == nullptr, "Invalid API identity accepted");
     fs::copy_file(pluginDirectory / "tool_inspection_plugin.dll", folder / "tool_inspection_plugin.dll");
+    fs::copy_file(pluginDirectory / "tool_inspection_plugin.tools.json", folder / "tool_inspection_plugin.tools.json");
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 3, "Inspection plugin did not register three tools");
     for (const auto* id : {"list_tools", "tool_info", "tool_stats"}) {

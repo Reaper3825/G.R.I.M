@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 // Fixed-response utility commands.
 #include "core/plugin_api.hpp"
 
@@ -51,26 +51,16 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION)
         return GRIM_ERROR_API_VERSION_MISMATCH;
-    GRIM::PluginToolRegistration tools[2];
-    tools[0].handler = clean;
-    tools[1].handler = help;
-    const char* ids[] = {"clean", "help"};
-    const char* summaries[] = {"Clear the current console command history display",
-        "Show help describing the available registered commands"};
-    const char* descriptions[] = {"Clean console history", "Show available commands"};
-    const char* categories[] = {"system", "information"};
-    for (size_t i = 0; i < 2; ++i) {
-        auto& d = tools[i].descriptor;
-        tools[i].descriptor.short_description = summaries[i];
-        d.tool_id = d.display_name = d.usage = ids[i];
-        d.version = "1.0.0";
-        d.description = descriptions[i];
-        d.category = categories[i];
-        d.argument_format = "raw_text";
-        d.is_informational = i == 1;
-        d.needs_confirmation = i == 0;
-    }
-    return GRIM::registerPluginTools(api, tools, 2);
+    return GRIM_OK;
+}
+
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "clean") return clean(request, writer, nullptr);
+    if (id == "help") return help(request, writer, nullptr);
+    return GRIM_ERROR_NOT_FOUND;
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}

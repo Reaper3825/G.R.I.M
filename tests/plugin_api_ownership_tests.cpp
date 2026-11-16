@@ -1,8 +1,9 @@
-#include "core/plugin_tool_registration.hpp"
 // Exercise the real API implementation and registry with host service sinks.
 #include "core/plugin_api_impl.hpp"
 #include "core/plugin_manager.hpp"
 #include <future>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <condition_variable>
 #include <chrono>
 #include <atomic>
@@ -45,24 +46,44 @@ GrimResult identify(const GrimToolCall*, GrimToolResultWriter* writer, void* dat
     message.assign(200, 'x');
     return status;
 }
-GRIM::PluginToolRegistration definition(const char* id, GrimToolHandler handler = identify, void* data = nullptr) {
-    GRIM::PluginToolRegistration tool;
-    tool.handler = handler;
-    tool.user_data = data;
-    auto& d = tool.descriptor;
-    d.tool_id = d.display_name = id;
-    d.version = "1.2.3";
-    d.description = "A complete test tool";
-    d.usage = "test [arguments]";
-    d.category = "test";
-    d.argument_format = "raw_text";
-    d.is_informational = false;
-    return tool;
+using Json = nlohmann::json;
+Json definition(const char* id, Json permissions = Json::array()) {
+    return {{"tool_id", id}, {"description", "A complete test tool"}, {"usage", "test [arguments]"},
+        {"category", "test"}, {"argument_format", "raw_text"}, {"permissions", std::move(permissions)},
+        {"is_informational", false}, {"needs_confirmation", false}};
 }
-GrimResult registerOne(GrimPluginAPI* api, const char* id) {
-    auto tool = definition(id, identify, api);
-    tool.descriptor.permission_bits = api->get_permissions(api);
-    return GRIM::registerPluginTools(api, &tool, 1);
+
+const GrimPluginAPI* alphaAPI = nullptr;
+GrimResult dispatchIdentify(const char*, const GrimToolCall* call, GrimToolResultWriter* writer) {
+    return identify(call, writer, const_cast<GrimPluginAPI*>(alphaAPI));
+}
+GrimResult dispatchEmpty(const char*, const GrimToolCall*, GrimToolResultWriter*) { return GRIM_OK; }
+
+std::vector<GRIM::MMO::ToolRegistration> readManifestText(
+    const GrimPluginAPI* api, const std::string& text, GrimToolDispatch dispatch) {
+    namespace fs = std::filesystem;
+    const auto directory = fs::temp_directory_path() / ("grim-manifest-test-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    check(fs::create_directory(directory), "Could not create manifest fixture directory");
+    const auto file = directory / "fixture.tools.json";
+    struct Cleanup {
+        fs::path file;
+        ~Cleanup() { std::error_code error; fs::remove(file, error); fs::remove(file.parent_path(), error); }
+    } cleanup{file};
+    std::ofstream output(file);
+    output << text;
+    output.close();
+    check(static_cast<bool>(output), "Could not write manifest fixture");
+    return PluginAPI::readToolManifest(file, api, "1.2.3", dispatch);
+}
+
+std::vector<GRIM::MMO::ToolRegistration> manifestTools(
+    const GrimPluginAPI* api, std::initializer_list<Json> tools, GrimToolDispatch dispatch = dispatchEmpty) {
+    const auto* name = api->get_plugin_name(api);
+    const std::string provider(name);
+    api->string_free(api, name);
+    return readManifestText(api, Json{{"schema_version", 1}, {"provider", provider},
+        {"version", "1.2.3"}, {"tools", Json(std::vector<Json>(tools))}}.dump(), dispatch);
 }
 GrimResult missingResult(const GrimToolCall*, GrimToolResultWriter*, void*) { return GRIM_OK; }
 GrimResult doubleResult(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
@@ -89,6 +110,15 @@ GrimResult blocking(const GrimToolCall*, GrimToolResultWriter* writer, void* dat
     result.success = 1;
     return writer->complete(writer, &result);
 }
+Blocking* blockedCall = nullptr;
+GrimResult dispatchBlocking(const char*, const GrimToolCall* call, GrimToolResultWriter* writer) {
+    return blocking(call, writer, blockedCall);
+}
+GrimResult (*brokenHandler)(const GrimToolCall*, GrimToolResultWriter*, void*) = nullptr;
+GrimResult dispatchBroken(const char*, const GrimToolCall* call, GrimToolResultWriter* writer) {
+    return brokenHandler(call, writer, nullptr);
+}
+
 void observe(const char*, const void*, size_t, void* data) {
     const auto* api = static_cast<const GrimPluginAPI*>(data);
     api->log(api, GRIM_LOG_INFO, "event");
@@ -169,8 +199,8 @@ void runProviderResourceTests() {
     PluginAPI::cleanupPluginContext(second);
 
     auto* old = PluginAPI::createPluginAPI("generation-provider", "old.dll", 0, true);
-    check(registerOne(old, "generation_tool") == GRIM_OK && publish(old, payload) == GRIM_OK &&
-          PluginAPI::commitPluginGeneration(old), "Initial mixed generation failed");
+    check(publish(old, payload) == GRIM_OK && PluginAPI::commitPluginGeneration(old, nullptr,
+          manifestTools(old, {definition("generation_tool")})), "Initial mixed generation failed");
     bool rejectedRename = false;
     try {
         auto* renamed = PluginAPI::createPluginAPI("renamed-provider", "new.dll", 0, true, old);
@@ -182,14 +212,14 @@ void runProviderResourceTests() {
     auto* replacement = PluginAPI::createPluginAPI("generation-provider", "new.dll", 0, true, old);
     auto newPayload = nlohmann::json::parse(payload);
     newPayload[0]["state"]["value"] = 43;
-    check(registerOne(replacement, "generation_tool") == GRIM_OK &&
-          publish(replacement, newPayload.dump()) == GRIM_OK, "Staging mixed generation failed");
+    check(publish(replacement, newPayload.dump()) == GRIM_OK, "Staging mixed generation failed");
 
     auto& tools = ToolRegistry::instance();
     const auto oldInstance = tools.getTool("generation_tool").value().provider.instance;
     GenerationObserver observer;
     tools.addListener(&observer);
-    const bool committed = PluginAPI::commitPluginGeneration(replacement, old);
+    const bool committed = PluginAPI::commitPluginGeneration(replacement, old,
+        manifestTools(replacement, {definition("generation_tool")}));
     tools.removeListener(&observer);
     check(committed && observer.tool && observer.tool->provider.instance != oldInstance,
           "Update listener did not see the replacement tool");
@@ -265,14 +295,15 @@ int main(int argc, char** argv) try {
         check(registry.snapshot().providers.size() == count, "Zero-tool provider survived unload");
     }
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY, true);
-    check(registerOne(alpha, "alpha_tool") == GRIM_OK &&
-          registerOne(alpha, "alpha_second") == GRIM_OK &&
-          PluginAPI::commitPluginGeneration(alpha), "Alpha publication failed");
+    alphaAPI = alpha;
+    check(PluginAPI::commitPluginGeneration(alpha, nullptr,
+        manifestTools(alpha, {definition("alpha_tool", {"memory"}), definition("alpha_second", {"memory"})},
+                      dispatchIdentify)), "Alpha publication failed");
     Blocking blocked;
-    auto waitTool = definition("blocking", blocking, &blocked);
+    blockedCall = &blocked;
     auto* beta = PluginAPI::createPluginAPI("beta", "beta.dll", GRIM_PERM_UI, true);
-    check(GRIM::registerPluginTools(beta, &waitTool, 1) == GRIM_OK &&
-          PluginAPI::commitPluginGeneration(beta), "Beta publication failed");
+    check(PluginAPI::commitPluginGeneration(beta, nullptr,
+        manifestTools(beta, {definition("blocking")}, dispatchBlocking)), "Beta publication failed");
     check(alpha != beta, "Plugins share an API table");
     checkName(alpha, "alpha");
     checkName(beta, "beta");
@@ -282,9 +313,10 @@ int main(int argc, char** argv) try {
     check(beta->search_memory(beta, "key") == nullptr, "API used another owner's permissions");
     check(dispatchCommand("alpha_tool", "").success, "Command callback used wrong owner");
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
-    check(registerOne(alpha, "alpha_later") == GRIM_ERROR_UNSUPPORTED &&
+    check(!PluginAPI::commitPluginGeneration(alpha, nullptr,
+        manifestTools(alpha, {definition("alpha_later")})) &&
           !GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_later"),
-          "Published provider accepted a new tool");
+          "Published provider accepted a second manifest");
     auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_second");
     check(tool && tool->provider.name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY,
           "Staged registration lost provider ownership");
@@ -322,32 +354,27 @@ int main(int argc, char** argv) try {
     check(copiedResult.message == "owned local message" &&
           copiedResult.structuredOutputJson == R"({"answer":42})", "Host did not copy result data immediately");
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
-        auto broken = definition("broken", handler);
+        brokenHandler = handler;
         auto* brokenProvider = PluginAPI::createPluginAPI("broken-fixture", "", 0, true);
-        check(GRIM::registerPluginTools(brokenProvider, &broken, 1) == GRIM_OK &&
-              PluginAPI::commitPluginGeneration(brokenProvider), "Broken fixture publication failed");
+        check(PluginAPI::commitPluginGeneration(brokenProvider, nullptr,
+            manifestTools(brokenProvider, {definition("broken")}, dispatchBroken)), "Broken fixture publication failed");
         check(dispatchCommand("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
         PluginAPI::cleanupPluginContext(brokenProvider);
     }
     auto* staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
-    auto complete = definition("staged_tool", missingResult);
-    complete.descriptor.description = "copied metadata";
-    complete.descriptor.argument_format = "json";
-    complete.descriptor.argument_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}}})";
-    complete.descriptor.aliases = {"staged_alias"};
-    complete.descriptor.parameters = {{"path", "path", "Destination", true}};
-    complete.descriptor.usage_type = GRIM::MMO::ToolUsage::System;
-    complete.descriptor.short_description = "Inspect information supplied by a selected entity";
-    complete.descriptor.usage = "staged_tool {path}";
-    complete.descriptor.bindings = {{"path", "t"}};
-    complete.descriptor.usage_count = 5;
-    complete.descriptor.success_count = 3;
-    complete.descriptor.failure_count = 2;
-    complete.descriptor.success_rate = 0.6f;
-    check(GRIM::registerPluginTools(staged, &complete, 1) == GRIM_OK, "Staging failed");
-    complete = {};
+    auto complete = definition("staged_tool");
+    complete.update({
+        {"description", "copied metadata"}, {"argument_format", "json"},
+        {"argument_schema", Json::parse(R"({"type":"object","properties":{"path":{"type":"string"}}})")},
+        {"aliases", {"staged_alias"}}, {"parameters", {{{"name", "path"}, {"type", "path"},
+            {"description", "Destination"}, {"required", true}}}},
+        {"usage_type", 2}, {"short_description", "Inspect information supplied by a selected entity"},
+        {"usage", "staged_tool {path}"}, {"bindings", {{"path", "t"}}}, {"usage_count", 5},
+        {"success_count", 3}, {"failure_count", 2}, {"success_rate", 0.6}
+    });
+    const auto stagedTools = manifestTools(staged, {complete});
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("staged_tool"), "Uncommitted tool leaked");
-    check(PluginAPI::commitPluginGeneration("staged"), "Commit failed");
+    check(PluginAPI::commitPluginGeneration(staged, nullptr, stagedTools), "Commit failed");
     auto snapshot = GRIM::MMO::ToolRegistry::instance().getTool("staged_alias");
     check(snapshot && snapshot->short_description=="Inspect information supplied by a selected entity",
           "Short description was not copied during registration");
@@ -366,68 +393,50 @@ int main(int argc, char** argv) try {
 
     auto first = definition("batch_first");
     auto second = definition("batch_second");
-    second.descriptor.usage_type = GRIM::MMO::ToolUsage::Debug;
-    GRIM::PluginToolRegistration batch[] = {first, second};
-    auto* invalidProvider = PluginAPI::createPluginAPI("invalid-fixture", "", GRIM_PERM_UI, true);
-    check(registerOne(invalidProvider, "") == GRIM_ERROR_INVALID_PARAM, "Empty tool name accepted");
-    const auto validMetadata = nlohmann::json(first.descriptor).dump();
-    const std::string invalidMetadata = "{";
-    GrimToolRegistration wire[] = {
-        {sizeof(GrimToolRegistration), validMetadata.data(), validMetadata.size(), first.handler, first.user_data},
-        {sizeof(GrimToolRegistration) - 1, validMetadata.data(), validMetadata.size(), second.handler, second.user_data},
-    };
-    check(invalidProvider->register_tools(invalidProvider, wire, 2) == GRIM_ERROR_INVALID_PARAM &&
-          !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
-          "Invalid registration size partially committed a batch");
-    wire[1] = {sizeof(GrimToolRegistration), invalidMetadata.data(), invalidMetadata.size(),
-               second.handler, second.user_data};
-    check(invalidProvider->register_tools(invalidProvider, wire, 2) == GRIM_ERROR_INVALID_PARAM &&
-          !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
-          "Invalid descriptor JSON partially committed a batch");
+    second["usage_type"] = 0;
     auto* batchProvider = PluginAPI::createPluginAPI("batch-fixture", "", 0, true);
-    check(GRIM::registerPluginTools(batchProvider, batch, 2) == GRIM_OK &&
-          PluginAPI::commitPluginGeneration(batchProvider) &&
-          GRIM::MMO::ToolRegistry::instance().getTool("batch_first")->usage_type == GRIM::MMO::ToolUsage::Model &&
-          GRIM::MMO::ToolRegistry::instance().getTool("batch_second")->usage_type == GRIM::MMO::ToolUsage::Debug,
-          "Batch registration lost tool metadata");
+    check(PluginAPI::commitPluginGeneration(batchProvider, nullptr, manifestTools(batchProvider, {first, second})) &&
+          ToolRegistry::instance().getTool("batch_first")->usage_type == ToolUsage::Model &&
+          ToolRegistry::instance().getTool("batch_second")->usage_type == ToolUsage::Debug,
+          "Manifest lost tool metadata");
     PluginAPI::cleanupPluginContext(batchProvider);
-    auto invalidSummary=definition("invalid_summary");invalidSummary.descriptor.short_description="Too short";
-    check(GRIM::registerPluginTools(invalidProvider, &invalidSummary,1)==GRIM_ERROR_INVALID_PARAM,"Invalid short summary registered");
-    auto badBinding = definition("bad_binding");
-    badBinding.descriptor.usage = "bad_binding {target}";
-    badBinding.descriptor.bindings = {{"target", "invalid_type"}};
-    check(GRIM::registerPluginTools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
-          "Invalid binding type accepted");
-    badBinding.descriptor.bindings = {{"missing", "t"}};
-    check(GRIM::registerPluginTools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
-          "Binding without a usage placeholder accepted");
-    GRIM::PluginToolRegistration invalidUsage[] = {definition("usage_valid"), definition("usage_invalid")};
-    invalidUsage[1].descriptor.usage_type = static_cast<GRIM::MMO::ToolUsage>(99);
-    check(GRIM::registerPluginTools(invalidProvider, invalidUsage, 2) == GRIM_ERROR_INVALID_PARAM &&
-          !GRIM::MMO::ToolRegistry::instance().isRegistered("usage_valid"), "Invalid usage published partial batch");
 
-    staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
-    GRIM::PluginToolRegistration collision[] = {definition("new_tool"), definition("reserved_fixture_tool")};
-    check(GRIM::registerPluginTools(staged, collision, 2) == GRIM_OK, "Staging collision failed early");
-    check(!PluginAPI::commitPluginGeneration("staged") && !GRIM::MMO::ToolRegistry::instance().isRegistered("new_tool"),
-          "Failed commit left a partial batch");
-    PluginAPI::cleanupPluginContext("staged");
-    staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
-    complete = definition("invalid");
-    complete.handler = nullptr;
-    check(GRIM::registerPluginTools(staged, &complete, 1) == GRIM_ERROR_INVALID_PARAM &&
-          !PluginAPI::commitPluginGeneration("staged"), "Ignored registration error did not reject initialization");
-    PluginAPI::cleanupPluginContext("staged");
-    complete = definition("invalid");
-    complete.descriptor.permission_bits = GRIM_PERM_MEMORY;
-    check(GRIM::registerPluginTools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Undeclared permissions accepted");
-    complete.descriptor.permission_bits = 0;
-    complete.descriptor.argument_format = "json";
-    complete.descriptor.argument_schema_json = "[]";
-    check(GRIM::registerPluginTools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Invalid schema accepted");
-
-    check(!PluginAPI::commitPluginGeneration(invalidProvider), "Invalid declarations did not poison publication");
+    auto* invalidProvider = PluginAPI::createPluginAPI("invalid-fixture", "", GRIM_PERM_UI, true);
+    const auto rejects = [&](const auto& read, const char* reason) {
+        try { read(); } catch (const std::exception&) { return; }
+        throw std::runtime_error(reason);
+    };
+    rejects([&] { readManifestText(invalidProvider, "{", dispatchEmpty); }, "Invalid JSON accepted");
+    rejects([&] { manifestTools(invalidProvider, {first}, nullptr); }, "Missing dispatcher accepted");
+    auto invalid = definition("");
+    rejects([&] { manifestTools(invalidProvider, {first, invalid}); }, "Empty tool ID accepted");
+    invalid = definition("invalid");
+    invalid["short_description"] = "Too short";
+    rejects([&] { manifestTools(invalidProvider, {invalid}); }, "Invalid summary accepted");
+    invalid.erase("short_description");
+    invalid["usage"] = "invalid {target}";
+    invalid["bindings"] = {{"target", "invalid_type"}};
+    rejects([&] { manifestTools(invalidProvider, {invalid}); }, "Invalid binding accepted");
+    invalid["bindings"] = {{"missing", "t"}};
+    rejects([&] { manifestTools(invalidProvider, {invalid}); }, "Missing binding placeholder accepted");
+    invalid.erase("bindings");
+    invalid["usage_type"] = 99;
+    rejects([&] { manifestTools(invalidProvider, {first, invalid}); }, "Invalid usage type accepted");
+    invalid.erase("usage_type");
+    invalid["permissions"] = {"memory"};
+    rejects([&] { manifestTools(invalidProvider, {invalid}); }, "Undeclared permissions accepted");
+    invalid["permissions"] = Json::array();
+    invalid["argument_format"] = "json";
+    invalid["argument_schema"] = Json::array();
+    rejects([&] { manifestTools(invalidProvider, {invalid}); }, "Invalid schema accepted");
+    check(!ToolRegistry::instance().isRegistered("batch_first"), "Invalid manifest partially published");
     PluginAPI::cleanupPluginContext(invalidProvider);
+
+    staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
+    check(!PluginAPI::commitPluginGeneration(staged, nullptr,
+          manifestTools(staged, {definition("new_tool"), definition("reserved_fixture_tool")})) &&
+          !ToolRegistry::instance().isRegistered("new_tool"), "Failed commit left a partial manifest");
+    PluginAPI::cleanupPluginContext(staged);
     auto running = std::async(std::launch::async, [] { return dispatchCommand("blocking", ""); });
     blocked.entered.get_future().wait();
     auto stopping = std::async(std::launch::async, [] { PluginAPI::beginPluginShutdown("beta"); });

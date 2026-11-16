@@ -465,3 +465,8 @@ cache/geospatial/*.sqlite-wal
 !/plugins/geospatial_plugin/geospatial/*.txt
 !/plugins/geospatial_plugin/shaders/
 !/plugins/geospatial_plugin/shaders/*.sc
+
+# Source manifests live under provider directories; deployed copies stay ignored.
+!/plugins/network_test_plugin/
+/plugins/network_test_plugin/*
+!/plugins/*_plugin/*_plugin.tools.json

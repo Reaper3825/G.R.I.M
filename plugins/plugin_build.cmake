@@ -8,7 +8,15 @@ endif()
 option(GRIM_DEPLOY_PLUGINS "Publish built plugins into GRIM's watched folder" ${_grim_deploy_plugins_default})
 set(GRIM_PLUGIN_DEPLOY_DIR "${GRIM_PLUGIN_ROOT}/plugins" CACHE PATH "Watched plugin deployment folder")
 function(grim_configure_plugin target)
-    cmake_parse_arguments(PLUGIN "DEPLOY_RUNTIME_DLLS" "" "" ${ARGN})
+    cmake_parse_arguments(PLUGIN "DEPLOY_RUNTIME_DLLS" "TOOL_MANIFEST" "" ${ARGN})
+    if(PLUGIN_TOOL_MANIFEST)
+        add_custom_target(manifest_${target}
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${PLUGIN_TOOL_MANIFEST}"
+                "$<TARGET_FILE_DIR:${target}>/$<TARGET_FILE_PREFIX:${target}>$<TARGET_FILE_BASE_NAME:${target}>.tools.json"
+            DEPENDS "${PLUGIN_TOOL_MANIFEST}"
+            VERBATIM)
+        add_dependencies(${target} manifest_${target})
+    endif()
     target_compile_features(${target} PRIVATE cxx_std_17)
     target_compile_definitions(${target} PRIVATE GRIM_BUILD_PLUGIN NOMINMAX WIN32_LEAN_AND_MEAN)
     target_include_directories(${target} PRIVATE
@@ -40,6 +48,7 @@ function(grim_configure_plugin target)
             COMMAND "${CMAKE_COMMAND}"
                 "-DPLUGIN_FILE=$<TARGET_FILE:${target}>"
                 "-DDEPLOY_DIR=${GRIM_PLUGIN_DEPLOY_DIR}"
+                "-DPLUGIN_MANIFEST=${PLUGIN_TOOL_MANIFEST}"
                 ${runtime_argument}
                 -P "${GRIM_PLUGIN_ROOT}/plugins/deploy_plugin.cmake"
             DEPENDS ${target}

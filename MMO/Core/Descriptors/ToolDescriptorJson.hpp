@@ -36,37 +36,54 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     j["success_rate"] = t.success_rate;
     j["usage_type"] = t.usage_type;
 }
-inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
+// A manifest version supplies defaults for authoring fields omitted from sidecars.
+inline void readToolDescriptorMetadata(const nlohmann::json& j, ToolDescriptor& t,
+                                       const char* manifestVersion = nullptr) {
     j.at("tool_id").get_to(t.tool_id);
-    j.at("display_name").get_to(t.display_name);
-    j.at("version").get_to(t.version);
     j.at("description").get_to(t.description);
-    t.short_description = j.value("short_description", std::string{});
-    if (!validToolShortDescription(t.short_description)) throw std::invalid_argument("Invalid short description");
     j.at("usage").get_to(t.usage);
-    // Older snapshots predate optional world binding labels.
-    t.bindings = j.value("bindings", std::map<std::string, std::string>{});
-    if (!validToolBindings(t)) throw std::invalid_argument("Invalid tool bindings");
     j.at("category").get_to(t.category);
-    j.at("permission_bits").get_to(t.permission_bits);
     j.at("needs_confirmation").get_to(t.needs_confirmation);
     j.at("is_informational").get_to(t.is_informational);
     j.at("argument_format").get_to(t.argument_format);
+
+    std::string summary;
+    if (manifestVersion) {
+        t.display_name = j.value("display_name", t.tool_id);
+        t.version = j.value("version", std::string(manifestVersion));
+        if (validToolShortDescription(t.description)) summary = t.description;
+    } else {
+        j.at("display_name").get_to(t.display_name);
+        j.at("version").get_to(t.version);
+    }
+    t.short_description = j.value("short_description", std::move(summary));
+    if (!validToolShortDescription(t.short_description)) throw std::invalid_argument("Invalid short description");
+    t.bindings = j.value("bindings", std::map<std::string, std::string>{});
+    if (!validToolBindings(t)) throw std::invalid_argument("Invalid tool bindings");
+
+    const auto readCollection = [&](const char* key, auto& values) {
+        if (manifestVersion && !j.contains(key)) values.clear();
+        else j.at(key).get_to(values);
+    };
+    readCollection("parameters", t.parameters);
+    readCollection("preconditions", t.preconditions);
+    readCollection("aliases", t.aliases);
+    readCollection("keywords", t.keywords);
+    readCollection("capability_tags", t.capability_tags);
+
+    const auto usage = j.value("usage_type", nlohmann::json(static_cast<uint32_t>(ToolUsage::Model)));
+    if (!usage.is_number_integer() || usage < 0 || usage > 3)
+        throw std::invalid_argument("Invalid tool usage type");
+    t.usage_type = static_cast<ToolUsage>(usage.get<uint32_t>());
+}
+inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
+    readToolDescriptorMetadata(j, t);
+    j.at("permission_bits").get_to(t.permission_bits);
     j.at("argument_schema_json").get_to(t.argument_schema_json);
-    j.at("parameters").get_to(t.parameters);
-    j.at("preconditions").get_to(t.preconditions);
-    j.at("aliases").get_to(t.aliases);
-    j.at("keywords").get_to(t.keywords);
-    j.at("capability_tags").get_to(t.capability_tags);
     j.at("usage_count").get_to(t.usage_count);
     j.at("success_count").get_to(t.success_count);
     j.at("failure_count").get_to(t.failure_count);
     j.at("success_rate").get_to(t.success_rate);
-    // Older version-1 snapshots have no consumer classification.
-    const auto usage = j.value("usage_type", nlohmann::json(1));
-    if (!usage.is_number_integer() || usage < 0 || usage > 3)
-        throw std::invalid_argument("Invalid tool usage type");
-    t.usage_type = static_cast<ToolUsage>(usage.get<uint32_t>());
 }
 inline void to_json(nlohmann::json& j, const RegisteredTool& tool) {
     to_json(j, static_cast<const ToolDescriptor&>(tool));

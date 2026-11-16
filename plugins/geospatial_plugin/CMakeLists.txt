@@ -18,7 +18,8 @@ add_library(geospatial_plugin SHARED
     geospatial/geospatial_group.cpp geospatial/geospatial_point.cpp geospatial/geospatial_area.cpp
     geospatial/cesium_bgfx_render_adapter.cpp geospatial/cesium_bgfx_shaders.cpp
     stb_image.cpp)
-grim_configure_plugin(geospatial_plugin DEPLOY_RUNTIME_DLLS)
+grim_configure_plugin(geospatial_plugin DEPLOY_RUNTIME_DLLS
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/geospatial_plugin.tools.json")
 target_compile_features(geospatial_plugin PRIVATE cxx_std_20)
 if(NOT TARGET GRIM)
     set(GRIM_ROOT_DIR "${GRIM_PLUGIN_ROOT}" CACHE PATH "Root of GRIM project")

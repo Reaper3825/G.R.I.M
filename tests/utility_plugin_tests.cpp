@@ -24,10 +24,12 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
             PluginManager::unloadAll();
             std::error_code error;
             fs::remove(folder / "utility_plugin.dll", error);
+            fs::remove(folder / "utility_plugin.tools.json", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
     fs::copy_file(pluginDirectory / "utility_plugin.dll", folder / "utility_plugin.dll");
+    fs::copy_file(pluginDirectory / "utility_plugin.tools.json", folder / "utility_plugin.tools.json");
 
     // A collision must reject the whole batch and retain the existing provider.
     ToolDescriptor clean;

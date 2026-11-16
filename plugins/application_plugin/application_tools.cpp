@@ -1,14 +1,13 @@
-#include "core/plugin_tool_registration.hpp"
 #include "application_tools.hpp"
 #include <nlohmann/json.hpp>
 #include <string>
 
-namespace {
-struct Context { GRIM::Applications::Catalog* catalog = nullptr; const char* operation = nullptr; };
-Context contexts[4];
-GrimResult invoke(const GrimToolCall* call, GrimToolResultWriter* writer, void* context) {
-    const auto& selected = *static_cast<Context*>(context);
-    const std::string operation = selected.operation;
+GrimResult dispatchApplicationTool(std::string_view id, const GrimToolCall* call,
+                                   GrimToolResultWriter* writer, GRIM::Applications::Catalog& catalog) {
+    if (id != "applications.list" && id != "applications.refresh" &&
+        id != "applications.inspect" && id != "applications.launch")
+        return GRIM_ERROR_NOT_FOUND;
+    const std::string operation(id.substr(std::string_view("applications.").size()));
     GrimToolResult result;
     std::string message, output;
     try {
@@ -16,7 +15,7 @@ GrimResult invoke(const GrimToolCall* call, GrimToolResultWriter* writer, void* 
             throw std::invalid_argument("Invalid application arguments");
         const auto args = nlohmann::json::parse(std::string(call->arguments ? call->arguments : "", call->arguments_size));
         const auto value = nlohmann::json{{"format", "grim-application-result"}, {"version", 1},
-            {"success", true}, {"value", selected.catalog->request(operation, args)}};
+            {"success", true}, {"value", catalog.request(operation, args)}};
         result.success = value.at("success").get<bool>();
         output = value.dump();
         if (!result.success) message = value.value("error", "Application operation failed");
@@ -37,46 +36,4 @@ GrimResult invoke(const GrimToolCall* call, GrimToolResultWriter* writer, void* 
     result.error_code = result.success ? "ERR_NONE" : "ERR_APPLICATION_SERVICE";
     result.category = result.success ? "application" : "error";
     return writer->complete(writer, &result);
-}
-}
-GrimResult registerApplicationTools(const GrimPluginAPI* api, GRIM::Applications::Catalog& catalog) {
-    GRIM::PluginToolRegistration tools[4];
-    const char* ids[] = {"applications.list", "applications.refresh", "applications.inspect", "applications.launch"};
-    const char* operations[] = {"list", "refresh", "inspect", "launch"};
-    const char* descriptions[] = {"List application resources discovered on this system", "Refresh application discovery and live resources",
-        "Inspect an application resource and its launch identity", "Launch a discovered application using its current generation"};
-    const char* usages[] = {"applications.list", "applications.refresh", "applications.inspect {t}", "applications.launch {t}"};
-    const std::map<std::string, std::string> binding = {{"t", "t"}};
-    GRIM::MMO::ToolParameter parameters[3];
-    GRIM::MMO::ToolParameter pagination[2];
-    pagination[0].name = "offset"; pagination[1].name = "limit";
-    for (auto& parameter : pagination) { parameter.type = "integer"; parameter.description = "Optional catalog page offset or maximum entries (1-50)"; }
-    const char* names[] = {"resource_id", "provider_instance", "runtime_id"};
-    for (size_t i = 0; i < 3; ++i) {
-        parameters[i].name = names[i]; parameters[i].type = i == 2 ? "integer" : "string";
-        parameters[i].description = "Exact identity from the current discovered application resource";
-        parameters[i].required = 1;
-    }
-    for (size_t i = 0; i < 4; ++i) {
-        auto& t = tools[i]; auto& d = t.descriptor;
-        contexts[i] = {&catalog, operations[i]};
-        t.handler = invoke; t.user_data = &contexts[i]; t.descriptor.short_description = descriptions[i];
-        d.tool_id = d.display_name = ids[i]; d.version = "1.0.0"; d.description = descriptions[i];
-        d.usage = usages[i]; d.category = "application"; d.argument_format = "json";
-        d.permission_bits = GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM | (i == 3 ? GRIM_PERM_PROCESS : 0);
-        d.is_informational = i != 3; d.needs_confirmation = i == 3;
-        if (i == 0) {
-            d.parameters.assign(pagination, pagination + 2);
-            d.argument_schema_json = R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false})";
-        }
-        else if (i == 1) d.argument_schema_json = R"({"type":"object","properties":{},"additionalProperties":false})";
-        else {
-            t.descriptor.bindings = binding;
-            d.parameters.assign(parameters, parameters + (i == 3 ? 3 : 1));
-            d.argument_schema_json = i == 2
-                ? R"({"type":"object","properties":{"resource_id":{"type":"string"}},"required":["resource_id"],"additionalProperties":false})"
-                : R"({"type":"object","properties":{"resource_id":{"type":"string"},"provider_instance":{"type":"string"},"runtime_id":{"type":"integer","minimum":1}},"required":["resource_id","provider_instance","runtime_id"],"additionalProperties":false})";
-        }
-    }
-    return GRIM::registerPluginTools(api, tools, 4);
 }

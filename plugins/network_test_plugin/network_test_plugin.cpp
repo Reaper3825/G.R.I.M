@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 
 
 #include "core/plugin_api.hpp"
@@ -671,47 +671,24 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     grim::plugin::setLoggingAPI(api);
     g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin initializing...");
     
-    GRIM::PluginToolRegistration tools[2];
-    tools[0].handler = networkTestHandler;
-    tools[1].handler = networkTestStopHandler;
-    const char* names[] = {"networktest", "networktest_stop"};
-    const char* descriptions[] = {"Start a network stress test", "Stop the current network stress test"};
-    const char* usages[] = {"networktest {t} <port> [options...]", "networktest_stop"};
-    const char* summaries[] = {"Start a network load test against selected targets",
-        "Stop the currently running network load test"};
-    const std::map<std::string, std::string> targetBindings = {{"t", "t"}};
-    tools[0].descriptor.bindings = targetBindings;
-    for (size_t i = 0; i < 2; ++i) {
-        tools[i].descriptor.usage_type = GRIM::MMO::ToolUsage::Ignore;
-        tools[i].descriptor.short_description = summaries[i];
-        auto& d = tools[i].descriptor;
-        d.tool_id = d.display_name = names[i];
-        d.version = "1.0.0";
-        d.description = descriptions[i];
-        d.usage = usages[i];
-        d.category = "network";
-        d.argument_format = "raw_text";
-        d.permission_bits = GRIM_PERM_NETWORK;
-        d.is_informational = false;
-        d.needs_confirmation = 1;
-    }
-    GRIM::MMO::ToolParameter args;
-    args.name = "arguments";
-    args.type = "string";
-    args.description = "Target IP or @target-file, port, and options; invoke without arguments for option help";
-    args.required = 1;
-    tools[0].descriptor.parameters = {args};
-    return GRIM::registerPluginTools(api, tools, 2);
+    return GRIM_OK;
 }
 
 // Shutdown plugin
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "networktest") return networkTestHandler(request, writer, nullptr);
+    if (id == "networktest_stop") return networkTestStopHandler(request, writer, nullptr);
+    return GRIM_ERROR_NOT_FOUND;
+}
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     if (g_api) {
         // Stop any running test
         GRIM::NetworkTest::stopTest();
         
-        g_api->unregister_command(g_api, "networktest");
-        g_api->unregister_command(g_api, "networktest_stop");
         g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin unloaded");
         grim::plugin::setLoggingAPI(nullptr);
         g_api = nullptr;

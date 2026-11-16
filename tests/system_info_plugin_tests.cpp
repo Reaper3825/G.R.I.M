@@ -72,6 +72,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
             detectionMode = 0;
             std::error_code error;
             fs::remove(folder / "system_info_plugin.dll", error);
+            fs::remove(folder / "system_info_plugin.tools.json", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
@@ -102,6 +103,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     const auto hardware = hardwareInventoryJson(detectedInventory);
     check(hardwareInventoryJson(hardwareInventoryFromJson(hardware)) == hardware, "Hardware codec lost data");
     fs::copy_file(pluginDirectory / "system_info_plugin.dll", folder / "system_info_plugin.dll");
+    fs::copy_file(pluginDirectory / "system_info_plugin.tools.json", folder / "system_info_plugin.tools.json");
     const auto beforeLoad = detectionCalls();
     prepareDetection();
     PluginManager::initialize(folder.string());

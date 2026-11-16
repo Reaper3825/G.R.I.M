@@ -8,15 +8,16 @@
 #include <stdexcept>
 extern "C" GrimResult grim_plugin_init(const GrimPluginAPI*);
 extern "C" void grim_plugin_shutdown();
+extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
 namespace {
-struct RegisteredHandler { GrimToolHandler handler; void* user_data; };
-std::vector<RegisteredHandler> tools; std::atomic<int> runs{0}; bool permitted=true,current=true;
+constexpr const char* tools[] = {"profile_person", "sherlock_sweep", "osint_report", "osint_status", "osint_clear_cache", "osint_scan_secrets", "osint_show_secrets"};
+ std::atomic<int> runs{0}; bool permitted=true,current=true;
 std::atomic<bool> block{false},entered{false}; bool success;std::string output,message;
 void check(bool value,const char* text){if(!value)throw std::runtime_error(text);}
 GrimResult invoke(size_t index,const std::string& args){
  GrimToolCall call{};call.arguments=args.data();call.arguments_size=args.size();GrimToolResultWriter writer{};
  writer.complete=[](GrimToolResultWriter*,const GrimToolResult* result){success=result->success;output=result->structured_output_json?result->structured_output_json:"";message=result->message?result->message:"";return GRIM_OK;};
- return tools[index].handler(&call,&writer,tools[index].user_data);
+ return grim_plugin_dispatch_tool(tools[index], &call, &writer);
 }
 }
 int osintProvider::runProcess(const std::vector<std::string>& args,int){
@@ -34,10 +35,9 @@ int main(){
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
  api.has_permission=[](const GrimPluginAPI*,GrimPermission){return permitted;};api.is_provider_current=[](const GrimPluginAPI*){return current;};
  api.log=[](const GrimPluginAPI*,GrimLogLevel,const char*){};
- api.register_tools=[](const GrimPluginAPI*,const GrimToolRegistration* t,size_t n){tools.clear(); for (size_t i = 0; i < n; ++i) tools.push_back({t[i].handler, t[i].user_data});return GRIM_OK;};
  try {
   auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
-  check(grim_plugin_init(&api)==GRIM_OK && tools.size()==7,"OSINT registration failed");
+  check(grim_plugin_init(&api)==GRIM_OK,"OSINT initialization failed");
   check(!fs::exists(temp/"cache") && runs==0,"OSINT load had side effects");
   fs::create_directories(osintProvider::scripts());std::ofstream(osintProvider::scripts()/"osit_bridge.py")<<"# fixture";
   invoke(2,"alice");check(success && runs==1,"Report did not use provider process");

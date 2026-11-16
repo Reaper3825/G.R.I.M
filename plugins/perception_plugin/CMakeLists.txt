@@ -49,7 +49,8 @@ add_library(perception_plugin SHARED perception_plugin.cpp perception_runtime.cp
 if(APPLE)
     set_target_properties(perception_plugin PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
 endif()
-grim_configure_plugin(perception_plugin)
+grim_configure_plugin(perception_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/perception_plugin.tools.json")
 target_compile_features(perception_plugin PRIVATE cxx_std_20)
 target_compile_definitions(perception_plugin PRIVATE GRIM_HAS_OPENCV GRIM_HAS_TESSERACT GRIM_ROOT_DIR="${GRIM_PLUGIN_ROOT}")
 target_include_directories(perception_plugin PRIVATE ${OpenCV_INCLUDE_DIRS} ${PERCEPTION_ONNX_INCLUDE})

@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "provider": "UI Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "ui.list",
+      "argument_format": "json",
+      "capability_tags": [
+        "ui",
+        "panels"
+      ],
+      "category": "ui",
+      "description": "Queue discovery of instantiated panels and their stable IDs; poll for completion",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "preconditions": [
+        "Host UI initialized and processing frames"
+      ],
+      "short_description": "Request a list of instantiated interface panels",
+      "usage": "ui.list",
+      "permissions": [
+        "ui"
+      ],
+      "argument_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "ui.inspect",
+      "argument_format": "json",
+      "bindings": {
+        "t": "t"
+      },
+      "capability_tags": [
+        "ui",
+        "panels"
+      ],
+      "category": "ui",
+      "description": "Queue a panel state snapshot by stable ID; poll for completion",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "Exact stable panel key from ui.list",
+          "name": "panel_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "preconditions": [
+        "Host UI initialized and processing frames"
+      ],
+      "short_description": "Request current state for a selected interface panel",
+      "usage": "ui.inspect {t}",
+      "permissions": [
+        "ui"
+      ],
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "panel_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "panel_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "ui.show",
+      "argument_format": "json",
+      "bindings": {
+        "t": "t"
+      },
+      "capability_tags": [
+        "ui",
+        "panels"
+      ],
+      "category": "ui",
+      "description": "Queue showing a panel and bringing it forward; poll to verify completion",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Exact stable panel key from ui.list",
+          "name": "panel_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "preconditions": [
+        "Host UI initialized and processing frames"
+      ],
+      "short_description": "Request showing a panel and bringing it forward",
+      "usage": "ui.show {t}",
+      "permissions": [
+        "ui"
+      ],
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "panel_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_runtime_id": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "panel_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "ui.hide",
+      "argument_format": "json",
+      "bindings": {
+        "t": "t"
+      },
+      "capability_tags": [
+        "ui",
+        "panels"
+      ],
+      "category": "ui",
+      "description": "Queue hiding a panel; poll to verify completion",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Exact stable panel key from ui.list",
+          "name": "panel_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "preconditions": [
+        "Host UI initialized and processing frames"
+      ],
+      "short_description": "Request hiding a selected interface panel from view",
+      "usage": "ui.hide {t}",
+      "permissions": [
+        "ui"
+      ],
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "panel_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_runtime_id": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "panel_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "ui.bring_to_front",
+      "argument_format": "json",
+      "bindings": {
+        "t": "t"
+      },
+      "capability_tags": [
+        "ui",
+        "panels"
+      ],
+      "category": "ui",
+      "description": "Queue bringing a panel forward without changing visibility; poll to verify completion",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Exact stable panel key from ui.list",
+          "name": "panel_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "preconditions": [
+        "Host UI initialized and processing frames"
+      ],
+      "short_description": "Request bringing a panel ahead of other panels",
+      "usage": "ui.bring_to_front {t}",
+      "permissions": [
+        "ui"
+      ],
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "panel_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "panel_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "tool_id": "ui.poll",
+      "argument_format": "json",
+      "capability_tags": [
+        "ui",
+        "panels"
+      ],
+      "category": "ui",
+      "description": "Read an owned UI request status without blocking; a completed result is consumed",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "Positive request ID returned to this plugin instance",
+          "name": "request_id",
+          "required": true,
+          "type": "integer"
+        }
+      ],
+      "preconditions": [
+        "Host UI initialized and processing frames"
+      ],
+      "short_description": "Check completion of an earlier interface panel request",
+      "usage": "ui.poll <request_id>",
+      "permissions": [
+        "ui"
+      ],
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cancel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

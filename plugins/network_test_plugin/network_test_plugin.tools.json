@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "provider": "Network Test Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "networktest",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "network",
+      "description": "Start a network stress test",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "Target IP or @target-file, port, and options; invoke without arguments for option help",
+          "name": "arguments",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Start a network load test against selected targets",
+      "usage": "networktest {t} <port> [options...]",
+      "usage_type": 3,
+      "permissions": [
+        "network"
+      ]
+    },
+    {
+      "tool_id": "networktest_stop",
+      "argument_format": "raw_text",
+      "category": "network",
+      "description": "Stop the current network stress test",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Stop the currently running network load test",
+      "usage": "networktest_stop",
+      "usage_type": 3,
+      "permissions": [
+        "network"
+      ]
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 // Filesystem provider owns operations and captures its base directory at load.
 #include "core/plugin_api.hpp"
 #include <algorithm>
@@ -96,51 +96,22 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
-        !api->register_tools || !api->replace_resources)
+        !api->replace_resources)
         return GRIM_ERROR_API_VERSION_MISMATCH;
     try {
         provider = std::make_unique<Provider>(api);
-        const char* ids[] = {"ls", "mkdir", "rm"};
-        const char* descriptions[] = {"List entries in the filesystem plugin's working directory",
-            "Create one directory; parent directories must already exist",
-            "Remove one file, symlink, or empty directory; never recursively"};
-        const char* usages[] = {"ls", "mkdir {c}", "rm {t}"};
-        const char* summaries[] = {"List entries inside the current working directory",
-            "Create a new directory within an existing parent",
-            "Remove one file or empty directory without recursion"};
-        GRIM::PluginToolRegistration tools[3];
-        const std::map<std::string, std::string> directoryBindings = {{"c", "c"}};
-        const std::map<std::string, std::string> pathBindings = {{"t", "t"}};
-        tools[Mkdir].descriptor.bindings = directoryBindings;
-        tools[Rm].descriptor.bindings = pathBindings;
-        GRIM::MMO::ToolParameter paths[3];
-        for (size_t i = 0; i < 3; ++i) {
-            tools[i].descriptor.usage_type = GRIM::MMO::ToolUsage::System;
-            tools[i].descriptor.short_description = summaries[i];
-            tools[i].handler = execute;
-            tools[i].user_data = &provider->operations[i];
-            auto& d = tools[i].descriptor;
-            d.tool_id = d.display_name = ids[i];
-            d.version = "1.0.0";
-            d.description = descriptions[i];
-            d.usage = usages[i];
-            d.category = "filesystem";
-            d.argument_format = "raw_text";
-            d.permission_bits = GRIM_PERM_FILESYSTEM;
-            d.is_informational = i == Ls;
-            d.needs_confirmation = !d.is_informational;
-            if (i == Mkdir || i == Rm) {
-                paths[i].name = "path";
-                paths[i].type = "path";
-                paths[i].description = "One absolute path or path relative to the plugin working directory; spaces allowed; optional enclosing double quotes";
-                paths[i].required = 1;
-                d.parameters = {paths[i]};
-            }
-        }
-        const auto registered = GRIM::registerPluginTools(api, tools, 3);
-        if (registered != GRIM_OK) return registered;
         return provider->publishDirectory(provider->currentDirectory) ? GRIM_OK : GRIM_ERROR_UNKNOWN;
     } catch (...) { return GRIM_ERROR_UNKNOWN; }
+}
+
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "ls") return execute(request, writer, &provider->operations[Ls]);
+    if (id == "mkdir") return execute(request, writer, &provider->operations[Mkdir]);
+    if (id == "rm") return execute(request, writer, &provider->operations[Rm]);
+    return GRIM_ERROR_NOT_FOUND;
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { provider.reset(); }

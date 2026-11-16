@@ -29,11 +29,12 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     const auto watched = fs::absolute(variants / "watched");
     fs::create_directories(watched);
     // Only remove the exact test fixture destinations owned by this test.
-    for (const auto* name : {"alpha.dll", "beta.dll"}) fs::remove(watched / name);
+    for (const auto* name : {"alpha.dll", "beta.dll", "alpha.tools.json", "beta.tools.json"}) fs::remove(watched / name);
     PluginManager::initialize(watched.string());
     PluginManager::checkForHotReload(); // Empty folders are valid.
     const auto install = [&](const char* variant) {
         fs::copy_file(variants / variant / "alpha.dll", watched / "alpha.dll", fs::copy_options::overwrite_existing);
+        fs::copy_file(variants / variant / "alpha.tools.json", watched / "alpha.tools.json", fs::copy_options::overwrite_existing);
         PluginManager::checkForHotReload();
     };
     install("old");
@@ -87,6 +88,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     registry.addListener(&notification);
     const auto timestamp = fs::last_write_time(watched / "alpha.dll");
     fs::copy_file(variants / "new" / "alpha.dll", watched / "alpha.dll", fs::copy_options::overwrite_existing);
+    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "alpha.tools.json", fs::copy_options::overwrite_existing);
     fs::last_write_time(watched / "alpha.dll", timestamp);
     PluginManager::checkForHotReload();
     registry.removeListener(&notification);
@@ -109,9 +111,25 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     PluginManager::tick();
     check(registry.getTool("Declared-alpha")->provider.instance != secondInstance, "Queued API reload request was not serviced");
 
+    const auto beforeManifestEdit = registry.getTool("Declared-alpha")->provider.instance;
+    const auto sidecar = watched / "alpha.tools.json";
+    std::ofstream(sidecar, std::ios::app) << ' ';
+    PluginManager::checkForHotReload();
+    const auto afterManifestEdit = registry.getTool("Declared-alpha")->provider.instance;
+    check(afterManifestEdit != beforeManifestEdit, "Manifest-only change did not reload the provider");
+    std::ofstream(sidecar, std::ios::trunc) << '{';
+    PluginManager::checkForHotReload();
+    check(registry.getTool("Declared-alpha")->provider.instance == afterManifestEdit,
+          "Invalid manifest displaced the working provider");
+    fs::remove(sidecar);
+    PluginManager::checkForHotReload();
+    check(registry.getTool("Declared-alpha")->provider.instance == afterManifestEdit,
+          "Missing manifest displaced the working provider");
+
     fs::create_directory(watched / "ignored.dll");
     PluginManager::checkForHotReload(); // A directory ending in .dll is not a plugin.
     fs::copy_file(variants / "new" / "alpha.dll", watched / "beta.dll");
+    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "beta.tools.json");
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline + 1 &&
           registry.getTool("Declared-alpha")->provider.path == (watched / "alpha.dll").string(),
@@ -124,10 +142,13 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline, "Deleted plugin retained tools");
     fs::remove(watched / "ignored.dll");
+    fs::remove(watched / "alpha.tools.json");
+    fs::remove(watched / "beta.tools.json");
     fs::remove(watched);
     PluginManager::checkForHotReload(); // Removal of the folder is a valid empty snapshot.
     fs::create_directory(watched);
     fs::copy_file(variants / "new" / "alpha.dll", watched / "alpha.dll");
+    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "alpha.tools.json");
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
     PluginManager::tick(); // Exercise the actual periodic frame path as well.
     check(registry.isRegistered("Declared-alpha"), "Plugin folder recreation was not discovered");
@@ -138,6 +159,8 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(!provider(), "Provider identity survived plugin unload");
     check(registry.toolCount() == baseline, "Tick rediscovered plugins during teardown");
     fs::remove(watched / "alpha.dll");
+    fs::remove(watched / "alpha.tools.json");
+    fs::remove(watched / "beta.tools.json");
     fs::remove(watched);
     PluginAPI::cleanupPluginContext(observer);
 

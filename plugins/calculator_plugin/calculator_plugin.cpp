@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 #include "core/plugin_api.hpp"
 
 #include <algorithm>
@@ -410,31 +410,15 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION)
         return GRIM_ERROR_API_VERSION_MISMATCH;
-    if (!api->register_tools) return GRIM_ERROR_INVALID_PARAM;
-    GRIM::PluginToolRegistration tool;
-    tool.handler = calculate;
-    tool.descriptor.usage_type = GRIM::MMO::ToolUsage::Model;
-    tool.descriptor.short_description = "Evaluate arithmetic expressions with constants and mathematical functions";
-    auto& d = tool.descriptor;
-    d.tool_id = d.display_name = "calculate";
-    d.version = "1.0.0";
-    d.description = "Evaluate finite double-precision arithmetic: + - * / % ^, parentheses, pi, e; "
-        "abs, sqrt, sin, cos, tan, asin, acos, atan, ln, log/log10, exp, floor, ceil, round, "
-        "min(a,b), max(a,b), pow(a,b). Trigonometric angles are radians; ^ is right-associative. "
-        "Maximum 4096 input bytes and 64 active recursive parsing levels. "
-        "Returns an answer and numeric value, or an error code, message, and zero-based byte offset.";
-    d.usage = "calculate {t}";
-    d.category = "math";
-    d.argument_format = "raw_text";
-    d.is_informational = 1;
-    d.bindings = {{"t", "t"}};
-    GRIM::MMO::ToolParameter parameter;
-    parameter.name = "expression";
-    parameter.type = "string";
-    parameter.description = "Raw mathematical expression to evaluate";
-    parameter.required = 1;
-    d.parameters = {parameter};
-    return GRIM::registerPluginTools(api, &tool, 1);
+    return GRIM_OK;
+}
+
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "calculate") return calculate(request, writer, nullptr);
+    return GRIM_ERROR_NOT_FOUND;
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}

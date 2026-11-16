@@ -4,5 +4,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/../plugin_build.cmake")
 find_package(nlohmann_json CONFIG REQUIRED
     HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
 add_library(tool_inspection_plugin SHARED tool_inspection_plugin.cpp inspection_commands.cpp)
-grim_configure_plugin(tool_inspection_plugin)
+grim_configure_plugin(tool_inspection_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/tool_inspection_plugin.tools.json")
 target_link_libraries(tool_inspection_plugin PRIVATE nlohmann_json::nlohmann_json)

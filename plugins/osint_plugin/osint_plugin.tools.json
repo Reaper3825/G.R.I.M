@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "provider": "OSINT Self-Audit Plugin",
+  "version": "2.1.0",
+  "tools": [
+    {
+      "tool_id": "profile_person",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "osint",
+      "description": "Profile a username across public sources",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "{t} [--no-cache] [--verbose]",
+          "name": "arguments",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Build a public source profile for a username",
+      "usage": "profile_person {t} [--no-cache] [--verbose]",
+      "usage_type": 3,
+      "permissions": [
+        "filesystem",
+        "process",
+        "network"
+      ]
+    },
+    {
+      "tool_id": "sherlock_sweep",
+      "aliases": [
+        "sherlock"
+      ],
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "osint",
+      "description": "Search public sites for a username",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "{t} [--async]",
+          "name": "arguments",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Search public websites for accounts matching a username",
+      "usage": "sherlock_sweep {t} [--async]",
+      "usage_type": 3,
+      "permissions": [
+        "filesystem",
+        "process",
+        "network"
+      ]
+    },
+    {
+      "tool_id": "osint_report",
+      "aliases": [
+        "osint"
+      ],
+      "argument_format": "raw_text",
+      "bindings": {
+        "o": "o",
+        "t": "t"
+      },
+      "category": "osint",
+      "description": "Read a username report and optionally export it",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "{t} [--export {o}]",
+          "name": "arguments",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Read a username report and optionally export findings",
+      "usage": "osint_report {t} [--export {o}]",
+      "usage_type": 3,
+      "permissions": [
+        "filesystem",
+        "process",
+        "network"
+      ]
+    },
+    {
+      "tool_id": "osint_status",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "osint",
+      "description": "Read scan status and consume completed results",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "[{t}]",
+          "name": "arguments",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "short_description": "Check scan status and collect completed scan results",
+      "usage": "osint_status [{t}]",
+      "usage_type": 3,
+      "permissions": [
+        "filesystem",
+        "process",
+        "network"
+      ]
+    },
+    {
+      "tool_id": "osint_clear_cache",
+      "argument_format": "raw_text",
+      "category": "osint",
+      "description": "Delete cached OSINT reports",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Delete locally cached reports from previous public searches",
+      "usage": "osint_clear_cache",
+      "usage_type": 3,
+      "permissions": [
+        "filesystem",
+        "process",
+        "network"
+      ]
+    },
+    {
+      "tool_id": "osint_scan_secrets",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "osint",
+      "description": "Scan discovered URLs for exposed sensitive data",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "{t}",
+          "name": "arguments",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Scan discovered web addresses for exposed sensitive information",
+      "usage": "osint_scan_secrets {t}",
+      "usage_type": 3,
+      "permissions": [
+        "filesystem",
+        "process",
+        "network"
+      ]
+    },
+    {
+      "tool_id": "osint_show_secrets",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "osint",
+      "description": "Read discovered sensitive data for a username",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "parameters": [
+        {
+          "description": "{t} [--severity <level>]",
+          "name": "arguments",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "short_description": "Read sensitive information findings for a selected username",
+      "usage": "osint_show_secrets {t} [--severity <level>]",
+      "usage_type": 3,
+      "permissions": [
+        "filesystem",
+        "process",
+        "network"
+      ]
+    }
+  ]
+}

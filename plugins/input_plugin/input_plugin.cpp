@@ -1,4 +1,4 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
 #include "core/plugin_api.hpp"
 #include "input_commands.hpp"
 #include <nlohmann/json.hpp>
@@ -44,40 +44,17 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
         !api->has_permission || !api->is_provider_current) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
-    GRIM::PluginToolRegistration tools[4];
-    tools[0].handler = call<GRIM_INPUT_MOVE_MOUSE>; tools[1].handler = call<GRIM_INPUT_CLICK>;
-    tools[2].handler = call<GRIM_INPUT_TYPE>; tools[3].handler = call<GRIM_INPUT_KEY>;
-    const char* ids[] = {"move_mouse", "click", "type", "key"};
-    const char* descriptions[] = {"Move the pointer to physical desktop coordinates using the provider-owned native backend",
-        "Click a mouse button at the current pointer position using the provider-owned native backend",
-        "Type raw text into the focused application using the provider-owned native backend",
-        "Tap a key or plus-separated key combination using the provider-owned native backend"};
-    const char* usages[] = {"move_mouse <x> <y>", "click [left|right|middle]", "type <text>",
-        "key <key|key+key>"};
-    const char* summaries[] = {"Move the pointer to specified desktop coordinates",
-        "Click a mouse button at the current position",
-        "Type supplied text into the focused application",
-        "Press a key or combination of keys"};
-    const char* names[] = {"coordinates", "button", "text", "keys"};
-    const char* parameterDescriptions[] = {"Two signed integers, comma- or whitespace-separated; uses existing integer-prefix parsing",
-        "Button name; omitted means left; retains existing native interpretation",
-        "Raw text, including surrounding whitespace; provider types with a 15 ms delay",
-        "Native key name, or a plus-separated combination; retains existing native key handling"};
-    const char* tags[] = {"input", "computer_control"};
-    GRIM::MMO::ToolParameter parameters[4];
-    for (size_t i = 0; i < 4; ++i) {
-        tools[i].descriptor.usage_type = GRIM::MMO::ToolUsage::Debug;
-        tools[i].descriptor.short_description = summaries[i];
-        auto& d = tools[i].descriptor;
-        d.tool_id = d.display_name = ids[i]; d.version = "1.0.0"; d.description = descriptions[i];
-        d.usage = usages[i]; d.category = "action"; d.argument_format = "raw_text";
-        d.permission_bits = GRIM_PERM_INPUT;
-        d.is_informational = 0; d.needs_confirmation = 1;
-        parameters[i].name = names[i]; parameters[i].type = "string";
-        parameters[i].description = parameterDescriptions[i]; parameters[i].required = i != 1;
-        d.parameters = {parameters[i]};
-        d.capability_tags.assign(tags, tags + 2);
-    }
-    return GRIM::registerPluginTools(api, tools, 4);
+    return GRIM_OK;
 }
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "move_mouse") return call<GRIM_INPUT_MOVE_MOUSE>(request, writer, nullptr);
+    if (id == "click") return call<GRIM_INPUT_CLICK>(request, writer, nullptr);
+    if (id == "type") return call<GRIM_INPUT_TYPE>(request, writer, nullptr);
+    if (id == "key") return call<GRIM_INPUT_KEY>(request, writer, nullptr);
+    return GRIM_ERROR_NOT_FOUND;
+}
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }

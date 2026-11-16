@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "provider": "Filesystem Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "ls",
+      "argument_format": "raw_text",
+      "category": "filesystem",
+      "description": "List entries in the filesystem plugin's working directory",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "short_description": "List entries inside the current working directory",
+      "usage": "ls",
+      "usage_type": 2,
+      "permissions": [
+        "filesystem"
+      ]
+    },
+    {
+      "tool_id": "mkdir",
+      "argument_format": "raw_text",
+      "bindings": {
+        "c": "c"
+      },
+      "category": "filesystem",
+      "description": "Create one directory; parent directories must already exist",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "One absolute path or path relative to the plugin working directory; spaces allowed; optional enclosing double quotes",
+          "name": "path",
+          "required": true,
+          "type": "path"
+        }
+      ],
+      "short_description": "Create a new directory within an existing parent",
+      "usage": "mkdir {c}",
+      "usage_type": 2,
+      "permissions": [
+        "filesystem"
+      ]
+    },
+    {
+      "tool_id": "rm",
+      "argument_format": "raw_text",
+      "bindings": {
+        "t": "t"
+      },
+      "category": "filesystem",
+      "description": "Remove one file, symlink, or empty directory; never recursively",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "parameters": [
+        {
+          "description": "One absolute path or path relative to the plugin working directory; spaces allowed; optional enclosing double quotes",
+          "name": "path",
+          "required": true,
+          "type": "path"
+        }
+      ],
+      "short_description": "Remove one file or empty directory without recursion",
+      "usage": "rm {t}",
+      "usage_type": 2,
+      "permissions": [
+        "filesystem"
+      ]
+    }
+  ]
+}

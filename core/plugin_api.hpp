@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v16.0
+// G.R.I.M Plugin API v17.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 16
+#define GRIM_API_VERSION_MAJOR 17
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -88,7 +88,7 @@ typedef enum {
 
 
 // All pointers are borrowed for the duration of the API call. The host copies
-// registration metadata and result data before returning. No STL crosses the ABI.
+// result data before returning. No STL crosses the ABI.
 struct GrimToolCall {
     uint32_t struct_size = sizeof(GrimToolCall);
     const char* arguments = nullptr;
@@ -111,17 +111,7 @@ struct GrimToolResultWriter {
     void* host_context = nullptr;
     GrimResult (*complete)(GrimToolResultWriter*, const GrimToolResult*) = nullptr;
 };
-typedef GrimResult (*GrimToolHandler)(const GrimToolCall*, GrimToolResultWriter*, void* user_data);
-struct GrimToolRegistration {
-    uint32_t struct_size = sizeof(GrimToolRegistration);
-    const char* descriptor_json = nullptr; // Serialized GRIM::MMO::ToolDescriptor.
-    size_t descriptor_size = 0;
-    GrimToolHandler handler = nullptr;
-    void* user_data = nullptr; // Plugin-owned until shutdown; not freed by the host.
-};
-
-
-
+using GrimToolDispatch = GrimResult (*)(const char* tool_id, const GrimToolCall*, GrimToolResultWriter*);
 
 enum GrimUIPanelOperation : uint32_t {
     GRIM_UI_LIST = 0, GRIM_UI_INSPECT = 1, GRIM_UI_SHOW = 2,
@@ -166,7 +156,6 @@ typedef struct GrimPluginAPI {
     // Command Registration
     // ========================================================================
     // Initialization only. Batches are staged until the loader commits a successful init.
-    GrimResult (*register_tools)(const GrimPluginAPI* self, const GrimToolRegistration* tools, size_t count);
     GrimResult (*unregister_command)(const GrimPluginAPI* self, const char* command_name);
     
     // Execute a command programmatically
@@ -324,10 +313,6 @@ public:
     void error(const char* msg) { log(GRIM_LOG_ERROR, msg); }
     
     // Commands
-    GrimResult registerTools(const GrimToolRegistration* tools, size_t count) {
-        return m_api->register_tools(m_api, tools, count);
-    }
-
     GrimResult unregisterCommand(const char* name) {
         return m_api->unregister_command(m_api, name);
     }

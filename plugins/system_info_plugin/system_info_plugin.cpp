@@ -1,4 +1,5 @@
-#include "core/plugin_tool_registration.hpp"
+#include <string_view>
+#include "core/plugin_api.hpp"
 #include "system_info_provider.hpp"
 #include "system_info_command.hpp"
 #include <memory>
@@ -27,26 +28,19 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
     grim::plugin::setLoggingAPI(api);
-    GRIM::PluginToolRegistration tool;
     provider = std::make_unique<GRIM::SystemInfo::Provider>(api);
-    tool.handler = call;
-    tool.user_data = provider.get();
-    auto& d = tool.descriptor;
-    d.tool_id = d.display_name = "system_info";
-    d.version = "1.0.0";
-    d.description = "Display system hardware and software information";
-    tool.descriptor.short_description = "Display information about system hardware and software";
-    d.usage = "system_info";
-    d.category = "information";
-    d.argument_format = "raw_text";
-    d.permission_bits = GRIM_PERM_SYSTEM;
-    d.is_informational = 1;
-    const auto registered = GRIM::registerPluginTools(api, &tool, 1);
-    if (registered != GRIM_OK) return registered;
     try { provider->refresh(); } // Probe failure publishes explicit stale state; publication failure rejects init.
     catch (...) { return GRIM_ERROR_UNKNOWN; }
     return GRIM_OK;
 }
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
+    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+    const std::string_view id(tool_id);
+    if (id == "system_info") return call(request, writer, provider.get());
+    return GRIM_ERROR_NOT_FOUND;
+}
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     provider.reset();
     grim::plugin::setLoggingAPI(nullptr);

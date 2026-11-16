@@ -40,7 +40,10 @@ GrimPluginAPI* createPluginAPI(const std::string& name, const std::string&, uint
     apis.emplace(name, std::move(instance));
     return result;
 }
-bool commitPluginGeneration(const GrimPluginAPI*, const GrimPluginAPI*) { return true; }
+std::vector<GRIM::MMO::ToolRegistration> readToolManifest(
+    const std::filesystem::path&, const GrimPluginAPI*, const char*, GrimToolDispatch) { return {}; }
+bool commitPluginGeneration(const GrimPluginAPI*, const GrimPluginAPI*,
+                            const std::vector<GRIM::MMO::ToolRegistration>&) { return true; }
 void beginPluginShutdown(const GrimPluginAPI*) {}
 void cleanupPluginContext(const GrimPluginAPI* api) {
     const auto name = *static_cast<const std::string*>(api->host_context);
@@ -86,10 +89,13 @@ int main(int argc, char** argv) try {
         file << "not a native library";
         check(file.good(), "Cannot write invalid-library fixture");
     }
+    const auto invalidSidecar = invalid.parent_path() / "invalid.tools.json";
+    std::ofstream(invalidSidecar) << "{}";
     errors.clear();
     PluginManager::initialize(argv[2]);
     PluginManager::unloadAll();
     std::filesystem::remove(invalid);
+    std::filesystem::remove(invalidSidecar);
     const auto rejection = std::find_if(errors.begin(), errors.end(), [](const std::string& error) {
         return error.find("Rejected invalid.dll: Cannot load native library") != std::string::npos;
     });

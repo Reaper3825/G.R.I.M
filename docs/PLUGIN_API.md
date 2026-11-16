@@ -1,4 +1,4 @@
-# G.R.I.M Plugin API v16.0
+# G.R.I.M Plugin API v17.0
 
 API version: **16.0.0**.
 
@@ -88,12 +88,21 @@ It consumes one reserved function pointer slot, preserving the table size and
 existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
-Plugins author `GRIM::MMO::ToolDescriptor` from
-`MMO/Core/Descriptors/ToolDescriptor.hpp` and call `GRIM::registerPluginTools`
-from `core/plugin_tool_registration.hpp`. The helper sends a batch of
-`GrimToolRegistration` records containing a byte span encoded by
-`ToolDescriptorJson.hpp`, a handler, and plugin-owned `user_data`. The host
-decodes and validates the metadata before staging the batch.
+Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
+loader expects `schema_version: 1`, `provider` and `version` matching
+`grim_plugin_get_info`, and a `tools` array. Providers with no tools supply an
+empty array. A provider with tools exports `grim_plugin_dispatch_tool`.
+See [Application's manifest](../plugins/application_plugin/application_plugin.tools.json)
+for raw text and JSON tool declarations.
+
+The loader passes the manifest's canonical `tool_id` to the dispatcher. Each
+tool declares named `permissions` and an `argument_format` of `raw_text` or
+`json`. JSON tools provide an `argument_schema` object. `display_name` defaults
+to the tool ID, `version` to the manifest version, and `usage_type` to `Model`.
+
+The loader fingerprints the library and sidecar together, so a JSON-only edit
+triggers replacement. A missing, unreadable, or invalid manifest leaves a
+previously loaded generation serving while its source DLL remains present.
 
 ### Host tool execution mode
 
@@ -244,16 +253,10 @@ Tool permission requirements must be a subset of the plugin's declared
 permissions. Metadata flags describe policy; direct registry invocation does
 not itself implement confirmation or the orchestration policy gate.
 
-Descriptor bytes are borrowed for the duration of the registration call. The
-host owns the decoded descriptor and retains `user_data` until shutdown after
-active calls have drained. The host initializes execution statistics.
-
-Registration, call, result, and writer structures require an exact
-`struct_size`. Metadata uses UTF-8 JSON. A batch or metadata collection is
-limited to 256 entries. Required text must be nonempty.
-Descriptor text fields accept up to 65,536 bytes, with a separate 512-byte limit
-for short descriptions. The host rejects duplicate parameter names, duplicate
-tool IDs, and alias collisions.
+The host owns the decoded descriptors and initializes execution statistics.
+The manifest can supply up to 256 tool entries. The host checks metadata and
+permissions when reading the manifest and checks duplicate tool IDs and aliases
+during publication.
 
 ### Initialization transaction
 
@@ -262,18 +265,11 @@ API context and registry share that generation's immutable provider descriptor.
 The context retains it through shutdown after the registry retires the generation.
 Pass the API table as self on every call and retain it through shutdown.
 
-During initialization, tool registrations are staged and resource updates
-write directly to the registry's unpublished provider generation. Staged tools
-are hidden and cannot be invoked. Once `grim_plugin_init` returns `GRIM_OK`,
-the registry publishes the tools and their generation together. Tool listeners
-can read that generation's resources as soon as they are notified. A failed staged
-registration or resource update rejects initialization even if the plugin
-ignores its error. Cross-batch tool duplicates and collisions are checked at
-commit. A failed initialization or commit leaves any previous generation visible.
+The loader reads and validates the manifest before initialization. During init,
+resource updates write to the unpublished provider generation. Once init returns
+`GRIM_OK`, the registry publishes the tools and resources together. A failed
+manifest, initialization, or commit leaves the previous generation visible.
 
-After initialization, `register_tools` returns `GRIM_ERROR_UNSUPPORTED`.
-Registration, event/timer operations, and lifecycle changes must be serialized
-by the host/caller. This API does not make all plugin services thread-safe.
 unregister_command removes a committed canonical tool owned by the caller;
 is_command_registered queries committed registry entries.
 
@@ -281,9 +277,8 @@ is_command_registered queries committed registry entries.
 
 Handlers have this signature:
 
-    GrimResult handler(const GrimToolCall* call,
-                       GrimToolResultWriter* writer,
-                       void* user_data);
+    extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
+        const char* tool_id, const GrimToolCall* call, GrimToolResultWriter* writer);
 
 The host supplies a synchronous call with an argument string and byte length.
 The handler completes exactly once with writer->complete(writer, &result).
@@ -312,45 +307,6 @@ completion API in v3.
 execute_command(api, command_text, writer) also delivers through a synchronous
 writer. The receiving plugin copies any strings it needs before its completion
 callback returns. There are no returned result strings to free.
-
-### Minimal plugin
-
-    #include "core/plugin_tool_registration.hpp"
-
-    static GrimResult echo(const GrimToolCall* call,
-                           GrimToolResultWriter* writer, void*) {
-        GrimToolResult result;
-        result.success = 1;
-        result.message = call->arguments;
-        result.category = "information";
-        return writer->complete(writer, &result);
-    }
-
-    extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-        static const GrimPluginInfo info{
-            GRIM_API_VERSION, "Echo", "1.0.0", "Example",
-            "Demonstrates a complete registered tool", 0
-        };
-        return &info;
-    }
-
-    extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
-        if (!api || api->api_version != GRIM_API_VERSION)
-            return GRIM_ERROR_API_VERSION_MISMATCH;
-        GRIM::PluginToolRegistration tool;
-        tool.handler = echo;
-        auto& d = tool.descriptor;
-        d.tool_id = d.display_name = "echo";
-        d.version = "1.0.0";
-        d.description = "Return the supplied text";
-        d.usage = "echo [text]";
-        d.category = "information";
-        d.argument_format = "raw_text";
-        d.parameters = {{"text", "string", "Text to return", false}};
-        return GRIM::registerPluginTools(api, &tool, 1);
-    }
-
-    extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}
 
 ## Shutdown and native lifetime
 
@@ -413,7 +369,7 @@ must be resolvable through the normal loader paths (source-relative $ORIGIN
 dependencies are not relocated automatically).
 
 For a changed file, the current plugin keeps serving tools while a separate
-candidate library initializes with its own API context and staged registrations.
+candidate library loads its manifest and initializes with its own API context.
 A replacement must retain its declared provider name. A bad binary, incompatible
 ABI, failed initialization, or registry collision rejects only the candidate.
 Its subscriptions, timers, and registrations cannot erase the working instance's
@@ -631,7 +587,7 @@ removal, resource updates, failed replacement, reload, and DLL removal. Use
 ### Native calculator plugin
 
 `calculator_plugin` owns its parser and evaluation handler, and registers the
-informational Model tool `calculate` through `register_tools`. It has no required
+informational Model tool `calculate` in its sidecar manifest. It has no required
 permissions, confirmation, or host-service dependency. The raw expression parameter
 is documented as `calculate {t}` with the text binding `t`.
 

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "provider": "Utility Plugin",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "tool_id": "clean",
+      "argument_format": "raw_text",
+      "category": "system",
+      "description": "Clean console history",
+      "is_informational": false,
+      "needs_confirmation": true,
+      "short_description": "Clear the current console command history display",
+      "usage": "clean",
+      "permissions": []
+    },
+    {
+      "tool_id": "help",
+      "argument_format": "raw_text",
+      "category": "information",
+      "description": "Show available commands",
+      "is_informational": true,
+      "needs_confirmation": false,
+      "short_description": "Show help describing the available registered commands",
+      "usage": "help",
+      "permissions": []
+    }
+  ]
+}

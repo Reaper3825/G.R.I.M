@@ -5,7 +5,8 @@ find_package(nlohmann_json CONFIG REQUIRED
     HINTS "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/share/nlohmann_json")
 add_library(calculator_plugin SHARED calculator_plugin.cpp)
 target_link_libraries(calculator_plugin PRIVATE nlohmann_json::nlohmann_json)
-grim_configure_plugin(calculator_plugin)
+grim_configure_plugin(calculator_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/calculator_plugin.tools.json")
 
 option(GRIM_CALCULATOR_TESTS "Build focused calculator plugin/registry tests" OFF)
 if(GRIM_CALCULATOR_TESTS)

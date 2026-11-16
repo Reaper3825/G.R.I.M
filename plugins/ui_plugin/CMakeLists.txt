@@ -7,4 +7,5 @@ endif()
 find_package(nlohmann_json CONFIG REQUIRED)
 add_library(ui_plugin SHARED ui_plugin.cpp)
 target_link_libraries(ui_plugin PRIVATE nlohmann_json::nlohmann_json)
-grim_configure_plugin(ui_plugin)
+grim_configure_plugin(ui_plugin
+    TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/ui_plugin.tools.json")
