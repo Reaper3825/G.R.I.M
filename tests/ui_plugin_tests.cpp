@@ -57,11 +57,11 @@ PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std
 
 void runUIPluginTests(const std::filesystem::path& directory) {
 
-    auto* denied = PluginAPI::createPluginAPI("ui-denied", "", 0);
+    auto* denied = PluginAPI::createPluginAPI({.name = "ui-denied", .path = "", .required_permissions = 0});
     check(!denied->ui_panel_service(denied, GRIM_UI_LIST, nullptr, 0), "UI permission was not enforced");
     PluginAPI::cleanupPluginContext(denied);
-    auto* owner = PluginAPI::createPluginAPI("ui-owner", "", GRIM_PERM_UI);
-    auto* other = PluginAPI::createPluginAPI("ui-other", "", GRIM_PERM_UI);
+    auto* owner = PluginAPI::createPluginAPI({.name = "ui-owner", .path = "", .required_permissions = GRIM_PERM_UI});
+    auto* other = PluginAPI::createPluginAPI({.name = "ui-other", .path = "", .required_permissions = GRIM_PERM_UI});
     check(!owner->ui_panel_service(owner, GRIM_UI_SHOW, nullptr, 0) &&
           !owner->ui_panel_service(owner, static_cast<GrimUIPanelOperation>(99), nullptr, 0) &&
           !owner->ui_panel_service(owner, GRIM_UI_LIST, "unexpected", 0) &&
@@ -91,7 +91,7 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     PluginAPI::cleanupPluginContext(owner); pump();
     check(effects == 1 && visible, "Unloaded provider's queued operations still executed");
     PluginAPI::cleanupPluginContext(other);
-    auto* staging = PluginAPI::createPluginAPI("ui-staging", "", GRIM_PERM_UI, true);
+    auto* staging = PluginAPI::createPluginAPI({.name = "ui-staging", .path = "", .required_permissions = GRIM_PERM_UI}, true);
     check(!staging->ui_panel_service(staging, GRIM_UI_SHOW, "settings", 0), "Staged initialization submitted UI work");
     PluginAPI::cleanupPluginContext(staging);
 

@@ -646,17 +646,6 @@ static GrimResult networkTestStopHandler(const GrimToolCall* call, GrimToolResul
 }
 
 // Plugin metadata
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static GrimPluginInfo info;
-    info.api_version = GRIM_API_VERSION;
-    info.name = "Network Test Plugin";
-    info.version = "1.0.0";
-    info.author = "GRIM";
-    info.description = "Advanced network stress testing and load generation tool";
-    info.required_permissions = GRIM_PERM_NETWORK;
-    return &info;
-}
-
 // Initialize plugin
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api) {

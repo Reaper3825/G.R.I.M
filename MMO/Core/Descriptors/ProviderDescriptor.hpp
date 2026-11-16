@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstdint>
 #include <string>
 
 namespace GRIM::MMO {
@@ -11,10 +12,15 @@ struct ProviderDescriptor {
     std::string name;
     std::string instance;
     std::string path;
+    std::string version;
+    uint32_t api_version = 0;
+    uint32_t required_permissions = 0;
 
     bool operator==(const ProviderDescriptor& other) const {
         return type == other.type && name == other.name &&
-               instance == other.instance && path == other.path;
+               instance == other.instance && path == other.path &&
+               version == other.version && api_version == other.api_version &&
+               required_permissions == other.required_permissions;
     }
 };
 }

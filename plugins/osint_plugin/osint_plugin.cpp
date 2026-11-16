@@ -72,20 +72,7 @@ static GrimResult handleOsintShowSecrets(const GrimToolCall* call, GrimToolResul
 // NEW PLUGIN API IMPLEMENTATION
 // ============================================================================
 
-static GrimPluginInfo s_plugin_info = {
-    GRIM_API_VERSION,
-    "OSINT Self-Audit Plugin",
-    "2.1.0",
-    "GRIM Project",
-    "Privacy-focused OSINT scanning and self-audit tools",
-    GRIM_PERM_FILESYSTEM | GRIM_PERM_NETWORK | GRIM_PERM_PROCESS
-};
-
 extern "C" {
-
-PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    return &s_plugin_info;
-}
 
 PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||

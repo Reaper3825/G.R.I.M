@@ -70,12 +70,6 @@ GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, voi
 }
 }
 
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION, "Application Plugin", "1.0.0",
-        "GRIM Project", "Application discovery, resources, opening and browser search",
-        GRIM_PERM_PROCESS | GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM};
-    return &info;
-}
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->get_user_error_message || !api->get_provider_identity || !api->replace_resources ||

@@ -42,6 +42,8 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     auto old = registry.getTool("Declared-alpha");
     check(old && !old->provider.instance.empty() && old->provider.path == (watched / "alpha.dll").string(),
           "Loaded generation/source identity missing");
+    check(old->provider.version == "1.0" && old->provider.api_version == GRIM_API_VERSION &&
+          old->provider.required_permissions == 0, "Provider metadata did not come from the sidecar");
     const auto firstInstance = old->provider.instance;
     const auto provider = [&]() -> std::optional<GRIM::MMO::ProviderDescriptor> {
         for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
@@ -52,7 +54,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(provider() && provider()->instance == firstInstance, "Plugin commit did not publish provider identity");
     PluginManager::initialize(watched.string());
     check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Repeated initialize reloaded unchanged plugin");
-    auto* observer = PluginAPI::createPluginAPI("observer", "", 0);
+    auto* observer = PluginAPI::createPluginAPI({.name = "observer", .path = "", .required_permissions = 0});
     const auto context = [&](const char* key) {
         const auto* text = observer->get_context(observer, key);
         const auto result = text ? std::string(text) : std::string{};
@@ -77,6 +79,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Collision replaced working tools");
     install("legacy");
     check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Incompatible ABI displaced working plugin");
+    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "alpha.tools.json", fs::copy_options::overwrite_existing);
     {
         std::ofstream broken(watched / "alpha.dll", std::ios::binary | std::ios::trunc);
         broken << "incomplete binary";

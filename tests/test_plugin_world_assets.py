@@ -14,15 +14,8 @@ class PluginWorldAssetsTests(unittest.TestCase):
                                  (ROOT / "plugins/CMakeLists.txt").read_text(encoding="utf-8"))
         expected = set()
         for directory in configured:
-            source = ROOT / "plugins" / directory / (directory + ".cpp")
-            if not source.exists():
-                source = ROOT / "plugins" / (directory + ".cpp")
-            text = source.read_text(encoding="utf-8")
-            declaration = re.search(r'(?:GrimPluginInfo\s+\w+\s*\{\s*GRIM_API_VERSION\s*,|'
-                                    r'GrimPluginInfo\s+\w+\s*=\s*\{\s*GRIM_API_VERSION\s*,|'
-                                    r'info\.name\s*=)\s*"([^"]+)"', text)
-            self.assertIsNotNone(declaration, str(source))
-            expected.add(declaration.group(1))
+            manifest = ROOT / "plugins" / directory / (directory + ".tools.json")
+            expected.add(json.loads(manifest.read_text(encoding="utf-8"))["provider"])
         rooms = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((LIBRARY / "rooms").glob("plugin_*.grimasset.json"))]
         self.assertEqual(len(rooms), len(expected))
         self.assertEqual({a["entities"][0]["plugin_binding"]["provider_name"] for a in rooms}, expected)

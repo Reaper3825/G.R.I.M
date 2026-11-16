@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v17.0
+// G.R.I.M Plugin API v18.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 17
+#define GRIM_API_VERSION_MAJOR 18
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -259,26 +259,10 @@ typedef struct GrimPluginAPI {
 } GrimPluginAPI;
 
 // ============================================================================
-// Plugin Descriptor (exported by plugin)
-// ============================================================================
-
-typedef struct GrimPluginInfo {
-    uint32_t api_version;           // GRIM_API_VERSION this plugin expects
-    const char* name;               // Plugin name
-    const char* version;            // Plugin version (e.g., "1.0.0")
-    const char* author;             // Plugin author
-    const char* description;        // Brief description
-    uint32_t required_permissions;  // Bitmask of required GrimPermission flags
-} GrimPluginInfo;
-
-// ============================================================================
 // Plugin Entry Points (plugins must export these)
 // ============================================================================
 
 extern "C" {
-    // Get plugin metadata
-    PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info();
-    
     // Initialize plugin (called on load). Tools stay staged until successful return.
     // Shutdown is also called after failed init; tolerate partial initialization.
     // Returns GRIM_OK on success

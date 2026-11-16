@@ -81,11 +81,9 @@ int main(int argc, char** argv) {
         check(library != nullptr, "Could not load calculator plugin library");
         const auto symbol = [library](const char* name) { return dlsym(library, name); };
 #endif
-        const auto pluginInfo = reinterpret_cast<const GrimPluginInfo* (*)()>(symbol("grim_plugin_get_info"));
         const auto pluginInit = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(symbol("grim_plugin_init"));
         const auto pluginShutdown = reinterpret_cast<void (*)()>(symbol("grim_plugin_shutdown"));
-        check(pluginInfo && pluginInit && pluginShutdown, "Missing native plugin exports");
-        check(pluginInfo()->required_permissions == 0, "Unexpected plugin permissions");
+        check(pluginInit && pluginShutdown, "Missing native plugin exports");
         check(pluginInit(nullptr) == GRIM_ERROR_API_VERSION_MISMATCH, "Null API accepted");
         GrimPluginAPI api{};
         api.api_version = GRIM_API_VERSION - 0x100;

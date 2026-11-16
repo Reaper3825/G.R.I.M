@@ -1,6 +1,6 @@
 # Native GRIM tool plugins
 
-The current host requires [plugin ABI v17](../docs/PLUGIN_API.md).
+The current host requires [plugin ABI v18](../docs/PLUGIN_API.md).
 
 API v15 uses native provider-owned panels. Native UI plugins import host UI
 classes and must match the host compiler, CRT and class ABI. See

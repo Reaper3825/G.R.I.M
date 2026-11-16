@@ -19,11 +19,6 @@ GrimResult call(const GrimToolCall*, GrimToolResultWriter* writer, void* context
     return writer->complete(writer, &result);
 }
 }
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION, "System Information Plugin", "1.0.0", "GRIM Project",
-        "System information using plugin-owned hardware detection", GRIM_PERM_SYSTEM};
-    return &info;
-}
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;

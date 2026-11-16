@@ -30,7 +30,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    cleanup.api = PluginAPI::createPluginAPI("snapshot-reader", "", 0);
+    cleanup.api = PluginAPI::createPluginAPI({.name = "snapshot-reader", .path = "", .required_permissions = 0});
     auto* api = cleanup.api;
     const auto snapshot = [&](const char* id = nullptr) {
         const auto* text = api->get_tool_snapshot(api, id);

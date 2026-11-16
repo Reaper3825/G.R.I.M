@@ -1,6 +1,9 @@
-# G.R.I.M Plugin API v17.0
+# G.R.I.M Plugin API v18.0
 
-API version: **16.0.0**.
+API version: **18.0.0**.
+
+Version 18 moves provider metadata to the required sidecar manifest. Build and
+deploy the host, plugin DLLs, and their matching manifests together.
 
 Version 16 removes legacy intent, synonym and conversation history calls,
 response output, memory CRUD stubs, process management, command existence
@@ -66,8 +69,8 @@ table does not preserve their former offsets. See [application ownership](APPLIC
 and [system information ownership](SYSTEM_INFO_RESOURCES.md).
 
 The host scans the immediate children of its plugins folder for native
-libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
-grim_plugin_init, and grim_plugin_shutdown.
+libraries (.dll, .so, or .dylib). A plugin exports `grim_plugin_init` and
+`grim_plugin_shutdown`. The loader checks the manifest ABI before opening the library.
 The loader rejects incompatible major versions and newer unsupported versions.
 
 A v15.1 plugin may export `extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI*)`.
@@ -89,9 +92,11 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 1`, `provider` and `version` matching
-`grim_plugin_get_info`, and a `tools` array. Providers with no tools supply an
-empty array. A provider with tools exports `grim_plugin_dispatch_tool`.
+loader expects `schema_version: 2`, the packed integer `api_version` (1179648
+for 18.0.0), the provider name and version in `provider` and `version`, a
+`required_permissions` array of permission names, and a `tools` array. Use
+empty arrays when there are no permissions or tools. A tool can only declare
+permissions from the provider’s `required_permissions` array. A provider with tools exports `grim_plugin_dispatch_tool`.
 See [Application's manifest](../plugins/application_plugin/application_plugin.tools.json)
 for raw text and JSON tool declarations.
 

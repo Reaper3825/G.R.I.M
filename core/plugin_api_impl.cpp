@@ -7,6 +7,7 @@
 
 #include "plugin_api_impl.hpp"
 #include "plugin_manager.hpp"
+#include "plugin_manifest.hpp"
 #include "plugin_notifications.hpp"
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
@@ -22,7 +23,6 @@
 #include <cstring>
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <thread>
 #include <memory>
 #include <stdexcept>
@@ -68,7 +68,6 @@ struct PluginContext {
         : identity(std::move(descriptor)) {}
 
     const std::shared_ptr<const GRIM::MMO::ProviderDescriptor> identity;
-    uint32_t permissions;
     GrimPluginAPI api{};
     std::shared_ptr<CallGate> gate = std::make_shared<CallGate>();
     bool staging = false;
@@ -103,7 +102,7 @@ static const PluginContext& pluginContext(const GrimPluginAPI* self) {
 }
 
 static bool checkPermission(const GrimPluginAPI* self, GrimPermission perm) {
-    return (pluginContext(self).permissions & perm) == static_cast<uint32_t>(perm);
+    return (pluginContext(self).identity->required_permissions & perm) == static_cast<uint32_t>(perm);
 }
 
 static const char* allocateString(const std::string& str) {
@@ -195,14 +194,8 @@ struct ActiveCall {
 static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
                                                      const char* version, uint32_t providerPermissions) {
     using namespace GRIM::MMO;
-    static const std::unordered_map<std::string, uint32_t> permissionFlags{
-        {"filesystem", GRIM_PERM_FILESYSTEM}, {"process", GRIM_PERM_PROCESS},
-        {"network", GRIM_PERM_NETWORK}, {"memory", GRIM_PERM_MEMORY}, {"voice", GRIM_PERM_VOICE},
-        {"ui", GRIM_PERM_UI}, {"system", GRIM_PERM_SYSTEM}, {"input", GRIM_PERM_INPUT}
-    };
     ToolDescriptor out;
-    for (const auto& name : entry.at("permissions").get<std::vector<std::string>>())
-        out.permission_bits |= permissionFlags.at(name);
+    out.permission_bits = readManifestPermissions(entry.at("permissions"));
     readToolDescriptorMetadata(entry, out, version);
 
     if (out.argument_format == "json") {
@@ -249,23 +242,15 @@ static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
     return out;
 }
 
-std::vector<GRIM::MMO::ToolRegistration> readToolManifest(
-    const std::filesystem::path& path, const GrimPluginAPI* api, const char* version, GrimToolDispatch dispatch) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("Cannot open tool manifest: " + path.string());
-    const auto manifest = nlohmann::json::parse(input);
+std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
+    const nlohmann::json& entries, const GrimPluginAPI* api, GrimToolDispatch dispatch) {
     const auto& owner = pluginContext(api);
-    const auto& schemaVersion = manifest.at("schema_version");
-    if (!schemaVersion.is_number_integer() || schemaVersion != 1 ||
-        manifest.at("provider") != owner.identity->name || manifest.at("version") != version)
-        throw std::invalid_argument("Tool manifest version or provider identity mismatch");
-    const auto& entries = manifest.at("tools");
     if (!entries.is_array() || entries.size() > 256 || (!entries.empty() && !dispatch))
         throw std::invalid_argument("Invalid tool manifest entries or missing dispatcher");
     std::vector<GRIM::MMO::ToolRegistration> tools;
     tools.reserve(entries.size());
     for (const auto& entry : entries) {
-        auto descriptor = decodeManifestTool(entry, version, owner.permissions);
+        auto descriptor = decodeManifestTool(entry, owner.identity->version.c_str(), owner.identity->required_permissions);
         auto invoke = [gate = owner.gate, dispatch, id = descriptor.tool_id](const std::string& arguments) -> CommandResult {
             ActiveCall active(gate);
             if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
@@ -572,7 +557,7 @@ static const char* api_get_plugin_path(const GrimPluginAPI* self) {
 }
 
 static uint32_t api_get_permissions(const GrimPluginAPI* self) {
-    return pluginContext(self).permissions;
+    return pluginContext(self).identity->required_permissions;
 }
 
 static bool api_has_permission(const GrimPluginAPI* self, GrimPermission perm) {
@@ -661,7 +646,8 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
 }
 
 
-GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string& plugin_path, uint32_t permissions, bool staging, const GrimPluginAPI* replacing) {
+GrimPluginAPI* createPluginAPI(GRIM::MMO::ProviderDescriptor provider, bool staging, const GrimPluginAPI* replacing) {
+    const auto& plugin_name = provider.name;
     if (plugin_name.empty()) throw std::invalid_argument("Empty plugin identity");
     for (const auto& [id, context] : s_plugin_contexts) {
         if (context->identity->name == plugin_name && &context->api != replacing)
@@ -672,13 +658,12 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     if (replacing && !staging)
         throw std::invalid_argument("Replacement must be staged");
 
-    const auto instance = plugin_name + "#" + std::to_string(s_next_instance++);
-    auto identity = std::make_shared<const GRIM::MMO::ProviderDescriptor>(
-        GRIM::MMO::ProviderDescriptor{GRIM::MMO::ToolProviderType::Plugin, plugin_name, instance, plugin_path});
+    provider.instance = plugin_name + "#" + std::to_string(s_next_instance++);
+    auto identity = std::make_shared<const GRIM::MMO::ProviderDescriptor>(std::move(provider));
+    const auto& instance = identity->instance;
     auto context = std::make_unique<PluginContext>(identity);
     context->panelLease->owner = instance;
-    context->panelLease->uiPermitted = (permissions & GRIM_PERM_UI) != 0;
-    context->permissions = permissions;
+    context->panelLease->uiPermitted = (identity->required_permissions & GRIM_PERM_UI) != 0;
     context->staging = staging;
     context->gate->published = !staging;
     auto& api = context->api;
@@ -739,7 +724,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
             GRIM::UI::registerProviderPanelLease(entry->second->panelLease);
         }
     } catch (...) {
-        if (generationCreated) GRIM::MMO::ProviderRegistry::instance().retire(plugin_name, instance);
+        if (generationCreated) GRIM::MMO::ProviderRegistry::instance().retire(identity->name, instance);
         s_plugin_contexts.erase(entry);
         throw;
     }

@@ -42,12 +42,6 @@ GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
 }
 }
 
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION, "Utility Plugin", "1.0.0",
-        "GRIM Project", "Existing console utility responses and static command help", 0};
-    return &info;
-}
-
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION)
         return GRIM_ERROR_API_VERSION_MISMATCH;

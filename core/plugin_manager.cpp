@@ -1,5 +1,6 @@
 #include "plugin_manager.hpp"
 #include "plugin_api_impl.hpp"
+#include "plugin_manifest.hpp"
 #include "logger.hpp"
 #include <algorithm>
 #include <fstream>
@@ -251,23 +252,20 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const PluginFi
             removeCache(candidate.cacheDirectory);
             return false;
         }
+        std::ifstream manifestInput(manifestCopy, std::ios::binary);
+        if (!manifestInput) throw std::runtime_error("Cannot open tool manifest: " + manifestCopy.string());
+        const auto manifestData = nlohmann::json::parse(manifestInput);
+        manifestInput.close();
+        auto provider = PluginAPI::readManifestProvider(manifestData, path.string());
         candidate.handle = loadLib(copy, path.parent_path());
-        using GetInfo = const GrimPluginInfo* (*)();
         using Init = GrimResult (*)(const GrimPluginAPI*);
-        auto getInfo = reinterpret_cast<GetInfo>(getSymbol(candidate.handle, "grim_plugin_get_info"));
         auto init = reinterpret_cast<Init>(getSymbol(candidate.handle, "grim_plugin_init"));
         activate = reinterpret_cast<Activate>(getSymbol(candidate.handle, "grim_plugin_activate"));
-        if (!getInfo || !init || !getSymbol(candidate.handle, "grim_plugin_shutdown"))
+        if (!init || !getSymbol(candidate.handle, "grim_plugin_shutdown"))
             throw std::runtime_error("Missing plugin entry points");
-        const auto* info = getInfo();
-        if (!info || (info->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-            info->api_version > GRIM_API_VERSION) throw std::runtime_error("Plugin API version mismatch");
-        if (!info->name || !*info->name || !info->version || !*info->version)
-            throw std::runtime_error("Invalid plugin identity");
-        candidate.api = PluginAPI::createPluginAPI(info->name, path.string(),
-            info->required_permissions, true, oldApi);
+        candidate.api = PluginAPI::createPluginAPI(std::move(provider), true, oldApi);
         const auto dispatch = reinterpret_cast<GrimToolDispatch>(getSymbol(candidate.handle, "grim_plugin_dispatch_tool"));
-        const auto tools = PluginAPI::readToolManifest(manifestCopy, candidate.api, info->version, dispatch);
+        const auto tools = PluginAPI::readManifestTools(manifestData.at("tools"), candidate.api, dispatch);
         initialized = true; // Shutdown must tolerate partially completed init.
         if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginGeneration(candidate.api, oldApi, tools))
             throw std::runtime_error("Initialization or provider publication rejected");

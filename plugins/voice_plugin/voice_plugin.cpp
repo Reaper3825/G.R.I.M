@@ -15,7 +15,6 @@ namespace {
 const GrimPluginAPI* host=nullptr;
 std::mutex operationMutex;
 bool configured=false, tts=false;
-constexpr uint32_t permissions=GRIM_PERM_VOICE|GRIM_PERM_FILESYSTEM|GRIM_PERM_PROCESS;
 const char* ids[]={"voice.status","voice.configure","voice.capture","voice.stream.start","voice.stream.stop",
  "voice.tts.start","voice.speak","voice.play","voice.stop","voice.precache","voice.wake.start","voice.wake.stop","voice.devices","voice.synthesize","voice.cache.status"};
 nlohmann::json status() {
@@ -101,9 +100,6 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
  result.message=message.c_str(); result.category="voice"; result.structured_output_json=output.empty()?nullptr:output.c_str();
  return writer->complete(writer,&result);
 }
-}
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
- static const GrimPluginInfo info{GRIM_API_VERSION,"Voice Plugin","2.0.0","GRIM Project","Provider-owned capture, transcription, wake detection, synthesis and playback",permissions}; return &info;
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
  if(!api || api->api_version!=GRIM_API_VERSION || !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;

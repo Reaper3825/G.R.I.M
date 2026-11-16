@@ -21,7 +21,7 @@ The existing authored plugin room files are templates, not an availability sourc
 
 ## Existing integration points
 
-- `core/plugin_api_impl.cpp`: `readToolManifest`, `commitPluginGeneration`,
+- `core/plugin_api_impl.cpp`: `readManifestTools`, `commitPluginGeneration`,
   `commitPluginGeneration`, and `beginPluginShutdown` provide the staging/commit/removal
   boundary. The host copies metadata and owns provider identity and generation.
 - `MMO/Core/Registries/ToolRegistry.cpp`: `replaceProvider` validates a candidate before
@@ -30,7 +30,7 @@ The existing authored plugin room files are templates, not an availability sourc
 - `core/plugin_api.hpp`: v3.16 ends its service table with 16 reserved pointer
   slots. A versioned resource-registration service can consume one while retaining
   table size and old field offsets. This needs ABI assertions and compatibility
-  tests; do not append resource fields to `GrimPluginInfo` without versioning.
+  tests. Provider metadata now lives in the versioned sidecar manifest.
 - `ui/world_lab/world_asset.*`: templates support metadata, independent insertion,
   fresh world IDs and preserved stable resource keys. No registration connection
   or automatic availability filtering currently exists.

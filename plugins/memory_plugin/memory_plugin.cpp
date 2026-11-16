@@ -8,11 +8,6 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
     return grim::runtime::deliver(writer, Handler(std::string(request->arguments, request->arguments_size)));
 }
 }
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION, "Memory Plugin", "1.0.0", "GRIM Project",
-        "Manual memory commands using the host rotation pipeline and storage", GRIM_PERM_MEMORY};
-    return &info;
-}
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->stage_manual_memory || !api->search_memory || !api->flush_memory_record_if_present)

@@ -2,7 +2,7 @@
 #include "core/plugin_api_impl.hpp"
 #include "core/plugin_manager.hpp"
 #include <future>
-#include <fstream>
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <condition_variable>
 #include <chrono>
@@ -59,31 +59,9 @@ GrimResult dispatchIdentify(const char*, const GrimToolCall* call, GrimToolResul
 }
 GrimResult dispatchEmpty(const char*, const GrimToolCall*, GrimToolResultWriter*) { return GRIM_OK; }
 
-std::vector<GRIM::MMO::ToolRegistration> readManifestText(
-    const GrimPluginAPI* api, const std::string& text, GrimToolDispatch dispatch) {
-    namespace fs = std::filesystem;
-    const auto directory = fs::temp_directory_path() / ("grim-manifest-test-" +
-        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    check(fs::create_directory(directory), "Could not create manifest fixture directory");
-    const auto file = directory / "fixture.tools.json";
-    struct Cleanup {
-        fs::path file;
-        ~Cleanup() { std::error_code error; fs::remove(file, error); fs::remove(file.parent_path(), error); }
-    } cleanup{file};
-    std::ofstream output(file);
-    output << text;
-    output.close();
-    check(static_cast<bool>(output), "Could not write manifest fixture");
-    return PluginAPI::readToolManifest(file, api, "1.2.3", dispatch);
-}
-
 std::vector<GRIM::MMO::ToolRegistration> manifestTools(
     const GrimPluginAPI* api, std::initializer_list<Json> tools, GrimToolDispatch dispatch = dispatchEmpty) {
-    const auto* name = api->get_plugin_name(api);
-    const std::string provider(name);
-    api->string_free(api, name);
-    return readManifestText(api, Json{{"schema_version", 1}, {"provider", provider},
-        {"version", "1.2.3"}, {"tools", Json(std::vector<Json>(tools))}}.dump(), dispatch);
+    return PluginAPI::readManifestTools(Json(std::vector<Json>(tools)), api, dispatch);
 }
 GrimResult missingResult(const GrimToolCall*, GrimToolResultWriter*, void*) { return GRIM_OK; }
 GrimResult doubleResult(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
@@ -163,7 +141,7 @@ void runProviderResourceTests() {
     auto publish = [&](const GrimPluginAPI* api, const std::string& text) {
         return api->replace_resources(api, "fixture", text.data(), text.size());
     };
-    auto* first = PluginAPI::createPluginAPI("resource-provider", "fixture", 0, true);
+    auto* first = PluginAPI::createPluginAPI({.name = "resource-provider", .path = "fixture", .version = "1.2.3", .required_permissions = 0}, true);
     check(!first->is_provider_current(first), "Staging provider is current");
     auto copiedPayload = payload;
     check(publish(first, copiedPayload) == GRIM_OK, "Cannot stage resources without tools");
@@ -181,14 +159,14 @@ void runProviderResourceTests() {
     auto duplicate = nlohmann::json::parse(payload); duplicate.push_back(duplicate[0]);
     check(publish(first, duplicate.dump()) == GRIM_ERROR_INVALID_PARAM && registry.resourceVersion() == revision,
           "Duplicate update partially committed");
-    auto* failed = PluginAPI::createPluginAPI("resource-provider", "replacement", 0, true, first);
+    auto* failed = PluginAPI::createPluginAPI({.name = "resource-provider", .path = "replacement", .version = "1.2.3", .required_permissions = 0}, true, first);
     check(publish(failed, payload) == GRIM_OK && publish(failed, "[{}]") == GRIM_ERROR_INVALID_PARAM,
           "Invalid staged resources accepted");
     check(!PluginAPI::commitPluginGeneration(failed, first), "Ignored resource error committed replacement");
     PluginAPI::cleanupPluginContext(failed);
     check(first->is_provider_current(first) && registry.snapshot().resourceCount() == baseline + 1,
           "Failed replacement removed current resources");
-    auto* second = PluginAPI::createPluginAPI("resource-provider", "replacement", 0, true, first);
+    auto* second = PluginAPI::createPluginAPI({.name = "resource-provider", .path = "replacement", .version = "1.2.3", .required_permissions = 0}, true, first);
     check(publish(second, payload) == GRIM_OK && PluginAPI::commitPluginGeneration(second, first), "Resource replacement failed");
     check(!first->is_provider_current(first) && publish(first, "[]") == GRIM_ERROR_PLUGIN_NOT_LOADED,
           "Retired generation could mutate replacement");
@@ -198,18 +176,18 @@ void runProviderResourceTests() {
           "Empty resource batch did not remove kind");
     PluginAPI::cleanupPluginContext(second);
 
-    auto* old = PluginAPI::createPluginAPI("generation-provider", "old.dll", 0, true);
+    auto* old = PluginAPI::createPluginAPI({.name = "generation-provider", .path = "old.dll", .version = "1.2.3", .required_permissions = 0}, true);
     check(publish(old, payload) == GRIM_OK && PluginAPI::commitPluginGeneration(old, nullptr,
           manifestTools(old, {definition("generation_tool")})), "Initial mixed generation failed");
     bool rejectedRename = false;
     try {
-        auto* renamed = PluginAPI::createPluginAPI("renamed-provider", "new.dll", 0, true, old);
+        auto* renamed = PluginAPI::createPluginAPI({.name = "renamed-provider", .path = "new.dll", .version = "1.2.3", .required_permissions = 0}, true, old);
         PluginAPI::cleanupPluginContext(renamed);
     } catch (const std::invalid_argument&) {
         rejectedRename = true;
     }
     check(rejectedRename, "Replacement changed the declared provider name");
-    auto* replacement = PluginAPI::createPluginAPI("generation-provider", "new.dll", 0, true, old);
+    auto* replacement = PluginAPI::createPluginAPI({.name = "generation-provider", .path = "new.dll", .version = "1.2.3", .required_permissions = 0}, true, old);
     auto newPayload = nlohmann::json::parse(payload);
     newPayload[0]["state"]["value"] = 43;
     check(publish(replacement, newPayload.dump()) == GRIM_OK, "Staging mixed generation failed");
@@ -258,7 +236,7 @@ static void runSystemTickTests() {
         tick.offset = offset;
     };
 
-    auto* first = PluginAPI::createPluginAPI("tick-provider", "first.dll", 0, true);
+    auto* first = PluginAPI::createPluginAPI({.name = "tick-provider", .path = "first.dll", .version = "1.2.3", .required_permissions = 0}, true);
     check(first->subscribe_system_tick(first, callback, &firstTick) == GRIM_OK, "Tick subscription failed");
     check(first->subscribe_system_tick(first, callback, &firstTick) == GRIM_ERROR_ALREADY_EXISTS,
           "Duplicate tick subscription accepted");
@@ -269,7 +247,7 @@ static void runSystemTickTests() {
     check(firstTick.calls == 1 && firstTick.delta == 0.125 && firstTick.offset == 1.5,
           "Published generation did not receive frame timing");
 
-    auto* replacement = PluginAPI::createPluginAPI("tick-provider", "second.dll", 0, true, first);
+    auto* replacement = PluginAPI::createPluginAPI({.name = "tick-provider", .path = "second.dll", .version = "1.2.3", .required_permissions = 0}, true, first);
     check(replacement->subscribe_system_tick(replacement, callback, &replacementTick) == GRIM_OK &&
           PluginAPI::commitPluginGeneration(replacement, first), "Tick replacement failed");
     PluginAPI::dispatchSystemTick(0.25, 1.75);
@@ -287,21 +265,21 @@ int main(int argc, char** argv) try {
     {
         auto& registry = GRIM::MMO::ProviderRegistry::instance();
         const auto count = registry.snapshot().providers.size();
-        auto* empty = PluginAPI::createPluginAPI("zero-tool-provider", "empty.dll", 0, true);
+        auto* empty = PluginAPI::createPluginAPI({.name = "zero-tool-provider", .path = "empty.dll", .version = "1.2.3", .required_permissions = 0}, true);
         check(registry.snapshot().providers.size() == count, "Staged provider leaked before commit");
         check(PluginAPI::commitPluginGeneration(empty), "Zero-tool provider commit failed");
         check(registry.snapshot().providers.size() == count + 1, "Zero-tool provider was not published");
         PluginAPI::cleanupPluginContext(empty);
         check(registry.snapshot().providers.size() == count, "Zero-tool provider survived unload");
     }
-    auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY, true);
+    auto* alpha = PluginAPI::createPluginAPI({.name = "alpha", .path = "alpha.dll", .version = "1.2.3", .required_permissions = GRIM_PERM_MEMORY}, true);
     alphaAPI = alpha;
     check(PluginAPI::commitPluginGeneration(alpha, nullptr,
         manifestTools(alpha, {definition("alpha_tool", {"memory"}), definition("alpha_second", {"memory"})},
                       dispatchIdentify)), "Alpha publication failed");
     Blocking blocked;
     blockedCall = &blocked;
-    auto* beta = PluginAPI::createPluginAPI("beta", "beta.dll", GRIM_PERM_UI, true);
+    auto* beta = PluginAPI::createPluginAPI({.name = "beta", .path = "beta.dll", .version = "1.2.3", .required_permissions = GRIM_PERM_UI}, true);
     check(PluginAPI::commitPluginGeneration(beta, nullptr,
         manifestTools(beta, {definition("blocking")}, dispatchBlocking)), "Beta publication failed");
     check(alpha != beta, "Plugins share an API table");
@@ -334,7 +312,7 @@ int main(int argc, char** argv) try {
     beta->emit_event(beta, "test", nullptr, 0);
     check(logs.back() == "[Plugin: alpha] event", "Event callback used wrong owner");
     bool duplicateRejected = false;
-    try { PluginAPI::createPluginAPI("alpha", "duplicate.dll", 0); }
+    try { PluginAPI::createPluginAPI({.name = "alpha", .path = "duplicate.dll", .version = "1.2.3", .required_permissions = 0}); }
     catch (const std::invalid_argument&) { duplicateRejected = true; }
     check(duplicateRejected, "Duplicate identity replaced a retained API");
 
@@ -355,13 +333,13 @@ int main(int argc, char** argv) try {
           copiedResult.structuredOutputJson == R"({"answer":42})", "Host did not copy result data immediately");
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
         brokenHandler = handler;
-        auto* brokenProvider = PluginAPI::createPluginAPI("broken-fixture", "", 0, true);
+        auto* brokenProvider = PluginAPI::createPluginAPI({.name = "broken-fixture", .path = "", .version = "1.2.3", .required_permissions = 0}, true);
         check(PluginAPI::commitPluginGeneration(brokenProvider, nullptr,
             manifestTools(brokenProvider, {definition("broken")}, dispatchBroken)), "Broken fixture publication failed");
         check(dispatchCommand("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
         PluginAPI::cleanupPluginContext(brokenProvider);
     }
-    auto* staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
+    auto* staged = PluginAPI::createPluginAPI({.name = "staged", .path = "staged.dll", .version = "1.2.3", .required_permissions = 0}, true);
     auto complete = definition("staged_tool");
     complete.update({
         {"description", "copied metadata"}, {"argument_format", "json"},
@@ -394,19 +372,20 @@ int main(int argc, char** argv) try {
     auto first = definition("batch_first");
     auto second = definition("batch_second");
     second["usage_type"] = 0;
-    auto* batchProvider = PluginAPI::createPluginAPI("batch-fixture", "", 0, true);
+    auto* batchProvider = PluginAPI::createPluginAPI({.name = "batch-fixture", .path = "", .version = "1.2.3", .required_permissions = 0}, true);
     check(PluginAPI::commitPluginGeneration(batchProvider, nullptr, manifestTools(batchProvider, {first, second})) &&
           ToolRegistry::instance().getTool("batch_first")->usage_type == ToolUsage::Model &&
           ToolRegistry::instance().getTool("batch_second")->usage_type == ToolUsage::Debug,
           "Manifest lost tool metadata");
     PluginAPI::cleanupPluginContext(batchProvider);
 
-    auto* invalidProvider = PluginAPI::createPluginAPI("invalid-fixture", "", GRIM_PERM_UI, true);
+    auto* invalidProvider = PluginAPI::createPluginAPI({.name = "invalid-fixture", .path = "", .version = "1.2.3", .required_permissions = GRIM_PERM_UI}, true);
     const auto rejects = [&](const auto& read, const char* reason) {
         try { read(); } catch (const std::exception&) { return; }
         throw std::runtime_error(reason);
     };
-    rejects([&] { readManifestText(invalidProvider, "{", dispatchEmpty); }, "Invalid JSON accepted");
+    rejects([&] { PluginAPI::readManifestTools(Json::object(), invalidProvider, dispatchEmpty); },
+            "Non-array manifest tools accepted");
     rejects([&] { manifestTools(invalidProvider, {first}, nullptr); }, "Missing dispatcher accepted");
     auto invalid = definition("");
     rejects([&] { manifestTools(invalidProvider, {first, invalid}); }, "Empty tool ID accepted");
@@ -432,7 +411,7 @@ int main(int argc, char** argv) try {
     check(!ToolRegistry::instance().isRegistered("batch_first"), "Invalid manifest partially published");
     PluginAPI::cleanupPluginContext(invalidProvider);
 
-    staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
+    staged = PluginAPI::createPluginAPI({.name = "staged", .path = "staged.dll", .version = "1.2.3", .required_permissions = 0}, true);
     check(!PluginAPI::commitPluginGeneration(staged, nullptr,
           manifestTools(staged, {definition("new_tool"), definition("reserved_fixture_tool")})) &&
           !ToolRegistry::instance().isRegistered("new_tool"), "Failed commit left a partial manifest");
@@ -454,7 +433,7 @@ int main(int argc, char** argv) try {
     const auto before = logs.size();
     beta->emit_event(beta, "test", nullptr, 0);
     check(logs.size() == before, "Owner cleanup retained event callback");
-    alpha = PluginAPI::createPluginAPI("alpha", "new-alpha.dll", 0);
+    alpha = PluginAPI::createPluginAPI({.name = "alpha", .path = "new-alpha.dll", .version = "1.2.3", .required_permissions = 0});
     checkName(alpha, "alpha");
     check(!alpha->has_permission(alpha, GRIM_PERM_MEMORY), "Reload inherited old permissions");
     PluginAPI::cleanupPluginContext("alpha");

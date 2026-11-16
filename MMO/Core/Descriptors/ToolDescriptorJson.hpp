@@ -94,6 +94,9 @@ inline void to_json(nlohmann::json& j, const RegisteredTool& tool) {
     j["provider_name"] = tool.provider.name;
     j["provider_instance"] = tool.provider.instance;
     j["provider_path"] = tool.provider.path;
+    j["provider_version"] = tool.provider.version;
+    j["provider_api_version"] = tool.provider.api_version;
+    j["provider_required_permissions"] = tool.provider.required_permissions;
 }
 inline void from_json(const nlohmann::json& j, RegisteredTool& tool) {
     from_json(j, static_cast<ToolDescriptor&>(tool));
@@ -101,5 +104,8 @@ inline void from_json(const nlohmann::json& j, RegisteredTool& tool) {
     j.at("provider_name").get_to(tool.provider.name);
     j.at("provider_instance").get_to(tool.provider.instance);
     j.at("provider_path").get_to(tool.provider.path);
+    tool.provider.version = j.value("provider_version", std::string{});
+    tool.provider.api_version = j.value("provider_api_version", uint32_t{});
+    tool.provider.required_permissions = j.value("provider_required_permissions", uint32_t{});
 }
 }

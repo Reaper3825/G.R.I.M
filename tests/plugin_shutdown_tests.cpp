@@ -29,7 +29,8 @@ void logError(const std::string&, const std::string& message) { errors.push_back
 namespace PluginAPI {
 struct TestAPI { std::string name; GrimPluginAPI api{}; };
 static std::unordered_map<std::string, std::unique_ptr<TestAPI>> apis;
-GrimPluginAPI* createPluginAPI(const std::string& name, const std::string&, uint32_t, bool, const GrimPluginAPI*) {
+GrimPluginAPI* createPluginAPI(GRIM::MMO::ProviderDescriptor provider, bool, const GrimPluginAPI*) {
+    const auto& name = provider.name;
     check(active.insert(name).second, "Plugin loaded more than once");
     auto instance = std::make_unique<TestAPI>();
     instance->name = name;
@@ -40,8 +41,8 @@ GrimPluginAPI* createPluginAPI(const std::string& name, const std::string&, uint
     apis.emplace(name, std::move(instance));
     return result;
 }
-std::vector<GRIM::MMO::ToolRegistration> readToolManifest(
-    const std::filesystem::path&, const GrimPluginAPI*, const char*, GrimToolDispatch) { return {}; }
+std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
+    const nlohmann::json&, const GrimPluginAPI*, GrimToolDispatch) { return {}; }
 bool commitPluginGeneration(const GrimPluginAPI*, const GrimPluginAPI*,
                             const std::vector<GRIM::MMO::ToolRegistration>&) { return true; }
 void beginPluginShutdown(const GrimPluginAPI*) {}
@@ -90,7 +91,8 @@ int main(int argc, char** argv) try {
         check(file.good(), "Cannot write invalid-library fixture");
     }
     const auto invalidSidecar = invalid.parent_path() / "invalid.tools.json";
-    std::ofstream(invalidSidecar) << "{}";
+    std::ofstream(invalidSidecar) << R"({"schema_version":2,"api_version":)" << GRIM_API_VERSION
+        << R"(,"provider":"Invalid fixture","version":"1.0","required_permissions":[],"tools":[]})";
     errors.clear();
     PluginManager::initialize(argv[2]);
     PluginManager::unloadAll();

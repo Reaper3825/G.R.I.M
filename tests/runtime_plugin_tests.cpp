@@ -39,14 +39,14 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    auto* denied = PluginAPI::createPluginAPI("runtime-denied", "", 0);
+    auto* denied = PluginAPI::createPluginAPI({.name = "runtime-denied", .path = "", .required_permissions = 0});
     check(denied->stage_manual_memory(denied, "fixture") == nullptr && rotation.stats().preproc_count == 0 &&
           denied->search_memory(denied, "fixture") == nullptr && denied->flush_memory_record_if_present(denied, 1) == nullptr,
           "Memory permission bypass");
     check(denied->stage_manual_memory(nullptr, "fixture") == nullptr,
           "Invalid runtime API identity accepted");
     PluginAPI::cleanupPluginContext(denied);
-    cleanup.api = PluginAPI::createPluginAPI("runtime-reader", "", GRIM_PERM_SYSTEM | GRIM_PERM_MEMORY);
+    cleanup.api = PluginAPI::createPluginAPI({.name = "runtime-reader", .path = "", .required_permissions = GRIM_PERM_SYSTEM | GRIM_PERM_MEMORY});
     auto* api = cleanup.api;
     const auto value = [&](const char* text) {
         check(text != nullptr, "Runtime API failed");

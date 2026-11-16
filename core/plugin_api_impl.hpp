@@ -1,7 +1,7 @@
 #pragma once
 #include "plugin_api.hpp"
 #include "../MMO/Core/Registries/ProviderRegistry.hpp"
-#include <filesystem>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 
 // ============================================================================
@@ -15,23 +15,19 @@ namespace PluginAPI {
 
 /**
  * Create a plugin API table for a specific plugin
- * @param plugin_name Name of the plugin
- * @param plugin_path Full path to the plugin DLL
- * @param permissions Permission bitmask (GrimPermission flags)
+ * @param provider Provider metadata from the manifest. The host assigns the instance ID.
  * @return Distinct host-owned API table, valid through shutdown until cleanup.
  * Every host call must pass this table as its first argument.
  */
 GrimPluginAPI* createPluginAPI(
-    const std::string& plugin_name,
-    const std::string& plugin_path,
-    uint32_t permissions,
+    GRIM::MMO::ProviderDescriptor provider,
     bool staging = false,
     const GrimPluginAPI* replacing = nullptr
 );
 
+std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
+    const nlohmann::json& entries, const GrimPluginAPI* api, GrimToolDispatch dispatch);
 // Publish the staged provider, tools and initial resources after successful initialization.
-std::vector<GRIM::MMO::ToolRegistration> readToolManifest(
-    const std::filesystem::path& path, const GrimPluginAPI* api, const char* version, GrimToolDispatch dispatch);
 bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr,
                             const std::vector<GRIM::MMO::ToolRegistration>& tools = {});
 bool commitPluginGeneration(const std::string& plugin_name);

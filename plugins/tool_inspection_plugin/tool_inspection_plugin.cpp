@@ -17,11 +17,6 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
     return writer->complete(writer, &result);
 }
 }
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION, "Tool Inspection Plugin", "1.0.0",
-        "GRIM Project", "Read-only registry tool listing, documentation, and usage statistics", 0};
-    return &info;
-}
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->get_tool_snapshot) return GRIM_ERROR_API_VERSION_MISMATCH;

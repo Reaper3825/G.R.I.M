@@ -5,9 +5,6 @@
 #ifndef FIXTURE_NAME
 #define FIXTURE_NAME "Shutdown fixture"
 #endif
-#ifndef FIXTURE_API_VERSION
-#define FIXTURE_API_VERSION GRIM_API_VERSION
-#endif
 
 static const GrimPluginAPI* api = nullptr;
 #ifdef FIXTURE_NATIVE_DEPENDENCY
@@ -31,11 +28,8 @@ static GrimResult run(const GrimToolCall* call, GrimToolResultWriter* writer, vo
     return writer->complete(writer, &result);
 }
 #endif
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{FIXTURE_API_VERSION, FIXTURE_NAME, "1.0", "tests", "Shutdown lifecycle fixture", 0};
-    return &info;
-}
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value) {
+    if (!value || value->api_version != GRIM_API_VERSION) return GRIM_ERROR_API_VERSION_MISMATCH;
     api = value;
 #ifdef FIXTURE_NATIVE_DEPENDENCY
     if (grim_test_dependency() != 42) return GRIM_ERROR_UNKNOWN;

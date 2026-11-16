@@ -35,11 +35,6 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
 }
 }
 
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION, "Input Plugin", "1.0.0", "GRIM Project",
-        "Mouse and keyboard input through provider-owned device primitives", GRIM_PERM_INPUT};
-    return &info;
-}
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
         !api->has_permission || !api->is_provider_current) return GRIM_ERROR_API_VERSION_MISMATCH;

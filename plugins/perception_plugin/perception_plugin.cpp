@@ -24,11 +24,6 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, const
     return writer->complete(writer,&result);
 }
 }
-extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
-    static const GrimPluginInfo info{GRIM_API_VERSION,"Perception Plugin","2.0.0","GRIM Project",
-        "Plugin-owned digital and physical perception primitives",GRIM_PERM_SYSTEM | GRIM_PERM_FILESYSTEM | GRIM_PERM_NETWORK};
-    return &info;
-}
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version != GRIM_API_VERSION || !api->subscribe_system_tick ||
         !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
