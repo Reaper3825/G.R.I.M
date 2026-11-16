@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include <cstdint>
 
 // Cross-platform input polling abstraction
@@ -18,7 +19,7 @@ namespace PlatformInput {
     
     // Check if a keyboard key is currently pressed
     // keyCode: Virtual key code (VK_* on Windows, platform-specific elsewhere)
-    bool isKeyDown(int keyCode);
+    GRIM_HOST_API bool isKeyDown(int keyCode);
     
     // Get current cursor position in screen coordinates
     void getCursorPos(int& x, int& y);

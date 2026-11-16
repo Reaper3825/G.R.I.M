@@ -96,7 +96,6 @@ struct PluginContext {
     bool staging = false;
     bool registration_failed = false;
     std::vector<GRIM::MMO::ToolRegistration> pending;
-    std::vector<std::string> pendingPanels;
     std::mutex resourcesMutex;
     std::map<std::string, GRIM::MMO::ResourceDescriptor> pendingResources;
     std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
@@ -316,34 +315,6 @@ static GrimResult api_register_tools(const GrimPluginAPI* self, const GrimToolRe
         for (size_t i = 0; i < count; ++i)
             copied.push_back(copyRegistration(tools[i], *owner));
         owner->pending.insert(owner->pending.end(), copied.begin(), copied.end());
-        return GRIM_OK;
-    } catch (...) {
-        if (owner && owner->staging) owner->registration_failed = true;
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-}
-
-static GrimResult api_register_ui_panel(const GrimPluginAPI* self, const char* implementation_key) noexcept {
-    PluginContext* owner = nullptr;
-    try {
-        owner = const_cast<PluginContext*>(&pluginContext(self));
-        std::lock_guard lock(owner->gate->mutex);
-        if (!owner->gate->accepting) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-        if (!checkPermission(self, GRIM_PERM_UI)) {
-            owner->registration_failed = true;
-            return GRIM_ERROR_PERMISSION_DENIED;
-        }
-        if (!owner->staging) return GRIM_ERROR_UNSUPPORTED;
-        const auto key = copyText(implementation_key, true, 256);
-        if (key.find_first_of("\r\n") != std::string::npos ||
-            owner->pendingPanels.size() >= 64)
-            throw std::invalid_argument("Invalid panel implementation declaration");
-        for (const auto& existing : owner->pendingPanels)
-            if (existing == key) {
-                owner->registration_failed = true;
-                return GRIM_ERROR_ALREADY_EXISTS;
-            }
-        owner->pendingPanels.push_back(key);
         return GRIM_OK;
     } catch (...) {
         if (owner && owner->staging) owner->registration_failed = true;
@@ -1217,7 +1188,6 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     api.search_memory = api_search_memory;
     api.flush_memory_record_if_present = api_flush_memory_record_if_present;
     api.ui_panel_service = api_ui_panel_service;
-    api.register_ui_panel = api_register_ui_panel;
     api.get_provider_identity = api_get_provider_identity;
     api.replace_resources = api_replace_resources;
     api.is_provider_current = api_is_provider_current;
@@ -1266,8 +1236,8 @@ bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing)
     // Queue retirement before replacement creation. Generation-specific leases
     // prevent a later shutdown of the old DLL from removing its replacement.
     if (replacing) GRIM::UI::retireProviderPanels(pluginContext(replacing).panelLease);
-    if (!owner.pendingPanels.empty() || !owner.panelLease->nativePanels.empty())
-        GRIM::UI::activateProviderPanels(owner.panelLease, std::move(owner.pendingPanels));
+    if (!owner.panelLease->nativePanels.empty())
+        GRIM::UI::activateProviderPanels(owner.panelLease);
     if (replacing) {
         const auto& old = pluginContext(replacing);
         std::lock_guard lock(old.gate->mutex);

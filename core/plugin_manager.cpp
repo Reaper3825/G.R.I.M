@@ -102,6 +102,10 @@ void* loadLib(const std::filesystem::path& copy, const std::filesystem::path& so
 #ifdef _WIN32
     // Only register explicit directories for the duration of the native load.
     ScopedDllDirectory sourceDirectory(sourceFolder);
+    const auto dependencyPath = sourceFolder / "dependencies" / copy.stem();
+    std::optional<ScopedDllDirectory> pluginDependencies;
+    if (std::filesystem::is_directory(dependencyPath))
+        pluginDependencies.emplace(dependencyPath);
 #ifdef GRIM_PLUGIN_CUDA_BIN_DIR
     ScopedDllDirectory cudaDirectory(GRIM_PLUGIN_CUDA_BIN_DIR);
 #endif
@@ -221,6 +225,8 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
     const auto name = path.filename().string();
     auto previous = loadedPlugins.find(name);
     const auto* oldApi = previous == loadedPlugins.end() ? nullptr : previous->second.api;
+    using Activate = GrimResult (*)(const GrimPluginAPI*);
+    Activate activate = nullptr;
     LoadedPlugin candidate;
     bool initialized = false;
     try {
@@ -239,6 +245,7 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
         using Init = GrimResult (*)(const GrimPluginAPI*);
         auto getInfo = reinterpret_cast<GetInfo>(getSymbol(candidate.handle, "grim_plugin_get_info"));
         auto init = reinterpret_cast<Init>(getSymbol(candidate.handle, "grim_plugin_init"));
+        activate = reinterpret_cast<Activate>(getSymbol(candidate.handle, "grim_plugin_activate"));
         if (!getInfo || !init || !getSymbol(candidate.handle, "grim_plugin_shutdown"))
             throw std::runtime_error("Missing plugin entry points");
         const auto* info = getInfo();
@@ -266,12 +273,24 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
         else { unloadLib(candidate.handle); removeCache(candidate.cacheDirectory); }
         return false;
     }
-    // The replacement is committed. Old-generation cleanup cannot remove its
-    // tools or resources because ownership includes a generation identifier.
-    if (previous != loadedPlugins.end()) {
+    const bool replaced = previous != loadedPlugins.end();
+    if (replaced) {
         retire(previous->second);
-        previous->second = std::move(candidate);
-    } else loadedPlugins.emplace(name, std::move(candidate));
+        loadedPlugins.erase(previous);
+    }
+
+    // Activation can take over resources released by the retired generation.
+    try {
+        if (activate && activate(candidate.api) != GRIM_OK)
+            throw std::runtime_error("Post-commit activation failed");
+    } catch (...) {
+        LOG_ERROR("PluginManager", "Activation failed for " + name);
+        retire(candidate);
+        if (replaced) ++surfaceRevision;
+        attempted[name] = {stamp, surfaceRevision};
+        return false;
+    }
+    loadedPlugins.emplace(name, std::move(candidate));
     ++surfaceRevision;
     LOG_DEBUG("PluginManager", "Loaded plugin: " + name);
     return true;

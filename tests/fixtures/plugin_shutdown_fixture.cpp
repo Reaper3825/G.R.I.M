@@ -66,6 +66,23 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value)
 #endif
     return GRIM_OK;
 }
+#ifdef FIXTURE_ACTIVATION
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI* value) {
+    if (!value->is_provider_current(value)) return GRIM_ERROR_UNKNOWN;
+#ifdef FIXTURE_FAIL_ACTIVATION
+    return GRIM_ERROR_UNKNOWN;
+#else
+    const auto* previous = value->get_context(value, "fixture_retired");
+    const std::string retired = previous ? previous : "";
+    value->string_free(value, previous);
+    return value->set_context(value, "fixture_activated", (std::string(FIXTURE_RESULT) + ":" + retired).c_str());
+#endif
+}
+#endif
+
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
+#ifdef FIXTURE_ACTIVATION
+    api->set_context(api, "fixture_retired", FIXTURE_RESULT);
+#endif
     api->log(api, GRIM_LOG_INFO, FIXTURE_NAME);
 }

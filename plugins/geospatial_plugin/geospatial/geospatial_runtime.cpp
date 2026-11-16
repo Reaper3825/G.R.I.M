@@ -7,8 +7,10 @@
 #include "cesium_bgfx_render_adapter.hpp"
 #include "geospatial_catalog.hpp"
 #include "geospatial_render_aggregation.hpp"
+#include "core/grim_platform.h"
 #include "core/platform_input.hpp"
-#include "logger.hpp"
+#include "plugins/plugin_logging.hpp"
+#include "settings/runtime_ai_config.hpp"
 #include "ui/primitives/ui_native_3d_viewport_attachment.hpp"
 
 #include <Cesium3DTilesSelection/Tileset.h>
@@ -57,8 +59,6 @@
 #ifndef GRIM_ROOT_DIR
 #error GRIM_ROOT_DIR must be defined by the build system
 #endif
-
-extern nlohmann::json aiConfig;
 
 namespace GRIM::GeoSpatial {
 
@@ -255,6 +255,7 @@ namespace {
 
     GeoSpatialRuntimeConfig loadGeospatialRuntimeConfig()
     {
+        const auto aiConfig = Settings::snapshotRuntimeAiConfig();
         if (!aiConfig.contains("geospatial") || !aiConfig.at("geospatial").is_object())
             throw std::runtime_error("GeoSpatial config requires top-level geospatial object in ai_config.json");
 
@@ -374,23 +375,16 @@ namespace {
                 throw std::runtime_error("QueuedTaskProcessor requires at least one worker");
 
             workers_.reserve(static_cast<size_t>(workerCount));
-            for (int32_t workerIndex = 0; workerIndex < workerCount; ++workerIndex)
-                workers_.emplace_back([this]() { workerLoop(); });
-        }
-
-        ~QueuedTaskProcessor() override
-        {
-            {
-                std::lock_guard lock(mutex_);
-                stopping_ = true;
-            }
-            condition_.notify_all();
-
-            for (std::thread& worker : workers_) {
-                if (worker.joinable())
-                    worker.join();
+            try {
+                for (int32_t workerIndex = 0; workerIndex < workerCount; ++workerIndex)
+                    workers_.emplace_back([this]() { workerLoop(); });
+            } catch (...) {
+                stopWorkers();
+                throw;
             }
         }
+
+        ~QueuedTaskProcessor() override { stopWorkers(); }
 
         void startTask(std::function<void()> task) override
         {
@@ -407,6 +401,20 @@ namespace {
         }
 
     private:
+        void stopWorkers()
+        {
+            {
+                std::lock_guard lock(mutex_);
+                stopping_ = true;
+            }
+            condition_.notify_all();
+
+            for (std::thread& worker : workers_) {
+                if (worker.joinable())
+                    worker.join();
+            }
+        }
+
         void workerLoop()
         {
             while (true) {
@@ -530,7 +538,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
         CesiumUtility::IntrusivePointer<CesiumRasterOverlays::RasterOverlay> overlay;
     };
 
-    explicit CesiumRuntimeContext(GeoSpatialRuntimeConfig runtimeConfig)
+    CesiumRuntimeContext(GeoSpatialRuntimeConfig runtimeConfig, bgfx::ViewId viewId)
         : config(std::move(runtimeConfig)),
           taskProcessor(std::make_shared<QueuedTaskProcessor>(config.workerThreads)),
           asyncSystem(taskProcessor),
@@ -545,7 +553,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
               networkAssetAccessor,
               cacheDatabase,
               config.requestsPerCachePrune)),
-          renderAdapter(std::make_shared<CesiumBgfxRenderAdapter>("GeoSpatialCesiumRender")),
+          renderAdapter(std::make_shared<CesiumBgfxRenderAdapter>(viewId)),
           externals(makeTilesetExternals(asyncSystem, assetAccessor, creditSystem, renderAdapter)),
           tilesetOptions(makeTilesetOptions(config)),
           rasterOverlayOptions(makeRasterOverlayOptions(config))
@@ -558,9 +566,24 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
 
     ~CesiumRuntimeContext()
     {
-        tileset.reset();
-        for (RasterLayerState& layer : rasterLayers)
-            layer.overlay.reset();
+        releaseTileset();
+        // DLL retirement must drain Cesium callbacks while this generation's
+        // task processor, asset accessor, and renderer are still alive.
+        for (auto& destruction : pendingDestructions)
+            destruction.waitInMainThread();
+    }
+
+    void releaseTileset()
+    {
+        if (tileset) {
+            // The rendered selection holds tile references that keep the
+            // content manager alive after the tileset is released.
+            renderAdapter->setFrameSelection({}, {}, glm::dmat4(1.0), glm::dmat4(1.0));
+            pendingDestructions.push_back(tileset->getAsyncDestructionCompleteEvent());
+            tileset.reset();
+        }
+        for (auto& layer : rasterLayers)
+            releaseOverlay(layer);
     }
 
     void createOrReloadTileset()
@@ -570,8 +593,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
 
         observedLodLevel = -1;
         lodOverrideScreenSpaceError = tilesetOptions.maximumScreenSpaceError;
-        for (RasterLayerState& layer : rasterLayers)
-            layer.overlay.reset();
+        releaseTileset();
         std::vector<float> activeOpacities;
         for (RasterLayerState& layer : rasterLayers) {
             layer.overlayTextureCoordinateID = -1;
@@ -621,8 +643,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
 
         if (layer.overlay) {
             LOG_DEBUG("GeoSpatialRuntime", "Imagery layer '" + layer.config.id + "': removing overlay");
-            tileset->getOverlays().remove(layer.overlay);
-            layer.overlay.reset();
+            releaseOverlay(layer);
         }
     }
 
@@ -683,6 +704,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
         if (logFirstFrame)
             LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: tick asset accessor");
         assetAccessor->tick();
+        std::erase_if(pendingDestructions, [](const auto& event) { return event.isReady(); });
 
         if (!tileset) {
             if (logFirstFrame)
@@ -795,6 +817,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
     CesiumRasterOverlays::RasterOverlayOptions rasterOverlayOptions;
     std::unique_ptr<Cesium3DTilesSelection::Tileset> tileset;
     std::vector<RasterLayerState> rasterLayers;
+    std::vector<CesiumAsync::SharedFuture<void>> pendingDestructions;
     std::vector<Cesium3DTilesSelection::ViewState> viewStates;
     int32_t loadedTileCount = 0;
     float loadProgress = 0.0f;
@@ -808,6 +831,16 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
     bool firstUpdateFrameLogged = false;
 
 private:
+    void releaseOverlay(RasterLayerState& layer)
+    {
+        if (!layer.overlay)
+            return;
+        pendingDestructions.push_back(layer.overlay->getAsyncDestructionCompleteEvent(asyncSystem));
+        if (tileset)
+            tileset->getOverlays().remove(layer.overlay);
+        layer.overlay.reset();
+    }
+
     void updateAdapterOpacities()
     {
         int32_t maximumID = -1;
@@ -851,7 +884,8 @@ private:
     }
 };
 
-GeoSpatialRuntime::GeoSpatialRuntime()
+GeoSpatialRuntime::GeoSpatialRuntime(bgfx::ViewId viewId)
+    : viewId_(viewId)
 {
     snapshot_.cesium_status = "Cesium Native linked; waiting for initialization";
     snapshot_.active_tileset = "No tileset loaded";
@@ -883,7 +917,7 @@ void GeoSpatialRuntime::requestInitializeCesium()
         camera_.setOrbitDistanceMeters(config.initialOrbitDistanceMeters);
 
         LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: constructing runtime context");
-        cesium_ = std::make_unique<CesiumRuntimeContext>(config);
+        cesium_ = std::make_unique<CesiumRuntimeContext>(config, viewId_);
         LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: attaching viewport");
         cesium_->renderAdapter->setViewportAttachment(viewportAttachment_);
         if (config.terrainEnabledOnStart) {
@@ -929,7 +963,7 @@ void GeoSpatialRuntime::requestReloadTileset()
     camera_.setZoomLimits(config.zoomLimits);
     camera_.setOrbitDistanceMeters(config.initialOrbitDistanceMeters);
 
-    cesium_ = std::make_unique<CesiumRuntimeContext>(config);
+    cesium_ = std::make_unique<CesiumRuntimeContext>(config, viewId_);
     cesium_->renderAdapter->setViewportAttachment(viewportAttachment_);
     if (config.terrainEnabledOnStart)
         cesium_->createOrReloadTileset();
@@ -991,7 +1025,7 @@ void GeoSpatialRuntime::requestSetLayerVisibility(const std::string& id, bool vi
             cesium_->createOrReloadTileset();
             snapshot_.cesium_status = "Terrain layer enabled";
         } else {
-            cesium_->tileset.reset();
+            cesium_->releaseTileset();
             snapshot_.cesium_status = "Terrain layer disabled; tileset released";
         }
         updateProviderStatusLocked();

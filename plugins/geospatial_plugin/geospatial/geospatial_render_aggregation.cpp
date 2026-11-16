@@ -1,6 +1,6 @@
 #include "geospatial_render_aggregation.hpp"
 
-#include "ui/ui_camera.hpp"
+#include "../ui_camera.hpp"
 
 #include <CesiumGeospatial/Cartographic.h>
 

@@ -82,7 +82,7 @@ void runCalendarPanelTests() {
         require(!std::filesystem::exists(directory), "Initialization touched calendar storage");
         require(!root.getPanelByKey("calendar"), "Staged Calendar attached before commit");
         require(UI::validateProviderPanels(first.lease), "Valid Calendar rejected");
-        first.publish(); UI::activateProviderPanels(first.lease, {}); root.processPendingTasks();
+        first.publish(); UI::activateProviderPanels(first.lease); root.processPendingTasks();
         require(root.getPanelByKey("calendar") == first.calendar.get(), "Host did not attach the actual plugin panel");
         require(!first.calendar->isVisible(), "Calendar should start hidden");
         root.requestPanelOperation("calendar", UIPanelOperation::Show).get();
@@ -116,14 +116,14 @@ void runCalendarPanelTests() {
         UI::retireProviderPanels(first.lease);
         require(!root.getPanelByKey("calendar"), "Retirement did not detach synchronously");
         first.calendar.reset();
-        UI::activateProviderPanels(replacement.lease, {}); root.processPendingTasks();
+        UI::activateProviderPanels(replacement.lease); root.processPendingTasks();
         UI::retireProviderPanels(first.lease);
         require(root.getPanelByKey("calendar") == replacement.calendar.get(), "Old retirement removed replacement");
     }
     require(!root.getPanelByKey("calendar"), "Provider destruction retained native panel");
     {
         Fixture cancelled(directory / "cancelled.json", "cancelled"); cancelled.initialize(); cancelled.publish();
-        UI::activateProviderPanels(cancelled.lease, {});
+        UI::activateProviderPanels(cancelled.lease);
         UI::retireProviderPanels(cancelled.lease); cancelled.calendar.reset();
         root.processPendingTasks();
         require(!root.getPanelByKey("calendar"), "Queued activation used a destroyed panel");
@@ -165,7 +165,7 @@ void runNativeCalendarDllTests(const char* dllPath) {
         void publish(const std::string& replacing = {}) {
             require(MMO::ProviderRegistry::instance().publish(
                 {MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing), "DLL provider publish failed");
-            UI::activateProviderPanels(lease, {});
+            UI::activateProviderPanels(lease);
         }
         void close() {
             if (!handle) return;

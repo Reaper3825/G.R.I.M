@@ -1,12 +1,12 @@
-# G.R.I.M Plugin API v14
+# G.R.I.M Plugin API v15.1
 
-API version: **14.0.0**.
+API version: **15.1.0**.
 
 Version 14 removes the copied-widget definition/event API. Schedule owns a
 native `CalendarPanel : UIPanel`, including its widgets, drawing and callbacks.
 Native UI plugins import the host UI classes and must match its compiler, CRT
 and UI class ABI. Rebuild the host and plugins together before deployment.
-See [native provider panels](#native-provider-panels-v14).
+See [native provider panels](#native-provider-panels).
 
 Version 12 removes `get_alias_snapshot` and `refresh_aliases`. User application
 aliases and portable/Start Menu discovery now belong exclusively to the application
@@ -60,6 +60,15 @@ The host scans the immediate children of its plugins folder for native
 libraries (.dll, .so, or .dylib). A plugin exports grim_plugin_get_info,
 grim_plugin_init, and grim_plugin_shutdown.
 The loader rejects incompatible major versions and newer unsupported versions.
+
+A v15.1 plugin may export `extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI*)`.
+The host calls it once on the lifecycle thread after provider commit and after any
+previous generation has shut down and unloaded. Desktop startup initializes the
+overlay and bgfx before plugin discovery. The UI task pump attaches staged panels
+to the live UI separately. Use activation to connect resources that require the
+initialized host or that the previous generation must release. Returning an error
+retires and unloads the candidate through normal shutdown. At this point the
+previous generation has already retired.
 Version 4 removes `context_requirements` and `affordance_tokens` from
 `GrimToolDescriptor`, changing the layout of both the descriptor and its
 containing `GrimToolRegistration`. Rebuild existing plugins against the v4 header
@@ -883,7 +892,7 @@ checks, due-item selection and delivery state. It publishes `schedule.state`
 resources (`items` and `delivery`) through generic resource registration.
 `items` contains at most 200 records plus the total; tools provide paginated access.
 Calendar is a native panel inside Schedule and uses that provider's existing
-service. See [native provider panels](#native-provider-panels-v14).
+service. See [native provider panels](#native-provider-panels).
 
 API v8 removes `schedule_user_timer`, `create_local_calendar` and
 `schedule_service` outright. Host and plugins must be rebuilt together.
@@ -892,72 +901,7 @@ notification delivery. The frame loop pumps callbacks; provider callbacks decide
 which notifications are due. Saved schedules survive unload; delivery resumes
 on the next provider poll after reload. See [scheduling contract](SCHEDULING_TOOLS.md).
 
-## Provider panel lifecycle (v3.17)
-
-The [provider-defined panel ownership contract](ui/PANEL_OPERATIONS.md#provider-defined-panel-ownership-contract)
-defines the migration target: individual providers own their panels; the UI
-provider owns generic discovery/interaction tools, not their targets. The
-factory-key mechanism below is the current implementation, not the completed
-provider-defined content boundary.
-
-`GrimResult register_ui_panel(self, implementation_key)` consumes one reserved
-API table slot, preserving table size and earlier member offsets. It requires
-UI permission and is supported only during staged plugin initialization.
-The host copies a nonempty implementation key of at most 256 bytes, rejects
-duplicate declarations, and limits each provider to 64 declarations.
-
-`GRIM_OK` means the declaration was staged, not that a panel exists. A failed
-plugin initialization discards the declarations. Successful provider publication
-queues host-only construction on the UI thread. Startup loads plugins before UI
-bootstrap; the first UI task pump runs after bootstrap registers the factories.
-Factories must be available at that point. Unknown implementations and factory
-failures are reported in `UIPanelService` logs; the panel batch is rolled back,
-while the provider and its tools remain loaded. There is no automatic retry or
-panel-activation status API in this stage.
-
-Each provider generation owns a host lease containing the created panels' stable
-keys and runtime IDs. Retirement cancels pending creation immediately and queues
-removal on the UI thread. Removal checks runtime identity. Replacement queues old
-panel removal before new construction; panels are recreated hidden with a new
-runtime ID. Failed plugin initialization before commit preserves the old panel.
-An activation failure after replacement commit does not restore the old panel.
-Shutdown can discard queued cleanup because `UIRoot::shutdown` destroys all panels.
-
-The UI plugin currently declares one host implementation:
-`ui.geospatial`. Bootstrap registers
-factories and host dependencies, but creates no instances of these panels.
-Dynamic surfaces and OSINT panels have not migrated. Host factories contain no
-DLL callbacks. The existing queued retirement relies on this host-only code
-lifetime; it is not sufficient for objects or callbacks implemented in a DLL.
-
-Factories may register a host-only cleanup callback, invoked on removal, host
-shutdown, or failure after construction. GeoSpatial uses this to disconnect its
-native viewport, clear input callbacks via the runtime, release the clear pass,
-and mark the viewport unavailable. Its runtime remains host-owned and continues
-its existing lifecycle. Storage Plugin imports copied host device-service operations
-and owns its native panel; it has no host factory. Perception services
-are plugin-owned, and physical/digital environment panels are no longer declared.
-Training UI commands resolve the live panel on the UI thread
-instead of holding a global owning pointer. Reloading the UI provider destroys
-and recreates the training panel, including its World Lab/live viewer session;
-unsaved panel-local state is not preserved by this migration. Runtime registration/removal APIs,
-widget parenting, and state persistence across replacement are subsequent stages.
-
-After construction the host publishes each panel's `ResourceDescriptor` under
-the calling provider generation. The registry stores resource data with its
-provider record. `ProviderRegistrySnapshot.providers` groups tool and resource
-descriptors under their owning provider generation. `resource_revision` advances
-independently of the tool revision.
-Provider replacement/unload removes old-generation descriptors under the registry
-lock, and stale generations cannot republish them. Runtime-ID checks protect
-removal. UI-thread frame sampling publishes actual title, visibility, minimized/
-maximized state, position, size, and z-order, including direct mouse interaction.
-Unchanged samples do not advance the resource revision. Panel removal and UI
-shutdown withdraw bindings. `parent_id` is reserved and must currently be empty.
-
-Each migrated panel publishes `panel:<stable-key>` of kind `ui.panel`.
-
-## Native provider panels (v14)
+## Native provider panels
 
 The loader runs plugin initialization in a host-owned panel registration scope
 on the UI/lifecycle thread. A provider constructs its concrete `UIPanel` members
@@ -969,7 +913,7 @@ A caught registration failure still rejects provider commit.
 Candidate panels are absent from the live UI until provider commit and the UI
 queue pump. Collision validation permits replacement of the old generation's
 panels only. Activation attaches the same native objects and binds `ui.panel`
-resources to the declaring generation. The host borrows these objects; the
+resources as `panel:<stable-key>` under the declaring generation. The host borrows these objects; the
 plugin owns their storage and implementation. UI callbacks run on the UI thread.
 
 Retirement synchronously detaches that generation's panels before plugin
@@ -980,7 +924,8 @@ failed candidate initialization. Old generation cleanup cannot remove a newer
 panel with the same key. Plugin shutdown must destroy every owned native panel.
 
 Native UI plugins use the exported C++ UI interface with a matching compiler,
-CRT and class layout. This is not a compiler-independent C object ABI. Windows
+CRT and class layout. API v15 removes the factory declaration entry and changes
+the native host class layout. All plugins must be rebuilt for this ABI. Windows
 standalone builds require `GRIM_HOST_IMPORT_LIBRARY`; host-tree builds link
 `GRIM_EXPORT`. Building the host target alone does not build Schedule, since
 Schedule imports the host. An all-target build builds/deploys it after the host.
@@ -989,7 +934,16 @@ Calendar uses native buttons, input boxes, scrolling and overlay drawing. It
 refreshes visible, non-minimized content every 500 ms from `update()`. Storage
 operations remain synchronous. Initialization does not open calendar storage;
 saved events survive unload, while unsaved widget drafts do not. The generic UI
-plugin operates on Calendar but does not own it. GeoSpatial remains unmigrated.
+plugin supplies panel discovery and interaction.
+
+GeoSpatial Plugin owns the `geospatial` panel, globe camera, native viewport
+attachment, and Cesium runtime. It connects the attachment in its post-commit
+activation hook. A repeating zero-interval timer dispatches once per
+application frame through the provider call gate. The plugin submits its clear
+and scene to the same host bgfx view. Native render callbacks execute on the
+application frame thread, which also retires the plugin. Shutdown unregisters
+the render callbacks, clears native input, and drains Cesium destruction before
+the loader releases the library.
 
 `tests/run_ui_input_foundation.ps1` tests native controls, provider staging,
 permissions, collision/replacement, and synchronous retirement. It also builds

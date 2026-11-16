@@ -15,6 +15,9 @@ std::filesystem::path resolveAiConfigLocalPath();
 // Deep-merge `overlay` into `base` (recursively merges objects, overwrites scalars/arrays).
 void deepMerge(nlohmann::json& base, const nlohmann::json& overlay);
 
+// Copy the effective in-memory configuration on the UI thread.
+GRIM_HOST_API nlohmann::json snapshotRuntimeAiConfig();
+
 // Load ai_config.json from disk, deep-merge ai_config.local.json, and
 // update the global `aiConfig`. Returns the merged document.
 GRIM_HOST_API nlohmann::json loadRuntimeAiConfig();

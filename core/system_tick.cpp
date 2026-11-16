@@ -2,7 +2,6 @@
 #include "plugin_manager.hpp"
 #include "plugin_api_impl.hpp"
 
-#include "../geospatial/geospatial_runtime.hpp"
 #include "../helpers/key.hpp"
 #include "../helpers/mouse.hpp"
 #include "../ui/ui_root.hpp"
@@ -17,9 +16,7 @@
 
 namespace GRIM {
 
-void tickApplicationFrame(
-    GeoSpatial::GeoSpatialRuntime& geoSpatialRuntime,
-    const GRIMWindow& overlayWindow)
+void tickApplicationFrame(const GRIMWindow& overlayWindow)
 {
     constexpr float kDeltaSeconds = 0.016f;
     constexpr auto kFrameDuration = std::chrono::milliseconds(16);
@@ -44,8 +41,6 @@ void tickApplicationFrame(
     UI::processPanelShortcuts();
     PluginManager::tick();
     PluginAPI::processTimers(); // Dispatch gated plugin callbacks; providers own due-work policy.
-
-    geoSpatialRuntime.tick(kDeltaSeconds);
 
     // Global bindings above retain raw hardware input. UI gestures stop when
     // another application owns activation; they cannot restart from a held key.

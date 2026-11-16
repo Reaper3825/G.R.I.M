@@ -68,12 +68,13 @@ $variants = @{
     old = @('/DFIXTURE_EXTRA', '/DFIXTURE_RESULT=\"old-result\"');
     new = @('/DFIXTURE_RESULT=\"new-result\"');
     failed = @('/DFIXTURE_FAIL_INIT', '/DFIXTURE_RESULT=\"failed-result\"');
+    'activation-failed' = @('/DFIXTURE_FAIL_ACTIVATION');
     collision = @('/DFIXTURE_COLLISION');
     legacy = @('/DFIXTURE_API_VERSION=393216')
 }
 foreach ($variant in $variants.Keys) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output ('replacement/' + $variant)) | Out-Null
-    $variantArgs = $common + @('/LD','/DFIXTURE_TOOLS','/DFIXTURE_NAME=\"Declared-alpha\"',$fixtureSource,('/Fe:replacement/' + $variant + '/alpha.dll')) + $variants[$variant]
+    $variantArgs = $common + @('/LD','/DFIXTURE_TOOLS','/DFIXTURE_ACTIVATION','/DFIXTURE_NAME=\"Declared-alpha\"',$fixtureSource,('/Fe:replacement/' + $variant + '/alpha.dll')) + $variants[$variant]
     Set-Content -LiteralPath (Join-Path $output ('replacement-' + $variant + '.rsp')) -Value $variantArgs -Encoding ascii
 }
 $testArgs = $common + '/DGRIM_BUILD_HOST'
@@ -136,6 +137,7 @@ $commands = @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul
     'cl @replacement-old.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @replacement-new.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @replacement-failed.rsp','if errorlevel 1 exit /b %errorlevel%',
+    'cl @replacement-activation-failed.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @replacement-collision.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @replacement-legacy.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @api.rsp','if errorlevel 1 exit /b %errorlevel%',

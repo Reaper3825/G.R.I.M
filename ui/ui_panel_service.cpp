@@ -56,23 +56,15 @@ bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
     }
     return true;
 }
-void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                            std::vector<std::string> implementations) {
-    UIRoot::get().postTask([lease, implementations = std::move(implementations)] {
+void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
+    UIRoot::get().postTask([lease] {
         if (lease->retired) return;
         auto& root = UIRoot::get();
         try {
-            lease->panels.reserve(implementations.size() + lease->nativePanels.size());
+            lease->panels.reserve(lease->nativePanels.size());
             for (auto* panel : lease->nativePanels) {
                 lease->panels.emplace_back(panel->getPanelKey(), panel->getPanelID());
                 root.registerPanel(panel);
-            }
-            for (const auto& implementation : implementations) {
-                lease->panels.emplace_back();
-                auto& identity = lease->panels.back();
-                auto panel = root.createPanelFromFactory(implementation);
-                try { identity = {panel->getPanelKey(), panel->getPanelID()}; }
-                catch (...) { root.removePanel(panel->getPanelKey()); throw; }
             }
             for (const auto& [key, runtime] : lease->panels)
                 root.bindPanelResource(key, runtime, lease->providerName, lease->owner);

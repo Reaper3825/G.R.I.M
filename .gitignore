@@ -452,3 +452,16 @@ cache/geospatial/*.sqlite-wal
 !/plugins/data_hub_plugin/data_hub/
 !/plugins/data_hub_plugin/data_hub/*.cpp
 !/plugins/data_hub_plugin/data_hub/*.hpp
+
+# Provider-owned GeoSpatial sources. Deployed dependencies are build artifacts.
+!/plugins/geospatial_plugin/
+/plugins/geospatial_plugin/*
+!/plugins/geospatial_plugin/CMakeLists.txt
+!/plugins/geospatial_plugin/*.cpp
+!/plugins/geospatial_plugin/*.hpp
+!/plugins/geospatial_plugin/geospatial/
+!/plugins/geospatial_plugin/geospatial/*.cpp
+!/plugins/geospatial_plugin/geospatial/*.hpp
+!/plugins/geospatial_plugin/geospatial/*.txt
+!/plugins/geospatial_plugin/shaders/
+!/plugins/geospatial_plugin/shaders/*.sc

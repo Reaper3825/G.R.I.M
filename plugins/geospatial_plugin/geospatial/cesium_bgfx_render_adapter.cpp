@@ -1,4 +1,5 @@
 #include "cesium_bgfx_render_adapter.hpp"
+#include "core/native_render.hpp"
 #include "cesium_bgfx_shaders.hpp"
 
 #ifdef OPAQUE
@@ -6,7 +7,7 @@
 #endif
 
 #include "core/window_manager.hpp"
-#include "logger.hpp"
+#include "plugins/plugin_logging.hpp"
 #include "ui/primitives/ui_native_3d_viewport_attachment.hpp"
 
 #include <stb/stb_image.h>
@@ -177,8 +178,6 @@ namespace {
     std::mutex g_registryMutex;
     std::vector<CesiumBgfxRenderAdapter*> g_adapters;
     bool g_renderPassRegistered = false;
-    bgfx::VertexLayout g_vertexLayout;
-    bool g_vertexLayoutInitialized = false;
     CesiumShaderState* g_shaderState = nullptr;
     bgfx::TextureHandle g_whiteTexture = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle g_globeTexture = BGFX_INVALID_HANDLE;
@@ -191,25 +190,23 @@ namespace {
     std::mutex g_tileResourcesRegistryMutex;
     std::vector<TileGpuResources*> g_tileResourcesRegistry;
 
-    bgfx::VertexLayout& vertexLayout()
+    const bgfx::VertexLayout& vertexLayout()
     {
-        if (!g_vertexLayoutInitialized) {
-            g_vertexLayout.begin()
-                .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-                .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
-                .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
-                .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-                .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
-            .end();
-            g_vertexLayoutInitialized = true;
-        }
-        return g_vertexLayout;
+        static constexpr GRIM::Render::VertexAttribute attributes[] = {
+            {bgfx::Attrib::Position, 3, bgfx::AttribType::Float},
+            {bgfx::Attrib::Normal, 3, bgfx::AttribType::Float},
+            {bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float},
+            {bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float},
+            {bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true},
+        };
+        static const auto layout = GRIM::Render::makeVertexLayout(attributes);
+        return layout;
     }
 
     void destroyTexture(GpuTexture& texture) noexcept
     {
         if (bgfx::isValid(texture.handle)) {
-            bgfx::destroy(texture.handle);
+            GRIM::Render::destroy(texture.handle);
             texture.handle = BGFX_INVALID_HANDLE;
         }
     }
@@ -217,11 +214,11 @@ namespace {
     void destroyGpuPrimitive(GpuPrimitive& primitive) noexcept
     {
         if (bgfx::isValid(primitive.vertexBuffer)) {
-            bgfx::destroy(primitive.vertexBuffer);
+            GRIM::Render::destroy(primitive.vertexBuffer);
             primitive.vertexBuffer = BGFX_INVALID_HANDLE;
         }
         if (bgfx::isValid(primitive.indexBuffer)) {
-            bgfx::destroy(primitive.indexBuffer);
+            GRIM::Render::destroy(primitive.indexBuffer);
             primitive.indexBuffer = BGFX_INVALID_HANDLE;
         }
     }
@@ -329,8 +326,8 @@ namespace {
             }
         }
 
-        const bgfx::Memory* memory = bgfx::copy(rgba.data(), static_cast<uint32_t>(rgba.size()));
-        bgfx::TextureHandle texture = bgfx::createTexture2D(width,
+        const bgfx::Memory* memory = GRIM::Render::copy(rgba.data(), static_cast<uint32_t>(rgba.size()));
+        bgfx::TextureHandle texture = GRIM::Render::createTexture2D(width,
                                                             height,
                                                             false,
                                                             1,
@@ -363,9 +360,9 @@ namespace {
             throw std::runtime_error("CesiumBgfxRenderAdapter globe texture is too large for bgfx copy: " + texturePath);
         }
 
-        const bgfx::Memory* memory = bgfx::copy(pixels, static_cast<uint32_t>(byteCount));
+        const bgfx::Memory* memory = GRIM::Render::copy(pixels, static_cast<uint32_t>(byteCount));
         stbi_image_free(pixels);
-        bgfx::TextureHandle texture = bgfx::createTexture2D(static_cast<uint16_t>(width),
+        bgfx::TextureHandle texture = GRIM::Render::createTexture2D(static_cast<uint16_t>(width),
                                                             static_cast<uint16_t>(height),
                                                             false,
                                                             1,
@@ -399,7 +396,7 @@ namespace {
             return;
 
         if (bgfx::isValid(g_globeTexture)) {
-            bgfx::destroy(g_globeTexture);
+            GRIM::Render::destroy(g_globeTexture);
             g_globeTexture = BGFX_INVALID_HANDLE;
         }
 
@@ -417,8 +414,8 @@ namespace {
 
         if (!bgfx::isValid(g_whiteTexture)) {
             const uint32_t white = 0xFFFFFFFFu;
-            const bgfx::Memory* memory = bgfx::copy(&white, sizeof(white));
-            g_whiteTexture = bgfx::createTexture2D(1, 1, false, 1,
+            const bgfx::Memory* memory = GRIM::Render::copy(&white, sizeof(white));
+            g_whiteTexture = GRIM::Render::createTexture2D(1, 1, false, 1,
                                                    bgfx::TextureFormat::RGBA8,
                                                    BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
                                                    memory);
@@ -434,11 +431,11 @@ namespace {
             return;
 
         if (bgfx::isValid(g_whiteTexture)) {
-            bgfx::destroy(g_whiteTexture);
+            GRIM::Render::destroy(g_whiteTexture);
             g_whiteTexture = BGFX_INVALID_HANDLE;
         }
         if (bgfx::isValid(g_globeTexture)) {
-            bgfx::destroy(g_globeTexture);
+            GRIM::Render::destroy(g_globeTexture);
             g_globeTexture = BGFX_INVALID_HANDLE;
             g_globeTextureSource.clear();
         }
@@ -456,8 +453,13 @@ namespace {
         std::lock_guard lock(g_registryMutex);
         g_adapters.push_back(adapter);
         if (!g_renderPassRegistered) {
-            WindowManager::registerRenderPass(kRenderPassName, &CesiumBgfxRenderAdapter::renderAll, true);
-            g_renderPassRegistered = true;
+            try {
+                WindowManager::registerRenderPass(kRenderPassName, &CesiumBgfxRenderAdapter::renderAll, true);
+                g_renderPassRegistered = true;
+            } catch (...) {
+                g_adapters.pop_back();
+                throw;
+            }
         }
     }
 
@@ -1116,8 +1118,8 @@ namespace {
         if (image.width == 0 || image.height == 0 || image.rgba8.empty())
             return BGFX_INVALID_HANDLE;
 
-        const bgfx::Memory* memory = bgfx::copy(image.rgba8.data(), static_cast<uint32_t>(image.rgba8.size()));
-        bgfx::TextureHandle handle = bgfx::createTexture2D(image.width,
+        const bgfx::Memory* memory = GRIM::Render::copy(image.rgba8.data(), static_cast<uint32_t>(image.rgba8.size()));
+        bgfx::TextureHandle handle = GRIM::Render::createTexture2D(image.width,
                                                            image.height,
                                                            image.mipCount > 1,
                                                            1,
@@ -1125,8 +1127,8 @@ namespace {
                                                            kTerrainSamplerFlags,
                                                            memory);
         if (!bgfx::isValid(handle)) {
-            const bgfx::Stats* stats = bgfx::getStats();
-            const bgfx::Caps* caps = bgfx::getCaps();
+            const bgfx::Stats* stats = GRIM::Render::getStats();
+            const bgfx::Caps* caps = GRIM::Render::getCaps();
             if (!stats || !caps)
                 throw std::runtime_error("CesiumBgfxRenderAdapter failed to create bgfx texture and resource statistics are unavailable");
             const std::string message = "CesiumBgfxRenderAdapter failed to create bgfx texture: textures=" +
@@ -1142,12 +1144,12 @@ namespace {
         if (vertices.empty())
             return BGFX_INVALID_HANDLE;
 
-        const bgfx::Memory* vertexMemory = bgfx::copy(vertices.data(),
+        const bgfx::Memory* vertexMemory = GRIM::Render::copy(vertices.data(),
                                                       static_cast<uint32_t>(vertices.size() * sizeof(CesiumBgfxVertex)));
-        bgfx::VertexBufferHandle vertexBuffer = bgfx::createVertexBuffer(vertexMemory, vertexLayout());
+        bgfx::VertexBufferHandle vertexBuffer = GRIM::Render::createVertexBuffer(vertexMemory, vertexLayout());
         if (!bgfx::isValid(vertexBuffer)) {
-            const bgfx::Stats* stats = bgfx::getStats();
-            const bgfx::Caps* caps = bgfx::getCaps();
+            const bgfx::Stats* stats = GRIM::Render::getStats();
+            const bgfx::Caps* caps = GRIM::Render::getCaps();
             if (!stats || !caps)
                 throw std::runtime_error("CesiumBgfxRenderAdapter failed to create vertex buffer and resource statistics are unavailable");
             const std::string message = "CesiumBgfxRenderAdapter failed to create vertex buffer: vertexBuffers=" +
@@ -1192,12 +1194,12 @@ namespace {
 
                 primitive.vertexBuffer = createVertexBuffer(cpuPrimitive.vertices);
 
-                const bgfx::Memory* indexMemory = bgfx::copy(cpuPrimitive.indices.data(),
+                const bgfx::Memory* indexMemory = GRIM::Render::copy(cpuPrimitive.indices.data(),
                                                              static_cast<uint32_t>(cpuPrimitive.indices.size() * sizeof(uint32_t)));
-                primitive.indexBuffer = bgfx::createIndexBuffer(indexMemory, BGFX_BUFFER_INDEX32);
+                primitive.indexBuffer = GRIM::Render::createIndexBuffer(indexMemory, BGFX_BUFFER_INDEX32);
                 if (!bgfx::isValid(primitive.indexBuffer)) {
-                    const bgfx::Stats* stats = bgfx::getStats();
-                    const bgfx::Caps* caps = bgfx::getCaps();
+                    const bgfx::Stats* stats = GRIM::Render::getStats();
+                    const bgfx::Caps* caps = GRIM::Render::getCaps();
                     if (!stats || !caps)
                         throw std::runtime_error("CesiumBgfxRenderAdapter failed to create index buffer and resource statistics are unavailable");
                     const std::string message = "CesiumBgfxRenderAdapter failed to create index buffer: indexBuffers=" +
@@ -1227,7 +1229,7 @@ namespace {
 
     glm::dmat4 projectionForBgfx(const glm::dmat4& projection)
     {
-        if (bgfx::getCaps()->homogeneousDepth)
+        if (GRIM::Render::getCaps()->homogeneousDepth)
             return projection;
 
         glm::dmat4 converted = projection;
@@ -1297,17 +1299,12 @@ namespace {
 
 }
 
-CesiumBgfxRenderAdapter::CesiumBgfxRenderAdapter(std::string owner)
-    : owner_(std::move(owner))
+CesiumBgfxRenderAdapter::CesiumBgfxRenderAdapter(bgfx::ViewId viewId)
+    : viewId_(viewId)
 {
-    if (owner_.empty())
-        throw std::runtime_error("CesiumBgfxRenderAdapter requires a non-empty owner");
-
-    const bgfx::Caps* caps = bgfx::getCaps();
+    const bgfx::Caps* caps = GRIM::Render::getCaps();
     if (!caps)
         throw std::runtime_error("CesiumBgfxRenderAdapter requires initialized bgfx capabilities");
-    viewId_ = WindowManager::reserveViewIds(owner_, WindowManager::ViewIdRange::PanelViewport, 1).at(0);
-    registerAdapter(this);
     // Bumped with every rendering change so a run's log proves which adapter
     // revision the binary actually contains.
     LOG_DEBUG("CesiumBgfxRenderAdapter",
@@ -1317,12 +1314,12 @@ CesiumBgfxRenderAdapter::CesiumBgfxRenderAdapter(std::string owner)
               std::to_string(caps->limits.maxVertexBuffers) +
               " index=" + std::to_string(caps->limits.maxIndexBuffers) +
               " texture=" + std::to_string(caps->limits.maxTextures));
+    registerAdapter(this);
 }
 
 CesiumBgfxRenderAdapter::~CesiumBgfxRenderAdapter()
 {
     unregisterAdapter(this);
-    WindowManager::releaseViewIds(owner_);
 }
 
 void CesiumBgfxRenderAdapter::setViewportAttachment(std::weak_ptr<UINative3DViewportAttachment> attachment)
@@ -1564,10 +1561,10 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
     matrixToFloatColumnMajor(projectionForBgfx(projection), projectionMatrix);
     const float cameraPos[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
-    bgfx::setViewFrameBuffer(viewId_, attachment->frameBufferHandle());
-    bgfx::setViewRect(viewId_, 0, 0, attachment->frameBufferWidth(), attachment->frameBufferHeight());
-    bgfx::setViewTransform(viewId_, viewMatrix, projectionMatrix);
-    bgfx::setViewMode(viewId_, bgfx::ViewMode::Sequential);
+    GRIM::Render::setViewFrameBuffer(viewId_, attachment->frameBufferHandle());
+    GRIM::Render::setViewRect(viewId_, 0, 0, attachment->frameBufferWidth(), attachment->frameBufferHeight());
+    GRIM::Render::setViewTransform(viewId_, viewMatrix, projectionMatrix);
+    GRIM::Render::setViewMode(viewId_, bgfx::ViewMode::Sequential);
 
     const float lightDir[4] = {0.35f, 0.55f, 0.75f, 0.0f};
     const float lightParams[4] = {0.75f, 0.38f, 0.0f, 0.0f};
@@ -1586,9 +1583,9 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
 
         float modelMatrix[16];
         matrixToFloatColumnMajor(view * primitive.transform, modelMatrix);
-        bgfx::setTransform(modelMatrix);
-        bgfx::setVertexBuffer(0, primitive.vertexBuffer, 0, primitive.vertexCount);
-        bgfx::setIndexBuffer(primitive.indexBuffer, 0, primitive.indexCount);
+        GRIM::Render::setTransform(modelMatrix);
+        GRIM::Render::setVertexBuffer(0, primitive.vertexBuffer, 0, primitive.vertexCount);
+        GRIM::Render::setIndexBuffer(primitive.indexBuffer, 0, primitive.indexCount);
         const float baseColorFactor[4] = {
             material.baseColorFactor[0],
             material.baseColorFactor[1],
@@ -1608,20 +1605,20 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
             0.0f
         };
 
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightDir), lightDir);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightParams), lightParams);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::BaseColorFactor), baseColorFactor);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::OverlayTransform), overlayTransform);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::TextureParams), textureParams);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::CameraPos), cameraPos);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ColorParams), colorParams);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::SurfaceParams), surfaceParams);
-        bgfx::setTexture(0, cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ImagerySampler), material.texture);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightDir), lightDir);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightParams), lightParams);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::BaseColorFactor), baseColorFactor);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::OverlayTransform), overlayTransform);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::TextureParams), textureParams);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::CameraPos), cameraPos);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ColorParams), colorParams);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::SurfaceParams), surfaceParams);
+        GRIM::Render::setTexture(0, cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ImagerySampler), material.texture);
 
         if (primitive.doubleSided)
             state &= ~(BGFX_STATE_CULL_CW | BGFX_STATE_CULL_CCW);
-        bgfx::setState(state);
-        bgfx::submit(viewId_, cesiumShadersGetProgram(g_shaderState));
+        GRIM::Render::setState(state);
+        GRIM::Render::submit(viewId_, cesiumShadersGetProgram(g_shaderState));
         return true;
     };
 
@@ -1803,15 +1800,15 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
         const uint32_t indexCount = static_cast<uint32_t>(areaIndices.size());
         if (vertexCount == 0 || indexCount == 0)
             throw std::runtime_error("CesiumBgfxRenderAdapter generated empty area geometry");
-        if (bgfx::getAvailTransientVertexBuffer(vertexCount, vertexLayout()) < vertexCount ||
-            bgfx::getAvailTransientIndexBuffer(indexCount, false) < indexCount) {
+        if (GRIM::Render::getAvailTransientVertexBuffer(vertexCount, vertexLayout()) < vertexCount ||
+            GRIM::Render::getAvailTransientIndexBuffer(indexCount, false) < indexCount) {
             throw std::runtime_error("CesiumBgfxRenderAdapter lacks transient buffer space for area geometry");
         }
 
         bgfx::TransientVertexBuffer vertexBuffer;
         bgfx::TransientIndexBuffer indexBuffer;
-        bgfx::allocTransientVertexBuffer(&vertexBuffer, vertexCount, vertexLayout());
-        bgfx::allocTransientIndexBuffer(&indexBuffer, indexCount, false);
+        GRIM::Render::allocTransientVertexBuffer(&vertexBuffer, vertexCount, vertexLayout());
+        GRIM::Render::allocTransientIndexBuffer(&indexBuffer, indexCount, false);
         std::memcpy(vertexBuffer.data, areaVertices.data(), areaVertices.size() * sizeof(CesiumBgfxVertex));
         std::memcpy(indexBuffer.data, areaIndices.data(), areaIndices.size() * sizeof(uint16_t));
 
@@ -1819,20 +1816,20 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
         const float areaTextureParams[4] = {0.0f, 1.0f, 0.0f, 0.0f};
         float identity[16];
         matrixToFloatColumnMajor(glm::dmat4(1.0), identity);
-        bgfx::setTransform(identity);
-        bgfx::setVertexBuffer(0, &vertexBuffer, 0, vertexCount);
-        bgfx::setIndexBuffer(&indexBuffer, 0, indexCount);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightDir), lightDir);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightParams), lightParams);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::BaseColorFactor), area.color.data());
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::OverlayTransform), areaOverlayTransform);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::TextureParams), areaTextureParams);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::CameraPos), cameraPos);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ColorParams), colorParams);
-        bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::SurfaceParams), surfaceParams);
-        bgfx::setTexture(0, cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ImagerySampler), g_whiteTexture);
-        bgfx::setState(kAreaState);
-        bgfx::submit(viewId_, cesiumShadersGetProgram(g_shaderState));
+        GRIM::Render::setTransform(identity);
+        GRIM::Render::setVertexBuffer(0, &vertexBuffer, 0, vertexCount);
+        GRIM::Render::setIndexBuffer(&indexBuffer, 0, indexCount);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightDir), lightDir);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightParams), lightParams);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::BaseColorFactor), area.color.data());
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::OverlayTransform), areaOverlayTransform);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::TextureParams), areaTextureParams);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::CameraPos), cameraPos);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ColorParams), colorParams);
+        GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::SurfaceParams), surfaceParams);
+        GRIM::Render::setTexture(0, cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ImagerySampler), g_whiteTexture);
+        GRIM::Render::setState(kAreaState);
+        GRIM::Render::submit(viewId_, cesiumShadersGetProgram(g_shaderState));
         submitted = true;
         ++areaDrawCount;
     }
@@ -1863,15 +1860,15 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
     if (!preparedMarkers.empty()) {
         const uint32_t vertexCount = static_cast<uint32_t>(preparedMarkers.size() * 4);
         const uint32_t indexCount = static_cast<uint32_t>(preparedMarkers.size() * 6);
-        if (bgfx::getAvailTransientVertexBuffer(vertexCount, vertexLayout()) < vertexCount ||
-            bgfx::getAvailTransientIndexBuffer(indexCount, false) < indexCount) {
+        if (GRIM::Render::getAvailTransientVertexBuffer(vertexCount, vertexLayout()) < vertexCount ||
+            GRIM::Render::getAvailTransientIndexBuffer(indexCount, false) < indexCount) {
             throw std::runtime_error("CesiumBgfxRenderAdapter lacks transient buffer space for point markers");
         }
 
         bgfx::TransientVertexBuffer vertexBuffer;
         bgfx::TransientIndexBuffer indexBuffer;
-        bgfx::allocTransientVertexBuffer(&vertexBuffer, vertexCount, vertexLayout());
-        bgfx::allocTransientIndexBuffer(&indexBuffer, indexCount, false);
+        GRIM::Render::allocTransientVertexBuffer(&vertexBuffer, vertexCount, vertexLayout());
+        GRIM::Render::allocTransientIndexBuffer(&indexBuffer, indexCount, false);
         auto* vertices = reinterpret_cast<CesiumBgfxVertex*>(vertexBuffer.data);
         auto* indices = reinterpret_cast<uint16_t*>(indexBuffer.data);
 
@@ -1910,20 +1907,20 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
 
         for (size_t markerIndex = 0; markerIndex < preparedMarkers.size(); ++markerIndex) {
             const PreparedMarker& marker = preparedMarkers[markerIndex];
-            bgfx::setTransform(identity);
-            bgfx::setVertexBuffer(0, &vertexBuffer, static_cast<uint32_t>(markerIndex * 4), 4);
-            bgfx::setIndexBuffer(&indexBuffer, static_cast<uint32_t>(markerIndex * 6), 6);
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightDir), markerLightDir);
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightParams), markerLightParams);
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::BaseColorFactor), marker.color.data());
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::OverlayTransform), markerOverlayTransform);
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::TextureParams), markerTextureParams);
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::CameraPos), cameraPos);
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ColorParams), colorParams);
-            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::SurfaceParams), markerSurfaceParams);
-            bgfx::setTexture(0, cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ImagerySampler), g_whiteTexture);
-            bgfx::setState(kAlphaState);
-            bgfx::submit(viewId_, cesiumShadersGetProgram(g_shaderState));
+            GRIM::Render::setTransform(identity);
+            GRIM::Render::setVertexBuffer(0, &vertexBuffer, static_cast<uint32_t>(markerIndex * 4), 4);
+            GRIM::Render::setIndexBuffer(&indexBuffer, static_cast<uint32_t>(markerIndex * 6), 6);
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightDir), markerLightDir);
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightParams), markerLightParams);
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::BaseColorFactor), marker.color.data());
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::OverlayTransform), markerOverlayTransform);
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::TextureParams), markerTextureParams);
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::CameraPos), cameraPos);
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ColorParams), colorParams);
+            GRIM::Render::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::SurfaceParams), markerSurfaceParams);
+            GRIM::Render::setTexture(0, cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ImagerySampler), g_whiteTexture);
+            GRIM::Render::setState(kAlphaState);
+            GRIM::Render::submit(viewId_, cesiumShadersGetProgram(g_shaderState));
             submitted = true;
         }
     }
@@ -1944,7 +1941,7 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
     }
 
     if (!submitted)
-        bgfx::touch(viewId_);
+        GRIM::Render::touch(viewId_);
 }
 
 } // namespace GRIM::GeoSpatial

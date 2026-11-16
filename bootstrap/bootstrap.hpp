@@ -20,9 +20,6 @@ namespace GRIM {
 class DeviceCommServer;
 class UnifiedMemoryStorage;
 class WebSocketServer;
-namespace GeoSpatial {
-class GeoSpatialRuntime;
-}
 }
 
 // Run startup checks and initialize GRIM environment
@@ -36,7 +33,6 @@ void bootstrapMemorySubsystem(GRIM::UnifiedMemoryStorage& memoryStorage);
 
 struct UIBootstrapResult {
 	GRIMWindow& overlayWindow;
-	std::shared_ptr<GRIM::GeoSpatial::GeoSpatialRuntime> geoSpatialRuntime;
 };
 
 UIBootstrapResult bootstrapUI(

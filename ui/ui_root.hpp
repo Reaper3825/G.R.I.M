@@ -60,13 +60,6 @@ public:
     // registered panel with the declared key; callbacks never cross the plugin ABI.
     // Optional cleanup releases external attachments on removal/shutdown or
     // post-construction failure. Constructors must roll back their own failures.
-    using PanelFactory = std::function<std::shared_ptr<UIPanel>()>;
-    using PanelCleanup = std::function<void(const std::shared_ptr<UIPanel>&)>;
-    void registerPanelFactory(const std::string& implementationKey,
-                              const std::string& panelKey, PanelFactory factory,
-                              PanelCleanup cleanup = {});
-    std::shared_ptr<UIPanel> createPanelFromFactory(
-        const std::string& implementationKey, bool initiallyVisible = false);
     void bindPanelResource(const std::string& key, uint64_t runtime,
                            const std::string& provider, const std::string& instance);
     void removePanel(const std::string& name);
@@ -135,14 +128,7 @@ private:
     std::vector<UIPanel*> m_panels;
     std::unordered_map<std::string, UIPanel*> m_panelKeyMap;
     std::unordered_map<UIPanel*, std::shared_ptr<UIPanel>> m_ownedPanels;
-    struct PanelFactoryEntry {
-        std::string panelKey;
-        PanelFactory construct;
-        PanelCleanup cleanup;
-    };
     // UI-thread-owned implementation catalog; cleared at host shutdown.
-    std::unordered_map<std::string, PanelFactoryEntry> m_panelFactories;
-    std::unordered_map<std::string, PanelCleanup> m_panelCleanups;
     std::unordered_map<std::string, GRIM::MMO::RegisteredResource> m_panelResources;
     void synchronizePanelResources();
     OverlayRenderer m_renderer;  // Changed from UIRenderer to OverlayRenderer

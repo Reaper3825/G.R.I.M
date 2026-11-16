@@ -30,8 +30,7 @@ bool stageNativePanel(UIPanel* panel);
 void forgetNativePanel(UIPanel* panel);
 bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
                             const std::shared_ptr<ProviderPanelLease>& replacing = {});
-void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                            std::vector<std::string> implementations);
+void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease);
 void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease);
 
 // Host-only state: neither a plugin callback nor plugin-owned data enters the UI queue.

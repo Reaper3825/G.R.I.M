@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 
 #include "ui_3d_viewport.hpp"
 #include "core/platform_window.hpp"
@@ -6,7 +7,7 @@
 #include <bgfx/bgfx.h>
 #include <string>
 
-class UINative3DViewportAttachment : public UI3DViewportAttachment {
+class GRIM_HOST_API UINative3DViewportAttachment : public UI3DViewportAttachment {
 public:
     UINative3DViewportAttachment(void* overlayWindowHandle, std::string debugName);
     ~UINative3DViewportAttachment() override;

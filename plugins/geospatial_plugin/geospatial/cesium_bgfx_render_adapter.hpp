@@ -40,7 +40,7 @@ struct CesiumBgfxAreaShape {
 
 class CesiumBgfxRenderAdapter final : public Cesium3DTilesSelection::IPrepareRendererResources {
 public:
-    explicit CesiumBgfxRenderAdapter(std::string owner);
+    explicit CesiumBgfxRenderAdapter(bgfx::ViewId viewId);
     ~CesiumBgfxRenderAdapter() override;
 
     CesiumBgfxRenderAdapter(const CesiumBgfxRenderAdapter&) = delete;
@@ -96,7 +96,6 @@ public:
 private:
     void render(uint32_t bgfxFrame);
 
-    std::string owner_;
     std::string globeTexturePath_;
     bgfx::ViewId viewId_ = 0;
     std::weak_ptr<UINative3DViewportAttachment> viewportAttachment_;

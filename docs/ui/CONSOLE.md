@@ -57,8 +57,7 @@ can therefore wait for an active command; this does not add command cancellation
 Conversation handling, session state, and display histories remain host services.
 Notifications use `ConsoleNotificationTarget`, with a fresh UI-thread lookup,
 without importing the plugin's concrete class. Generic `ui.*` operations remain
-in `ui_plugin`. Console no longer has a bootstrap factory or a `register_ui_panel`
-request. Its World Lab resource belongs to the Console Plugin room.
+in `ui_plugin`. The Console Plugin room owns the Console panel resource in World Lab.
 
 Native UI plugins require matching host/compiler/CRT/UI ABI and host import
 libraries. Focused DLL lifecycle tests run through

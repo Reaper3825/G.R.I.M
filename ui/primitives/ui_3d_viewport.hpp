@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 
 #include "widget.hpp"
 
@@ -24,7 +25,7 @@ public:
     virtual void onViewportDetached() {}
 };
 
-class UI3DViewport : public Widget {
+class GRIM_HOST_API UI3DViewport : public Widget {
 public:
     using GeometryChangedCallback = std::function<void(const UI3DViewportGeometry&)>;
 

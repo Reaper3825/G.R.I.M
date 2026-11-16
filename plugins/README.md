@@ -1,23 +1,20 @@
 # Native GRIM tool plugins
 
-The current host requires plugin ABI v14. Rebuild all older plugin binaries
+The current host requires plugin ABI v15. Rebuild all older plugin binaries
 against [the current API](../docs/PLUGIN_API.md) before loading them.
 
-API v3.17 adds initialization-time `register_ui_panel`. The UI plugin now
-declares the remaining GeoSpatial host panel; bootstrap registers its factory without
-creating their instances. Rebuild the host and UI plugin together for this
-migration. Older UI DLLs do not declare the full panel set. Dynamic surfaces
-and OSINT panels retain their current paths.
-See [provider panel lifecycle](../docs/PLUGIN_API.md#provider-panel-lifecycle-v317).
+API v15 uses native provider-owned panels. Native UI plugins import host UI
+classes and must match the host compiler, CRT and class ABI. See
+[native panels](../docs/PLUGIN_API.md#native-provider-panels).
+Windows standalone native UI builds require a matching
+`-DGRIM_HOST_IMPORT_LIBRARY=<path>`. Host-tree all-target builds link these
+plugins against `GRIM_EXPORT` after building the host. Focused native panel
+tests use an isolated headless host import library.
 
-API v14 replaces Calendar's copied widget/event transport with a native
-`UIPanel` subclass in Schedule. Native UI plugins import host UI classes and
-must match the host compiler, CRT and class ABI. Rebuild matching binaries before
-deployment. See [native panels](../docs/PLUGIN_API.md#native-provider-panels-v14).
-Windows standalone Schedule builds require `-DGRIM_HOST_IMPORT_LIBRARY=<path>`
-to a matching host import library. Host-tree all-target builds link Schedule
-against `GRIM_EXPORT` after building the host; the GRIM target alone cannot build
-its importing plugin. Focused tests use an isolated headless host import library.
+GeoSpatial Plugin owns the globe panel and streams Cesium content through the
+host viewport and bgfx context. On Windows, deployment places its runtime DLL
+dependencies under `plugins/dependencies/geospatial_plugin/`. The loader adds
+that directory for the duration of the plugin load.
 
 API v3.14 adds guarded hide (`GRIM_UI_HIDE_CURRENT`). Like `ui.show`, `ui.hide`
 accepts optional `expected_runtime_id`; World Lab supplies it automatically when
@@ -317,7 +314,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps
 ```
 
 Deploy the completed `.codex-build/ui-plugin/plugins/ui_plugin.dll` into the
-application's `plugins/` folder only with a matching API v14 host and providers.
+application's `plugins/` folder only with a matching API v15 host and providers.
 This plugin uses the panel operations introduced in v3.8. The new host no longer registers `console`, `toggle_settings`,
 `ui.show_surface`, or `ui.hide_surface`. Existing handler functions are retained.
 Surface lifecycle and OSINT findings panel handlers remain in the host.

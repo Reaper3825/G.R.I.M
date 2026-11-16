@@ -52,8 +52,6 @@ void UIRoot::shutdown()
     m_panels.clear();
     m_panelKeyMap.clear();
     m_ownedPanels.clear();
-    m_panelFactories.clear();
-    m_panelCleanups.clear();
     synchronizePanelResources(); // Remove resources now that panel instances are gone.
     { std::lock_guard lock(m_taskMutex); m_pendingTasks.clear(); }
     

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_exports.hpp"
 #include "grim_platform.h"
 #include <string>
 #include <vector>
@@ -57,16 +58,16 @@ public:
         bgfx::ViewId first = 0;
         uint16_t count = 0;
 
-        bgfx::ViewId at(uint16_t offset) const;
+        GRIM_HOST_API bgfx::ViewId at(uint16_t offset) const;
     };
 
     static bgfx::ViewId defaultViewId();
-    static ViewIdBlock reserveViewIds(const std::string& owner, ViewIdRange range, uint16_t count);
-    static void releaseViewIds(const std::string& owner);
+    static GRIM_HOST_API ViewIdBlock reserveViewIds(const std::string& owner, ViewIdRange range, uint16_t count);
+    static GRIM_HOST_API void releaseViewIds(const std::string& owner);
 
     using RenderPassCallback = void(*)(uint32_t bgfxFrame);
-    static void registerRenderPass(const std::string& name, RenderPassCallback callback, bool enabled = true);
-    static void unregisterRenderPass(const std::string& name);
+    static GRIM_HOST_API void registerRenderPass(const std::string& name, RenderPassCallback callback, bool enabled = true);
+    static GRIM_HOST_API void unregisterRenderPass(const std::string& name);
     static void setRenderPassEnabled(const std::string& name, bool enabled);
     static bool hasEnabledRenderPasses();
 

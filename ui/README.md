@@ -12,8 +12,8 @@ Reusable widget primitives live here:
 - `ui_label.*`, `ui_progress_bar.*`, `ui_scrollbox.*`, `ui_textarea.*`, `ui_graph.*`, `ui_consoleview.*` — display and content widgets.
 - `ui_layout_box.*`, `ui_action_menu.*` — reusable layout/menu primitives.
 
-The remaining GeoSpatial host panel includes primitives via
-`primitives/<file>.hpp`. Shared Storage lives in
+GeoSpatial lives in `plugins/geospatial_plugin` and reuses the host native viewport
+primitives and render services. Shared Storage lives in
 `plugins/storage_plugin`; `storage_panel_services.*` retains the host-owned
 device-service boundary, returning copies rather than exposing server ownership.
 DataHub lives in `plugins/data_hub_plugin`; `data_hub_services.*` retains its host

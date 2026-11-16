@@ -58,6 +58,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
         observer->string_free(observer, text);
         return result;
     };
+    check(context("fixture_activated") == "old-result:", "Initial activation did not run after commit");
     // A staged candidate's subscriptions/timers must not replace the old ones.
     install("failed");
     check(provider() && provider()->instance == firstInstance, "Failed init changed the published provider");
@@ -81,6 +82,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     }
     PluginManager::checkForHotReload();
     check(dispatchCommand("Declared-alpha", "").message == "old-result", "Invalid native library displaced working plugin");
+    observer->set_context(observer, "fixture_retired", "");
     ChangeObserver notification;
     registry.addListener(&notification);
     const auto timestamp = fs::last_write_time(watched / "alpha.dll");
@@ -88,6 +90,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     fs::last_write_time(watched / "alpha.dll", timestamp);
     PluginManager::checkForHotReload();
     registry.removeListener(&notification);
+    check(context("fixture_activated") == "new-result:old-result", "Replacement activated before old shutdown");
     check(notification.callable, "Committed replacement was not callable from a registry observer");
     auto replacement = registry.getTool("Declared-alpha");
     check(provider() && replacement && provider()->instance == replacement->provider.instance,
@@ -128,6 +131,8 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
     PluginManager::tick(); // Exercise the actual periodic frame path as well.
     check(registry.isRegistered("Declared-alpha"), "Plugin folder recreation was not discovered");
+    install("activation-failed");
+    check(!provider() && registry.toolCount() == baseline, "Failed activation left a published provider");
     PluginManager::unloadAll();
     PluginManager::tick();
     check(!provider(), "Provider identity survived plugin unload");

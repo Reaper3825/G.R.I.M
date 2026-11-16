@@ -36,6 +36,10 @@ void deepMerge(nlohmann::json& base, const nlohmann::json& overlay) {
     }
 }
 
+nlohmann::json snapshotRuntimeAiConfig() {
+    return aiConfig;
+}
+
 nlohmann::json loadRuntimeAiConfig() {
     fs::path configPath = resolveAiConfigPath();
 

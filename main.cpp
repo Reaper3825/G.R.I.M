@@ -31,13 +31,12 @@ int main(int argc, char* argv[])
 
     runBootstrapChecks(argc, argv);
 
+    auto ui = bootstrapUI(argc, argv);
+
     PluginManager::initialize((std::filesystem::path(getGrimRootDir()) / "plugins").string());
     LOG_PHASE("Plugin manager initialized", true);
 
-
     bootstrapMemorySubsystem(g_memoryStorage);
-
-    auto ui = bootstrapUI(argc, argv);
 
     WakeKey::start();
     LOG_PHASE("WakeKey listener started", true);
@@ -48,7 +47,7 @@ int main(int argc, char* argv[])
     while (!WindowManager::isMainLoopStopRequested() &&
             !GRIM::isApplicationShutdownRequested())
     {
-        GRIM::tickApplicationFrame(*ui.geoSpatialRuntime, ui.overlayWindow);
+        GRIM::tickApplicationFrame(ui.overlayWindow);
     }
 
     LOG_PHASE("Main thread render loop exited", true);

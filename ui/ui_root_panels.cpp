@@ -40,57 +40,6 @@ void UIRoot::synchronizePanelResources() {
     }
 }
 
-void UIRoot::registerPanelFactory(const std::string& implementationKey,
-                                  const std::string& panelKey, PanelFactory factory,
-                                  PanelCleanup cleanup)
-{
-    if (!isUIThread()) throw std::logic_error("Panel factories must be registered on the UI thread");
-    const auto validKey = [](const std::string& key) {
-        return !key.empty() && key.size() <= 256 &&
-            key.find_first_of("\r\n\0", 0, 3) == std::string::npos;
-    };
-    if (!validKey(implementationKey) || !validKey(panelKey) || !factory)
-        throw std::invalid_argument("Panel factory requires valid implementation and panel keys and a constructor");
-    if (m_panelFactories.count(implementationKey))
-        throw std::logic_error("Duplicate panel implementation: " + implementationKey);
-    for (const auto& entry : m_panelFactories)
-        if (entry.second.panelKey == panelKey)
-            throw std::logic_error("Panel key already assigned to a factory: " + panelKey);
-    m_panelFactories.emplace(implementationKey, PanelFactoryEntry{panelKey, std::move(factory), std::move(cleanup)});
-}
-
-std::shared_ptr<UIPanel> UIRoot::createPanelFromFactory(
-    const std::string& implementationKey, bool initiallyVisible)
-{
-    if (!isUIThread()) throw std::logic_error("Panel construction must run on the UI thread");
-    const auto found = m_panelFactories.find(implementationKey);
-    if (found == m_panelFactories.end())
-        throw std::invalid_argument("Unknown panel implementation: " + implementationKey);
-    // Copy before invoking host code: construction must not retain a map iterator.
-    const auto entry = found->second;
-    if (getPanelByKey(entry.panelKey))
-        throw std::logic_error("Panel already exists: " + entry.panelKey);
-    auto panel = entry.construct();
-    try {
-        if (!panel || panel->getPanelKey() != entry.panelKey)
-            throw std::logic_error("Panel factory returned a null panel or an unexpected key: " + implementationKey);
-        panel->setVisible(initiallyVisible);
-        if (entry.cleanup) m_panelCleanups.emplace(entry.panelKey, entry.cleanup);
-        addPanel(panel);
-        if (getPanelByKey(entry.panelKey) != panel.get())
-            throw std::runtime_error("Could not attach factory panel: " + entry.panelKey);
-    } catch (...) {
-        m_panelCleanups.erase(entry.panelKey);
-        if (entry.cleanup) {
-            try { entry.cleanup(panel); }
-            catch (...) { LOG_ERROR("UIRoot", "Factory rollback cleanup failed: " + entry.panelKey); }
-        }
-        if (panel && getPanelByKey(entry.panelKey) == panel.get()) removePanel(entry.panelKey);
-        throw;
-    }
-    return panel;
-}
-
 void UIRoot::requireUIThread() const {
     if (!isUIThread()) throw std::logic_error("Native panel lifecycle requires the UI thread");
 }
@@ -129,8 +78,6 @@ void UIRoot::unregisterPanel(UIPanel* panel) noexcept
     }
     m_panelKeyMap.erase(key);
     m_panels.erase(found);
-    // Destruction does not call derived methods or factory cleanup callbacks.
-    m_panelCleanups.erase(key);
 }
 
 void UIRoot::addPanel(const std::shared_ptr<UIPanel>& panel)
@@ -147,13 +94,7 @@ void UIRoot::removePanel(const std::string& name)
         auto panel = getPanel(name);
         if (!panel) return;
         // Stop native attachments and panel-owned activity before detaching.
-        // Cleanup runs on the UI thread, outside the panel collection lock.
         panel->setVisible(false);
-        auto cleanup = m_panelCleanups.extract(panel->getPanelKey());
-        if (!cleanup.empty()) {
-            try { cleanup.mapped()(m_ownedPanels.at(panel)); }
-            catch (...) { LOG_ERROR("UIRoot", "Panel cleanup failed: " + panel->getPanelKey()); }
-        }
         std::unique_lock lock(m_panelMutex);
         GRIM::UI::InputRouter::get().forgetPanel(panel->getPanelID());
         m_panelKeyMap.erase(panel->getPanelKey());

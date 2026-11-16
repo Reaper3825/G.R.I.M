@@ -2,8 +2,9 @@
 
 #include "../geospatial_panel_controller.hpp"
 #include "core/platform_window.hpp"
-#include "ui/ui_camera.hpp"
+#include "../ui_camera.hpp"
 
+#include <bgfx/bgfx.h>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -14,7 +15,7 @@ namespace GRIM::GeoSpatial {
 
 class GeoSpatialRuntime final : public GeoSpatialPanelController {
 public:
-    GeoSpatialRuntime();
+    explicit GeoSpatialRuntime(bgfx::ViewId viewId);
     ~GeoSpatialRuntime() override;
 
     GeoSpatialPanelSnapshot snapshot() const override;
@@ -66,6 +67,7 @@ private:
     GeoSpatialPanelSnapshot snapshot_{};
     std::unique_ptr<CesiumRuntimeContext> cesium_;
     std::weak_ptr<UINative3DViewportAttachment> viewportAttachment_;
+    const bgfx::ViewId viewId_;
     UICamera camera_;
     double elapsedSeconds_ = 0.0;
     int viewportLastX_ = 0;

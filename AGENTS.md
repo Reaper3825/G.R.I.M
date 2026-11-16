@@ -19,6 +19,10 @@
 
 - Voice capture, transcription, wake detection, TTS providers, playback, caches and bridge workers are owned by `plugins/voice_plugin` through API v10. Do not restore host voice exports, forwarding services, automatic conversation dispatch or detached precache threads. Application consumers must use explicit tools or copied status/transcript resources.
 
+## GeoSpatial ownership
+
+- The GeoSpatial panel, globe camera, Cesium runtime, render passes, and related state belong to `plugins/geospatial_plugin`. The host supplies native UI, frame scheduling, and the shared bgfx context. Generic panel tools belong to `ui_plugin`.
+
 ## Application alias ownership
 
 - User application aliases, legacy user-alias compatibility reads, and portable/Start Menu discovery belong to `plugins/application_plugin` through API v12. Do not restore host alias caches, scanners, or alias-specific ABI services. Never overwrite the existing alias database during compatibility reads. ToolRegistry command aliases are separate.

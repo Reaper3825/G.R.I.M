@@ -41,7 +41,7 @@ struct Module {
     void publish(const std::string& replacing = {}) {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
             {GRIM::MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing), "Console provider publish failed");
-        GRIM::UI::activateProviderPanels(lease, {});
+        GRIM::UI::activateProviderPanels(lease);
     }
     void close() {
         if (!handle) return;

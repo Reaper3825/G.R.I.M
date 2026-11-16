@@ -57,7 +57,7 @@ struct Module {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
             {GRIM::MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing),
             "DataHub provider publication failed");
-        GRIM::UI::activateProviderPanels(lease, {});
+        GRIM::UI::activateProviderPanels(lease);
     }
     void close() {
         if (!handle) return;

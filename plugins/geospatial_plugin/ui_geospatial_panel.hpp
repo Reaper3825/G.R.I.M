@@ -7,7 +7,7 @@
 #include "primitives/ui_inputbox.hpp"
 #include "primitives/ui_slider.hpp"
 #include "primitives/ui_toggle.hpp"
-#include "../geospatial_panel_controller.hpp"
+#include "geospatial_panel_controller.hpp"
 
 #include <memory>
 #include <string>

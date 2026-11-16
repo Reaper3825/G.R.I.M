@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v14.0
+// G.R.I.M Plugin API v15.1
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,8 +20,8 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 14
-#define GRIM_API_VERSION_MINOR 0
+#define GRIM_API_VERSION_MAJOR 15
+#define GRIM_API_VERSION_MINOR 1
 #define GRIM_API_VERSION_PATCH 0
 
 #define GRIM_API_VERSION ((GRIM_API_VERSION_MAJOR << 16) | (GRIM_API_VERSION_MINOR << 8) | GRIM_API_VERSION_PATCH)
@@ -280,6 +280,7 @@ typedef struct GrimPluginAPI {
     // ========================================================================
     // Timer & Scheduling
     // ========================================================================
+    // A repeating timer with interval_ms == 0 runs once per host frame.
     GrimTimerHandle (*create_timer)(const GrimPluginAPI* self, uint64_t interval_ms, bool repeat, GrimTimerCallback callback, void* user_data);
     GrimResult (*cancel_timer)(const GrimPluginAPI* self, GrimTimerHandle handle);
     
@@ -333,14 +334,6 @@ typedef struct GrimPluginAPI {
     // but cannot undo an effect already applied. Table/descriptor layouts unchanged.
     const char* (*ui_panel_service)(const GrimPluginAPI* self, GrimUIPanelOperation operation,
                                     const char* panel_key, uint64_t request_id);
-    // v3.17: UI permission. Initialization-only declaration of a host panel
-    // implementation (1-256 bytes). Copied and staged until provider commit.
-    // GRIM_OK accepts the declaration; UI-thread creation is asynchronous.
-    // Resource ownership is the calling provider generation; the host owns the
-    // visual instance and removes it when that provider retires.
-    // This selects a host factory, not provider-defined content. Target contract:
-    // docs/ui/PANEL_OPERATIONS.md#provider-defined-panel-ownership-contract
-    GrimResult (*register_ui_panel)(const GrimPluginAPI* self, const char* implementation_key);
     // v5.0: Generic provider identity (JSON name/instance/path); string_free releases it.
     const char* (*get_provider_identity)(const GrimPluginAPI* self);
     // Copy an entire resource kind atomically. JSON array <=64 MiB, <=10000 entries.

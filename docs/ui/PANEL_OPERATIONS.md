@@ -87,7 +87,7 @@ not a central list of every provider's panels.
 The migration preserves the seven existing root panels and their tab composition.
 Schedule owns Calendar; Console Plugin owns Console; Settings Plugin owns Settings;
 Model Workspace owns Training Control; Storage Plugin owns Shared Storage; DataHub
-Plugin owns DataHub. GeoSpatial remains a migration target.
+Plugin owns DataHub. GeoSpatial Plugin owns GeoSpatial.
 
 | Panel key | Owning provider |
 |---|---|
@@ -97,7 +97,7 @@ Plugin owns DataHub. GeoSpatial remains a migration target.
 | `training_control` | Model Workspace Plugin (migrated) |
 | `data_hub` | DataHub Plugin (migrated) |
 | `storage` | Storage Plugin (migrated) |
-| `geospatial` | GeoSpatial (new) |
+| `geospatial` | GeoSpatial Plugin |
 
 Model Workspace retains Home, Knowledge Gaps, Tool Gaps, Model Config, Tokenizer,
 Observatory, World Lab, Assets, and Tools in the existing Training Control panel.
@@ -109,20 +109,19 @@ the domain services it consumes to that provider.
 
 Providers own concrete `UIPanel` subclasses and their native widgets and callbacks.
 They import the existing host UI implementation through its exported C++ interface.
-Native UI plugins require the matching compiler, CRT and UI class ABI; API v14
+Native UI plugins require the matching compiler, CRT and UI class ABI; API v15
 rejects older binaries. Domain services remain with their respective providers.
 
-Calendar in Schedule, Console in Console Plugin, Settings in Settings Plugin, Training Control in Model Workspace, Shared Storage in Storage Plugin, and DataHub in DataHub Plugin use this path. Constructor registration stages
+Calendar in Schedule, Console in Console Plugin, Settings in Settings Plugin, Training Control in Model Workspace, Shared Storage in Storage Plugin, DataHub in DataHub Plugin, and GeoSpatial in
+GeoSpatial Plugin use this path. Constructor registration stages
 ownership under the loader's initialization scope. Commit attaches the same object;
 retirement detaches it before provider shutdown destroys it. No JSON widget tree,
 interaction-event transport or generic copied-content panel remains.
 
-### Current gap
-
-The UI plugin still declares GeoSpatial through `register_ui_panel`.
-Its provider migration remains outstanding. Dynamic surfaces and OSINT keep
-their own lifecycle paths. The generic `ui.list` response still lacks owner
-metadata; World Lab reads provider ownership from the resource registry.
+GeoSpatial Plugin also owns the Cesium runtime and registers its tick through
+the host's gated frame dispatch. The host supplies the viewport primitives and
+bgfx context. Dynamic surfaces and OSINT use their own lifecycle paths. World
+Lab reads panel ownership from the resource registry.
 
 ## Current panel identity
 
@@ -151,7 +150,7 @@ they are not generated from titles and require no database.
 | `geospatial` | GeoSpatial |
 
 These are the seven current provider-declared panels. Calendar belongs to
-Schedule; Console belongs to Console Plugin; Settings belongs to Settings Plugin; Training Control belongs to Model Workspace; Shared Storage belongs to Storage Plugin; DataHub belongs to DataHub Plugin; GeoSpatial still belongs to the UI plugin. Physical and digital
+Schedule; Console belongs to Console Plugin; Settings belongs to Settings Plugin; Training Control belongs to Model Workspace; Shared Storage belongs to Storage Plugin; DataHub belongs to DataHub Plugin; GeoSpatial belongs to GeoSpatial Plugin. Physical and digital
 environment panels are no longer registered; the Model Registry panel source is
 excluded from the host build.
 
