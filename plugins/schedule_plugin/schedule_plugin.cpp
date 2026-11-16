@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 #include "schedule_provider.hpp"
 #include "calendar_panel.hpp"
@@ -32,7 +33,7 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if(!api || (api->api_version>>16)!=GRIM_API_VERSION_MAJOR || api->api_version<GRIM_API_VERSION ||
-        !api->create_timer || !api->cancel_timer || !api->replace_resources || !api->show_notification || !api->register_tools ||
+        !api->subscribe_system_tick || !api->replace_resources || !api->show_notification || !api->register_tools ||
         !api->string_free || !api->log) return GRIM_ERROR_API_VERSION_MISMATCH;
     provider=std::make_unique<grim::scheduling::Provider>(api);
     using Json=nlohmann::json;
@@ -63,22 +64,19 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Patch fields on an item with matching revision. Kind cannot change. Timer duration restarts from now; changing alarm/reminder start rearms delivery. Title-only changes do not rearm. Fetch again on conflict.",
         "Delete an item with matching revision. Prevents future dispatch; cannot recall a notification already handed to the host. Missing ids return not_found.",
         "With id, inspect the item and delivery state. Without id, inspect supported kinds and device delivery capabilities. Dispatched means handed to the host, not acknowledged or delivered by a native device."};
-    const char* examples[]={R"(schedule.create {"kind":"timer","title":"Check oven","duration_seconds":600})",
-        R"(schedule.get {"id":"example"})",R"(schedule.list {"kind":"event","limit":20})",
-        R"(schedule.update {"id":"example","revision":1,"title":"Updated title"})",
-        R"(schedule.cancel {"id":"example","revision":1})",R"(schedule.status {})"};
+
     const char* tags[]={"scheduling","calendar"};
     std::array<std::string,6> ids,schemaText,usage;
-    std::array<GrimToolRegistration,6> registrations;
+    std::array<GRIM::PluginToolRegistration,6> registrations;
     for(size_t i=0;i<6;++i) {
         ids[i]="schedule."+std::string(operations[i]);schemaText[i]=schemas[i].dump();usage[i]=ids[i]+" <json>";
-        auto& tool=registrations[i];tool.handler=call;tool.user_data=const_cast<char*>(operations[i]);tool.usage_type=GRIM_TOOL_USAGE_MODEL;tool.short_description=summaries[i];
+        auto& tool=registrations[i];tool.handler=call;tool.user_data=const_cast<char*>(operations[i]);tool.descriptor.usage_type=GRIM::MMO::ToolUsage::Model;tool.descriptor.short_description=summaries[i];
         auto& d=tool.descriptor;d.tool_id=d.display_name=ids[i].c_str();d.version="1.0.0";d.description=descriptions[i];d.usage=usage[i].c_str();
         d.category="scheduling";d.argument_format="json";d.argument_schema_json=schemaText[i].c_str();
-        d.required_permissions=GRIM_PERM_SYSTEM|GRIM_PERM_FILESYSTEM|GRIM_PERM_UI;d.is_informational=i==1 || i==2 || i==5;
-        d.needs_confirmation=!d.is_informational;d.examples={&examples[i],1};d.capability_tags={tags,2};
+        d.permission_bits=GRIM_PERM_SYSTEM|GRIM_PERM_FILESYSTEM|GRIM_PERM_UI;d.is_informational=i==1 || i==2 || i==5;
+        d.needs_confirmation=!d.is_informational;d.capability_tags.assign(tags, tags + 2);
     }
-    const auto result=api->register_tools(api,registrations.data(),registrations.size());
+    const auto result=GRIM::registerPluginTools(api,registrations.data(),registrations.size());
     if(result!=GRIM_OK) return result;
     try {
         provider->prepare();

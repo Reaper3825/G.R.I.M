@@ -9,16 +9,15 @@
 #include "MMO/Core/Registries/ProviderRegistry.hpp"
 
 void UIRoot::bindPanelResource(const std::string& key, uint64_t runtime,
-                              const std::string& provider, const std::string& instance) {
+                              const std::string& instance) {
     if (!isUIThread()) throw std::logic_error("Panel resource binding requires the UI thread");
     const auto panel = getPanelByKey(key);
     if (!panel || panel->getPanelID() != runtime || m_panelResources.count(key))
         throw std::logic_error("Panel resource identity is missing, stale, or already bound");
-    GRIM::MMO::RegisteredResource r;
-    r.provider = {GRIM::MMO::ToolProviderType::Plugin, provider, instance, {}};
+    GRIM::MMO::ResourceDescriptor r;
     r.resource_id = "panel:" + key; r.kind = "ui.panel";
     r.name = panel->getTitle(); r.runtime_id = runtime;
-    m_panelResources.emplace(key, std::move(r));
+    m_panelResources.emplace(key, PanelResourceBinding{instance, std::move(r)});
     synchronizePanelResources();
 }
 
@@ -26,16 +25,16 @@ void UIRoot::synchronizePanelResources() {
     auto& registry = GRIM::MMO::ProviderRegistry::instance();
     for (auto it = m_panelResources.begin(); it != m_panelResources.end();) {
         auto panel = getPanelByKey(it->first);
-        auto& r = it->second;
+        auto& [instance, r] = it->second;
         if (!panel || panel->getPanelID() != r.runtime_id) {
-            registry.removeResource(r.provider, r); it = m_panelResources.erase(it); continue;
+            registry.removeResource(instance, r); it = m_panelResources.erase(it); continue;
         }
         r.name = panel->getTitle();
         const auto position = panel->getPosition(), size = panel->getSize();
         r.state = {{"visible", panel->isVisible()}, {"minimized", panel->isMinimized()},
             {"maximized", panel->isMaximized()}, {"position", {{"x", position.x}, {"y", position.y}}},
             {"size", {{"width", size.x}, {"height", size.y}}}, {"z_order", panel->getZOrder()}};
-        if (!registry.publishResource(r.provider, r)) { it = m_panelResources.erase(it); continue; }
+        if (!registry.publishResource(instance, r)) { it = m_panelResources.erase(it); continue; }
         ++it;
     }
 }
@@ -72,7 +71,7 @@ void UIRoot::unregisterPanel(UIPanel* panel) noexcept
     const auto& key = panel->getPanelKey();
     const auto resource = m_panelResources.find(key);
     if (resource != m_panelResources.end()) {
-        GRIM::MMO::ProviderRegistry::instance().removeResource(resource->second.provider, resource->second);
+        GRIM::MMO::ProviderRegistry::instance().removeResource(resource->second.providerInstance, resource->second.resource);
         m_panelResources.erase(resource);
     }
     m_panelKeyMap.erase(key);
@@ -99,7 +98,7 @@ void UIRoot::removePanel(const std::string& name)
         m_panelKeyMap.erase(panel->getPanelKey());
         const auto resource = m_panelResources.find(panel->getPanelKey());
         if (resource != m_panelResources.end()) {
-            GRIM::MMO::ProviderRegistry::instance().removeResource(resource->second.provider, resource->second);
+            GRIM::MMO::ProviderRegistry::instance().removeResource(resource->second.providerInstance, resource->second.resource);
             m_panelResources.erase(resource);
         }
 

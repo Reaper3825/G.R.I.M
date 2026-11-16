@@ -22,12 +22,12 @@ must be new consumers, not direct references to these implementation classes.
 
 ## Lifecycle
 
-Load stages tools, an idle observation resource and a generic host timer. It does
-not acquire a camera/screen or load an inference model. Explicit tools start
-capture. The provider owns processing policy; generic timer callbacks pump the
-physical stages, preserving calibration gating and source-frame coherence.
-Digital capture/primitives retain their joined workers. Shutdown cancels the
-timer, joins analysis/capture workers and releases engines and frame caches.
+Load stages tools, an idle observation resource and a system-tick subscription.
+Explicit tools start capture and inference. The provider pumps physical stages
+on the first host frame after each 33 ms polling deadline, preserving calibration
+gating and source-frame coherence. Digital capture and primitives retain their
+joined workers. The host drains tick callbacks before DLL shutdown joins
+analysis and capture workers and releases engines and frame caches.
 Stop/restart resets shutdown flags; there are no detached plugin workers.
 
 ## Tools

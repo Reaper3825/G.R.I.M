@@ -49,7 +49,7 @@ int main() try {
         resource.kind = "ui.panel"; resource.runtime_id = 1;
         resource.state = {{"visible", true}};
         const auto toolRevision = ToolRegistry::instance().version();
-        check(providers.publishResource(provider, resource), "navigation resource fixture");
+        check(providers.publishResource(provider.instance, resource), "navigation resource fixture");
         check(ToolRegistry::instance().version() == toolRevision, "Resource publication changed tool revision");
         session.synchronize();
         check(std::filesystem::last_write_time(file) == timestamp && loadJsonFile(file) == snapshot,
@@ -57,12 +57,12 @@ int main() try {
         auto replacement = provider; replacement.instance = "second";
         check(providers.publish(replacement, {}, provider.instance), "navigation replacement");
         check(providers.snapshot().resourceCount() == 0, "Replacement kept retired resources");
-        check(!providers.publishResource(provider, resource), "Retired provider republished resource");
-        check(providers.publishResource(replacement, resource), "Replacement resource fixture");
-        providers.removeResource(provider, resource);
+        check(!providers.publishResource(provider.instance, resource), "Retired provider republished resource");
+        check(providers.publishResource(replacement.instance, resource), "Replacement resource fixture");
+        providers.removeResource(provider.instance, resource);
         auto staleBinding = resource;
         ++staleBinding.runtime_id;
-        providers.removeResource(replacement, staleBinding);
+        providers.removeResource(replacement.instance, staleBinding);
         const auto current = providers.snapshot();
         check(current.providers.size() == 1 && current.providers.front().provider == replacement &&
               current.providers.front().resources == std::vector<ResourceDescriptor>{resource},
@@ -95,7 +95,7 @@ int main() try {
         resource.state = {{"format", "grim-system-info-resource"}, {"version", 1}, {"component", "cpu"},
             {"data", {{"cpu_cores", 12}}}, {"capture_time_ns", 123000000000LL},
             {"stale", false}, {"error", nullptr}};
-        check(providers.publishResource(provider, resource), "publish CPU fixture");
+        check(providers.publishResource(provider.instance, resource), "publish CPU fixture");
         LiveWorldSession session(providers);
         session.command("inspect CPU");
         check(session.history().back().feedback.starts_with("Action rejected") &&
@@ -112,7 +112,7 @@ int main() try {
         auto panel = resource;
         panel.resource_id = "panel:fixture"; panel.name = "Fixture panel"; panel.kind = "ui.panel";
         panel.state = {{"visible", true}, {"position", {{"x", 0}, {"y", 0}}}};
-        check(providers.publishResource(provider, panel), "publish refresh regression fixture");
+        check(providers.publishResource(provider.instance, panel), "publish refresh regression fixture");
         session.synchronize();
         check(session.history().back().action == "Resources changed" &&
               session.history().back().feedback == "Added: Hardware fixture / Fixture panel (panel:fixture)\n",
@@ -120,7 +120,7 @@ int main() try {
         const auto refreshHistory = session.history().size();
         for (int frame = 1; frame <= 100; ++frame) {
             panel.state["position"]["x"] = frame;
-            check(providers.publishResource(provider, panel), "publish animated panel state");
+            check(providers.publishResource(provider.instance, panel), "publish animated panel state");
             session.synchronize();
             check(session.history().size() == refreshHistory &&
                   session.observation().at("resource_inspection") == nlohmann::json(RegisteredResource{resource, provider}),
@@ -130,12 +130,12 @@ int main() try {
               "Silent refresh failed to update live resource state");
         const auto stableRevision = providers.resourceVersion();
         for (int frame = 0; frame < 10; ++frame) {
-            check(providers.publishResource(provider, panel), "republish unchanged panel state");
+            check(providers.publishResource(provider.instance, panel), "republish unchanged panel state");
             session.synchronize();
         }
         check(session.history().size() == refreshHistory && providers.resourceVersion() == stableRevision,
               "Unchanged publication created history or resource revision churn");
-        providers.removeResource(provider, panel); session.synchronize();
+        providers.removeResource(provider.instance, panel); session.synchronize();
         check(session.history().size() == refreshHistory + 1 &&
               session.history().back().feedback == "Removed: Hardware fixture / Fixture panel (panel:fixture)\n",
               "Resource removal was missed or repeated the room snapshot");
@@ -146,7 +146,7 @@ int main() try {
         check(session.history().back().feedback == "CPU\nLogical cores: 12\nStatus: Current", "legacy inspection format differs");
         resource.state["stale"] = true;
         resource.state["error"] = {{"kind", "exception"}, {"message", "Fixture capture failed"}};
-        check(providers.publishResource(provider, resource), "publish stale CPU");
+        check(providers.publishResource(provider.instance, resource), "publish stale CPU");
         session.synchronize();
         check(!session.observation().contains("resource_inspection"), "Refresh retained an outdated inspection");
         session.command("inspect cpu");
@@ -157,7 +157,7 @@ int main() try {
               historyState.at("resource_inspection").at("state").at("stale") == false,
               "Inspection changed capture provenance or historical state");
         resource.state["data"] = nullptr; resource.state["capture_time_ns"] = nullptr;
-        check(providers.publishResource(provider, resource), "publish unavailable CPU");
+        check(providers.publishResource(provider.instance, resource), "publish unavailable CPU");
         session.command("inspect CPU");
         check(session.history().back().feedback.find("CPU information unavailable") != std::string::npos &&
               session.history().back().feedback.find("Logical cores") == std::string::npos,
@@ -182,7 +182,7 @@ int main() try {
               resourceInspectionFeedback({resource, provider}).find("Primary: No") != std::string::npos, "Monitor formatting lost topology");
         // A display name cannot redirect a command to a different object.
         auto duplicate = resource; duplicate.resource_id = "other";
-        check(providers.publishResource(provider, duplicate), "publish ambiguous fixture");
+        check(providers.publishResource(provider.instance, duplicate), "publish ambiguous fixture");
         session.command("inspect CPU");
         check(session.history().back().feedback.starts_with("Action rejected: Ambiguous"), "Ambiguous object name was guessed");
         session.command("inspect-resource cpu");

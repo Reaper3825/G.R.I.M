@@ -56,7 +56,7 @@ void runLiveWorldUITests() {
         item.resource_id = "app:" + std::to_string(i);
         item.name = "Fixture app " + std::to_string(i);
         item.runtime_id = i + 1;
-        check(registry.publishResource(provider, item), "Fixture resource publication failed");
+        check(registry.publishResource(provider.instance, item), "Fixture resource publication failed");
     }
     frame({});
     check(renderedTestText.find("Fixture app 0") == std::string::npos, "Unselected room leaked resources onto the map");
@@ -86,7 +86,7 @@ void runLiveWorldUITests() {
     cpu.kind = "system_info.snapshot";
     cpu.state = {{"format", "grim-system-info-resource"}, {"version", 1}, {"component", "cpu"},
         {"data", {{"cpu_cores", 12}}}, {"capture_time_ns", 123000000000LL}, {"stale", false}, {"error", nullptr}};
-    check(registry.publishResource(provider, cpu), "Publish CPU tile fixture failed");
+    check(registry.publishResource(provider.instance, cpu), "Publish CPU tile fixture failed");
     frame({});
     click(liveFixtureTileLabel.x + 2, liveFixtureTileLabel.y + 2);
     check(renderedTestText.find("Logical cores: 12") != std::string::npos &&
@@ -96,7 +96,7 @@ void runLiveWorldUITests() {
     const auto inspectionHistorySize = view.session().history().size();
     for (int refresh = 1; refresh <= 10; ++refresh) {
         cpu.state["capture_time_ns"] = 123000000000LL + refresh;
-        check(registry.publishResource(provider, cpu), "Publish refreshed CPU reading failed");
+        check(registry.publishResource(provider.instance, cpu), "Publish refreshed CPU reading failed");
         frame({});
         check(view.session().history().size() == inspectionHistorySize &&
               renderedTestText.find("Logical cores: 12") != std::string::npos &&
@@ -113,7 +113,7 @@ void runLiveWorldUITests() {
     click(100, 108 + static_cast<float>(actionIndex + 1) * 25 + 12);
     check(view.session().world().location() != "system_hub", "Available action did not enter provider room");
     check(renderedTestText.find("Live UI fixture  (60 resources)") != std::string::npos, "Entered room grid missing");
-    registry.removeResource(provider, item);
+    registry.removeResource(provider.instance, item);
     frame({});
     check(renderedTestText.find("Live UI fixture  (59 resources)") != std::string::npos, "Grid missed resource removal");
     const auto identity = view.session().observation().at("session_id");

@@ -1,3 +1,4 @@
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "core/plugin_api.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
@@ -21,25 +22,14 @@ static void check(bool condition, const char* message) {
 static GrimResult registerTools(const GrimPluginAPI*, const GrimToolRegistration* tools, size_t count) {
     check(count == 1, "Expected one calculator tool");
     const auto& tool = tools[0];
-    const auto& d = tool.descriptor;
-    check(tool.usage_type == GRIM_TOOL_USAGE_MODEL && d.is_informational &&
-          !d.needs_confirmation && !d.required_permissions, "Invalid tool policy");
-    check(d.parameter_count == 1 && d.parameters[0].required &&
-          std::string(d.parameters[0].name) == "expression", "Missing expression parameter");
-    check(tool.binding_count == 1, "Missing tool documentation");
+    const auto descriptor = Json::parse(tool.descriptor_json,
+        tool.descriptor_json + tool.descriptor_size).get<ToolDescriptor>();
+    check(descriptor.usage_type == ToolUsage::Model && descriptor.is_informational &&
+          !descriptor.needs_confirmation && !descriptor.permission_bits, "Invalid tool policy");
+    check(descriptor.parameters.size() == 1 && descriptor.parameters[0].required &&
+          descriptor.parameters[0].name == "expression", "Missing expression parameter");
+    check(descriptor.bindings.size() == 1, "Missing tool documentation");
     handler = tool.handler;
-    ToolDescriptor descriptor;
-    descriptor.tool_id = d.tool_id;
-    descriptor.display_name = d.display_name;
-    descriptor.description = d.description;
-    descriptor.short_description = tool.short_description;
-    descriptor.usage = d.usage;
-    descriptor.category = d.category;
-    descriptor.argument_format = d.argument_format;
-    descriptor.is_informational = d.is_informational;
-    descriptor.needs_confirmation = d.needs_confirmation;
-    descriptor.usage_type = ToolUsage::Model;
-    descriptor.bindings.emplace(tool.bindings[0].placeholder, tool.bindings[0].type);
     return ProviderRegistry::instance().publish({ToolProviderType::Plugin, "Calculator Plugin", "calculator-test", {}}, {{descriptor,
         [](const std::string& arguments) {
             struct Capture { CommandResult result; int completions = 0; } capture;

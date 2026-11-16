@@ -13,7 +13,7 @@ void runTrainingToolsTests() {
     auto& registry = ToolRegistry::instance();
     auto& providers = ProviderRegistry::instance();
     const auto owner = [](const std::string& name) {
-        return ProviderDescriptor{ToolProviderType::Plugin, name, "fixture-1", {}};
+        return ProviderDescriptor{ToolProviderType::Plugin, name, "fixture-" + name, {}};
     };
     const auto retire = [&](const std::string& name) { providers.retire(name, owner(name).instance); };
     const auto handler = [](const std::string&) { return CommandResult{}; };

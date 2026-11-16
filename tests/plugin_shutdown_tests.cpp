@@ -40,7 +40,7 @@ GrimPluginAPI* createPluginAPI(const std::string& name, const std::string&, uint
     apis.emplace(name, std::move(instance));
     return result;
 }
-bool commitPluginTools(const GrimPluginAPI*, const GrimPluginAPI*) { return true; }
+bool commitPluginGeneration(const GrimPluginAPI*, const GrimPluginAPI*) { return true; }
 void beginPluginShutdown(const GrimPluginAPI*) {}
 void cleanupPluginContext(const GrimPluginAPI* api) {
     const auto name = *static_cast<const std::string*>(api->host_context);

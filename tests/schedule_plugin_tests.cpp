@@ -1,3 +1,4 @@
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "plugins/schedule_plugin/scheduling_service.hpp"
 #include "plugins/schedule_plugin/schedule_plugin.cpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
@@ -11,13 +12,13 @@ static GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration*
     assert(count==6);
     std::vector<GRIM::MMO::ToolRegistration> registrations;
     for(size_t i=0;i<count;++i) {
-        const auto& t=tools[i];assert(t.usage_type==GRIM_TOOL_USAGE_MODEL);
-        auto schema=Json::parse(t.descriptor.argument_schema_json);assert(schema["type"]=="object" && schema["additionalProperties"]==false);
-        GRIM::MMO::ToolDescriptor d;d.tool_id=t.descriptor.tool_id;d.display_name=d.tool_id;
-        d.argument_format="json";d.argument_schema_json=t.descriptor.argument_schema_json;
-        d.description=t.descriptor.description;d.short_description=t.short_description;d.usage_type=GRIM::MMO::ToolUsage::Model;
-        d.needs_confirmation=t.descriptor.needs_confirmation;d.is_informational=t.descriptor.is_informational;
-        auto handler=t.handler;auto context=t.user_data;
+        const auto& tool = tools[i];
+        auto d = Json::parse(tool.descriptor_json,
+            tool.descriptor_json + tool.descriptor_size).get<GRIM::MMO::ToolDescriptor>();
+        assert(d.usage_type == GRIM::MMO::ToolUsage::Model);
+        auto schema = Json::parse(d.argument_schema_json);
+        assert(schema["type"] == "object" && schema["additionalProperties"] == false);
+        auto handler=tool.handler;auto context=tool.user_data;
         registrations.push_back({d,[handler,context](const std::string& args){
             CommandResult result;GrimToolResultWriter writer;writer.host_context=&result;
             writer.complete=[](GrimToolResultWriter* w,const GrimToolResult* r){auto& value=*static_cast<CommandResult*>(w->host_context);
@@ -42,12 +43,10 @@ void runSchedulePluginTests() {
 
         GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;api.register_tools=registerTools;
         api.replace_resources=[](const GrimPluginAPI*,const char*,const char*,size_t){return GRIM_OK;};
-        api.create_timer=[](const GrimPluginAPI*,uint64_t,bool,GrimTimerCallback,void*){return reinterpret_cast<GrimTimerHandle>(1);};
-        api.cancel_timer=[](const GrimPluginAPI*,GrimTimerHandle){return GRIM_OK;};
+        api.subscribe_system_tick=[](const GrimPluginAPI*,GrimSystemTickCallback,void*){return GRIM_OK;};
         api.show_notification=[](const GrimPluginAPI*,const char*,const char* text){notifications.emplace_back(text);};
         api.log=[](const GrimPluginAPI*,GrimLogLevel,const char*){};
         auto lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
-        lease->providerName = "schedule_test";
         lease->owner = "fixture-1";
         prepareProviderPanelFixture(api, lease, true);
         auto oldApi=api;oldApi.api_version=12u<<16;

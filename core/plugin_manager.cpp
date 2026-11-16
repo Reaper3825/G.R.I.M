@@ -253,13 +253,10 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const Fingerpr
             info->api_version > GRIM_API_VERSION) throw std::runtime_error("Plugin API version mismatch");
         if (!info->name || !*info->name || !info->version || !*info->version)
             throw std::runtime_error("Invalid plugin identity");
-        candidate.declaredName = info->name;
-        if (oldApi && candidate.declaredName != previous->second.declaredName)
-            throw std::runtime_error("Replacement must retain provider identity");
         candidate.api = PluginAPI::createPluginAPI(info->name, path.string(),
             info->required_permissions, true, oldApi);
         initialized = true; // Shutdown must tolerate partially completed init.
-        if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginTools(candidate.api, oldApi))
+        if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginGeneration(candidate.api, oldApi))
             throw std::runtime_error("Initialization or provider publication rejected");
         candidate.fingerprint = stamp;
     } catch (const std::exception& error) {

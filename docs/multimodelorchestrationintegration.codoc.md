@@ -984,7 +984,7 @@ CommandRegistry import or separate command map remains.
 ### 14. Plugin provider publication (Phase 0.25)
 
 The host stages each plugin's tool registrations during initialization.
-`commitPluginTools()` publishes the generation through `ProviderRegistry::publish()`
+`commitPluginGeneration()` publishes the generation through `ProviderRegistry::publish()`
 after initialization succeeds. Reload replaces the provider and updates the
 global tool index atomically. `beginPluginShutdown()` retires the exact generation
 and drains active calls before the loader releases the plugin.

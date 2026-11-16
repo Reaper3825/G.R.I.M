@@ -20,12 +20,13 @@ void frame(UIPanel& panel, InputState input = {}) {
     panel.update(input, 0.016f); router.endFrame();
 }
 struct Module {
+    const char* const providerName = "Model Workspace Plugin";
     HMODULE handle;
     GrimPluginAPI api{};
     std::shared_ptr<GRIM::UI::ProviderPanelLease> lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
     void (*shutdown)();
     Module(const std::filesystem::path& path, const std::string& generation) {
-        lease->providerName = "Model Workspace Plugin"; lease->owner = generation;
+        lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
         api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
         handle = LoadLibraryW(path.c_str());
@@ -41,14 +42,14 @@ struct Module {
     }
     void publish(const std::string& replacing = {}) {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing), "ModelWorkspace provider publish failed");
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "ModelWorkspace provider publish failed");
         GRIM::UI::activateProviderPanels(lease);
     }
     void close() {
         if (!handle) return;
         GRIM::UI::retireProviderPanels(lease); shutdown();
         require(lease->nativePanels.empty(), "ModelWorkspace shutdown retained native objects");
-        GRIM::MMO::ProviderRegistry::instance().retire(lease->providerName, lease->owner);
+        GRIM::MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
         FreeLibrary(handle); handle = nullptr;
     }
     ~Module() { close(); }

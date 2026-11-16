@@ -43,7 +43,7 @@ int main() try {
     auto& registry = ToolRegistry::instance();
     auto& providers = ProviderRegistry::instance();
     const auto ownerFor = [](const std::string& id) {
-        return ProviderDescriptor{ToolProviderType::Plugin, "Tool fixture: " + id, "fixture-1", {}};
+        return ProviderDescriptor{ToolProviderType::Plugin, "Tool fixture: " + id, "fixture-" + id, {}};
     };
     const auto publishTool = [&](const ToolDescriptor& tool, ToolHandler handler) {
         return providers.publish(ownerFor(tool.tool_id), {{tool, std::move(handler)}});
@@ -130,8 +130,9 @@ int main() try {
     check(!publishTool(descriptor("alias"), echo), "Canonical name overwrote alias");
     check(registry.version() == version && registry.toolCount() == 1, "Rejected registrations mutated registry");
     auto foreign = first;
-    check(!providers.publish({ToolProviderType::Plugin, "other", "fixture-1", {}}, {{foreign, echo}}), "Provider replaced foreign tool");
-    check(!registry.unregisterTool("first", "other", "fixture-1"), "Provider removed foreign tool");
+    const auto foreignOwner = ownerFor("other");
+    check(!providers.publish(foreignOwner, {{foreign, echo}}), "Provider replaced foreign tool");
+    check(!registry.unregisterTool("first", foreignOwner.name, foreignOwner.instance), "Provider removed foreign tool");
     bool invalid = false;
     try { publishTool(descriptor("missing_handler"), {}); }
     catch (const std::invalid_argument&) { invalid = true; }
@@ -164,7 +165,7 @@ int main() try {
     auto replaced = descriptor("replaced");
     const auto oldOwner = ownerFor(replaced.tool_id);
     auto replacement = oldOwner;
-    replacement.instance = "fixture-2";
+    replacement.instance += "-replacement";
     publishTool(replaced, [&](const std::string&) {
         check(providers.publish(replacement, {{replaced, echo}}, oldOwner.instance),
               "In-flight provider replacement failed");

@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 #include "plugins/plugin_logging.hpp"
 #include "runtime/runtime_state.hpp"
@@ -109,19 +110,19 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
  std::lock_guard<std::mutex> lock(operationMutex);
  host=api; configured=false; tts=false; VoiceRuntime::reset(); grim::plugin::setLoggingAPI(api);
  try {
-  GrimToolRegistration registrations[15];
+  GRIM::PluginToolRegistration registrations[15];
   const char* descriptions[]={"Read voice status and the latest 64 transcript/wake/error events","Configure provider root, voice and whisper settings without starting devices",
    "Capture and transcribe speech without executing it","Start continuous transcription without conversation dispatch","Stop streaming transcription",
    "Explicitly initialize the configured TTS provider","Queue text for speech","Play a WAV file","Stop voice workers, models and playback",
    "Generate and cache common phrases synchronously","Start wake detection without command dispatch","Stop wake detection","Enumerate audio devices","Synthesize text to an audio file without playback","Read provider cache statistics"};
   for(size_t i=0;i<15;++i) {
    auto& r=registrations[i]; auto& d=r.descriptor; r.handler=call; r.user_data=const_cast<char*>(ids[i]);
-   r.usage_type=GRIM_TOOL_USAGE_DEBUG; r.short_description=descriptions[i];
+   r.descriptor.usage_type=GRIM::MMO::ToolUsage::Debug; r.descriptor.short_description=descriptions[i];
    d.tool_id=d.display_name=d.usage=ids[i]; d.version="2.0.0"; d.description=descriptions[i]; d.category="voice";
    d.argument_format="json"; d.argument_schema_json=R"({"type":"object"})";
-   d.required_permissions=permissions; d.is_informational=i==0 || i==12 || i==14; d.needs_confirmation=!d.is_informational;
+   d.permission_bits=permissions; d.is_informational=i==0 || i==12 || i==14; d.needs_confirmation=!d.is_informational;
   }
-  publish(); const auto registered=api->register_tools(api,registrations,15);
+  publish(); const auto registered=GRIM::registerPluginTools(api,registrations,15);
   if(registered!=GRIM_OK) { host=nullptr; grim::plugin::setLoggingAPI(nullptr); }
   return registered;
  } catch(...) { host=nullptr; grim::plugin::setLoggingAPI(nullptr); return GRIM_ERROR_UNKNOWN; }

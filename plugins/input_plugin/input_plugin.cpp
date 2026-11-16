@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 #include "input_commands.hpp"
 #include <nlohmann/json.hpp>
@@ -43,7 +44,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
         !api->has_permission || !api->is_provider_current) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
-    GrimToolRegistration tools[4];
+    GRIM::PluginToolRegistration tools[4];
     tools[0].handler = call<GRIM_INPUT_MOVE_MOUSE>; tools[1].handler = call<GRIM_INPUT_CLICK>;
     tools[2].handler = call<GRIM_INPUT_TYPE>; tools[3].handler = call<GRIM_INPUT_KEY>;
     const char* ids[] = {"move_mouse", "click", "type", "key"};
@@ -63,20 +64,20 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         "Raw text, including surrounding whitespace; provider types with a 15 ms delay",
         "Native key name, or a plus-separated combination; retains existing native key handling"};
     const char* tags[] = {"input", "computer_control"};
-    GrimToolParameter parameters[4];
+    GRIM::MMO::ToolParameter parameters[4];
     for (size_t i = 0; i < 4; ++i) {
-        tools[i].usage_type = GRIM_TOOL_USAGE_DEBUG;
-        tools[i].short_description = summaries[i];
+        tools[i].descriptor.usage_type = GRIM::MMO::ToolUsage::Debug;
+        tools[i].descriptor.short_description = summaries[i];
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0"; d.description = descriptions[i];
         d.usage = usages[i]; d.category = "action"; d.argument_format = "raw_text";
-        d.required_permissions = GRIM_PERM_INPUT;
+        d.permission_bits = GRIM_PERM_INPUT;
         d.is_informational = 0; d.needs_confirmation = 1;
         parameters[i].name = names[i]; parameters[i].type = "string";
         parameters[i].description = parameterDescriptions[i]; parameters[i].required = i != 1;
-        d.parameters = &parameters[i]; d.parameter_count = 1;
-        d.capability_tags = {tags, 2};
+        d.parameters = {parameters[i]};
+        d.capability_tags.assign(tags, tags + 2);
     }
-    return api->register_tools(api, tools, 4);
+    return GRIM::registerPluginTools(api, tools, 4);
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }

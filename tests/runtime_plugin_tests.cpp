@@ -13,7 +13,7 @@
 
 GRIM::UnifiedMemoryStorage g_memoryStorage;
 
-void runRuntimePluginTests(const std::filesystem::path& timerDirectory, const std::filesystem::path& memoryDirectory) {
+void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     namespace fs = std::filesystem;
     using namespace GRIM;
     using namespace GRIM::MMO;
@@ -34,7 +34,7 @@ void runRuntimePluginTests(const std::filesystem::path& timerDirectory, const st
             g_memoryStorage.shutdown();
             MemoryBufferRotation::instance().clear();
             std::error_code error;
-            for (const auto* name : {"timers_plugin.dll", "memory_plugin.dll", "records.fb", "records.json", "records.idx",
+            for (const auto* name : {"memory_plugin.dll", "records.fb", "records.json", "records.idx",
                                      "records.fb.tmp", "records.json.tmp", "records.idx.tmp"}) fs::remove(folder / name, error);
             fs::remove(folder, error);
         }

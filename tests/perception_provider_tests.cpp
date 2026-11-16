@@ -1,3 +1,4 @@
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "core/plugin_api.hpp"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -14,18 +15,29 @@ struct Tool { GrimToolHandler handler; void* context; };
 std::map<std::string,Tool> registered;
 std::string output;
 bool success=false;
-int timers=0, publications=0;
+GrimSystemTickCallback systemTick = nullptr;
+void* tickContext = nullptr;
+int publications=0;
 void check(bool ok,const char* text) { if (!ok) throw std::runtime_error(text); }
 GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration* tools,size_t count) {
-    for(size_t i=0;i<count;++i) registered.emplace(tools[i].descriptor.tool_id,Tool{tools[i].handler,tools[i].user_data});
+    for(size_t i=0;i<count;++i) {
+        const auto& tool = tools[i];
+        const auto descriptor = nlohmann::json::parse(tool.descriptor_json,
+            tool.descriptor_json + tool.descriptor_size).get<GRIM::MMO::ToolDescriptor>();
+        registered.emplace(descriptor.tool_id, Tool{tool.handler, tool.user_data});
+    }
     return GRIM_OK;
 }
 GrimResult publish(const GrimPluginAPI*,const char*,const char* json,size_t size) {
     const auto value=nlohmann::json::parse(json,json+size);
     check(value.is_array(),"Resources were not structured"); ++publications; return GRIM_OK;
 }
-GrimTimerHandle timer(const GrimPluginAPI*,uint64_t,bool,GrimTimerCallback,void*) { ++timers;return reinterpret_cast<void*>(1); }
-GrimResult cancel(const GrimPluginAPI*,GrimTimerHandle) { --timers;return GRIM_OK; }
+GrimResult subscribe(const GrimPluginAPI*, GrimSystemTickCallback callback, void* context) {
+    if (systemTick) return GRIM_ERROR_ALREADY_EXISTS;
+    systemTick = callback;
+    tickContext = context;
+    return GRIM_OK;
+}
 void log(const GrimPluginAPI*,GrimLogLevel,const char*) {}
 GrimResult complete(GrimToolResultWriter*,const GrimToolResult* result) {
     success=result->success;output=result->structured_output_json ? result->structured_output_json : "";return GRIM_OK;
@@ -49,11 +61,12 @@ int main(int argc,char** argv) try {
     auto stop=reinterpret_cast<void(*)()>(symbol("grim_plugin_shutdown"));
     check(init&&stop,"Missing exports");
     GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;api.register_tools=registerTools;
-    api.replace_resources=publish;api.create_timer=timer;api.cancel_timer=cancel;api.log=log;
+    api.replace_resources=publish;api.subscribe_system_tick=subscribe;api.log=log;
     auto old=api;old.api_version=8<<16;check(init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
     for(int pass=0;pass<2;++pass) {
         registered.clear();check(init(&api)==GRIM_OK,"Initialization failed");
-        check(registered.size()==7&&timers==1,"Tool/timer ownership incorrect");
+        check(registered.size()==7&&systemTick&&tickContext,"Tool/system tick ownership incorrect");
+        systemTick(0, 0, tickContext);
         check(!registered.count("perception_read_text"),"Legacy tool was retained");
         invoke("perception.observe","{}");check(success,"Idle observation failed");
         const auto state=nlohmann::json::parse(output);
@@ -62,10 +75,13 @@ int main(int argc,char** argv) try {
         invoke("perception.digital.start",R"({"interval_ms":0})");check(!success,"Invalid cadence accepted");
         invoke("perception.configure",R"({"operator":"missing","config":{}})");check(!success,"Unknown operator accepted");
         invoke("perception.calibrate","{}");check(!success,"Calibration without camera accepted");
-        stop();check(timers==0,"Shutdown retained timer");stop();
+        // The host closes the callback gate before calling DLL shutdown.
+        systemTick = nullptr;
+        tickContext = nullptr;
+        stop();stop();
     }
-    api.create_timer=[](const GrimPluginAPI*,uint64_t,bool,GrimTimerCallback,void*)->GrimTimerHandle{return nullptr;};
-    check(init(&api)!=GRIM_OK,"Timer failure accepted");stop();
+    api.subscribe_system_tick=[](const GrimPluginAPI*,GrimSystemTickCallback,void*){return GRIM_ERROR_UNKNOWN;};
+    check(init(&api)!=GRIM_OK,"System tick subscription failure accepted");stop();
 #ifdef _WIN32
     FreeLibrary(lib);
 #else

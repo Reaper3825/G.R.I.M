@@ -88,7 +88,7 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        api->api_version < GRIM_API_VERSION || !api->log || !api->create_timer)
+        api->api_version < GRIM_API_VERSION || !api->log || !api->subscribe_system_tick)
         return GRIM_ERROR_API_VERSION_MISMATCH;
 
     grim::plugin::setLoggingAPI(api);
@@ -104,14 +104,10 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI* api) {
     try {
         provider->startViewport();
-        if (!api->create_timer(api, 0, true, [](uint64_t, void* context) {
-                try {
-                    static_cast<GeoSpatialProvider*>(context)->runtime->tick(0.016f);
-                } catch (const std::exception& error) {
-                    LOG_ERROR("GeoSpatial Plugin", error.what());
-                }
-            }, provider.get()))
-            throw std::runtime_error("Could not schedule the GeoSpatial frame callback");
+        if (api->subscribe_system_tick(api, [](double deltaSeconds, double, void* context) {
+                static_cast<GeoSpatialProvider*>(context)->runtime->tick(static_cast<float>(deltaSeconds));
+            }, provider.get()) != GRIM_OK)
+            throw std::runtime_error("Could not subscribe to the system tick");
         return GRIM_OK;
     } catch (const std::exception& error) {
         LOG_ERROR("GeoSpatial Plugin", error.what());
@@ -120,7 +116,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI* ap
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
-    // The host has closed the timer gate and detached the panel on this thread.
+    // The host has closed the callback gate and detached the panel on this thread.
     provider.reset();
     grim::plugin::setLoggingAPI(nullptr);
 }

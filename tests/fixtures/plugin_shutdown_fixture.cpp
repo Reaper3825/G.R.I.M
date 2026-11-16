@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 #include <string>
 
@@ -19,8 +20,8 @@ extern "C" __declspec(dllimport) int grim_test_dependency();
 static void event(const char*, const void*, size_t, void*) {
     api->set_context(api, "fixture_event", FIXTURE_RESULT);
 }
-static void timer(uint64_t, void*) {
-    api->set_context(api, "fixture_timer", FIXTURE_RESULT);
+static void tick(double, double, void*) {
+    api->set_context(api, "fixture_tick", FIXTURE_RESULT);
 }
 static GrimResult run(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     if (std::string(call->arguments, call->arguments_size) == "reload") api->request_reload(api);
@@ -40,7 +41,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value)
     if (grim_test_dependency() != 42) return GRIM_ERROR_UNKNOWN;
 #endif
 #ifdef FIXTURE_TOOLS
-    GrimToolRegistration tool;
+    GRIM::PluginToolRegistration tool;
     tool.handler = run;
     auto& d = tool.descriptor;
     d.tool_id = d.display_name = FIXTURE_NAME;
@@ -49,17 +50,19 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value)
     d.usage = FIXTURE_NAME;
     d.category = "test";
     d.argument_format = "raw_text";
+    d.is_informational = false;
 #ifdef FIXTURE_COLLISION
     const char* aliases[] = {"reserved_fixture_tool"};
-    d.aliases = {aliases, 1};
+    d.aliases.assign(aliases, aliases + 1);
 #endif
-    if (api->register_tools(api, &tool, 1) != GRIM_OK) return GRIM_ERROR_INVALID_PARAM;
+    if (GRIM::registerPluginTools(api, &tool, 1) != GRIM_OK) return GRIM_ERROR_INVALID_PARAM;
 #ifdef FIXTURE_EXTRA
     tool.descriptor.tool_id = tool.descriptor.display_name = FIXTURE_NAME "-extra";
-    if (api->register_tools(api, &tool, 1) != GRIM_OK) return GRIM_ERROR_INVALID_PARAM;
+    if (GRIM::registerPluginTools(api, &tool, 1) != GRIM_OK) return GRIM_ERROR_INVALID_PARAM;
 #endif
     api->subscribe_event(api, "fixture_event", event, nullptr);
-    api->create_timer(api, 0, false, timer, nullptr);
+    if (const auto result = api->subscribe_system_tick(api, tick, nullptr); result != GRIM_OK)
+        return result;
 #endif
 #ifdef FIXTURE_FAIL_INIT
     return GRIM_ERROR_UNKNOWN;

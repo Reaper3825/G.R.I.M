@@ -22,21 +22,22 @@ class ProviderRegistry {
 public:
     static ProviderRegistry& instance();
 
-    // Publish a plugin generation and its tools together, including zero-tool providers.
+    // Create an unpublished generation that can receive resource updates.
+    void beginGeneration(const std::shared_ptr<const ProviderDescriptor>& provider);
+    // Publish a plugin generation with its tools and any resources it already owns.
     bool publish(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
-                 const std::string& old_instance = {},
-                 const std::vector<ResourceDescriptor>& resources = {});
+                 const std::string& old_instance = {});
     void retire(const std::string& provider, const std::string& instance);
 
     ProviderRegistrySnapshot snapshot() const;
     bool hasChanged(const ProviderRegistrySnapshot& snapshot) const;
 
     // Resource changes do not invalidate tool selections.
-    static void validateResources(const std::string& kind, const std::vector<ResourceDescriptor>& resources);
-    bool publishResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource);
+    // Single-resource operations address a published generation by its unique instance ID.
+    bool publishResource(const std::string& instance, const ResourceDescriptor& resource);
     bool replaceResources(const ProviderDescriptor& provider, const std::string& kind,
                           const std::vector<ResourceDescriptor>& resources);
-    void removeResource(const ProviderDescriptor& provider, const ResourceDescriptor& resource);
+    void removeResource(const std::string& instance, const ResourceDescriptor& resource);
     uint64_t resourceVersion() const;
 
 private:
@@ -51,11 +52,14 @@ private:
         std::unordered_map<std::string, std::shared_ptr<Entry>> tools;
         Resources resources;
     };
+    static Resources makeResourceBatch(const std::string& kind, const std::vector<ResourceDescriptor>& resources);
     Resources* providerResourcesLocked(const ProviderDescriptor& provider);
+    Resources* publishedResourcesForInstanceLocked(const std::string& instance);
 
     // Provider records and tool indexes share the ToolRegistry mutex.
     ToolRegistry& tools_;
     std::map<std::string, std::unique_ptr<ProviderRecord>> records_;
+    std::map<std::string, std::unique_ptr<ProviderRecord>> candidates_; // By instance.
     uint64_t resourceVersion_ = 0;
 };
 

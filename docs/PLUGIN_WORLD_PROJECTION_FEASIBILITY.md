@@ -22,7 +22,7 @@ The existing authored plugin room files are templates, not an availability sourc
 ## Existing integration points
 
 - `core/plugin_api_impl.cpp`: `PluginContext::pending`, `api_register_tools`,
-  `commitPluginTools`, and `beginPluginShutdown` provide the staging/commit/removal
+  `commitPluginGeneration`, and `beginPluginShutdown` provide the staging/commit/removal
   boundary. The host copies metadata and owns provider identity and generation.
 - `MMO/Core/Registries/ToolRegistry.cpp`: `replaceProvider` validates a candidate before
   swapping tools and aliases under one mutex. A rejected replacement retains the

@@ -1,6 +1,7 @@
 #pragma once
 #include "core/plugin_api.hpp"
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include <mutex>
 #include <string>
 namespace perceptionPlugin {
@@ -11,13 +12,14 @@ public:
     ~Runtime();
     nlohmann::json request(const std::string&, const nlohmann::json&);
 private:
-    static void tick(uint64_t, void*);
+    static constexpr auto pollInterval = std::chrono::milliseconds(33);
+    static void tick(double, double, void*);
     void pump();
     void stopPhysical();
     void publish();
     nlohmann::json snapshot();
     const GrimPluginAPI* api;
-    GrimTimerHandle timer = nullptr;
+    std::chrono::steady_clock::time_point nextPoll;
     std::mutex mutex;
     bool physical = false;
     std::string lastError;

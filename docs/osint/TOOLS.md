@@ -20,11 +20,11 @@ tools, with raw-text arguments rather than JSON parameter objects:
 | `osint_scan_secrets` | `<username>` | Obtains discovery results and scans found URLs for sensitive patterns |
 | `osint_show_secrets` | `<username> [--severity critical\|high\|medium\|low\|all]` | Reads existing JSONL with a minimum-severity filter |
 
-Aliases: **`sherlock` → `sherlock_sweep`**, **`osint` → `osint_report`**.
+Aliases: **`sherlock` â†’ `sherlock_sweep`**, **`osint` â†’ `osint_report`**.
 There is no `profile_self` registration. All descriptors request FILESYSTEM,
 NETWORK and PROCESS permissions. Six carry confirmation metadata;
 only `osint_show_secrets` is informational. Status can consume state.
-The source marks these tools `GRIM_TOOL_USAGE_IGNORE`; registration does not
+The source marks these tools `ToolUsage::Ignore`; registration does not
 promise normal model-catalog selection or literal console dispatch.
 
 [handleCommand](../../commands/commands_core.cpp#L39) sends typed text to the
@@ -121,8 +121,8 @@ implemented integrations in this collector.
 
 [Sensitive scanning](SCANNER.md#sensitive-scanning) owns detector, severity,
 storage, and redaction details. `osint_show_secrets --severity high` means
-**score ≥7**, including critical findings; medium is ≥5, critical ≥9, low/all
-≥0. Values are lowercase; an unrecognized value retains threshold zero.
+**score â‰¥7**, including critical findings; medium is â‰¥5, critical â‰¥9, low/all
+â‰¥0. Values are lowercase; an unrecognized value retains threshold zero.
 Missing logs and skipped malformed JSONL can produce successful empty displays.
 
 Use [OSINT panel](../ui/OSINT_PANEL.md) for presentation and

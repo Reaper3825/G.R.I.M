@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "host_memory.hpp"
 #include "plugins/plugin_logging.hpp"
 namespace {
@@ -17,7 +18,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     grim::runtime::host = api;
     grim::plugin::setLoggingAPI(api);
-    GrimToolRegistration tools[3];
+    GRIM::PluginToolRegistration tools[3];
     tools[0].handler = call<cmdRemember>; tools[1].handler = call<cmdRecall>; tools[2].handler = call<cmdForget>;
     const char* ids[] = {"remember", "recall", "forget"};
     const char* descriptions[] = {"Stage manual information in the host memory rotation pipeline", "Retrieve information from memory",
@@ -26,20 +27,20 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* summaries[] = {"Stage supplied information for the host memory pipeline",
         "Retrieve stored information matching the supplied memory query",
         "Check and flush matching memories without deleting records"};
-    GrimToolParameter parameters[3];
+    GRIM::MMO::ToolParameter parameters[3];
     for (size_t i = 0; i < 3; ++i) {
         auto& d = tools[i].descriptor;
-        tools[i].short_description = summaries[i];
+        tools[i].descriptor.short_description = summaries[i];
         d.tool_id = d.display_name = ids[i]; d.version = "1.0.0";
         d.description = descriptions[i]; d.usage = usages[i];
         d.category = i == 1 ? "information" : "action"; d.argument_format = "raw_text";
-        d.required_permissions = GRIM_PERM_MEMORY; d.is_informational = i == 1; d.needs_confirmation = i != 1;
+        d.permission_bits = GRIM_PERM_MEMORY; d.is_informational = i == 1; d.needs_confirmation = i != 1;
         parameters[i].name = i == 0 ? "text" : "query"; parameters[i].type = "string";
         parameters[i].description = i == 0 ? "Original manual memory text staged in the host rotation pipeline" :
             "Unmodified query for the existing host memory search";
-        parameters[i].required = 1; d.parameters = &parameters[i]; d.parameter_count = 1;
+        parameters[i].required = 1; d.parameters = {parameters[i]};
     }
-    return api->register_tools(api, tools, 3);
+    return GRIM::registerPluginTools(api, tools, 3);
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     grim::plugin::setLoggingAPI(nullptr); grim::runtime::host = nullptr;

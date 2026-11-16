@@ -1,16 +1,10 @@
 # Scheduling provider ownership
 
-API v8 loads timers and scheduling as ordinary plugin providers. The host owns
-registration, generation call gates, generic callback pumping and copied UI
-notification output. It owns no countdown queue, calendar store, schedule
-operation dispatcher or due-item logic.
-
-`timers_plugin` owns volatile steady-clock countdowns through `set_timer` and
-publishes `timers.queue`. Its 100 ms callback checks expiry. Unload/replacement
-cancels pending countdowns. It requires SYSTEM and UI permissions.
+The host owns registration, generation call gates, system tick dispatch and
+copied UI notifications. Schedule owns calendar storage and due-item logic.
 
 `schedule_plugin` owns six `schedule.*` tools, persistent UTC records and a
-one-second delivery callback. It requires SYSTEM, FILESYSTEM and UI permissions.
+one-second delivery poll driven by host system ticks. It requires SYSTEM, FILESYSTEM and UI permissions.
 API v14 makes Calendar a native `UIPanel` subclass owned by Schedule. It directly
 owns buttons, inputs, scrolling, layout and actions and uses the provider service.
 Constructor registration is staged during provider initialization. After commit,

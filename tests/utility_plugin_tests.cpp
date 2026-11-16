@@ -58,7 +58,7 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     const std::string expectedHelp = "[Help] Available commands:\n"
         "- remember <key> <value>\n- recall <key>\n- forget <key>\n"
         "- pwd\n- cd <dir>\n- ls\n- mkdir <dir>\n- rm <file>\n"
-        "- set_timer <seconds>\n- sysinfo\n- clean\n- help\n- voice\n- voice_stream\n";
+        "- sysinfo\n- clean\n- help\n- voice\n- voice_stream\n";
     // Both original handlers ignore arguments. Compare every result field,
     // including voice/category/color, rather than only visible message text.
     for (const auto* args : {"", "ignored arguments"}) {

@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 
 #include <algorithm>
@@ -410,10 +411,10 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION)
         return GRIM_ERROR_API_VERSION_MISMATCH;
     if (!api->register_tools) return GRIM_ERROR_INVALID_PARAM;
-    GrimToolRegistration tool;
+    GRIM::PluginToolRegistration tool;
     tool.handler = calculate;
-    tool.usage_type = GRIM_TOOL_USAGE_MODEL;
-    tool.short_description = "Evaluate arithmetic expressions with constants and mathematical functions";
+    tool.descriptor.usage_type = GRIM::MMO::ToolUsage::Model;
+    tool.descriptor.short_description = "Evaluate arithmetic expressions with constants and mathematical functions";
     auto& d = tool.descriptor;
     d.tool_id = d.display_name = "calculate";
     d.version = "1.0.0";
@@ -426,17 +427,14 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     d.category = "math";
     d.argument_format = "raw_text";
     d.is_informational = 1;
-    const GrimToolBinding binding{"t", "t"};
-    tool.bindings = &binding;
-    tool.binding_count = 1;
-    GrimToolParameter parameter;
+    d.bindings = {{"t", "t"}};
+    GRIM::MMO::ToolParameter parameter;
     parameter.name = "expression";
     parameter.type = "string";
     parameter.description = "Raw mathematical expression to evaluate";
     parameter.required = 1;
-    d.parameters = &parameter;
-    d.parameter_count = 1;
-    return api->register_tools(api, &tool, 1);
+    d.parameters = {parameter};
+    return GRIM::registerPluginTools(api, &tool, 1);
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}

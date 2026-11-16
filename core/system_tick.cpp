@@ -21,6 +21,11 @@ void tickApplicationFrame(const GRIMWindow& overlayWindow)
     constexpr float kDeltaSeconds = 0.016f;
     constexpr auto kFrameDuration = std::chrono::milliseconds(16);
     const auto frameStart = std::chrono::steady_clock::now();
+    static const auto firstFrameStart = frameStart;
+    static auto previousFrameStart = frameStart;
+    const auto deltaSeconds = std::chrono::duration<double>(frameStart - previousFrameStart).count();
+    const auto offsetSeconds = std::chrono::duration<double>(frameStart - firstFrameStart).count();
+    previousFrameStart = frameStart;
 
     PlatformWindow::ScrollDelta wheelDelta;
     bool quitRequested = false;
@@ -40,7 +45,7 @@ void tickApplicationFrame(const GRIMWindow& overlayWindow)
 
     UI::processPanelShortcuts();
     PluginManager::tick();
-    PluginAPI::processTimers(); // Dispatch gated plugin callbacks; providers own due-work policy.
+    PluginAPI::dispatchSystemTick(deltaSeconds, offsetSeconds);
 
     // Global bindings above retain raw hardware input. UI gestures stop when
     // another application owns activation; they cannot restart from a held key.

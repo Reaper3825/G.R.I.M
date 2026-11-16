@@ -26,24 +26,12 @@ No table or registration layout changes. World Lab uses these to protect observe
 panel references and release interrupted requests. See
 [manual UI dispatch](../docs/WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
 
-API v3.12 adds `registration.short_description`: an authored 5-12 word summary
-for the environment tool catalog. The host copies it into the canonical
-descriptor. The summary defaults to empty. See
-[catalog summaries](../docs/PLUGIN_API.md#catalog-summaries-v312).
-
-API v3.11 adds optional world binding labels. Supply `GrimToolBinding` entries
-through `registration.bindings` and `registration.binding_count`; the host copies
-them into `ToolDescriptor::bindings`. For `open {t}`, use `{"t", "t"}`.
-Model-facing usage uses shared world placeholders; binding maps stay system-facing.
-These labels do not change argument parsing or execution. Bindings default to empty. See [binding labels](../docs/PLUGIN_API.md#world-binding-labels-v311).
-
-API v3.10 adds per-tool usage classification. Set
-`registration.usage_type` to `GRIM_TOOL_USAGE_DEBUG`, `GRIM_TOOL_USAGE_MODEL`,
-`GRIM_TOOL_USAGE_SYSTEM`, or `GRIM_TOOL_USAGE_IGNORE`; omitted values default to
-Model. Perception wrappers are Debug, and no voice-plugin tool is Model-facing.
-See [classification and compatibility](../docs/PLUGIN_API.md#tool-usage-classification-v310).
-These source classifications take effect after rebuilding the affected plugins
-and the host.
+Use `GRIM::MMO::ToolDescriptor` for tool metadata and
+`GRIM::registerPluginTools` to submit registrations. Set `short_description`
+to an authored 5–12 word catalog summary, `bindings` to world binding labels
+such as `{{"t", "t"}}` for `open {t}`, and `usage_type` to the applicable
+`ToolUsage` value. The default usage type is `Model`. See
+[tool registration](../docs/PLUGIN_API.md#tool-registration).
 
 Use the standalone build to produce API v4 plugin libraries without configuring
 or building GRIM:
@@ -249,21 +237,17 @@ For deterministic DLL/resource tests, run
 `tests/run_plugin_shutdown.ps1 -BuildSystemInfoFixture`. Native detection/linking
 can be checked with `tests/run_system_info_native.ps1`.
 
-## Timers and memory plugins
-
-`timers_plugin` owns `set_timer`, countdown state, expiry and `timers.queue`
-resources. SYSTEM and UI permissions are required. Its generic callback runs
-from the host frame pump. Pending countdowns cancel on unload/replacement.
+## Schedule and memory plugins
 
 `memory_plugin` still uses host memory rotation/storage under MEMORY permission.
 Remember stages records; recall searches; forget flushes but does not delete.
 Memory state survives unload.
 
-Build focused timer/schedule DLL fixtures and run lifecycle checks with:
+Build the focused Schedule DLL fixture and run lifecycle checks with:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -BuildSchedulingFixtures
 
-These fixtures stay outside the live plugin directory. API v8 requires matching
+The fixture stays outside the live plugin directory. API v8 requires matching
 host and plugin rebuilds before deployment.
 
 ## Perception plugin

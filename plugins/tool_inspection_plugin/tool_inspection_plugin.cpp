@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "snapshot_registry.hpp"
 #include "plugins/plugin_logging.hpp"
 
@@ -25,7 +26,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         !api->get_tool_snapshot) return GRIM_ERROR_API_VERSION_MISMATCH;
     inspection::host = api;
     grim::plugin::setLoggingAPI(api);
-    GrimToolRegistration tools[3];
+    GRIM::PluginToolRegistration tools[3];
     tools[0].handler = call<cmdListTools>;
     tools[1].handler = call<cmdToolInfo>;
     tools[2].handler = call<cmdToolStats>;
@@ -35,14 +36,14 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* summaries[] = {"List registered tools and their documented descriptions",
         "Inspect a registered tool and its usage documentation",
         "Show recorded tool execution counts and success rates"};
-    const GrimToolBinding toolBindings[] = {{"t", "t"}};
-    tools[1].bindings = toolBindings; tools[1].binding_count = 1;
+    const std::map<std::string, std::string> toolBindings = {{"t", "t"}};
+    tools[1].descriptor.bindings = toolBindings;
     const char* names[] = {"category", "command_name", "limit"};
     const char* parameterDescriptions[] = {"Exact category; omitted lists all tools", "Canonical tool ID, display name, or registered alias", "Maximum rows; defaults to 20; retains existing integer-prefix parsing"};
-    GrimToolParameter parameters[3];
+    GRIM::MMO::ToolParameter parameters[3];
     for (size_t i = 0; i < 3; ++i) {
         auto& d = tools[i].descriptor;
-        tools[i].short_description = summaries[i];
+        tools[i].descriptor.short_description = summaries[i];
         d.tool_id = d.display_name = ids[i];
         d.version = "1.0.0";
         d.description = descriptions[i];
@@ -54,10 +55,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         parameters[i].type = i == 2 ? "number" : "string";
         parameters[i].description = parameterDescriptions[i];
         parameters[i].required = i == 1;
-        d.parameters = &parameters[i];
-        d.parameter_count = 1;
+        d.parameters = {parameters[i]};
     }
-    return api->register_tools(api, tools, 3);
+    return GRIM::registerPluginTools(api, tools, 3);
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     grim::plugin::setLoggingAPI(nullptr);

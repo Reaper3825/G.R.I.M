@@ -19,7 +19,6 @@ struct ProviderPanelLease {
     std::mutex mutex;
     std::atomic<bool> retired{false};
     std::string owner;
-    std::string providerName;
     std::vector<std::pair<std::string, uint64_t>> panels;
     std::vector<UIPanel*> nativePanels;
     bool registrationFailed = false;

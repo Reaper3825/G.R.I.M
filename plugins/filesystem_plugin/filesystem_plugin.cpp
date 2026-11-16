@@ -1,8 +1,8 @@
-// Filesystem provider owns operations, directory state and cleanup.
+#include "core/plugin_tool_registration.hpp"
+// Filesystem provider owns operations and captures its base directory at load.
 #include "core/plugin_api.hpp"
 #include <algorithm>
 #include <filesystem>
-#include <mutex>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -10,14 +10,13 @@
 
 namespace {
 namespace fs = std::filesystem;
-enum Operation { Pwd, Cd, Ls, Mkdir, Rm };
+enum Operation { Ls, Mkdir, Rm };
 struct Provider;
 struct OperationContext { Provider* provider; Operation operation; };
 struct Provider {
     const GrimPluginAPI* api;
-    fs::path currentDirectory = fs::current_path();
-    std::mutex directoryMutex;
-    OperationContext operations[5] = {{this, Pwd}, {this, Cd}, {this, Ls}, {this, Mkdir}, {this, Rm}};
+    const fs::path currentDirectory = fs::current_path();
+    OperationContext operations[3] = {{this, Ls}, {this, Mkdir}, {this, Rm}};
     explicit Provider(const GrimPluginAPI* value) : api(value) {}
     bool publishDirectory(const fs::path& directory) const {
         const auto path = directory.u8string();
@@ -50,9 +49,7 @@ GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void*
     const std::string argument(call->arguments ? call->arguments : "", call->arguments_size);
     auto& context = *static_cast<OperationContext*>(data);
     const auto op = context.operation;
-    auto& state = *context.provider;
-    auto& currentDirectory = state.currentDirectory;
-    std::lock_guard lock(state.directoryMutex);
+    const auto& currentDirectory = context.provider->currentDirectory;
     try {
         // A single raw path may contain spaces. Optional enclosing double quotes
         // are accepted; no shell expansion, flags, or multiple-path parsing.
@@ -61,7 +58,6 @@ GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void*
             pathText = pathText.substr(1, pathText.size() - 2);
         if (pathText.find('\0') != std::string::npos)
             return complete(writer, false, "[FS] Path contains a NUL byte", "ERR_FS_INVALID_PATH");
-        if (op == Pwd) return complete(writer, true, "[FS] Current directory: " + currentDirectory.string());
         if (op == Ls) {
             std::vector<std::string> names;
             for (const auto& entry : fs::directory_iterator(currentDirectory))
@@ -74,17 +70,6 @@ GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void*
         if (pathText.empty()) return complete(writer, false,
             "[FS] A path argument is required", "ERR_FS_NO_ARGUMENT");
         const auto path = currentDirectory / fs::path(pathText);
-        if (op == Cd) {
-            if (!fs::exists(path)) return complete(writer, false,
-                "[FS] Directory does not exist: " + pathText, "ERR_FS_NOT_FOUND");
-            if (!fs::is_directory(path)) return complete(writer, false,
-                "[FS] Path is not a directory: " + pathText, "ERR_FS_NOT_DIRECTORY");
-            auto nextDirectory = fs::canonical(path);
-            if (!state.publishDirectory(nextDirectory)) return complete(writer, false,
-                "[FS] Working directory resource publication rejected", "ERR_FS_RESOURCE");
-            currentDirectory = std::move(nextDirectory);
-            return complete(writer, true, "[FS] Changed directory to: " + currentDirectory.string());
-        }
         if (op == Mkdir) {
             if (!fs::create_directory(path)) return complete(writer, false,
                 "[FS] Failed to create directory: " + path.string(), "ERR_FS_CREATE_FAILED");
@@ -104,7 +89,7 @@ GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void*
 
 extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
     static const GrimPluginInfo info{GRIM_API_VERSION, "Filesystem Plugin", "1.0.0",
-        "GRIM Project", "Working-directory navigation and basic filesystem operations",
+        "GRIM Project", "Basic filesystem operations",
         GRIM_PERM_FILESYSTEM};
     return &info;
 }
@@ -115,28 +100,23 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     try {
         provider = std::make_unique<Provider>(api);
-        const char* ids[] = {"pwd", "cd", "ls", "mkdir", "rm"};
-        const char* descriptions[] = {"Show the filesystem plugin's working directory",
-            "Change the filesystem plugin's working directory without changing the host process directory",
-            "List entries in the filesystem plugin's working directory",
+        const char* ids[] = {"ls", "mkdir", "rm"};
+        const char* descriptions[] = {"List entries in the filesystem plugin's working directory",
             "Create one directory; parent directories must already exist",
             "Remove one file, symlink, or empty directory; never recursively"};
-        const char* usages[] = {"pwd", "cd {c}", "ls", "mkdir {c}", "rm {t}"};
-        const char* summaries[] = {"Show the current filesystem working directory",
-            "Change the filesystem working directory to another container",
-            "List entries inside the current working directory",
+        const char* usages[] = {"ls", "mkdir {c}", "rm {t}"};
+        const char* summaries[] = {"List entries inside the current working directory",
             "Create a new directory within an existing parent",
             "Remove one file or empty directory without recursion"};
-        GrimToolRegistration tools[5];
-        const GrimToolBinding directoryBindings[] = {{"c", "c"}};
-        const GrimToolBinding pathBindings[] = {{"t", "t"}};
-        tools[1].bindings = directoryBindings; tools[1].binding_count = 1;
-        tools[3].bindings = directoryBindings; tools[3].binding_count = 1;
-        tools[4].bindings = pathBindings; tools[4].binding_count = 1;
-        GrimToolParameter paths[5];
-        for (size_t i = 0; i < 5; ++i) {
-            tools[i].usage_type = GRIM_TOOL_USAGE_SYSTEM;
-            tools[i].short_description = summaries[i];
+        GRIM::PluginToolRegistration tools[3];
+        const std::map<std::string, std::string> directoryBindings = {{"c", "c"}};
+        const std::map<std::string, std::string> pathBindings = {{"t", "t"}};
+        tools[Mkdir].descriptor.bindings = directoryBindings;
+        tools[Rm].descriptor.bindings = pathBindings;
+        GRIM::MMO::ToolParameter paths[3];
+        for (size_t i = 0; i < 3; ++i) {
+            tools[i].descriptor.usage_type = GRIM::MMO::ToolUsage::System;
+            tools[i].descriptor.short_description = summaries[i];
             tools[i].handler = execute;
             tools[i].user_data = &provider->operations[i];
             auto& d = tools[i].descriptor;
@@ -146,19 +126,18 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             d.usage = usages[i];
             d.category = "filesystem";
             d.argument_format = "raw_text";
-            d.required_permissions = GRIM_PERM_FILESYSTEM;
-            d.is_informational = i == Pwd || i == Ls;
+            d.permission_bits = GRIM_PERM_FILESYSTEM;
+            d.is_informational = i == Ls;
             d.needs_confirmation = !d.is_informational;
-            if (i == Cd || i == Mkdir || i == Rm) {
+            if (i == Mkdir || i == Rm) {
                 paths[i].name = "path";
                 paths[i].type = "path";
                 paths[i].description = "One absolute path or path relative to the plugin working directory; spaces allowed; optional enclosing double quotes";
                 paths[i].required = 1;
-                d.parameters = &paths[i];
-                d.parameter_count = 1;
+                d.parameters = {paths[i]};
             }
         }
-        const auto registered = api->register_tools(api, tools, 5);
+        const auto registered = GRIM::registerPluginTools(api, tools, 3);
         if (registered != GRIM_OK) return registered;
         return provider->publishDirectory(provider->currentDirectory) ? GRIM_OK : GRIM_ERROR_UNKNOWN;
     } catch (...) { return GRIM_ERROR_UNKNOWN; }

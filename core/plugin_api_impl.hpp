@@ -28,8 +28,8 @@ GrimPluginAPI* createPluginAPI(
 );
 
 // Publish the staged provider, tools and initial resources after successful initialization.
-bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr);
-bool commitPluginTools(const std::string& plugin_name);
+bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr);
+bool commitPluginGeneration(const std::string& plugin_name);
 // Host lifecycle thread only; never call from inside a plugin callback.
 void beginPluginShutdown(const GrimPluginAPI* api);
 void beginPluginShutdown(const std::string& plugin_name);
@@ -37,10 +37,8 @@ void beginPluginShutdown(const std::string& plugin_name);
 void cleanupPluginContext(const GrimPluginAPI* api);
 void cleanupPluginContext(const std::string& plugin_name);
 
-/**
- * Process timer callbacks (call from main loop)
- */
-void processTimers();
+/** Dispatch the frame tick to published plugin generations. */
+void dispatchSystemTick(double deltaSeconds, double offsetSeconds);
 
 /**
  * Emit an event to all subscribers

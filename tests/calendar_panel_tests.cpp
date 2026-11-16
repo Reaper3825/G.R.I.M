@@ -26,12 +26,13 @@ struct TestCalendar : grim::scheduling::CalendarPanel {
     }
 };
 struct Fixture {
+    const char* const providerName = "Native Calendar Fixture";
     GrimPluginAPI api{};
     std::shared_ptr<UI::ProviderPanelLease> lease = std::make_shared<UI::ProviderPanelLease>();
     std::unique_ptr<grim::scheduling::Provider> provider;
     std::unique_ptr<TestCalendar> calendar;
     explicit Fixture(const std::filesystem::path& path, const std::string& generation) {
-        lease->owner = generation; lease->providerName = "Native Calendar Fixture";
+        lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
         api.replace_resources = [](const GrimPluginAPI*, const char*, const char*, size_t) { return GRIM_OK; };
         api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
@@ -43,12 +44,12 @@ struct Fixture {
     }
     void publish(const std::string& replacing = {}) {
         require(MMO::ProviderRegistry::instance().publish(
-            {MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing), "Owner publication failed");
+            {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "Owner publication failed");
     }
     ~Fixture() {
         UI::retireProviderPanels(lease);
         calendar.reset(); provider.reset();
-        MMO::ProviderRegistry::instance().retire(lease->providerName, lease->owner);
+        MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
     }
 };
 void frame(TestCalendar& panel, InputState input = {}) {
@@ -142,16 +143,16 @@ void runNativeCalendarDllTests(const char* dllPath) {
         ("grim-calendar-dll-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directory(directory);
     struct Module {
+        const char* const providerName = "Schedule DLL Fixture";
         HMODULE handle = nullptr;
         GrimPluginAPI api{};
         std::shared_ptr<UI::ProviderPanelLease> lease = std::make_shared<UI::ProviderPanelLease>();
         void (*shutdown)() = nullptr;
         Module(const std::filesystem::path& path, const std::string& generation) {
-            lease->providerName = "Schedule DLL Fixture"; lease->owner = generation;
+            lease->owner = generation;
             api.api_version = GRIM_API_VERSION;
             api.register_tools = [](const GrimPluginAPI*, const GrimToolRegistration*, size_t count) { return count == 6 ? GRIM_OK : GRIM_ERROR_INVALID_PARAM; };
-            api.create_timer = [](const GrimPluginAPI*, uint64_t, bool, GrimTimerCallback, void*) { return reinterpret_cast<GrimTimerHandle>(1); };
-            api.cancel_timer = [](const GrimPluginAPI*, GrimTimerHandle) { return GRIM_OK; };
+            api.subscribe_system_tick = [](const GrimPluginAPI*, GrimSystemTickCallback, void*) { return GRIM_OK; };
             api.replace_resources = [](const GrimPluginAPI*, const char*, const char*, size_t) { return GRIM_OK; };
             api.show_notification = [](const GrimPluginAPI*, const char*, const char*) {};
             api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
@@ -168,14 +169,14 @@ void runNativeCalendarDllTests(const char* dllPath) {
         }
         void publish(const std::string& replacing = {}) {
             require(MMO::ProviderRegistry::instance().publish(
-                {MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing), "DLL provider publish failed");
+                {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "DLL provider publish failed");
             UI::activateProviderPanels(lease);
         }
         void close() {
             if (!handle) return;
             UI::retireProviderPanels(lease); shutdown();
             require(lease->nativePanels.empty(), "DLL shutdown did not destroy its panels");
-            MMO::ProviderRegistry::instance().retire(lease->providerName, lease->owner);
+            MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
             FreeLibrary(handle); handle = nullptr;
         }
         ~Module() { close(); }
@@ -204,7 +205,7 @@ void runNativeCalendarDllTests(const char* dllPath) {
         }
         {
             Module failed(directory / "failed.dll", "dll-failed");
-            failed.api.create_timer = [](const GrimPluginAPI*, uint64_t, bool, GrimTimerCallback, void*) -> GrimTimerHandle { return nullptr; };
+            failed.api.subscribe_system_tick = [](const GrimPluginAPI*, GrimSystemTickCallback, void*) { return GRIM_ERROR_UNKNOWN; };
             require(failed.init() != GRIM_OK, "Failed provider initialized successfully");
             failed.close(); require(!root.getPanelByKey("calendar"), "Failed DLL leaked Calendar");
         }

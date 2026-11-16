@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 // Fixed-response utility commands.
 #include "core/plugin_api.hpp"
 
@@ -28,7 +29,6 @@ GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
         "- ls\n"
         "- mkdir <dir>\n"
         "- rm <file>\n"
-        "- set_timer <seconds>\n"
         "- sysinfo\n"
         "- clean\n"
         "- help\n"
@@ -51,7 +51,7 @@ extern "C" PLUGIN_EXPORT const GrimPluginInfo* grim_plugin_get_info() {
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION)
         return GRIM_ERROR_API_VERSION_MISMATCH;
-    GrimToolRegistration tools[2];
+    GRIM::PluginToolRegistration tools[2];
     tools[0].handler = clean;
     tools[1].handler = help;
     const char* ids[] = {"clean", "help"};
@@ -61,7 +61,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* categories[] = {"system", "information"};
     for (size_t i = 0; i < 2; ++i) {
         auto& d = tools[i].descriptor;
-        tools[i].short_description = summaries[i];
+        tools[i].descriptor.short_description = summaries[i];
         d.tool_id = d.display_name = d.usage = ids[i];
         d.version = "1.0.0";
         d.description = descriptions[i];
@@ -70,7 +70,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.is_informational = i == 1;
         d.needs_confirmation = i == 0;
     }
-    return api->register_tools(api, tools, 2);
+    return GRIM::registerPluginTools(api, tools, 2);
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}

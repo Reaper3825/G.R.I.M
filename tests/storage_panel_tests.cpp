@@ -94,13 +94,14 @@ void checkResource(const std::string& generation, uint64_t runtime) {
     throw std::runtime_error("Storage provider resource missing");
 }
 struct Module {
+    const char* const providerName = "Storage Plugin";
     HMODULE handle;
     GrimPluginAPI api{};
     std::shared_ptr<GRIM::UI::ProviderPanelLease> lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
     GrimResult (*initialize)(const GrimPluginAPI*);
     void (*shutdown)();
     Module(const std::filesystem::path& path, const std::string& generation) {
-        lease->providerName = "Storage Plugin"; lease->owner = generation;
+        lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
         api.log = [](const GrimPluginAPI*, GrimLogLevel, const char* message) { pluginError = message; };
         handle = LoadLibraryW(path.c_str());
@@ -118,7 +119,7 @@ struct Module {
     }
     void publish(const std::string& replacing = {}) {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing),
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing),
             "Storage provider publication failed");
         GRIM::UI::activateProviderPanels(lease);
     }
@@ -126,7 +127,7 @@ struct Module {
         if (!handle) return;
         GRIM::UI::retireProviderPanels(lease); shutdown();
         require(lease->nativePanels.empty(), "Storage shutdown retained native panels");
-        GRIM::MMO::ProviderRegistry::instance().retire(lease->providerName, lease->owner);
+        GRIM::MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
         require(FreeLibrary(handle) != 0, "Storage DLL unload failed");
         handle = nullptr;
     }

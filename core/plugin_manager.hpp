@@ -30,7 +30,6 @@ private:
     struct LoadedPlugin {
         void* handle = nullptr;
         GrimPluginAPI* api = nullptr;
-        std::string declaredName;
         Fingerprint fingerprint;
         std::filesystem::path cacheDirectory;
     };

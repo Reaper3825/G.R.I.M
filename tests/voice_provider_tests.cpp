@@ -1,3 +1,4 @@
+#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "core/plugin_api.hpp"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -16,18 +17,21 @@ struct Tool { GrimToolHandler handler; void* context; };
 std::map<std::string,Tool> registered;
 std::string output;
 bool success=false;
-int timers=0, publications=0;
+int publications=0;
 void check(bool ok,const char* text) { if (!ok) throw std::runtime_error(text); }
 GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration* tools,size_t count) {
-    for(size_t i=0;i<count;++i) registered.emplace(tools[i].descriptor.tool_id,Tool{tools[i].handler,tools[i].user_data});
+    for(size_t i=0;i<count;++i) {
+        const auto& tool = tools[i];
+        const auto descriptor = nlohmann::json::parse(tool.descriptor_json,
+            tool.descriptor_json + tool.descriptor_size).get<GRIM::MMO::ToolDescriptor>();
+        registered.emplace(descriptor.tool_id, Tool{tool.handler, tool.user_data});
+    }
     return GRIM_OK;
 }
 GrimResult publish(const GrimPluginAPI*,const char*,const char* json,size_t size) {
     const auto value=nlohmann::json::parse(json,json+size);
     check(value.is_array(),"Resources were not structured"); ++publications; return GRIM_OK;
 }
-GrimTimerHandle timer(const GrimPluginAPI*,uint64_t,bool,GrimTimerCallback,void*) { ++timers;return reinterpret_cast<void*>(1); }
-GrimResult cancel(const GrimPluginAPI*,GrimTimerHandle) { --timers;return GRIM_OK; }
 void log(const GrimPluginAPI*,GrimLogLevel,const char*) {}
 GrimResult complete(GrimToolResultWriter*,const GrimToolResult* result) {
     success=result->success;output=result->structured_output_json ? result->structured_output_json : "";return GRIM_OK;
@@ -51,7 +55,7 @@ int main(int argc,char** argv) try {
     auto stop=reinterpret_cast<void(*)()>(symbol("grim_plugin_shutdown"));
     check(init&&stop,"Missing exports");
     GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;api.register_tools=registerTools;
-    api.replace_resources=publish;api.create_timer=timer;api.cancel_timer=cancel;api.log=log;
+    api.replace_resources=publish;api.log=log;
     auto old=api;old.api_version=9<<16;check(init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
     const auto testRoot=std::filesystem::temp_directory_path() / ("grim-voice-owned-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check(std::filesystem::create_directory(testRoot),"Cannot create private cache fixture");

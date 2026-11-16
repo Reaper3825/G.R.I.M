@@ -1,12 +1,14 @@
 #pragma once
 #include "core/plugin_api.hpp"
 #include "scheduling_service.hpp"
+#include <chrono>
 namespace grim::scheduling {
 class Provider {
+    static constexpr auto pollInterval = std::chrono::seconds(1);
     const GrimPluginAPI* api;
     SchedulingService service;
     std::mutex operationMutex;
-    GrimTimerHandle poller = nullptr;
+    std::chrono::steady_clock::time_point nextPoll;
     void publish(bool initial = false) {
         auto state = nlohmann::json{{"items",nlohmann::json::array()},{"ready",false}};
         auto delivery = nlohmann::json{{"persistent",true},{"active",!initial},{"unload_policy","suspend_until_reload"}};
@@ -25,18 +27,22 @@ class Provider {
         if (api->replace_resources(api,"schedule.state",text.data(),text.size()) != GRIM_OK)
             throw std::runtime_error("Schedule resource publication rejected");
     }
-    static void tick(uint64_t, void* value) noexcept {
-        try { static_cast<Provider*>(value)->poll(scheduleNow()); }
+    static void tick(double, double, void* value) noexcept {
+        auto& provider = *static_cast<Provider*>(value);
+        const auto now = std::chrono::steady_clock::now();
+        if (now < provider.nextPoll) return;
+        provider.nextPoll = now + pollInterval;
+        try { provider.poll(scheduleNow()); }
         catch (...) {} // Provider reports storage errors in its status/resources on the next successful poll.
     }
 public:
     explicit Provider(const GrimPluginAPI* value, std::filesystem::path path = {}) : api(value), service(std::move(path)) {}
-    ~Provider() { if (poller) api->cancel_timer(api,poller); }
     void prepare() {
         // Candidate generations do not touch storage or deliver notifications before publication.
         publish(true);
-        poller = api->create_timer(api,1000,true,tick,this);
-        if (!poller) throw std::runtime_error("Cannot schedule provider polling");
+        nextPoll = std::chrono::steady_clock::now() + pollInterval;
+        if (api->subscribe_system_tick(api, tick, this) != GRIM_OK)
+            throw std::runtime_error("Cannot subscribe to system ticks for schedule polling");
     }
     nlohmann::json execute(const std::string& op,const nlohmann::json& args,int64_t now = scheduleNow()) {
         std::lock_guard lock(operationMutex);

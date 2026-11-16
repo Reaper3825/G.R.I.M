@@ -97,11 +97,11 @@ Json physicalSnapshot() {
 Runtime::Runtime(const GrimPluginAPI* host) : api(host) {
     // No device acquisition, model loading, or worker starts during staged init.
     publish();
-    timer = api->create_timer(api, 33, true, tick, this);
-    if (!timer) throw std::runtime_error("Unable to register perception tick");
+    nextPoll = std::chrono::steady_clock::now() + pollInterval;
+    if (api->subscribe_system_tick(api, tick, this) != GRIM_OK)
+        throw std::runtime_error("Unable to register perception tick");
 }
 Runtime::~Runtime() {
-    if (timer) api->cancel_timer(api,timer);
     std::lock_guard lock(mutex);
     D::ShutdownDigitalPerceptionPrimitives();
     D::ShutdownDigitalEnvironment();
@@ -118,8 +118,11 @@ void Runtime::stopPhysical() {
     P::ShutdownPhysicalEnvironment();
     P::ResetPhysicalCalibrationState();
 }
-void Runtime::tick(uint64_t, void* context) {
+void Runtime::tick(double, double, void* context) {
     auto& self = *static_cast<Runtime*>(context);
+    const auto now = std::chrono::steady_clock::now();
+    if (now < self.nextPoll) return;
+    self.nextPoll = now + pollInterval;
     std::lock_guard lock(self.mutex);
     try { self.pump(); }
     catch (const std::exception& e) { self.lastError = e.what(); LOG_ERROR("PerceptionPlugin", self.lastError); }

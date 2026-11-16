@@ -65,7 +65,7 @@ void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
                 root.registerPanel(panel);
             }
             for (const auto& [key, runtime] : lease->panels)
-                root.bindPanelResource(key, runtime, lease->providerName, lease->owner);
+                root.bindPanelResource(key, runtime, lease->owner);
         } catch (const std::exception& error) {
             for (const auto& [key, runtime] : lease->panels) {
                 auto* panel = root.getPanelByKey(key);

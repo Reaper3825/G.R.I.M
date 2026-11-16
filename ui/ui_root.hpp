@@ -17,7 +17,7 @@
 
 // Include host_exports.hpp for GRIM_HOST_API macro
 #include "core/host_exports.hpp"
-#include "MMO/Core/Descriptors/RegisteredResource.hpp"
+#include "MMO/Core/Descriptors/ResourceDescriptor.hpp"
 
 struct InputState; // Forward declaration
 
@@ -61,7 +61,7 @@ public:
     // Optional cleanup releases external attachments on removal/shutdown or
     // post-construction failure. Constructors must roll back their own failures.
     void bindPanelResource(const std::string& key, uint64_t runtime,
-                           const std::string& provider, const std::string& instance);
+                           const std::string& instance);
     void removePanel(const std::string& name);
     UIPanel* getPanel(const std::string& name);
     // Borrowed UI-thread pointers; never retain across panel destruction.
@@ -129,7 +129,11 @@ private:
     std::unordered_map<std::string, UIPanel*> m_panelKeyMap;
     std::unordered_map<UIPanel*, std::shared_ptr<UIPanel>> m_ownedPanels;
     // UI-thread-owned implementation catalog; cleared at host shutdown.
-    std::unordered_map<std::string, GRIM::MMO::RegisteredResource> m_panelResources;
+    struct PanelResourceBinding {
+        std::string providerInstance;
+        GRIM::MMO::ResourceDescriptor resource;
+    };
+    std::unordered_map<std::string, PanelResourceBinding> m_panelResources;
     void synchronizePanelResources();
     OverlayRenderer m_renderer;  // Changed from UIRenderer to OverlayRenderer
     static constexpr int m_activePanelIndex = -1;  // Active panel always has zOrder = -1

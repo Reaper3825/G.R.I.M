@@ -59,14 +59,14 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
         return result;
     };
     check(context("fixture_activated") == "old-result:", "Initial activation did not run after commit");
-    // A staged candidate's subscriptions/timers must not replace the old ones.
+    // A staged candidate's event and tick subscriptions must not replace the old ones.
     install("failed");
     check(provider() && provider()->instance == firstInstance, "Failed init changed the published provider");
     check(registry.getTool("Declared-alpha")->provider.instance == firstInstance &&
           dispatchCommand("Declared-alpha", "").message == "old-result", "Failed init displaced working plugin");
     PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
-    PluginAPI::processTimers();
-    check(context("fixture_event") == "old-result" && context("fixture_timer") == "old-result",
+    PluginAPI::dispatchSystemTick(0, 0);
+    check(context("fixture_event") == "old-result" && context("fixture_tick") == "old-result",
           "Failed candidate cleanup removed old resources or exposed staged callbacks");
     auto version = registry.version();
     PluginManager::checkForHotReload();
@@ -99,8 +99,8 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
           dispatchCommand("Declared-alpha", "").message == "new-result", "Valid replacement was not committed");
     check(!registry.isRegistered("Declared-alpha-extra"), "Replacement retained a removed tool");
     PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
-    PluginAPI::processTimers();
-    check(context("fixture_event") == "new-result" && context("fixture_timer") == "new-result",
+    PluginAPI::dispatchSystemTick(0, 0);
+    check(context("fixture_event") == "new-result" && context("fixture_tick") == "new-result",
           "Retiring old generation removed replacement resources");
 
     const auto secondInstance = replacement->provider.instance;

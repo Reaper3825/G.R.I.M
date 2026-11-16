@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 #include "core/plugin_api.hpp"
 #include "application_tools.hpp"
 #include "shell_open.hpp"
@@ -103,7 +104,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         catalog->request("refresh", nlohmann::json::object());
     } catch (...) { catalog.reset(); userAliases.reset(); return GRIM_ERROR_UNKNOWN; }
 
-    GrimToolRegistration tools[2];
+    GRIM::PluginToolRegistration tools[2];
     tools[0].handler = openApplication;
     tools[1].handler = searchWeb;
     const char* ids[] = {"open", "search"};
@@ -111,19 +112,19 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* usages[] = {"open {t}", "search <query>"};
     const char* summaries[] = {"Open a selected entity through its available handler",
         "Search the web for information matching a query"};
-    const GrimToolBinding openBindings[] = {{"t", "t"}};
-    tools[0].bindings = openBindings; tools[0].binding_count = 1;
-    GrimToolParameter parameters[2];
+    const std::map<std::string, std::string> openBindings = {{"t", "t"}};
+    tools[0].descriptor.bindings = openBindings;
+    GRIM::MMO::ToolParameter parameters[2];
     for (size_t i = 0; i < 2; ++i) {
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = ids[i];
         d.version = "1.0.0";
         d.description = descriptions[i];
-        tools[i].short_description = summaries[i];
+        tools[i].descriptor.short_description = summaries[i];
         d.usage = usages[i];
         d.category = i == 0 ? "action" : "information";
         d.argument_format = "raw_text";
-        d.required_permissions = GRIM_PERM_PROCESS;
+        d.permission_bits = GRIM_PERM_PROCESS;
         d.is_informational = i == 1;
         d.needs_confirmation = i == 0;
         parameters[i].name = i == 0 ? "target" : "query";
@@ -131,10 +132,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         parameters[i].description = i == 0 ? "Application or file passed unchanged to the OS opener" :
             "Search text; surrounding whitespace is trimmed before opening the original Google search URL";
         parameters[i].required = 1;
-        d.parameters = &parameters[i];
-        d.parameter_count = 1;
+        d.parameters = {parameters[i]};
     }
-    const auto result = api->register_tools(api, tools, 2);
+    const auto result = GRIM::registerPluginTools(api, tools, 2);
     return result == GRIM_OK ? registerApplicationTools(api, *catalog) : result;
 }
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); userAliases.reset(); host = nullptr; }

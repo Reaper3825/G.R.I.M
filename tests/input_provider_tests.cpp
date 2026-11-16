@@ -8,7 +8,8 @@
 extern "C" GrimResult grim_plugin_init(const GrimPluginAPI*);
 extern "C" void grim_plugin_shutdown();
 namespace {
-std::vector<GrimToolRegistration> tools; bool permitted=true,current=true; std::vector<std::string> effects;
+struct RegisteredHandler { GrimToolHandler handler; void* user_data; };
+std::vector<RegisteredHandler> tools; bool permitted=true,current=true; std::vector<std::string> effects;
 void check(bool value,const char* message){if(!value) throw std::runtime_error(message);}
 GrimToolResult result; std::string message,error;
 GrimResult complete(GrimToolResultWriter*,const GrimToolResult* r){result=*r;message=r->message?r->message:"";error=r->error_code?r->error_code:"";return GRIM_OK;}
@@ -25,7 +26,7 @@ int main(){
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
  api.has_permission=[](const GrimPluginAPI*,GrimPermission){return permitted;};
  api.is_provider_current=[](const GrimPluginAPI*){return current;};
- api.register_tools=[](const GrimPluginAPI*,const GrimToolRegistration* t,size_t n){tools.assign(t,t+n);return GRIM_OK;};
+ api.register_tools=[](const GrimPluginAPI*,const GrimToolRegistration* t,size_t n){tools.clear(); for (size_t i = 0; i < n; ++i) tools.push_back({t[i].handler, t[i].user_data});return GRIM_OK;};
  auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
  check(grim_plugin_init(&api)==GRIM_OK && tools.size()==4,"Registration failed");check(effects.empty(),"Initialization injected input");
  permitted=false;check(invoke(1,"")==GRIM_ERROR_PERMISSION_DENIED && effects.empty(),"Permission bypass");permitted=true;

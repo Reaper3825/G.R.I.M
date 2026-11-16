@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 
 
 #include "core/plugin_api.hpp"
@@ -670,7 +671,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     grim::plugin::setLoggingAPI(api);
     g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin initializing...");
     
-    GrimToolRegistration tools[2];
+    GRIM::PluginToolRegistration tools[2];
     tools[0].handler = networkTestHandler;
     tools[1].handler = networkTestStopHandler;
     const char* names[] = {"networktest", "networktest_stop"};
@@ -678,11 +679,11 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     const char* usages[] = {"networktest {t} <port> [options...]", "networktest_stop"};
     const char* summaries[] = {"Start a network load test against selected targets",
         "Stop the currently running network load test"};
-    const GrimToolBinding targetBindings[] = {{"t", "t"}};
-    tools[0].bindings = targetBindings; tools[0].binding_count = 1;
+    const std::map<std::string, std::string> targetBindings = {{"t", "t"}};
+    tools[0].descriptor.bindings = targetBindings;
     for (size_t i = 0; i < 2; ++i) {
-        tools[i].usage_type = GRIM_TOOL_USAGE_IGNORE;
-        tools[i].short_description = summaries[i];
+        tools[i].descriptor.usage_type = GRIM::MMO::ToolUsage::Ignore;
+        tools[i].descriptor.short_description = summaries[i];
         auto& d = tools[i].descriptor;
         d.tool_id = d.display_name = names[i];
         d.version = "1.0.0";
@@ -690,17 +691,17 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         d.usage = usages[i];
         d.category = "network";
         d.argument_format = "raw_text";
-        d.required_permissions = GRIM_PERM_NETWORK;
+        d.permission_bits = GRIM_PERM_NETWORK;
+        d.is_informational = false;
         d.needs_confirmation = 1;
     }
-    GrimToolParameter args;
+    GRIM::MMO::ToolParameter args;
     args.name = "arguments";
     args.type = "string";
     args.description = "Target IP or @target-file, port, and options; invoke without arguments for option help";
     args.required = 1;
-    tools[0].descriptor.parameters = &args;
-    tools[0].descriptor.parameter_count = 1;
-    return api->register_tools(api, tools, 2);
+    tools[0].descriptor.parameters = {args};
+    return GRIM::registerPluginTools(api, tools, 2);
 }
 
 // Shutdown plugin

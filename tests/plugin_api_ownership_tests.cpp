@@ -1,3 +1,4 @@
+#include "core/plugin_tool_registration.hpp"
 // Exercise the real API implementation and registry with host service sinks.
 #include "core/plugin_api_impl.hpp"
 #include "core/plugin_manager.hpp"
@@ -44,8 +45,8 @@ GrimResult identify(const GrimToolCall*, GrimToolResultWriter* writer, void* dat
     message.assign(200, 'x');
     return status;
 }
-GrimToolRegistration definition(const char* id, GrimToolHandler handler = identify, void* data = nullptr) {
-    GrimToolRegistration tool;
+GRIM::PluginToolRegistration definition(const char* id, GrimToolHandler handler = identify, void* data = nullptr) {
+    GRIM::PluginToolRegistration tool;
     tool.handler = handler;
     tool.user_data = data;
     auto& d = tool.descriptor;
@@ -55,12 +56,13 @@ GrimToolRegistration definition(const char* id, GrimToolHandler handler = identi
     d.usage = "test [arguments]";
     d.category = "test";
     d.argument_format = "raw_text";
+    d.is_informational = false;
     return tool;
 }
 GrimResult registerOne(GrimPluginAPI* api, const char* id) {
     auto tool = definition(id, identify, api);
-    tool.descriptor.required_permissions = api->get_permissions(api);
-    return api->register_tools(api, &tool, 1);
+    tool.descriptor.permission_bits = api->get_permissions(api);
+    return GRIM::registerPluginTools(api, &tool, 1);
 }
 GrimResult missingResult(const GrimToolCall*, GrimToolResultWriter*, void*) { return GRIM_OK; }
 GrimResult doubleResult(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
@@ -91,12 +93,24 @@ void observe(const char*, const void*, size_t, void* data) {
     const auto* api = static_cast<const GrimPluginAPI*>(data);
     api->log(api, GRIM_LOG_INFO, "event");
 }
-void tick(uint64_t, void* data) { ++*static_cast<int*>(data); }
 void checkName(const GrimPluginAPI* api, const char* expected) {
     const auto* name = api->get_plugin_name(api);
     check(std::string(name) == expected, "Plugin identity changed after another load");
     api->string_free(api, name);
 }
+
+struct GenerationObserver : GRIM::MMO::ToolRegistryListener {
+    std::optional<GRIM::MMO::RegisteredTool> tool;
+    GRIM::MMO::ProviderRegistrySnapshot snapshot;
+
+    void onToolRegistered(const std::string&) override {}
+    void onToolUnregistered(const std::string&) override {}
+    void onToolUpdated(const std::string& id) override {
+        if (id != "generation_tool") return;
+        tool = GRIM::MMO::ToolRegistry::instance().getTool(id);
+        snapshot = GRIM::MMO::ProviderRegistry::instance().snapshot();
+    }
+};
 }
 
 void runPluginReconcileTests(const std::filesystem::path&, const std::filesystem::path&);
@@ -105,7 +119,7 @@ void runUtilityPluginTests(const std::filesystem::path&);
 void runApplicationPluginTests(const std::filesystem::path&);
 void runToolInspectionPluginTests(const std::filesystem::path&);
 void runSystemInfoPluginTests(const std::filesystem::path&);
-void runRuntimePluginTests(const std::filesystem::path&, const std::filesystem::path&);
+void runRuntimePluginTests(const std::filesystem::path&);
 void runUIPluginTests(const std::filesystem::path&);
 void runInputPluginTests(const std::filesystem::path&);
 
@@ -125,7 +139,7 @@ void runProviderResourceTests() {
     check(publish(first, copiedPayload) == GRIM_OK, "Cannot stage resources without tools");
     copiedPayload.assign(copiedPayload.size(), 'x');
     check(registry.snapshot().resourceCount() == baseline, "Staged resource leaked");
-    check(PluginAPI::commitPluginTools(first), "Resource-only provider commit failed");
+    check(PluginAPI::commitPluginGeneration(first), "Resource-only provider commit failed");
     check(first->is_provider_current(first) && registry.snapshot().resourceCount() == baseline + 1,
           "Initial resources missing at commit");
     for (const auto& group : registry.snapshot().providers)
@@ -140,12 +154,12 @@ void runProviderResourceTests() {
     auto* failed = PluginAPI::createPluginAPI("resource-provider", "replacement", 0, true, first);
     check(publish(failed, payload) == GRIM_OK && publish(failed, "[{}]") == GRIM_ERROR_INVALID_PARAM,
           "Invalid staged resources accepted");
-    check(!PluginAPI::commitPluginTools(failed, first), "Ignored resource error committed replacement");
+    check(!PluginAPI::commitPluginGeneration(failed, first), "Ignored resource error committed replacement");
     PluginAPI::cleanupPluginContext(failed);
     check(first->is_provider_current(first) && registry.snapshot().resourceCount() == baseline + 1,
           "Failed replacement removed current resources");
     auto* second = PluginAPI::createPluginAPI("resource-provider", "replacement", 0, true, first);
-    check(publish(second, payload) == GRIM_OK && PluginAPI::commitPluginTools(second, first), "Resource replacement failed");
+    check(publish(second, payload) == GRIM_OK && PluginAPI::commitPluginGeneration(second, first), "Resource replacement failed");
     check(!first->is_provider_current(first) && publish(first, "[]") == GRIM_ERROR_PLUGIN_NOT_LOADED,
           "Retired generation could mutate replacement");
     PluginAPI::cleanupPluginContext(first);
@@ -153,17 +167,99 @@ void runProviderResourceTests() {
     check(publish(second, "[]") == GRIM_OK && registry.snapshot().resourceCount() == baseline,
           "Empty resource batch did not remove kind");
     PluginAPI::cleanupPluginContext(second);
+
+    auto* old = PluginAPI::createPluginAPI("generation-provider", "old.dll", 0, true);
+    check(registerOne(old, "generation_tool") == GRIM_OK && publish(old, payload) == GRIM_OK &&
+          PluginAPI::commitPluginGeneration(old), "Initial mixed generation failed");
+    bool rejectedRename = false;
+    try {
+        auto* renamed = PluginAPI::createPluginAPI("renamed-provider", "new.dll", 0, true, old);
+        PluginAPI::cleanupPluginContext(renamed);
+    } catch (const std::invalid_argument&) {
+        rejectedRename = true;
+    }
+    check(rejectedRename, "Replacement changed the declared provider name");
+    auto* replacement = PluginAPI::createPluginAPI("generation-provider", "new.dll", 0, true, old);
+    auto newPayload = nlohmann::json::parse(payload);
+    newPayload[0]["state"]["value"] = 43;
+    check(registerOne(replacement, "generation_tool") == GRIM_OK &&
+          publish(replacement, newPayload.dump()) == GRIM_OK, "Staging mixed generation failed");
+
+    auto& tools = ToolRegistry::instance();
+    const auto oldInstance = tools.getTool("generation_tool").value().provider.instance;
+    GenerationObserver observer;
+    tools.addListener(&observer);
+    const bool committed = PluginAPI::commitPluginGeneration(replacement, old);
+    tools.removeListener(&observer);
+    check(committed && observer.tool && observer.tool->provider.instance != oldInstance,
+          "Update listener did not see the replacement tool");
+    bool matchingResources = false;
+    for (const auto& group : observer.snapshot.providers) {
+        if (group.provider.instance == observer.tool->provider.instance) {
+            matchingResources = group.tools.size() == 1 && group.tools[0].tool_id == "generation_tool" &&
+                group.resources.size() == 1 && group.resources[0].state.at("value") == 43;
+        }
+    }
+    check(matchingResources, "Update listener did not see matching replacement resources");
+    PluginAPI::beginPluginShutdown(old);
+    const char* oldIdentityText = old->get_provider_identity(old);
+    check(oldIdentityText != nullptr, "Retired generation lost its identity before shutdown");
+    const std::string oldIdentityJson = oldIdentityText;
+    old->string_free(old, oldIdentityText);
+    const auto oldIdentity = nlohmann::json::parse(oldIdentityJson);
+    check(oldIdentity.at("name") == "generation-provider" && oldIdentity.at("instance") == oldInstance &&
+          oldIdentity.at("path") == "old.dll", "Retired API returned the wrong generation identity");
+    PluginAPI::cleanupPluginContext(old);
+    PluginAPI::cleanupPluginContext(replacement);
 }
 
-void runProviderSchedulingTests(const std::filesystem::path&,const std::filesystem::path&);
+void runProviderSchedulingTests(const std::filesystem::path&);
+
+static void runSystemTickTests() {
+    struct Tick {
+        int calls = 0;
+        double delta = 0;
+        double offset = 0;
+    } firstTick, replacementTick;
+    const auto callback = [](double delta, double offset, void* data) {
+        auto& tick = *static_cast<Tick*>(data);
+        ++tick.calls;
+        tick.delta = delta;
+        tick.offset = offset;
+    };
+
+    auto* first = PluginAPI::createPluginAPI("tick-provider", "first.dll", 0, true);
+    check(first->subscribe_system_tick(first, callback, &firstTick) == GRIM_OK, "Tick subscription failed");
+    check(first->subscribe_system_tick(first, callback, &firstTick) == GRIM_ERROR_ALREADY_EXISTS,
+          "Duplicate tick subscription accepted");
+    PluginAPI::dispatchSystemTick(0, 0);
+    check(firstTick.calls == 0, "Unpublished generation received a tick");
+    check(PluginAPI::commitPluginGeneration(first), "Tick generation publication failed");
+    PluginAPI::dispatchSystemTick(0.125, 1.5);
+    check(firstTick.calls == 1 && firstTick.delta == 0.125 && firstTick.offset == 1.5,
+          "Published generation did not receive frame timing");
+
+    auto* replacement = PluginAPI::createPluginAPI("tick-provider", "second.dll", 0, true, first);
+    check(replacement->subscribe_system_tick(replacement, callback, &replacementTick) == GRIM_OK &&
+          PluginAPI::commitPluginGeneration(replacement, first), "Tick replacement failed");
+    PluginAPI::dispatchSystemTick(0.25, 1.75);
+    check(firstTick.calls == 1 && replacementTick.calls == 1, "Tick dispatched to the wrong generation");
+    PluginAPI::cleanupPluginContext(first);
+    PluginAPI::beginPluginShutdown(replacement);
+    PluginAPI::dispatchSystemTick(0.25, 2.0);
+    check(replacementTick.calls == 1, "Stopping generation received a tick");
+    PluginAPI::cleanupPluginContext(replacement);
+}
+
 int main(int argc, char** argv) try {
     runProviderResourceTests();
+    runSystemTickTests();
     {
         auto& registry = GRIM::MMO::ProviderRegistry::instance();
         const auto count = registry.snapshot().providers.size();
         auto* empty = PluginAPI::createPluginAPI("zero-tool-provider", "empty.dll", 0, true);
         check(registry.snapshot().providers.size() == count, "Staged provider leaked before commit");
-        check(PluginAPI::commitPluginTools(empty), "Zero-tool provider commit failed");
+        check(PluginAPI::commitPluginGeneration(empty), "Zero-tool provider commit failed");
         check(registry.snapshot().providers.size() == count + 1, "Zero-tool provider was not published");
         PluginAPI::cleanupPluginContext(empty);
         check(registry.snapshot().providers.size() == count, "Zero-tool provider survived unload");
@@ -171,19 +267,19 @@ int main(int argc, char** argv) try {
     auto* alpha = PluginAPI::createPluginAPI("alpha", "alpha.dll", GRIM_PERM_MEMORY, true);
     check(registerOne(alpha, "alpha_tool") == GRIM_OK &&
           registerOne(alpha, "alpha_second") == GRIM_OK &&
-          PluginAPI::commitPluginTools(alpha), "Alpha publication failed");
+          PluginAPI::commitPluginGeneration(alpha), "Alpha publication failed");
     Blocking blocked;
     auto waitTool = definition("blocking", blocking, &blocked);
     auto* beta = PluginAPI::createPluginAPI("beta", "beta.dll", GRIM_PERM_UI, true);
-    check(beta->register_tools(beta, &waitTool, 1) == GRIM_OK &&
-          PluginAPI::commitPluginTools(beta), "Beta publication failed");
+    check(GRIM::registerPluginTools(beta, &waitTool, 1) == GRIM_OK &&
+          PluginAPI::commitPluginGeneration(beta), "Beta publication failed");
     check(alpha != beta, "Plugins share an API table");
     checkName(alpha, "alpha");
     checkName(beta, "beta");
     check(alpha->has_permission(alpha, GRIM_PERM_MEMORY), "Alpha lost permissions");
     check(!beta->has_permission(beta, GRIM_PERM_MEMORY), "Beta inherited Alpha permissions");
     check(!alpha->has_permission(alpha, static_cast<GrimPermission>(GRIM_PERM_MEMORY | GRIM_PERM_UI)), "Combined permissions partially accepted");
-    check(beta->store_memory(beta, "key", "value", "test") == GRIM_ERROR_PERMISSION_DENIED, "API used another owner's permissions");
+    check(beta->search_memory(beta, "key") == nullptr, "API used another owner's permissions");
     check(dispatchCommand("alpha_tool", "").success, "Command callback used wrong owner");
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
     check(registerOne(alpha, "alpha_later") == GRIM_ERROR_UNSUPPORTED &&
@@ -205,10 +301,6 @@ int main(int argc, char** argv) try {
     check(beta->unsubscribe_event(beta, event) == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's event");
     beta->emit_event(beta, "test", nullptr, 0);
     check(logs.back() == "[Plugin: alpha] event", "Event callback used wrong owner");
-    int alphaTicks = 0, betaTicks = 0;
-    auto timer = alpha->create_timer(alpha, 0, false, tick, &alphaTicks);
-    check(beta->cancel_timer(beta, timer) == GRIM_ERROR_PERMISSION_DENIED, "Plugin cancelled another owner's timer");
-    beta->create_timer(beta, 0, false, tick, &betaTicks);
     bool duplicateRejected = false;
     try { PluginAPI::createPluginAPI("alpha", "duplicate.dll", 0); }
     catch (const std::invalid_argument&) { duplicateRejected = true; }
@@ -232,41 +324,30 @@ int main(int argc, char** argv) try {
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
         auto broken = definition("broken", handler);
         auto* brokenProvider = PluginAPI::createPluginAPI("broken-fixture", "", 0, true);
-        check(brokenProvider->register_tools(brokenProvider, &broken, 1) == GRIM_OK &&
-              PluginAPI::commitPluginTools(brokenProvider), "Broken fixture publication failed");
+        check(GRIM::registerPluginTools(brokenProvider, &broken, 1) == GRIM_OK &&
+              PluginAPI::commitPluginGeneration(brokenProvider), "Broken fixture publication failed");
         check(dispatchCommand("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
         PluginAPI::cleanupPluginContext(brokenProvider);
     }
     auto* staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
-    std::string description = "copied metadata";
-    std::string schema = R"({"type":"object","properties":{"path":{"type":"string"}}})";
-    const char* examples[] = {"test example"};
-    const char* alias[] = {"staged_alias"};
-    GrimToolParameter parameter;
-    parameter.name = "path"; parameter.type = "path"; parameter.description = "Destination"; parameter.required = 1;
     auto complete = definition("staged_tool", missingResult);
-    complete.descriptor.description = description.c_str();
+    complete.descriptor.description = "copied metadata";
     complete.descriptor.argument_format = "json";
-    complete.descriptor.argument_schema_json = schema.c_str();
-    complete.descriptor.examples = {examples, 1};
-    complete.descriptor.aliases = {alias, 1};
-    complete.descriptor.parameters = &parameter;
-    complete.descriptor.parameter_count = 1;
-    complete.usage_type = GRIM_TOOL_USAGE_SYSTEM;
-    std::string shortDescription = "Inspect information supplied by a selected entity";
-    complete.short_description = shortDescription.c_str();
-    std::string bindingName = "path";
-    std::string bindingType = "t";
-    GrimToolBinding binding{bindingName.c_str(), bindingType.c_str()};
+    complete.descriptor.argument_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}}})";
+    complete.descriptor.aliases = {"staged_alias"};
+    complete.descriptor.parameters = {{"path", "path", "Destination", true}};
+    complete.descriptor.usage_type = GRIM::MMO::ToolUsage::System;
+    complete.descriptor.short_description = "Inspect information supplied by a selected entity";
     complete.descriptor.usage = "staged_tool {path}";
-    complete.bindings = &binding; complete.binding_count = 1;
-    check(staged->register_tools(staged, &complete, 1) == GRIM_OK, "Staging failed");
-    shortDescription.assign(200, 'x');
-    bindingName.assign(200, 'x'); bindingType.assign(200, 'x');
-    description.assign(200, 'x');
-    schema.assign(200, 'x');
+    complete.descriptor.bindings = {{"path", "t"}};
+    complete.descriptor.usage_count = 5;
+    complete.descriptor.success_count = 3;
+    complete.descriptor.failure_count = 2;
+    complete.descriptor.success_rate = 0.6f;
+    check(GRIM::registerPluginTools(staged, &complete, 1) == GRIM_OK, "Staging failed");
+    complete = {};
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("staged_tool"), "Uncommitted tool leaked");
-    check(PluginAPI::commitPluginTools("staged"), "Commit failed");
+    check(PluginAPI::commitPluginGeneration("staged"), "Commit failed");
     auto snapshot = GRIM::MMO::ToolRegistry::instance().getTool("staged_alias");
     check(snapshot && snapshot->short_description=="Inspect information supplied by a selected entity",
           "Short description was not copied during registration");
@@ -278,68 +359,74 @@ int main(int argc, char** argv) try {
           snapshot->provider.path == "staged.dll" && snapshot->argument_format == "json" &&
           snapshot->argument_schema_json.find("properties") != std::string::npos &&
           snapshot->aliases == std::vector<std::string>{"staged_alias"}, "Descriptor copy lost fields");
+    check(snapshot && snapshot->usage_count == 0 && snapshot->success_count == 0 &&
+          snapshot->failure_count == 0 && snapshot->success_rate == 1.0f,
+          "Plugin registration supplied host execution statistics");
     PluginAPI::cleanupPluginContext("staged");
 
     auto first = definition("batch_first");
     auto second = definition("batch_second");
-    second.usage_type = GRIM_TOOL_USAGE_DEBUG;
-    GrimToolRegistration batch[] = {first, second};
+    second.descriptor.usage_type = GRIM::MMO::ToolUsage::Debug;
+    GRIM::PluginToolRegistration batch[] = {first, second};
     auto* invalidProvider = PluginAPI::createPluginAPI("invalid-fixture", "", GRIM_PERM_UI, true);
     check(registerOne(invalidProvider, "") == GRIM_ERROR_INVALID_PARAM, "Empty tool name accepted");
-    --batch[1].struct_size;
-    check(invalidProvider->register_tools(invalidProvider, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
+    const auto validMetadata = nlohmann::json(first.descriptor).dump();
+    const std::string invalidMetadata = "{";
+    GrimToolRegistration wire[] = {
+        {sizeof(GrimToolRegistration), validMetadata.data(), validMetadata.size(), first.handler, first.user_data},
+        {sizeof(GrimToolRegistration) - 1, validMetadata.data(), validMetadata.size(), second.handler, second.user_data},
+    };
+    check(invalidProvider->register_tools(invalidProvider, wire, 2) == GRIM_ERROR_INVALID_PARAM &&
           !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
           "Invalid registration size partially committed a batch");
-    batch[1] = second;
-    ++batch[1].descriptor.struct_size;
-    check(invalidProvider->register_tools(invalidProvider, batch, 2) == GRIM_ERROR_INVALID_PARAM &&
+    wire[1] = {sizeof(GrimToolRegistration), invalidMetadata.data(), invalidMetadata.size(),
+               second.handler, second.user_data};
+    check(invalidProvider->register_tools(invalidProvider, wire, 2) == GRIM_ERROR_INVALID_PARAM &&
           !GRIM::MMO::ToolRegistry::instance().isRegistered("batch_first"),
-          "Invalid descriptor size partially committed a batch");
-    batch[1] = second;
+          "Invalid descriptor JSON partially committed a batch");
     auto* batchProvider = PluginAPI::createPluginAPI("batch-fixture", "", 0, true);
-    check(batchProvider->register_tools(batchProvider, batch, 2) == GRIM_OK &&
-          PluginAPI::commitPluginTools(batchProvider) &&
+    check(GRIM::registerPluginTools(batchProvider, batch, 2) == GRIM_OK &&
+          PluginAPI::commitPluginGeneration(batchProvider) &&
           GRIM::MMO::ToolRegistry::instance().getTool("batch_first")->usage_type == GRIM::MMO::ToolUsage::Model &&
           GRIM::MMO::ToolRegistry::instance().getTool("batch_second")->usage_type == GRIM::MMO::ToolUsage::Debug,
-          "v4 batch registration lost tool metadata");
+          "Batch registration lost tool metadata");
     PluginAPI::cleanupPluginContext(batchProvider);
-    auto invalidSummary=definition("invalid_summary");invalidSummary.short_description="Too short";
-    check(invalidProvider->register_tools(invalidProvider, &invalidSummary,1)==GRIM_ERROR_INVALID_PARAM,"Invalid short summary registered");
+    auto invalidSummary=definition("invalid_summary");invalidSummary.descriptor.short_description="Too short";
+    check(GRIM::registerPluginTools(invalidProvider, &invalidSummary,1)==GRIM_ERROR_INVALID_PARAM,"Invalid short summary registered");
     auto badBinding = definition("bad_binding");
     badBinding.descriptor.usage = "bad_binding {target}";
-    const GrimToolBinding duplicateBindings[] = {{"target", "t"}, {"target", "t"}};
-    badBinding.bindings = duplicateBindings; badBinding.binding_count = 2;
-    check(invalidProvider->register_tools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
-          "Duplicate binding placeholder accepted");
-    badBinding.bindings = nullptr; badBinding.binding_count = 1;
-    check(invalidProvider->register_tools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
-          "Null binding array accepted");
-    GrimToolRegistration invalidUsage[] = {definition("usage_valid"), definition("usage_invalid")};
-    invalidUsage[1].usage_type = static_cast<GrimToolUsage>(99);
-    check(invalidProvider->register_tools(invalidProvider, invalidUsage, 2) == GRIM_ERROR_INVALID_PARAM &&
+    badBinding.descriptor.bindings = {{"target", "invalid_type"}};
+    check(GRIM::registerPluginTools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
+          "Invalid binding type accepted");
+    badBinding.descriptor.bindings = {{"missing", "t"}};
+    check(GRIM::registerPluginTools(invalidProvider, &badBinding, 1) == GRIM_ERROR_INVALID_PARAM,
+          "Binding without a usage placeholder accepted");
+    GRIM::PluginToolRegistration invalidUsage[] = {definition("usage_valid"), definition("usage_invalid")};
+    invalidUsage[1].descriptor.usage_type = static_cast<GRIM::MMO::ToolUsage>(99);
+    check(GRIM::registerPluginTools(invalidProvider, invalidUsage, 2) == GRIM_ERROR_INVALID_PARAM &&
           !GRIM::MMO::ToolRegistry::instance().isRegistered("usage_valid"), "Invalid usage published partial batch");
 
     staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
-    GrimToolRegistration collision[] = {definition("new_tool"), definition("reserved_fixture_tool")};
-    check(staged->register_tools(staged, collision, 2) == GRIM_OK, "Staging collision failed early");
-    check(!PluginAPI::commitPluginTools("staged") && !GRIM::MMO::ToolRegistry::instance().isRegistered("new_tool"),
+    GRIM::PluginToolRegistration collision[] = {definition("new_tool"), definition("reserved_fixture_tool")};
+    check(GRIM::registerPluginTools(staged, collision, 2) == GRIM_OK, "Staging collision failed early");
+    check(!PluginAPI::commitPluginGeneration("staged") && !GRIM::MMO::ToolRegistry::instance().isRegistered("new_tool"),
           "Failed commit left a partial batch");
     PluginAPI::cleanupPluginContext("staged");
     staged = PluginAPI::createPluginAPI("staged", "staged.dll", 0, true);
     complete = definition("invalid");
-    complete.descriptor.struct_size = 0;
-    check(staged->register_tools(staged, &complete, 1) == GRIM_ERROR_INVALID_PARAM &&
-          !PluginAPI::commitPluginTools("staged"), "Ignored registration error did not reject initialization");
+    complete.handler = nullptr;
+    check(GRIM::registerPluginTools(staged, &complete, 1) == GRIM_ERROR_INVALID_PARAM &&
+          !PluginAPI::commitPluginGeneration("staged"), "Ignored registration error did not reject initialization");
     PluginAPI::cleanupPluginContext("staged");
     complete = definition("invalid");
-    complete.descriptor.required_permissions = GRIM_PERM_MEMORY;
-    check(invalidProvider->register_tools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Undeclared permissions accepted");
-    complete.descriptor.required_permissions = 0;
+    complete.descriptor.permission_bits = GRIM_PERM_MEMORY;
+    check(GRIM::registerPluginTools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Undeclared permissions accepted");
+    complete.descriptor.permission_bits = 0;
     complete.descriptor.argument_format = "json";
     complete.descriptor.argument_schema_json = "[]";
-    check(invalidProvider->register_tools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Invalid schema accepted");
+    check(GRIM::registerPluginTools(invalidProvider, &complete, 1) == GRIM_ERROR_INVALID_PARAM, "Invalid schema accepted");
 
-    check(!PluginAPI::commitPluginTools(invalidProvider), "Invalid declarations did not poison publication");
+    check(!PluginAPI::commitPluginGeneration(invalidProvider), "Invalid declarations did not poison publication");
     PluginAPI::cleanupPluginContext(invalidProvider);
     auto running = std::async(std::launch::async, [] { return dispatchCommand("blocking", ""); });
     blocked.entered.get_future().wait();
@@ -354,8 +441,6 @@ int main(int argc, char** argv) try {
     stopping.get();
     PluginAPI::cleanupPluginContext("alpha");
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_tool") && !GRIM::MMO::ToolRegistry::instance().getTool("alpha_second"), "Owner cleanup retained tools");
-    PluginAPI::processTimers();
-    check(alphaTicks == 0 && betaTicks == 0, "Owner cleanup retained timer or removed another owner's timer");
     checkName(beta, "beta");
     const auto before = logs.size();
     beta->emit_event(beta, "test", nullptr, 0);
@@ -382,10 +467,10 @@ int main(int argc, char** argv) try {
     if (argc > 7 && *argv[7]) runApplicationPluginTests(argv[7]);
     if (argc > 8 && *argv[8]) runToolInspectionPluginTests(argv[8]);
     if (argc > 9 && *argv[9]) runSystemInfoPluginTests(argv[9]);
-    if ((argc > 10 && *argv[10]) || (argc > 11 && *argv[11])) runRuntimePluginTests(argc > 10 ? argv[10] : "", argc > 11 ? argv[11] : "");
-    runUIPluginTests(argc > 14 ? argv[14] : "");
-    runInputPluginTests(argc > 15 ? argv[15] : "");
-    runProviderSchedulingTests(argc > 10 ? argv[10] : "", argc > 16 ? argv[16] : "");
+    if (argc > 10 && *argv[10]) runRuntimePluginTests(argv[10]);
+    runUIPluginTests(argc > 13 ? argv[13] : "");
+    runInputPluginTests(argc > 14 ? argv[14] : "");
+    runProviderSchedulingTests(argc > 15 ? argv[15] : "");
     ProviderRegistry::instance().retire(collisionOwner.name, collisionOwner.instance);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {

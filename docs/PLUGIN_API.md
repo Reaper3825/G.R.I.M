@@ -1,6 +1,15 @@
-# G.R.I.M Plugin API v15.1
+# G.R.I.M Plugin API v16.0
 
-API version: **15.1.0**.
+API version: **16.0.0**.
+
+Version 16 removes legacy intent, synonym and conversation history calls,
+response output, memory CRUD stubs, process management, command existence
+lookup, formatted logging, unused allocation/string creation helpers, and host
+timer callbacks. Plugins can subscribe to system ticks and manage their own
+due-work policy. Tool registration now carries serialized canonical
+`ToolDescriptor` metadata.
+The table layout has changed. The loader rejects v15 DLLs. Rebuild the host
+and plugins together before deployment.
 
 Version 14 removes the copied-widget definition/event API. Schedule owns a
 native `CalendarPanel : UIPanel`, including its widgets, drawing and callbacks.
@@ -35,7 +44,7 @@ Rebuild the host and every plugin together; v8 binaries are rejected.
 There is no legacy forwarding or compatibility adapter.
 
 Perception implementation/state lives in `plugins/perception_plugin`.
-The host supplies only generic registration, provider-owned timers, resource
+The host supplies generic registration, system ticks, resource
 publication and logging. New tools return copied JSON observations; no OpenCV
 objects, engines, devices, or C++ pointers cross the ABI. See
 [perception ownership and tools](../plugins/perception_plugin/README.md).
@@ -69,11 +78,6 @@ to the live UI separately. Use activation to connect resources that require the
 initialized host or that the previous generation must release. Returning an error
 retires and unloads the candidate through normal shutdown. At this point the
 previous generation has already retired.
-Version 4 removes `context_requirements` and `affordance_tokens` from
-`GrimToolDescriptor`, changing the layout of both the descriptor and its
-containing `GrimToolRegistration`. Rebuild existing plugins against the v4 header
-before loading them into a v4 host. The loader rejects v3 binaries before initialization.
-
 Version 3.1 consumes two of the function table's reserved pointer slots, retaining
 the table size and existing v3.0 service-field offsets at the time.
 
@@ -84,10 +88,12 @@ It consumes one reserved function pointer slot, preserving the table size and
 existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
-MMO::ToolRegistry is the authoritative store for metadata and executable
-handlers. Plugins call api->register_tools(api, tools, count) with a batch
-of GrimToolRegistration values. Each contains a descriptor, handler, and
-plugin-owned user_data.
+Plugins author `GRIM::MMO::ToolDescriptor` from
+`MMO/Core/Descriptors/ToolDescriptor.hpp` and call `GRIM::registerPluginTools`
+from `core/plugin_tool_registration.hpp`. The helper sends a batch of
+`GrimToolRegistration` records containing a byte span encoded by
+`ToolDescriptorJson.hpp`, a handler, and plugin-owned `user_data`. The host
+decodes and validates the metadata before staging the batch.
 
 ### Host tool execution mode
 
@@ -107,14 +113,14 @@ change; individual tool registrations are unchanged.
 ### Tool usage classification (v3.10)
 
 Each tool has a `ToolUsage usage_type` in the canonical descriptor. Plugin
-registrations set `GrimToolRegistration::usage_type` using `GrimToolUsage`:
+registrations set `ToolDescriptor::usage_type` using `ToolUsage`:
 
 | Value | Canonical / plugin enum | Intended consumer |
 |---|---|---|
-| 0 | `Debug` / `GRIM_TOOL_USAGE_DEBUG` | Developer diagnostics and inspection |
-| 1 | `Model` / `GRIM_TOOL_USAGE_MODEL` | Model-selectable capability |
-| 2 | `System` / `GRIM_TOOL_USAGE_SYSTEM` | Host-controlled operation |
-| 3 | `Ignore` / `GRIM_TOOL_USAGE_IGNORE` | Retained but excluded from model discovery |
+| 0 | `Debug` | Developer diagnostics and inspection |
+| 1 | `Model` | Model-selectable capability |
+| 2 | `System` | Host-controlled operation |
+| 3 | `Ignore` | Retained but excluded from model discovery |
 
 The default is **Model**, preserving existing exposure. This field is independent
 of the existing `usage` syntax string, category, informational/action flags,
@@ -169,12 +175,9 @@ Text, search queries, coordinates, durations, request IDs, flags, and tools with
 no entity arguments have no bindings. No application/file/person-specific types
 are introduced. Classification and model discovery remain unchanged.
 
-Native plugins provide a borrowed `GrimToolBinding` array and `binding_count` on
-`GrimToolRegistration`; the host copies it into the canonical descriptor. The
-optional array defaults to empty.
-Arrays are limited to 256 entries. Names must be nonempty ASCII letters, digits,
-or underscores, occur as `{name}` in usage, and be unique within a tool. Invalid
-types, names, counts, or pointers reject the registration batch atomically.
+Native plugins populate `ToolDescriptor::bindings`, an optional map limited to
+256 entries. Names must contain ASCII letters, digits, or underscores and occur
+as `{name}` in usage. Invalid bindings reject the registration batch atomically.
 
 Version-1 snapshots add a `bindings` JSON object; missing fields in older snapshots
 default to empty. Model prompts and `tool_info` show usage; binding maps remain in
@@ -184,9 +187,8 @@ or compiled gameplay are included.
 ### Catalog summaries (v3.12)
 
 `ToolDescriptor::short_description` supplies an authored, single-line summary of
-5-12 whitespace-separated words. Native plugins supply the optional
-`GrimToolRegistration::short_description` string; the host copies it before
-registration returns. Nonempty invalid summaries reject the entire batch. Empty
+5-12 whitespace-separated words. The host validates it before registration
+returns. Nonempty invalid summaries reject the entire batch. Empty
 summaries remain valid for legacy and third-party registrations; the catalog
 honestly displays `Short description unavailable for this registered tool`.
 Existing full descriptions and argument documentation remain separate.
@@ -223,8 +225,7 @@ Descriptors require a canonical tool ID, display name, tool version,
 description, usage, category, and argument format. They can additionally supply:
 
 - Named parameters with types, descriptions, and required flags.
-- Aliases, keywords, and capability tags. The legacy registration slot for
-  examples is reserved for ABI compatibility.
+- Aliases, keywords, and capability tags.
 - Preconditions.
 - Required permission bits, informational/action classification, and a
   confirmation requirement.
@@ -243,33 +244,32 @@ Tool permission requirements must be a subset of the plugin's declared
 permissions. Metadata flags describe policy; direct registry invocation does
 not itself implement confirmation or the orchestration policy gate.
 
-Every supplied pointer is borrowed only for the registration call. The host
-copies all strings, parameters, and counted arrays before returning. A plugin
-can register metadata from stack-local storage. The host retains the user_data
-pointer; the plugin must keep its pointee alive until shutdown after active
-calls have drained.
+Descriptor bytes are borrowed for the duration of the registration call. The
+host owns the decoded descriptor and retains `user_data` until shutdown after
+active calls have drained. The host initializes execution statistics.
 
-Versioned registration, descriptor, parameter, call, result, and writer structures
-have struct_size. API v4 requires exact sizes. `GrimToolBinding` is a
-pair of borrowed strings, supplied in a counted array.
-Flags use uint32_t with values 0 or 1. Each batch, list, or parameter array is
-limited to 256 entries. Strings are NUL-terminated, limited to 65,536 bytes,
-and required text must be nonempty. Empty optional lists use {nullptr, 0}.
-Duplicate parameter names, IDs, and alias collisions are rejected. An alias is
-part of its canonical tool, not a separate tool registration.
+Registration, call, result, and writer structures require an exact
+`struct_size`. Metadata uses UTF-8 JSON. A batch or metadata collection is
+limited to 256 entries. Required text must be nonempty.
+Descriptor text fields accept up to 65,536 bytes, with a separate 512-byte limit
+for short descriptions. The host rejects duplicate parameter names, duplicate
+tool IDs, and alias collisions.
 
 ### Initialization transaction
 
-The loader creates a distinct host-owned API table per loaded instance. Its host_context
-identifies the provider. Pass that API table as self on every call; retain it
-through shutdown.
+The loader creates a distinct host-owned API table per loaded instance. The
+API context and registry share that generation's immutable provider descriptor.
+The context retains it through shutdown after the registry retires the generation.
+Pass the API table as self on every call and retain it through shutdown.
 
-During initialization, registration calls copy and stage batches. No staged
-tool is discoverable or executable. Once grim_plugin_init returns GRIM_OK,
-the loader validates and publishes all staged tools in one registry batch.
-Any failed registration poisons the initialization transaction, even if the
-plugin ignores its error. Cross-batch duplicates and collisions are checked
-at commit. A failed initialization or commit publishes no partial tool set.
+During initialization, tool registrations are staged and resource updates
+write directly to the registry's unpublished provider generation. Staged tools
+are hidden and cannot be invoked. Once `grim_plugin_init` returns `GRIM_OK`,
+the registry publishes the tools and their generation together. Tool listeners
+can read that generation's resources as soon as they are notified. A failed staged
+registration or resource update rejects initialization even if the plugin
+ignores its error. Cross-batch tool duplicates and collisions are checked at
+commit. A failed initialization or commit leaves any previous generation visible.
 
 After initialization, `register_tools` returns `GRIM_ERROR_UNSUPPORTED`.
 Registration, event/timer operations, and lifecycle changes must be serialized
@@ -315,7 +315,7 @@ callback returns. There are no returned result strings to free.
 
 ### Minimal plugin
 
-    #include "core/plugin_api.hpp"
+    #include "core/plugin_tool_registration.hpp"
 
     static GrimResult echo(const GrimToolCall* call,
                            GrimToolResultWriter* writer, void*) {
@@ -337,12 +337,7 @@ callback returns. There are no returned result strings to free.
     extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         if (!api || api->api_version != GRIM_API_VERSION)
             return GRIM_ERROR_API_VERSION_MISMATCH;
-        GrimToolParameter text;
-        text.name = "text";
-        text.type = "string";
-        text.description = "Text to return";
-
-        GrimToolRegistration tool;
+        GRIM::PluginToolRegistration tool;
         tool.handler = echo;
         auto& d = tool.descriptor;
         d.tool_id = d.display_name = "echo";
@@ -351,10 +346,8 @@ callback returns. There are no returned result strings to free.
         d.usage = "echo [text]";
         d.category = "information";
         d.argument_format = "raw_text";
-        d.parameters = &text;
-        d.parameter_count = 1;
-        d.is_informational = 1;
-        return api->register_tools(api, &tool, 1);
+        d.parameters = {{"text", "string", "Text to return", false}};
+        return GRIM::registerPluginTools(api, &tool, 1);
     }
 
     extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}
@@ -368,7 +361,7 @@ the gate closes. Handler code and user data remain valid through completion.
 
 Shutdown must stop and join plugin-owned background work. It is also called
 after failed initialization, so it must tolerate partially initialized state.
-After shutdown, host cleanup removes provider-owned subscriptions, timers, and
+After shutdown, host cleanup removes provider-owned subscriptions and
 the API context, then the loader unloads the native library. Do not retain the
 API pointer after cleanup.
 
@@ -378,18 +371,15 @@ threads must not mutate the API's shared service maps concurrently with cleanup.
 Event and timer subscriptions carry the same instance identity and call gate.
 Staged callbacks cannot run before publication. Snapshots of pending callbacks
 cannot enter retired plugin code after its gate closes. The lifecycle waits for
-active tool, event, and timer callbacks before unloading the library.
+active tool, event, and system tick callbacks before unloading the library.
 
 The migrated OSINT plugin joins outstanding scans at shutdown. The network
 plugin joins its coordinator, which owns worker joins and network cleanup.
 
 ## Other API services and current limits
 
-The function table retains logging, context, events, timers, output,
-process, allocation, string utilities, and generic provider resource publication.
-Check individual implementations before depending on a service: several are
-partial or stubs. Memory store/retrieve/delete remain stubs, and classify_intent
-returns an unmatched result without local classification.
+The function table retains logging, context, events, timers, notifications,
+manual memory services, and generation-scoped provider resource publication.
 
 Host-returned strings from other services retain their existing string_free
 ownership contract; the new result writer applies specifically to tool results
@@ -442,8 +432,19 @@ Initialization should register capabilities and allocate reversible local state;
 reserve external actions for explicitly invoked tool handlers.
 
 The application frame loop pumps generic plugin callbacks after reconciliation.
-Provider-owned countdown and schedule pollers use this pump; unloading a provider
-removes its callbacks after active calls drain.
+Schedule and Perception subscribe to system ticks and track their own poll deadlines. Unloading a provider removes
+its callbacks after active calls drain.
+
+## System tick subscriptions (v15.2)
+
+`subscribe_system_tick` registers one callback per plugin generation. The host
+calls it on the application frame thread after plugin reconciliation and timer
+dispatch. The callback receives elapsed seconds since the previous frame began
+and elapsed seconds since the first application frame began. Both values are zero
+on the first frame. Subscriptions registered during init start receiving ticks
+after publication. Keep the callback context alive through shutdown. The host
+drains active callbacks before plugin shutdown and removes the subscription
+before unloading the DLL.
 
 ## Generic UI operations (v3.8)
 
@@ -491,7 +492,7 @@ enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, an
 OSINT findings panel handlers remain host-owned after their tool registrations were removed.
 See [UI panel operations](ui/PANEL_OPERATIONS.md) for stable keys and examples.
 
-## Input tool migration (v3.9) — removed in v9
+## Input tool migration (v3.9) â€” removed in v9
 
 The following describes the retired ABI. It is not available in v9.
 
@@ -602,22 +603,21 @@ and refresh on plugin registration/removal. Its focused host UI regression is:
 
 ### Filesystem migration
 
-`filesystem_plugin` owns the former built-in `pwd`, `cd`, `ls`, `mkdir`, and `rm`
+`filesystem_plugin` owns the `ls`, `mkdir`, and `rm`
 tools. It registers one atomic batch with path parameters, usage,
 filesystem permissions, and informational/confirmation metadata. It uses no
 host globals or imported host symbols. `clean` and `help` are provided by the
 separate `utility_plugin`.
 
-The plugin's working directory starts at the process working directory on each
-load; `cd` changes only plugin-local state. It publishes a `working_directory`
-resource of kind `filesystem.directory`, with UTF-8 path and provider scope in
-its state. Initial tools and resources commit together. Successful `cd` updates
-the resource before adopting the new path; failed navigation leaves both intact.
-Reload resets the directory in a new provider generation. Failed replacement
-keeps the current generation and directory. Removal withdraws tools and resources.
+On load, the plugin captures the process working directory as its base for
+relative paths. It publishes that path in the `working_directory` resource of
+kind `filesystem.directory`, with UTF-8 path and provider scope in its state.
+Tools and resources commit together. Reload captures the base directory for
+the new generation. Failed replacement keeps the current generation and
+directory. Removal withdraws the tools and resource.
 
 The v7 API contains no host file-open/close/read/write/existence/deletion service
-or file-handle type. These five tools operate directly through the plugin's C++
+or file-handle type. These tools operate directly through the plugin's C++
 filesystem implementation; they retain no open file handles between calls.
 No additional file-reading or file-writing tools are introduced.
 
@@ -763,14 +763,7 @@ The historical v3.4 forwarding contract and v3.19 opt-in contract are removed.
 See [System Information resources](SYSTEM_INFO_RESOURCES.md) for schemas,
 failure handling, native detection and lifecycle validation.
 
-### Countdown provider and manual memory
-
-`timers_plugin` owns `set_timer`, its steady-clock countdown queue, expiry
-handling and `timers.queue` resource. It uses generic callback timers and copied
-notification output; pending countdowns cancel on unload or replacement.
-Integer-prefix parsing and existing invalid/nonpositive input results remain.
-SYSTEM and UI permissions are required. No host countdown queue or timer-specific
-service remains in API v8.
+### Manual memory
 
 `memory_plugin` still uses `stage_manual_memory`, `search_memory` and
 `flush_memory_record_if_present` under MEMORY permission. Memory rotation,
@@ -896,9 +889,9 @@ service. See [native provider panels](#native-provider-panels).
 
 API v8 removes `schedule_user_timer`, `create_local_calendar` and
 `schedule_service` outright. Host and plugins must be rebuilt together.
-The host retains only generic callback scheduling, lifecycle gates and copied
-notification delivery. The frame loop pumps callbacks; provider callbacks decide
-which notifications are due. Saved schedules survive unload; delivery resumes
+The host dispatches system ticks, gates callbacks by plugin generation, and
+delivers copied notifications. Schedule decides which notifications are due.
+Saved schedules survive unload, and delivery resumes
 on the next provider poll after reload. See [scheduling contract](SCHEDULING_TOOLS.md).
 
 ## Native provider panels
@@ -912,7 +905,7 @@ registration failure for a staging generation still rejects provider commit.
 Candidate panels are absent from the live UI until provider commit and the UI
 queue pump. Collision validation permits replacement of the old generation's
 panels only. Activation attaches the same native objects and binds `ui.panel`
-resources as `panel:<stable-key>` under the declaring generation. The host borrows these objects; the
+resources as `panel:<stable-key>` using the declaring generation ID. The host borrows these objects; the
 plugin owns their storage and implementation. UI callbacks run on the UI thread.
 
 Retirement synchronously detaches that generation's panels before plugin

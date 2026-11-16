@@ -67,16 +67,6 @@
     },
 
 
-  "ERR_TIMER_MISSING_VALUE": {
-    "user": "[Timer] Usage: set_timer <duration> (e.g. 30s, 5m, 2h30m)",
-    "debug": "cmdSetTimer called without duration argument."
-  },
-  "ERR_TIMER_INVALID_VALUE": {
-    "user": "[Timer] Invalid duration.",
-    "debug": "cmdSetTimer could not parse duration string or value <= 0."
-  },
-
-
   "ERR_CORE_UNKNOWN_COMMAND": {
     "user": "[Core] I don’t recognize that command. Try \"help\".",
     "debug": "User entered an unrecognized command. Check NLP rules or commandMap."
