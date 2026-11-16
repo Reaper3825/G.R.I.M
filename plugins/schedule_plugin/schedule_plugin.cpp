@@ -82,7 +82,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     if(result!=GRIM_OK) return result;
     try {
         provider->prepare();
-        calendarPanel = std::make_unique<grim::scheduling::CalendarPanel>(api, *provider);
+        calendarPanel = std::make_unique<grim::scheduling::CalendarPanel>(UIPanel::providerInstanceId(api), api, *provider);
         return GRIM_OK;
     } catch(const std::exception& error) {
         api->log(api, GRIM_LOG_ERROR, error.what());

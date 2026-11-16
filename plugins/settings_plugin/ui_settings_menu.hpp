@@ -30,7 +30,7 @@ enum class SettingsTab : uint8_t {
 
 class UISettingsMenu : public UIPanel {
 public:
-    UISettingsMenu();
+    explicit UISettingsMenu(std::string_view providerInstance);
 
     void update(const InputState& input, float dt) override;
     bool drawOverlay(OverlayRenderer& renderer) override;

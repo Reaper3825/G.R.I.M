@@ -14,8 +14,8 @@ using namespace UITrainingPanelDetail;
 // Constructor
 // ============================================================
 
-UITrainingPanel::UITrainingPanel()
-    : UIPanel("GRIM-text Training Control", true, "training_control")
+UITrainingPanel::UITrainingPanel(std::string_view providerInstance)
+    : UIPanel("GRIM-text Training Control", true, "training_control", providerInstance)
 {
     position = { 200, 80 };
     size     = { 1100, 800 };
@@ -245,6 +245,7 @@ UITrainingPanel::UITrainingPanel()
 
     tokenizerScrollBox_ = std::make_shared<UIScrollBox>();
     tokenizerScrollBox_->setSize(600.0f, 300.0f);
+    setVisible(false);
 }
 
 UITrainingPanel::~UITrainingPanel() {

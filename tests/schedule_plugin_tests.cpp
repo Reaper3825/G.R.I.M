@@ -2,10 +2,10 @@
 #include "plugins/schedule_plugin/schedule_plugin.cpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
+#include "tests/provider_panel_fixture.hpp"
 #include <cassert>
 #include <iostream>
 using Json=nlohmann::json;
-static int64_t now=grim::scheduling::scheduleNow();
 static std::vector<std::string> notifications;
 static GrimResult registerTools(const GrimPluginAPI*,const GrimToolRegistration* tools,size_t count) {
     assert(count==6);
@@ -36,6 +36,7 @@ static Json invoke(const std::string& operation,Json args) {
         {.expected_registry_version = registry.version(), .require_canonical_model = true}).structuredOutputJson);
 }
 void runSchedulePluginTests() {
+    const auto now = grim::scheduling::scheduleNow();
     const auto root=std::filesystem::temp_directory_path()/("grim-schedule-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     {
 
@@ -44,8 +45,11 @@ void runSchedulePluginTests() {
         api.create_timer=[](const GrimPluginAPI*,uint64_t,bool,GrimTimerCallback,void*){return reinterpret_cast<GrimTimerHandle>(1);};
         api.cancel_timer=[](const GrimPluginAPI*,GrimTimerHandle){return GRIM_OK;};
         api.show_notification=[](const GrimPluginAPI*,const char*,const char* text){notifications.emplace_back(text);};
-        api.string_free=[](const GrimPluginAPI*,const char* p){delete[] p;};
         api.log=[](const GrimPluginAPI*,GrimLogLevel,const char*){};
+        auto lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
+        lease->providerName = "schedule_test";
+        lease->owner = "fixture-1";
+        prepareProviderPanelFixture(api, lease, true);
         auto oldApi=api;oldApi.api_version=12u<<16;
         assert(grim_plugin_init(&oldApi)==GRIM_ERROR_API_VERSION_MISMATCH);
         assert(grim_plugin_init(&api)==GRIM_OK);
@@ -61,14 +65,17 @@ void runSchedulePluginTests() {
         assert(update["success"]==true);
         assert(invoke("cancel",{{"id","event"},{"revision",event["item"]["revision"]}})["error"]=="conflict");
         assert(invoke("list",{{"from_utc_ms",now+2000000},{"until_utc_ms",now+3000000}})["items"].empty());
+        auto lastDue = now;
         for(const auto* kind:{"timer","alarm","reminder"}) {
             Json args={{"id",kind},{"kind",kind},{"title","Notify"}};
             if(std::string(kind)=="timer") args["duration_seconds"]=10;else args["start_utc_ms"]=now+10000;
-            assert(invoke("create",args)["success"]==true);
+            const auto created = invoke("create",args);
+            assert(created["success"]==true);
+            lastDue = std::max(lastDue, created.at("item").at("start_utc_ms").get<int64_t>());
         }
         provider->poll(now+9999);assert(notifications.empty());
-        provider->poll(now+11000);assert(notifications.size()==3);
-        provider->poll(now+12000);assert(notifications.size()==3);
+        provider->poll(lastDue);assert(notifications.size()==3);
+        provider->poll(lastDue+1000);assert(notifications.size()==3);
         auto alarm=invoke("status",{{"id","alarm"}});assert(alarm["item"]["delivery_status"]=="dispatched");
         assert(invoke("cancel",{{"id","alarm"},{"revision",alarm["item"]["revision"]}})["already_dispatched"]==true);
         assert(invoke("status",Json::object())["background_delivery"]==false);
@@ -76,6 +83,7 @@ void runSchedulePluginTests() {
         assert(invoke("update",{{"id","event"},{"revision",-1},{"title","Bad"}})["success"]==false);
         assert(invoke("get",{{"id","missing"}})["error"]=="not_found");
         assert(invoke("list",{{"typo",1}})["success"]==false);
+        GRIM::UI::retireProviderPanels(lease);
         grim_plugin_shutdown();
     }
     {

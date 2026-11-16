@@ -16,8 +16,8 @@ namespace {
 
 // ─── Construction ────────────────────────────────────────
 
-UIStoragePanel::UIStoragePanel()
-    : UIPanel("Shared Storage", true, "storage")
+UIStoragePanel::UIStoragePanel(std::string_view providerInstance)
+    : UIPanel("Shared Storage", true, "storage", providerInstance)
 {
     position = {250, 500};
     size     = {900, 550};

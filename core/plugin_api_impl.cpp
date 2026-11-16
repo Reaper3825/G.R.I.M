@@ -1112,6 +1112,7 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     context->instance = plugin_name + "#" + std::to_string(s_next_instance++);
     context->panelLease->owner = context->instance;
     context->panelLease->providerName = plugin_name;
+    context->panelLease->uiPermitted = (permissions & GRIM_PERM_UI) != 0;
     context->name = plugin_name;
     context->path = plugin_path;
     context->permissions = permissions;
@@ -1194,7 +1195,14 @@ GrimPluginAPI* createPluginAPI(const std::string& plugin_name, const std::string
     
     auto* result = &api;
     auto instance = context->instance;
-    s_plugin_contexts.emplace(instance, std::move(context));
+    auto [entry, inserted] = s_plugin_contexts.emplace(instance, std::move(context));
+    if (!inserted) throw std::logic_error("Duplicate plugin instance: " + instance);
+    try {
+        if (staging) GRIM::UI::registerProviderPanelLease(entry->second->panelLease);
+    } catch (...) {
+        s_plugin_contexts.erase(entry);
+        throw;
+    }
     return result;
 }
 
@@ -1208,31 +1216,32 @@ static GrimPluginAPI* uniquePlugin(const std::string& name) {
     if (!result) throw std::invalid_argument("Missing plugin context");
     return result;
 }
-GrimResult initializePlugin(const GrimPluginAPI* api, GrimResult (*init)(const GrimPluginAPI*)) {
-    auto& owner = const_cast<PluginContext&>(pluginContext(api));
-    return GRIM::UI::initializeProviderPanels(owner.panelLease,
-        checkPermission(api, GRIM_PERM_UI), init, api);
-}
 bool commitPluginTools(const GrimPluginAPI* api, const GrimPluginAPI* replacing) {
     auto& owner = const_cast<PluginContext&>(pluginContext(api));
     if (owner.registration_failed || !owner.staging ||
         !GRIM::UI::validateProviderPanels(owner.panelLease, replacing ? pluginContext(replacing).panelLease : nullptr)) return false;
     auto& providers = GRIM::MMO::ProviderRegistry::instance();
+    std::vector<GRIM::MMO::ResourceDescriptor> resources;
+    for (const auto& [id, resource] : owner.pendingResources) resources.push_back(resource);
     // Handlers may become reachable as soon as the registry swaps its entries,
     // including from listeners. Late registrations must no longer be staged.
     owner.staging = false;
+    owner.panelLease->acceptingPanels = false;
     bool committed;
-    std::vector<GRIM::MMO::ResourceDescriptor> resources;
-    for (const auto& [id, resource] : owner.pendingResources) resources.push_back(resource);
     try {
         committed = providers.publish(
             {GRIM::MMO::ToolProviderType::Plugin, owner.name, owner.instance, owner.path},
             owner.pending, replacing ? pluginContext(replacing).instance : std::string{}, resources);
     } catch (...) {
         owner.staging = true;
+        owner.panelLease->acceptingPanels = true;
         throw;
     }
-    if (!committed) { owner.staging = true; return false; }
+    if (!committed) {
+        owner.staging = true;
+        owner.panelLease->acceptingPanels = true;
+        return false;
+    }
     // Queue retirement before replacement creation. Generation-specific leases
     // prevent a later shutdown of the old DLL from removing its replacement.
     if (replacing) GRIM::UI::retireProviderPanels(pluginContext(replacing).panelLease);

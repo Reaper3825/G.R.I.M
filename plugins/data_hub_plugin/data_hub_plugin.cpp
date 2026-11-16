@@ -18,7 +18,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     try {
         if (panel) throw std::logic_error("DataHub Plugin is already initialized");
-        panel = std::make_unique<UIDataHubPanel>();
+        panel = std::make_unique<UIDataHubPanel>(UIPanel::providerInstanceId(api));
         return GRIM_OK;
     } catch (const std::exception& error) {
         api->log(api, GRIM_LOG_ERROR, error.what());

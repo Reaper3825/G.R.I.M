@@ -195,8 +195,8 @@ class CalendarPanel : public UIPanel {
         place(*delete_, editorX + 2 * (editorWidth + 12) / 3, editorY + 426, (editorWidth - 24) / 3, 28);
     }
 public:
-    CalendarPanel(const GrimPluginAPI* api, Provider& provider)
-        : UIPanel("Calendar", true, "calendar"), api_(api), provider_(provider) {
+    CalendarPanel(std::string_view providerInstance, const GrimPluginAPI* api, Provider& provider)
+        : UIPanel("Calendar", true, "calendar", providerInstance), api_(api), provider_(provider) {
         if (!api_ || !api_->log) throw std::invalid_argument("Calendar requires provider logging");
         setPosition(240, 180); setSize(1160, 600); setVisible(false);
         scroll_ = std::make_shared<UIScrollBox>(); addChild(scroll_);

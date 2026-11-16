@@ -17,8 +17,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || !api->log)
         return GRIM_ERROR_API_VERSION_MISMATCH;
     try {
-        workspace = std::make_unique<UITrainingPanel>();
-        workspace->setVisible(false);
+        workspace = std::make_unique<UITrainingPanel>(UIPanel::providerInstanceId(api));
         return GRIM_OK;
     } catch (const std::exception& error) {
         api->log(api, GRIM_LOG_ERROR, error.what());

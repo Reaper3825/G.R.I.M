@@ -1,4 +1,4 @@
-#include "ui/ui_panel_service.hpp"
+#include "tests/provider_panel_fixture.hpp"
 #include "core/input_parser.hpp"
 #include "ui/ui_root.hpp"
 #include "ui/console_notification_target.hpp"
@@ -34,9 +34,10 @@ struct Module {
         require(shutdown != nullptr, "Missing Console shutdown");
     }
     GrimResult init(bool permission = true) {
-        auto init = reinterpret_cast<GRIM::UI::ProviderInit>(GetProcAddress(handle, "grim_plugin_init"));
+        auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
         require(init != nullptr, "Missing Console init");
-        return GRIM::UI::initializeProviderPanels(lease, permission, init, &api);
+        prepareProviderPanelFixture(api, lease, permission);
+        return init(&api);
     }
     void publish(const std::string& replacing = {}) {
         require(GRIM::MMO::ProviderRegistry::instance().publish(

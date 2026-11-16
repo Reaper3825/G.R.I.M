@@ -21,7 +21,7 @@ struct GeoSpatialProvider {
     bgfx::ViewId viewId = 0;
     bool clearRegistered = false;
 
-    GeoSpatialProvider() { panel.setVisible(false); }
+    explicit GeoSpatialProvider(std::string_view providerInstance) : panel(providerInstance) {}
     ~GeoSpatialProvider();
 
     void startViewport();
@@ -93,7 +93,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
 
     grim::plugin::setLoggingAPI(api);
     try {
-        provider = std::make_unique<GeoSpatialProvider>();
+        provider = std::make_unique<GeoSpatialProvider>(UIPanel::providerInstanceId(api));
         return GRIM_OK;
     } catch (const std::exception& error) {
         LOG_ERROR("GeoSpatial Plugin", error.what());

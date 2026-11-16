@@ -46,8 +46,8 @@ namespace {
     }
 }
 
-UIGeoSpatialPanel::UIGeoSpatialPanel()
-    : UIPanel("GeoSpatial", true, "geospatial")
+UIGeoSpatialPanel::UIGeoSpatialPanel(std::string_view providerInstance)
+    : UIPanel("GeoSpatial", true, "geospatial", providerInstance)
 {
     position = { 260.0f, 220.0f };
     size = { 1180.0f, 920.0f };
@@ -210,6 +210,7 @@ UIGeoSpatialPanel::UIGeoSpatialPanel()
     remove_group_btn_->setSize(118.0f, kButtonH);
     use_pick_btn_->setSize(112.0f, kButtonH);
     save_catalog_btn_->setSize(100.0f, kButtonH);
+    setVisible(false);
 }
 
 void UIGeoSpatialPanel::setController(GRIM::GeoSpatial::GeoSpatialPanelController* controller)

@@ -20,7 +20,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     try {
         if (panel) throw std::logic_error("Storage Plugin is already initialized");
-        panel = std::make_unique<UIStoragePanel>();
+        panel = std::make_unique<UIStoragePanel>(UIPanel::providerInstanceId(api));
         return GRIM_OK;
     } catch (const std::exception& error) {
         api->log(api, GRIM_LOG_ERROR, error.what());

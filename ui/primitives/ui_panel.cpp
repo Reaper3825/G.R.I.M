@@ -8,16 +8,33 @@
 #include "logger.hpp"
 #include "../ui_focus_manager.hpp"
 #include "../ui_root.hpp"
+#include "../ui_panel_service.hpp"
 #include <algorithm>
+#include <stdexcept>
 
 Vec2 UIPanel::s_canvasSize{1920.0f, 1080.0f};
 
-UIPanel::UIPanel(const std::string& t, bool drag, const std::string& panelKey)
+UIPanel::UIPanel(const std::string& t, bool drag, const std::string& panelKey,
+                 std::optional<std::string_view> providerInstance)
     : title(t), draggable(drag), panelKey_(panelKey)
 {
     // Generate unique panel ID
     panelID = UIFocusManager::getInstance().generateUniqueID();
-    UIRoot::get().registerPanel(this);
+    if (providerInstance) GRIM::UI::stageNativePanel(this, *providerInstance);
+    else UIRoot::get().registerPanel(this);
+}
+
+std::string UIPanel::providerInstanceId(const GrimPluginAPI* api) {
+    if (!api || !api->get_provider_identity || !api->string_free)
+        throw std::invalid_argument("Native panels require the provider identity API");
+    const char* value = api->get_provider_identity(api);
+    if (!value) throw std::runtime_error("Could not read the native panel provider identity");
+    struct Identity {
+        const GrimPluginAPI* api;
+        const char* value;
+        ~Identity() { api->string_free(api, value); }
+    } identity{api, value};
+    return nlohmann::json::parse(identity.value).at("instance").get<std::string>();
 }
 
 UIPanel::~UIPanel() { UIRoot::get().unregisterPanel(this); }

@@ -113,8 +113,8 @@ Native UI plugins require the matching compiler, CRT and UI class ABI; API v15
 rejects older binaries. Domain services remain with their respective providers.
 
 Calendar in Schedule, Console in Console Plugin, Settings in Settings Plugin, Training Control in Model Workspace, Shared Storage in Storage Plugin, DataHub in DataHub Plugin, and GeoSpatial in
-GeoSpatial Plugin use this path. Constructor registration stages
-ownership under the loader's initialization scope. Commit attaches the same object;
+GeoSpatial Plugin use this path. Each provider passes its generation ID to its
+panel constructor, which stages ownership against that generation. Commit attaches the same object;
 retirement detaches it before provider shutdown destroys it. No JSON widget tree,
 interaction-event transport or generic copied-content panel remains.
 

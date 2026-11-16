@@ -1,5 +1,5 @@
 #include "ui/data_hub_services.hpp"
-#include "ui/ui_panel_service.hpp"
+#include "tests/provider_panel_fixture.hpp"
 #include "ui/ui_root.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "core/input_parser.hpp"
@@ -35,7 +35,7 @@ struct Module {
     HMODULE handle;
     GrimPluginAPI api{};
     std::shared_ptr<GRIM::UI::ProviderPanelLease> lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
-    GRIM::UI::ProviderInit initialize;
+    GrimResult (*initialize)(const GrimPluginAPI*);
     void (*shutdown)();
     Module(const std::filesystem::path& path, const std::string& generation) {
         lease->providerName = "DataHub Plugin"; lease->owner = generation;
@@ -43,7 +43,7 @@ struct Module {
         api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
         handle = LoadLibraryW(path.c_str());
         require(handle != nullptr, "DataHub DLL could not import host services");
-        initialize = reinterpret_cast<GRIM::UI::ProviderInit>(GetProcAddress(handle, "grim_plugin_init"));
+        initialize = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         if (!initialize || !shutdown) {
             FreeLibrary(handle);
@@ -51,7 +51,8 @@ struct Module {
         }
     }
     GrimResult init(bool permission = true) {
-        return GRIM::UI::initializeProviderPanels(lease, permission, initialize, &api);
+        prepareProviderPanelFixture(api, lease, permission);
+        return initialize(&api);
     }
     void publish(const std::string& replacing = {}) {
         require(GRIM::MMO::ProviderRegistry::instance().publish(

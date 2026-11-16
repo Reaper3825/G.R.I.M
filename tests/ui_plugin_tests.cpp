@@ -25,8 +25,7 @@ nlohmann::json take(const GrimPluginAPI* api, const char* value) {
 namespace GRIM::UI {
 // Controlled host boundary: the API/loader/plugin are real, no native UI is started.
 // The native provider panel lifecycle is covered by the UI foundation tests.
-GrimResult initializeProviderPanels(const std::shared_ptr<ProviderPanelLease>&, bool,
-                                   ProviderInit init, const GrimPluginAPI* api) { return init(api); }
+void registerProviderPanelLease(const std::shared_ptr<ProviderPanelLease>&) {}
 bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
                             const std::shared_ptr<ProviderPanelLease>&) { return !lease->registrationFailed; }
 void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>&) {}

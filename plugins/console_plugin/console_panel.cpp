@@ -26,8 +26,8 @@ float sessionSidebarWidth(float panelWidth)
 }
 }
 
-ConsolePanel::ConsolePanel()
-    : UIPanel("Console", true, "console"),  // Enable dragging
+ConsolePanel::ConsolePanel(std::string_view providerInstance)
+    : UIPanel("Console", true, "console", providerInstance),  // Enable dragging
       settingsButton(std::make_shared<UIButton>("Settings", []() {
           auto settingsPanel = UIRoot::get().getPanel("Settings");
           if (settingsPanel) {
@@ -145,6 +145,7 @@ ConsolePanel::ConsolePanel()
     toolbarBox->layout();
 
     addTemporarySession();
+    setVisible(false);
 }
 
 ConsolePanel::~ConsolePanel()

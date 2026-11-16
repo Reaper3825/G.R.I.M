@@ -5,10 +5,13 @@
 #include <memory>
 #include <functional>
 #include <cstdint>
+#include <optional>
+#include <string_view>
 
 // Include host_exports.hpp for GRIM_HOST_API macro
 #include "../core/host_exports.hpp"
 class OverlayRenderer;  // Forward declaration
+struct GrimPluginAPI;
 
 struct PanelChromeOptions {
     bool enableMinimize = true;
@@ -33,8 +36,11 @@ class GRIM_HOST_API UIPanel : public Widget {
 public:
     // Construction/destruction register/unregister on the UI thread.
     // Derived constructors must not pump UI work before initialization finishes.
+    // A provider instance stages the panel until that generation is published.
     UIPanel(const std::string& title = "", bool draggable = true,
-            const std::string& panelKey = "");
+            const std::string& panelKey = "",
+            std::optional<std::string_view> providerInstance = std::nullopt);
+    static std::string providerInstanceId(const GrimPluginAPI* api);
     ~UIPanel() override;
     UIPanel(const UIPanel&) = delete;
     UIPanel& operator=(const UIPanel&) = delete;

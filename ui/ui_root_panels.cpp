@@ -50,7 +50,6 @@ void UIRoot::registerPanel(UIPanel* panel)
     // Constructors must not reenter the UI pump while constructing derived state.
     if (!isUIThread()) throw std::logic_error("Panel construction requires the UI thread");
     if (!panel) throw std::invalid_argument("Cannot register a null panel");
-    if (GRIM::UI::stageNativePanel(panel)) return;
     std::unique_lock lock(m_panelMutex);
     if (std::find(m_panels.begin(), m_panels.end(), panel) != m_panels.end()) return;
     const auto& key = panel->getPanelKey();

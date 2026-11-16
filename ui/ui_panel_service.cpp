@@ -7,35 +7,32 @@
 
 namespace GRIM::UI {
 namespace {
-std::shared_ptr<ProviderPanelLease> initializing;
-bool uiPermitted = false;
+std::map<std::string, std::weak_ptr<ProviderPanelLease>, std::less<>> providerLeases;
 std::unordered_map<UIPanel*, std::weak_ptr<ProviderPanelLease>> nativeOwners;
 }
-GrimResult initializeProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                                   bool permitted, ProviderInit init, const GrimPluginAPI* api) {
-    UIRoot::get().requireUIThread();
-    if (initializing) throw std::logic_error("Nested provider initialization");
-    initializing = lease;
-    uiPermitted = permitted;
-    struct Reset { ~Reset() { initializing.reset(); uiPermitted = false; } } reset;
-    return init(api);
+void registerProviderPanelLease(const std::shared_ptr<ProviderPanelLease>& lease) {
+    if (lease->owner.empty() || !providerLeases.emplace(lease->owner, lease).second)
+        throw std::logic_error("Invalid or duplicate panel provider instance: " + lease->owner);
 }
-bool stageNativePanel(UIPanel* panel) {
-    if (!initializing) return false;
-    auto& lease = *initializing;
+void stageNativePanel(UIPanel* panel, std::string_view providerInstance) {
+    UIRoot::get().requireUIThread();
+    const auto found = providerLeases.find(providerInstance);
+    const auto owner = found == providerLeases.end() ? nullptr : found->second.lock();
+    if (!owner || !owner->acceptingPanels)
+        throw std::logic_error("Panel provider instance is not accepting construction: " + std::string(providerInstance));
+    auto& lease = *owner;
     const auto& key = panel->getPanelKey();
     try {
-        if (!uiPermitted) throw std::logic_error("Native panels require UI permission");
+        if (!lease.uiPermitted) throw std::logic_error("Native panels require UI permission");
         if (key.empty() || key.size() > 256 || key.find_first_of("\r\n\0", 0, 3) != std::string::npos)
             throw std::invalid_argument("Provider panels require a stable key");
         if (lease.nativePanels.size() >= 64) throw std::logic_error("Provider panel limit exceeded");
         for (const auto* existing : lease.nativePanels)
             if (existing->getPanelKey() == key) throw std::logic_error("Duplicate provider panel key: " + key);
-        nativeOwners.emplace(panel, initializing);
+        nativeOwners.emplace(panel, owner);
         try { lease.nativePanels.push_back(panel); }
         catch (...) { nativeOwners.erase(panel); throw; }
     } catch (...) { lease.registrationFailed = true; throw; }
-    return true;
 }
 void forgetNativePanel(UIPanel* panel) {
     const auto found = nativeOwners.find(panel);
@@ -57,6 +54,7 @@ bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
     return true;
 }
 void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
+    lease->acceptingPanels = false;
     UIRoot::get().postTask([lease] {
         if (lease->retired) return;
         auto& root = UIRoot::get();
@@ -80,13 +78,14 @@ void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
 }
 void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
     // Detach synchronously, before plugin shutdown destroys objects or unloads code.
-    if (lease->nativePanels.empty() && lease->panels.empty()) {
-        lease->retired = true;
-        return;
-    }
-    auto& root = UIRoot::get();
-    root.requireUIThread();
+    const bool hasPanels = !lease->nativePanels.empty() || !lease->panels.empty();
+    if (hasPanels) UIRoot::get().requireUIThread();
     if (lease->retired.exchange(true)) return;
+    const auto registered = providerLeases.find(lease->owner);
+    if (registered != providerLeases.end() && registered->second.lock() == lease)
+        providerLeases.erase(registered);
+    if (!hasPanels) return;
+    auto& root = UIRoot::get();
     for (const auto& [key, runtime] : lease->panels) {
         auto* panel = root.getPanelByKey(key);
         if (panel && panel->getPanelID() == runtime) root.removePanel(key);

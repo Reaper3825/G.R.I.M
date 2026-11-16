@@ -74,7 +74,7 @@ enum class TrainingPanelTab : uint8_t {
 // ─────────────────────────────────────────────────────────
 class UITrainingPanel : public UIPanel {
 public:
-    UITrainingPanel();
+    explicit UITrainingPanel(std::string_view providerInstance);
     ~UITrainingPanel() override;
 
     void update(const InputState& input, float dt) override;

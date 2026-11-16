@@ -903,12 +903,11 @@ on the next provider poll after reload. See [scheduling contract](SCHEDULING_TOO
 
 ## Native provider panels
 
-The loader runs plugin initialization in a host-owned panel registration scope
-on the UI/lifecycle thread. A provider constructs its concrete `UIPanel` members
-or owned objects normally. The base constructor stages registration under that
-scope; no panel JSON, factory key, per-panel registration call or event polling
-is needed. UI permission, nonempty stable keys and duplicate keys are checked.
-A caught registration failure still rejects provider commit.
+A provider obtains its generation ID with `UIPanel::providerInstanceId(api)`
+and passes it through each concrete panel constructor to the `UIPanel` base
+constructor. The base constructor stages the panel against that generation on
+the UI thread. It checks UI permission, stable keys and duplicate keys. A caught
+registration failure for a staging generation still rejects provider commit.
 
 Candidate panels are absent from the live UI until provider commit and the UI
 queue pump. Collision validation permits replacement of the old generation's
@@ -925,8 +924,9 @@ panel with the same key. Plugin shutdown must destroy every owned native panel.
 
 Native UI plugins use the exported C++ UI interface with a matching compiler,
 CRT and class layout. API v15 removes the factory declaration entry and changes
-the native host class layout. All plugins must be rebuilt for this ABI. Windows
-standalone builds require `GRIM_HOST_IMPORT_LIBRARY`; host-tree builds link
+the native host class layout. All plugins must be rebuilt for this ABI. Native
+UI plugins also need to be rebuilt for the provider instance constructor change.
+Windows standalone builds require `GRIM_HOST_IMPORT_LIBRARY`; host-tree builds link
 `GRIM_EXPORT`. Building the host target alone does not build Schedule, since
 Schedule imports the host. An all-target build builds/deploys it after the host.
 

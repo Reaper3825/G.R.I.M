@@ -63,7 +63,7 @@ enum class DataHubView : uint8_t {
 
 class UIDataHubPanel : public UIPanel {
 public:
-    UIDataHubPanel();
+    explicit UIDataHubPanel(std::string_view providerInstance);
     ~UIDataHubPanel() override;
 
     void update(const InputState& input, float dt) override;

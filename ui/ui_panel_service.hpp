@@ -4,6 +4,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <mutex>
 #include <vector>
 #include <utility>
@@ -22,11 +23,12 @@ struct ProviderPanelLease {
     std::vector<std::pair<std::string, uint64_t>> panels;
     std::vector<UIPanel*> nativePanels;
     bool registrationFailed = false;
+    bool uiPermitted = false;
+    bool acceptingPanels = true;
 };
-using ProviderInit = GrimResult (*)(const GrimPluginAPI*);
-GrimResult initializeProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                                   bool permitted, ProviderInit init, const GrimPluginAPI* api);
-bool stageNativePanel(UIPanel* panel);
+// Registered by the host lifecycle thread when it creates a staging provider.
+void registerProviderPanelLease(const std::shared_ptr<ProviderPanelLease>& lease);
+void stageNativePanel(UIPanel* panel, std::string_view providerInstance);
 void forgetNativePanel(UIPanel* panel);
 bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
                             const std::shared_ptr<ProviderPanelLease>& replacing = {});

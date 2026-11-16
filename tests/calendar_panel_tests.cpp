@@ -1,5 +1,5 @@
 #include "plugins/schedule_plugin/calendar_panel.hpp"
-#include "ui/ui_panel_service.hpp"
+#include "tests/provider_panel_fixture.hpp"
 #include "ui/ui_root.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "MMO/Core/Registries/ProviderRegistry.hpp"
@@ -32,17 +32,15 @@ struct Fixture {
     std::unique_ptr<TestCalendar> calendar;
     explicit Fixture(const std::filesystem::path& path, const std::string& generation) {
         lease->owner = generation; lease->providerName = "Native Calendar Fixture";
-        api.api_version = GRIM_API_VERSION; api.host_context = this;
+        api.api_version = GRIM_API_VERSION;
         api.replace_resources = [](const GrimPluginAPI*, const char*, const char*, size_t) { return GRIM_OK; };
         api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
         provider = std::make_unique<grim::scheduling::Provider>(&api, path);
     }
-    static GrimResult init(const GrimPluginAPI* api) {
-        auto& f = *static_cast<Fixture*>(const_cast<void*>(api->host_context));
-        f.calendar = std::make_unique<TestCalendar>(api, *f.provider);
-        return GRIM_OK;
+    void initialize(bool permitted = true) {
+        prepareProviderPanelFixture(api, lease, permitted);
+        calendar = std::make_unique<TestCalendar>(lease->owner, &api, *provider);
     }
-    void initialize(bool permitted = true) { UI::initializeProviderPanels(lease, permitted, init, &api); }
     void publish(const std::string& replacing = {}) {
         require(MMO::ProviderRegistry::instance().publish(
             {MMO::ToolProviderType::Plugin, lease->providerName, lease->owner, {}}, {}, replacing), "Owner publication failed");
@@ -70,6 +68,12 @@ void runCalendarPanelTests() {
     UIPanel::setCanvasSize({1920,1080});
     const auto directory = std::filesystem::temp_directory_path() /
         ("grim-native-calendar-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    {
+        bool rejected = false;
+        try { UIPanel unknown("Unknown", true, "test.unknown", "unknown-provider"); }
+        catch (const std::logic_error&) { rejected = true; }
+        require(rejected && !root.getPanelByKey("test.unknown"), "Unknown provider attached a panel");
+    }
     {
         Fixture denied(directory / "denied.json", "denied");
         bool rejected = false;
@@ -150,7 +154,6 @@ void runNativeCalendarDllTests(const char* dllPath) {
             api.cancel_timer = [](const GrimPluginAPI*, GrimTimerHandle) { return GRIM_OK; };
             api.replace_resources = [](const GrimPluginAPI*, const char*, const char*, size_t) { return GRIM_OK; };
             api.show_notification = [](const GrimPluginAPI*, const char*, const char*) {};
-            api.string_free = [](const GrimPluginAPI*, const char*) {};
             api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
             handle = LoadLibraryW(path.c_str());
             require(handle != nullptr, "Could not load native Schedule DLL against test host exports");
@@ -158,9 +161,10 @@ void runNativeCalendarDllTests(const char* dllPath) {
             require(shutdown != nullptr, "Missing native shutdown export");
         }
         GrimResult init() {
-            const auto callback = reinterpret_cast<UI::ProviderInit>(GetProcAddress(handle, "grim_plugin_init"));
+            const auto callback = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
             require(callback != nullptr, "Missing native init export");
-            return UI::initializeProviderPanels(lease, true, callback, &api);
+            prepareProviderPanelFixture(api, lease, true);
+            return callback(&api);
         }
         void publish(const std::string& replacing = {}) {
             require(MMO::ProviderRegistry::instance().publish(
