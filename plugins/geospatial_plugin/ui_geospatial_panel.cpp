@@ -46,8 +46,8 @@ namespace {
     }
 }
 
-UIGeoSpatialPanel::UIGeoSpatialPanel(std::string_view providerInstance)
-    : UIPanel("GeoSpatial", true, "geospatial", providerInstance)
+UIGeoSpatialPanel::UIGeoSpatialPanel()
+    : UIPanel("GeoSpatial", true, "geospatial", false)
 {
     position = { 260.0f, 220.0f };
     size = { 1180.0f, 920.0f };

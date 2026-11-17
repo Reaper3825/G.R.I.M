@@ -5,7 +5,7 @@
 namespace grim::scheduling {
 class Provider {
     static constexpr auto pollInterval = std::chrono::seconds(1);
-    const GrimPluginAPI* api;
+    grim::PluginHost api;
     SchedulingService service;
     std::mutex operationMutex;
     std::chrono::steady_clock::time_point nextPoll;
@@ -24,7 +24,7 @@ class Provider {
             {{"resource_id","items"},{"kind","schedule.state"},{"name","Scheduled items"},{"runtime_id",uint64_t{1}},{"state",state}},
             {{"resource_id","delivery"},{"kind","schedule.state"},{"name","Schedule delivery"},{"runtime_id",uint64_t{1}},{"state",delivery}}
         }).dump();
-        if (api->replace_resources(api,"schedule.state",text.data(),text.size()) != GRIM_OK)
+        if (api->replace_resources(api.instance(),"schedule.state",text.data(),text.size()) != GRIM_OK)
             throw std::runtime_error("Schedule resource publication rejected");
     }
     static void tick(double, double, void* value) noexcept {
@@ -36,12 +36,12 @@ class Provider {
         catch (...) {} // Provider reports storage errors in its status/resources on the next successful poll.
     }
 public:
-    explicit Provider(const GrimPluginAPI* value, std::filesystem::path path = {}) : api(value), service(std::move(path)) {}
+    explicit Provider(grim::PluginHost value, std::filesystem::path path = {}) : api(value), service(std::move(path)) {}
     void prepare() {
-        // Candidate generations do not touch storage or deliver notifications before publication.
+        // Storage and delivery start at the first poll.
         publish(true);
         nextPoll = std::chrono::steady_clock::now() + pollInterval;
-        if (api->subscribe_system_tick(api, tick, this) != GRIM_OK)
+        if (api->subscribe_system_tick(api.instance(), tick, this) != GRIM_OK)
             throw std::runtime_error("Cannot subscribe to system ticks for schedule polling");
     }
     nlohmann::json execute(const std::string& op,const nlohmann::json& args,int64_t now = scheduleNow()) {
@@ -52,7 +52,7 @@ public:
     }
     void poll(int64_t now) {
         std::lock_guard lock(operationMutex);
-        for (const auto& text : service.takeDue(now)) api->show_notification(api,"Schedule",text.c_str());
+        for (const auto& text : service.takeDue(now)) api->show_notification(api.instance(),"Schedule",text.c_str());
         publish();
     }
 };

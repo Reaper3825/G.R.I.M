@@ -11,7 +11,7 @@
 // Include host_exports.hpp for GRIM_HOST_API macro
 #include "../core/host_exports.hpp"
 class OverlayRenderer;  // Forward declaration
-struct GrimPluginAPI;
+#include "core/plugin_api.hpp"
 
 struct PanelChromeOptions {
     bool enableMinimize = true;
@@ -39,8 +39,8 @@ public:
     // A provider instance stages the panel until that generation is published.
     UIPanel(const std::string& title = "", bool draggable = true,
             const std::string& panelKey = "",
-            std::optional<std::string_view> providerInstance = std::nullopt);
-    static std::string providerInstanceId(const GrimPluginAPI* api);
+            bool registerWithRoot = true);
+    void attachToProvider(GrimPluginHandle instance);
     ~UIPanel() override;
     UIPanel(const UIPanel&) = delete;
     UIPanel& operator=(const UIPanel&) = delete;

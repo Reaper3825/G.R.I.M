@@ -87,8 +87,9 @@ int main() try {
         const auto oldRevision = registry.version();
         const auto oldInstance = provider.instance;
         const auto oldTool = *registry.getTool(retained.tool_id);
+        providers.retire(provider.name, oldInstance);
         provider.instance = "generation-2";
-        check(providers.publish(provider, {{retained, handler}}, oldInstance),
+        check(providers.publish(provider, {{retained, handler}}),
               "Provider replacement failed");
         providers.retire(provider.name, oldInstance);
         check(registry.getModelTools().size() == 1 && registry.isExecutable(retained.tool_id) &&

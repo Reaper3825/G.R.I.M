@@ -5,7 +5,7 @@
 #include <string>
 
 namespace {
-const GrimPluginAPI* host = nullptr;
+grim::PluginHost host = {};
 GrimResult deliver(GrimToolResultWriter* writer, bool success, const std::string& message,
                    const char* error, const std::string& json = {}) {
     GrimToolResult result;
@@ -49,13 +49,13 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
             if (key.empty() || key.size() > 256 || key.find('\0') != std::string::npos)
                 throw std::invalid_argument("panel_id must contain 1-256 bytes without NUL");
         }
-        const char* raw = host->ui_panel_service(host, cancel ? GRIM_UI_CANCEL :
+        const char* raw = host->ui_panel_service(host.instance(), cancel ? GRIM_UI_CANCEL :
             (Operation == GRIM_UI_SHOW && id ? GRIM_UI_SHOW_CURRENT :
                 (Operation == GRIM_UI_HIDE && id ? GRIM_UI_HIDE_CURRENT : Operation)),
             Operation == GRIM_UI_LIST || Operation == GRIM_UI_POLL ? nullptr : key.c_str(), id);
         if (!raw) return deliver(writer, false, "UI panel service unavailable or request denied", "ERR_UI_SERVICE");
         std::string text;
-        { struct Release { const char* raw; ~Release() { host->string_free(host, raw); } } release{raw}; text = raw; }
+        { struct Release { const char* raw; ~Release() { host->string_free(host.instance(), raw); } } release{raw}; text = raw; }
         const auto response = nlohmann::json::parse(text);
         if (response.at("format") != "grim-ui-panel-response" || response.at("version") != 1)
             throw std::runtime_error("Unsupported UI service response");
@@ -78,7 +78,8 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
 }
 }
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
         !api->ui_panel_service) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
@@ -97,4 +98,4 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
     return GRIM_ERROR_NOT_FOUND;
 }
 
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = nullptr; }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = {}; }

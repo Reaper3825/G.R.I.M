@@ -1,12 +1,26 @@
 #include "plugin_logging.hpp"
-#include <atomic>
+#include <mutex>
+
 namespace grim::plugin {
-namespace { std::atomic<const GrimPluginAPI*> loggingAPI{nullptr}; }
-void setLoggingAPI(const GrimPluginAPI* api) { loggingAPI.store(api); }
+namespace {
+std::mutex loggingMutex;
+PluginHost loggingAPI;
+}
+
+void setLoggingAPI(PluginHost api) {
+    std::lock_guard lock(loggingMutex);
+    loggingAPI = api;
+}
+
 void log(GrimLogLevel level, const std::string& tag, const std::string& message) {
-    if (const auto* api = loggingAPI.load()) {
+    PluginHost api;
+    {
+        std::lock_guard lock(loggingMutex);
+        api = loggingAPI;
+    }
+    if (api) {
         const auto text = "[" + tag + "] " + message;
-        api->log(api, level, text.c_str());
+        api->log(api.instance(), level, text.c_str());
     }
 }
 }

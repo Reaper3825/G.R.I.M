@@ -26,30 +26,33 @@ struct TestCalendar : grim::scheduling::CalendarPanel {
     }
 };
 struct Fixture {
-    const char* const providerName = "Native Calendar Fixture";
+    const std::string providerName;
     GrimPluginAPI api{};
     std::shared_ptr<UI::ProviderPanelLease> lease = std::make_shared<UI::ProviderPanelLease>();
     std::unique_ptr<grim::scheduling::Provider> provider;
     std::unique_ptr<TestCalendar> calendar;
-    explicit Fixture(const std::filesystem::path& path, const std::string& generation) {
+    explicit Fixture(const std::filesystem::path& path, const std::string& generation)
+        : providerName("Native Calendar Fixture " + generation) {
         lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
-        api.replace_resources = [](const GrimPluginAPI*, const char*, const char*, size_t) { return GRIM_OK; };
-        api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
-        provider = std::make_unique<grim::scheduling::Provider>(&api, path);
+        api.replace_resources = [](GrimPluginHandle, const char*, const char*, size_t) { return GRIM_OK; };
+        api.log = [](GrimPluginHandle, GrimLogLevel, const char*) {};
+        provider = std::make_unique<grim::scheduling::Provider>(grim::PluginHost{&api, 0}, path);
     }
     void initialize(bool permitted = true) {
-        prepareProviderPanelFixture(api, lease, permitted);
-        calendar = std::make_unique<TestCalendar>(lease->owner, &api, *provider);
+        const auto instance = prepareProviderPanelFixture(api, lease, permitted);
+        publish();
+        calendar = std::make_unique<TestCalendar>(grim::PluginHost{&api, instance}, *provider);
+        calendar->attachToProvider(instance);
     }
-    void publish(const std::string& replacing = {}) {
+    void publish() {
         require(MMO::ProviderRegistry::instance().publish(
-            {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "Owner publication failed");
+            {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "Owner publication failed");
     }
     ~Fixture() {
+        MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
         UI::retireProviderPanels(lease);
         calendar.reset(); provider.reset();
-        MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
     }
 };
 void frame(TestCalendar& panel, InputState input = {}) {
@@ -71,7 +74,7 @@ void runCalendarPanelTests() {
         ("grim-native-calendar-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     {
         bool rejected = false;
-        try { UIPanel unknown("Unknown", true, "test.unknown", "unknown-provider"); }
+        try { UIPanel unknown("Unknown", true, "test.unknown", false); unknown.attachToProvider(0); }
         catch (const std::logic_error&) { rejected = true; }
         require(rejected && !root.getPanelByKey("test.unknown"), "Unknown provider attached a panel");
     }
@@ -79,15 +82,11 @@ void runCalendarPanelTests() {
         Fixture denied(directory / "denied.json", "denied");
         bool rejected = false;
         try { denied.initialize(false); } catch (const std::logic_error&) { rejected = true; }
-        require(rejected && !UI::validateProviderPanels(denied.lease), "Native construction ignored UI permission");
-        require(!root.getPanelByKey("calendar"), "Rejected constructor attached Calendar");
+        require(rejected && !root.getPanelByKey("calendar"), "Permission denial attached Calendar");
     }
     {
         Fixture first(directory / "events.json", "first"); first.initialize();
         require(!std::filesystem::exists(directory), "Initialization touched calendar storage");
-        require(!root.getPanelByKey("calendar"), "Staged Calendar attached before commit");
-        require(UI::validateProviderPanels(first.lease), "Valid Calendar rejected");
-        first.publish(); UI::activateProviderPanels(first.lease); root.processPendingTasks();
         require(root.getPanelByKey("calendar") == first.calendar.get(), "Host did not attach the actual plugin panel");
         require(!first.calendar->isVisible(), "Calendar should start hidden");
         root.requestPanelOperation("calendar", UIPanelOperation::Show).get();
@@ -111,24 +110,25 @@ void runCalendarPanelTests() {
         require(panel.scroll().getScrollOffset() > 0, "Native scrolling failed");
         panel.setSize(1160,600); panel.scroll().scrollTo(0); frame(panel);
         {
-            Fixture collision(directory / "collision.json", "collision"); collision.initialize();
-            require(!UI::validateProviderPanels(collision.lease), "Foreign panel collision accepted");
+            Fixture collision(directory / "collision.json", "collision");
+            bool rejected = false;
+            try { collision.initialize(); } catch (const std::logic_error&) { rejected = true; }
+            require(rejected, "Foreign provider reused a live panel key");
         }
         require(root.getPanelByKey("calendar") == &panel, "Failed candidate displaced live Calendar");
-        Fixture replacement(directory / "events.json", "replacement"); replacement.initialize();
-        require(UI::validateProviderPanels(replacement.lease, first.lease), "Replacement panel rejected");
-        replacement.publish(first.lease->owner);
+
         UI::retireProviderPanels(first.lease);
         require(!root.getPanelByKey("calendar"), "Retirement did not detach synchronously");
         first.calendar.reset();
-        UI::activateProviderPanels(replacement.lease); root.processPendingTasks();
+        MMO::ProviderRegistry::instance().retire(first.providerName, first.lease->owner);
+        Fixture replacement(directory / "events.json", "replacement");
+        replacement.initialize();
         UI::retireProviderPanels(first.lease);
         require(root.getPanelByKey("calendar") == replacement.calendar.get(), "Old retirement removed replacement");
     }
     require(!root.getPanelByKey("calendar"), "Provider destruction retained native panel");
     {
-        Fixture cancelled(directory / "cancelled.json", "cancelled"); cancelled.initialize(); cancelled.publish();
-        UI::activateProviderPanels(cancelled.lease);
+        Fixture cancelled(directory / "cancelled.json", "cancelled"); cancelled.initialize();
         UI::retireProviderPanels(cancelled.lease); cancelled.calendar.reset();
         root.processPendingTasks();
         require(!root.getPanelByKey("calendar"), "Queued activation used a destroyed panel");
@@ -151,31 +151,32 @@ void runNativeCalendarDllTests(const char* dllPath) {
         Module(const std::filesystem::path& path, const std::string& generation) {
             lease->owner = generation;
             api.api_version = GRIM_API_VERSION;
-            api.subscribe_system_tick = [](const GrimPluginAPI*, GrimSystemTickCallback, void*) { return GRIM_OK; };
-            api.replace_resources = [](const GrimPluginAPI*, const char*, const char*, size_t) { return GRIM_OK; };
-            api.show_notification = [](const GrimPluginAPI*, const char*, const char*) {};
-            api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
+            api.subscribe_system_tick = [](GrimPluginHandle, GrimSystemTickCallback, void*) { return GRIM_OK; };
+            api.replace_resources = [](GrimPluginHandle, const char*, const char*, size_t) { return GRIM_OK; };
+            api.show_notification = [](GrimPluginHandle, const char*, const char*) {};
+            api.log = [](GrimPluginHandle, GrimLogLevel, const char*) {};
             handle = LoadLibraryW(path.c_str());
             require(handle != nullptr, "Could not load native Schedule DLL against test host exports");
             shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
             require(shutdown != nullptr, "Missing native shutdown export");
         }
         GrimResult init() {
-            const auto callback = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
+            const auto callback = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
             require(callback != nullptr, "Missing native init export");
-            prepareProviderPanelFixture(api, lease, true);
-            return callback(&api);
+            const auto instance = prepareProviderPanelFixture(api, lease, true);
+            publish();
+            return callback(&api, instance);
         }
-        void publish(const std::string& replacing = {}) {
+        void publish() {
             require(MMO::ProviderRegistry::instance().publish(
-                {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "DLL provider publish failed");
-            UI::activateProviderPanels(lease);
+                {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "DLL provider publish failed");
         }
         void close() {
             if (!handle) return;
-            UI::retireProviderPanels(lease); shutdown();
-            require(lease->nativePanels.empty(), "DLL shutdown did not destroy its panels");
             MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
+            UI::retireProviderPanels(lease); shutdown();
+            require(lease->panels.empty(), "DLL shutdown did not destroy its panels");
+
             FreeLibrary(handle); handle = nullptr;
         }
         ~Module() { close(); }
@@ -185,26 +186,24 @@ void runNativeCalendarDllTests(const char* dllPath) {
             std::filesystem::copy_file(dllPath, directory / name);
         {
             Module first(directory / "first.dll", "dll-first"); require(first.init() == GRIM_OK, "Native DLL init failed");
-            require(!root.getPanelByKey("calendar"), "DLL init attached before commit");
-            first.publish(); root.processPendingTasks();
+            root.processPendingTasks();
             auto* panel = root.getPanelByKey("calendar"); require(panel != nullptr, "Native DLL Calendar missing");
             const auto runtime = panel->getPanelID();
             panel->setVisible(true);
             OverlayRenderer renderer; require(panel->drawOverlay(renderer), "Native DLL draw dispatch failed");
-            Module second(directory / "second.dll", "dll-second"); require(second.init() == GRIM_OK, "Replacement DLL init failed");
-            require(UI::validateProviderPanels(second.lease, first.lease), "Native DLL replacement rejected");
-            first.close(); second.publish(); root.processPendingTasks();
+            first.close();
+            Module second(directory / "second.dll", "dll-second"); require(second.init() == GRIM_OK, "Replacement DLL init failed"); root.processPendingTasks();
             require(root.getPanelByKey("calendar") && root.getPanelByKey("calendar")->getPanelID() != runtime, "Replacement did not attach fresh native panel");
         }
         require(!root.getPanelByKey("calendar"), "Unloaded DLL left live panel");
         {
             Module cancelled(directory / "cancelled.dll", "dll-cancelled"); require(cancelled.init() == GRIM_OK, "Cancelled DLL init failed");
-            cancelled.publish(); cancelled.close(); root.processPendingTasks();
+            cancelled.close(); root.processPendingTasks();
             require(!root.getPanelByKey("calendar"), "Queued task reached unloaded DLL");
         }
         {
             Module failed(directory / "failed.dll", "dll-failed");
-            failed.api.subscribe_system_tick = [](const GrimPluginAPI*, GrimSystemTickCallback, void*) { return GRIM_ERROR_UNKNOWN; };
+            failed.api.subscribe_system_tick = [](GrimPluginHandle, GrimSystemTickCallback, void*) { return GRIM_ERROR_UNKNOWN; };
             require(failed.init() != GRIM_OK, "Failed provider initialized successfully");
             failed.close(); require(!root.getPanelByKey("calendar"), "Failed DLL leaked Calendar");
         }

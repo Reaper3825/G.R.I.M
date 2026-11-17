@@ -6,7 +6,7 @@
 #define FIXTURE_NAME "Shutdown fixture"
 #endif
 
-static const GrimPluginAPI* api = nullptr;
+static grim::PluginHost api;
 #ifdef FIXTURE_NATIVE_DEPENDENCY
 extern "C" __declspec(dllimport) int grim_test_dependency();
 #endif
@@ -14,29 +14,33 @@ extern "C" __declspec(dllimport) int grim_test_dependency();
 #ifndef FIXTURE_RESULT
 #define FIXTURE_RESULT "fixture result"
 #endif
-static void event(const char*, const void*, size_t, void*) {
-    api->set_context(api, "fixture_event", FIXTURE_RESULT);
+static GrimResult publish(const char* kind) {
+    const auto json = std::string("[{\"resource_id\":\"") + kind +
+        "\",\"kind\":\"" + kind + "\",\"name\":\"Fixture\",\"runtime_id\":1,\"state\":{\"value\":\"" +
+        FIXTURE_RESULT + "\"}}]";
+    return api->replace_resources(api.instance(), kind, json.data(), json.size());
 }
-static void tick(double, double, void*) {
-    api->set_context(api, "fixture_tick", FIXTURE_RESULT);
-}
+static void event(const char*, const void*, size_t, void*) { publish("fixture_event"); }
+static void tick(double, double, void*) { publish("fixture_tick"); }
 static GrimResult run(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    if (std::string(call->arguments, call->arguments_size) == "reload") api->request_reload(api);
+    if (std::string(call->arguments, call->arguments_size) == "reload") api->request_reload(api.instance());
     GrimToolResult result;
     result.success = 1;
     result.message = FIXTURE_RESULT;
     return writer->complete(writer, &result);
 }
 #endif
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value, GrimPluginHandle instance) {
     if (!value || value->api_version != GRIM_API_VERSION) return GRIM_ERROR_API_VERSION_MISMATCH;
-    api = value;
+    api = {value, instance};
 #ifdef FIXTURE_NATIVE_DEPENDENCY
     if (grim_test_dependency() != 42) return GRIM_ERROR_UNKNOWN;
 #endif
 #ifdef FIXTURE_TOOLS
-    api->subscribe_event(api, "fixture_event", event, nullptr);
-    if (const auto result = api->subscribe_system_tick(api, tick, nullptr); result != GRIM_OK)
+    api->log(instance, GRIM_LOG_INFO, "init " FIXTURE_RESULT);
+    if (publish("fixture_init") != GRIM_OK) return GRIM_ERROR_UNKNOWN;
+    api->subscribe_event(instance, "fixture_event", event, nullptr);
+    if (const auto result = api->subscribe_system_tick(instance, tick, nullptr); result != GRIM_OK)
         return result;
 #endif
 #ifdef FIXTURE_FAIL_INIT
@@ -55,23 +59,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
     return GRIM_ERROR_NOT_FOUND;
 }
 #endif
-#ifdef FIXTURE_ACTIVATION
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI* value) {
-    if (!value->is_provider_current(value)) return GRIM_ERROR_UNKNOWN;
-#ifdef FIXTURE_FAIL_ACTIVATION
-    return GRIM_ERROR_UNKNOWN;
-#else
-    const auto* previous = value->get_context(value, "fixture_retired");
-    const std::string retired = previous ? previous : "";
-    value->string_free(value, previous);
-    return value->set_context(value, "fixture_activated", (std::string(FIXTURE_RESULT) + ":" + retired).c_str());
-#endif
-}
-#endif
-
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
-#ifdef FIXTURE_ACTIVATION
-    api->set_context(api, "fixture_retired", FIXTURE_RESULT);
-#endif
-    api->log(api, GRIM_LOG_INFO, FIXTURE_NAME);
+    api->log(api.instance(), GRIM_LOG_INFO, FIXTURE_NAME);
+    api = {};
 }

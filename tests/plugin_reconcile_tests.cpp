@@ -9,17 +9,21 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <algorithm>
+#include <vector>
+
+std::vector<std::string> pluginTestLogSnapshot();
 
 namespace {
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 struct ChangeObserver : GRIM::MMO::ToolRegistryListener {
     bool callable = false;
-    void onToolRegistered(const std::string&) override { throw std::runtime_error("observer failure"); }
-    void onToolUnregistered(const std::string&) override { throw std::runtime_error("observer failure"); }
-    void onToolUpdated(const std::string& id) override {
-        callable = dispatchCommand(id, "").message == "new-result";
+    void onToolRegistered(const std::string& id) override {
+        callable = dispatchCommand(id, "").success;
         throw std::runtime_error("observer failure");
     }
+    void onToolUnregistered(const std::string&) override { throw std::runtime_error("observer failure"); }
+    void onToolUpdated(const std::string&) override {}
 };
 }
 void runPluginReconcileTests(const std::filesystem::path& variants, const std::filesystem::path& actual) {
@@ -54,39 +58,38 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(provider() && provider()->instance == firstInstance, "Plugin commit did not publish provider identity");
     PluginManager::initialize(watched.string());
     check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Repeated initialize reloaded unchanged plugin");
-    auto* observer = PluginAPI::createPluginAPI({.name = "observer", .path = "", .required_permissions = 0});
-    const auto context = [&](const char* key) {
-        const auto* text = observer->get_context(observer, key);
-        const auto result = text ? std::string(text) : std::string{};
-        observer->string_free(observer, text);
-        return result;
+    const auto resource = [](const char* kind) {
+        for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
+            if (group.provider.name == "Declared-alpha")
+                for (const auto& item : group.resources)
+                    if (item.kind == kind) return item.state.at("value").get<std::string>();
+        return std::string{};
     };
-    check(context("fixture_activated") == "old-result:", "Initial activation did not run after commit");
-    // A staged candidate's event and tick subscriptions must not replace the old ones.
-    install("failed");
-    check(provider() && provider()->instance == firstInstance, "Failed init changed the published provider");
-    check(registry.getTool("Declared-alpha")->provider.instance == firstInstance &&
-          dispatchCommand("Declared-alpha", "").message == "old-result", "Failed init displaced working plugin");
-    PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
-    PluginAPI::dispatchSystemTick(0, 0);
-    check(context("fixture_event") == "old-result" && context("fixture_tick") == "old-result",
-          "Failed candidate cleanup removed old resources or exposed staged callbacks");
-    auto version = registry.version();
-    PluginManager::checkForHotReload();
-    check(registry.version() == version, "Unchanged rejected binary was repeatedly processed");
-
-    install("collision");
-    check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Collision replaced working tools");
+    check(resource("fixture_init") == "old-result", "Init did not publish under the live provider");
     install("legacy");
     check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Incompatible ABI displaced working plugin");
-    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "alpha.tools.json", fs::copy_options::overwrite_existing);
+    PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
+    PluginAPI::dispatchSystemTick(0, 0);
+    check(resource("fixture_event") == "old-result" && resource("fixture_tick") == "old-result",
+          "Live instance did not receive callbacks");
+    install("failed");
+    check(!provider() && registry.toolCount() == baseline && resource("fixture_init").empty(),
+          "Failed init retained the provider, tools, or resources");
+    const auto version = registry.version();
+    PluginManager::checkForHotReload();
+    check(registry.version() == version, "Unchanged rejected binary was repeatedly processed");
+    install("old");
+    install("collision");
+    check(!provider() && registry.toolCount() == baseline, "Failed registration retained a provider");
+    install("old");
     {
         std::ofstream broken(watched / "alpha.dll", std::ios::binary | std::ios::trunc);
         broken << "incomplete binary";
     }
     PluginManager::checkForHotReload();
-    check(dispatchCommand("Declared-alpha", "").message == "old-result", "Invalid native library displaced working plugin");
-    observer->set_context(observer, "fixture_retired", "");
+    check(!provider(), "Failed native load retained the outgoing provider");
+    install("old");
+    const auto beforeCutover = pluginTestLogSnapshot().size();
     ChangeObserver notification;
     registry.addListener(&notification);
     const auto timestamp = fs::last_write_time(watched / "alpha.dll");
@@ -95,8 +98,13 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     fs::last_write_time(watched / "alpha.dll", timestamp);
     PluginManager::checkForHotReload();
     registry.removeListener(&notification);
-    check(context("fixture_activated") == "new-result:old-result", "Replacement activated before old shutdown");
-    check(notification.callable, "Committed replacement was not callable from a registry observer");
+    check(!notification.callable, "Registry observer entered the provider before init");
+    const auto lifecycleLog = pluginTestLogSnapshot();
+    const auto firstCutoverLog = lifecycleLog.begin() + beforeCutover;
+    const auto shutdown = std::find(firstCutoverLog, lifecycleLog.end(), "[Plugin: Declared-alpha] Declared-alpha");
+    const auto init = std::find(firstCutoverLog, lifecycleLog.end(), "[Plugin: Declared-alpha] init new-result");
+    check(shutdown != lifecycleLog.end() && init != lifecycleLog.end() && shutdown < init,
+          "Replacement init ran before outgoing shutdown");
     auto replacement = registry.getTool("Declared-alpha");
     check(provider() && replacement && provider()->instance == replacement->provider.instance,
           "Replacement provider and tools have different generations");
@@ -105,7 +113,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(!registry.isRegistered("Declared-alpha-extra"), "Replacement retained a removed tool");
     PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
     PluginAPI::dispatchSystemTick(0, 0);
-    check(context("fixture_event") == "new-result" && context("fixture_tick") == "new-result",
+    check(resource("fixture_event") == "new-result" && resource("fixture_tick") == "new-result",
           "Retiring old generation removed replacement resources");
 
     const auto secondInstance = replacement->provider.instance;
@@ -155,8 +163,6 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
     PluginManager::tick(); // Exercise the actual periodic frame path as well.
     check(registry.isRegistered("Declared-alpha"), "Plugin folder recreation was not discovered");
-    install("activation-failed");
-    check(!provider() && registry.toolCount() == baseline, "Failed activation left a published provider");
     PluginManager::unloadAll();
     PluginManager::tick();
     check(!provider(), "Provider identity survived plugin unload");
@@ -165,7 +171,6 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     fs::remove(watched / "alpha.tools.json");
     fs::remove(watched / "beta.tools.json");
     fs::remove(watched);
-    PluginAPI::cleanupPluginContext(observer);
 
     if (!actual.empty()) {
         PluginManager::initialize(fs::absolute(actual).string());

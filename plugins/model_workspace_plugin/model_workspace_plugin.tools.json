@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1179648,
+  "api_version": 1245184,
   "required_permissions": ["ui"],
   "provider": "Model Workspace Plugin",
   "version": "1.0.0",

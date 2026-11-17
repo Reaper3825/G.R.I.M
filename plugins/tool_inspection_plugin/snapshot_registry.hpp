@@ -7,12 +7,12 @@
 #include <stdexcept>
 
 namespace inspection {
-inline const GrimPluginAPI* host = nullptr;
+inline grim::PluginHost host = {};
 inline std::vector<GRIM::MMO::RegisteredTool> snapshot(const char* id = nullptr) {
     struct OwnedString {
         const char* text;
-        ~OwnedString() { if (text) host->string_free(host, text); }
-    } text{host->get_tool_snapshot(host, id)};
+        ~OwnedString() { if (text) host->string_free(host.instance(), text); }
+    } text{host->get_tool_snapshot(host.instance(), id)};
     if (!text.text) throw std::runtime_error("Tool registry snapshot unavailable");
     const auto value = nlohmann::json::parse(text.text);
     if (value.at("format") != "grim-tool-snapshot" || value.at("version") != 1)

@@ -81,17 +81,17 @@ int main(int argc, char** argv) {
         check(library != nullptr, "Could not load calculator plugin library");
         const auto symbol = [library](const char* name) { return dlsym(library, name); };
 #endif
-        const auto pluginInit = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(symbol("grim_plugin_init"));
+        const auto pluginInit = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(symbol("grim_plugin_init"));
         const auto pluginShutdown = reinterpret_cast<void (*)()>(symbol("grim_plugin_shutdown"));
         check(pluginInit && pluginShutdown, "Missing native plugin exports");
-        check(pluginInit(nullptr) == GRIM_ERROR_API_VERSION_MISMATCH, "Null API accepted");
+        check(pluginInit(nullptr, 0) == GRIM_ERROR_API_VERSION_MISMATCH, "Null API accepted");
         GrimPluginAPI api{};
         api.api_version = GRIM_API_VERSION - 0x100;
-        check(pluginInit(&api) == GRIM_ERROR_API_VERSION_MISMATCH, "Old API accepted");
+        check(pluginInit(&api, 1) == GRIM_ERROR_API_VERSION_MISMATCH, "Old API accepted");
         api.api_version = GRIM_API_VERSION;
         dispatch = reinterpret_cast<GrimToolDispatch>(symbol("grim_plugin_dispatch_tool"));
         check(dispatch != nullptr, "Missing dispatcher export");
-        check(pluginInit(&api) == GRIM_OK, "Plugin initialization failed");
+        check(pluginInit(&api, 1) == GRIM_OK, "Plugin initialization failed");
         check(publishCalculator(std::filesystem::path(argv[1]).replace_extension(".tools.json")),
               "Calculator manifest did not publish");
         check(ToolRegistry::instance().getModelTools().size() == 1, "Tool missing from model discovery");

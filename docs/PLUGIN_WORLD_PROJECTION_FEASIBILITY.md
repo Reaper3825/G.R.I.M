@@ -12,25 +12,20 @@ compiled episodes and the host-owned live session are separate backend paths.
 
 ## Finding
 
-The native plugin lifecycle already provides staging, provider identity, generation
-checks, atomic tool replacement, and generation-scoped removal. Extend that
-publication transaction with explicit resource declarations and project the world
-from its committed snapshot. Do not discover available resources by scanning the
-asset library, matching descriptions, or inferring internal services from tools.
-The existing authored plugin room files are templates, not an availability source.
+The native plugin lifecycle registers a provider with its manifest tools
+and accepts resource updates under the live instance. World projection can
+use snapshots of these provider records. Authored plugin room files supply
+templates.
 
 ## Existing integration points
 
-- `core/plugin_api_impl.cpp`: `readManifestTools`, `commitPluginGeneration`,
-  `commitPluginGeneration`, and `beginPluginShutdown` provide the staging/commit/removal
-  boundary. The host copies metadata and owns provider identity and generation.
-- `MMO/Core/Registries/ToolRegistry.cpp`: `replaceProvider` validates a candidate before
-  swapping tools and aliases under one mutex. A rejected replacement retains the
-  previous generation; `unregisterInstance` removes only the specified generation.
-- `core/plugin_api.hpp`: v3.16 ends its service table with 16 reserved pointer
-  slots. A versioned resource-registration service can consume one while retaining
-  table size and old field offsets. This needs ABI assertions and compatibility
-  tests. Provider metadata now lives in the versioned sidecar manifest.
+- `core/plugin_api_impl.cpp`: `registerProvider` publishes manifest tools and
+  `retireProvider` closes callback entry and removes the exact instance.
+- `MMO/Core/Registries/ProviderRegistry.cpp`: `publish` registers the provider
+  and its tool and alias indexes under one mutex. `retire` removes those entries
+  with the provider's resources.
+- `core/plugin_api.hpp`: the v19 ABI uses a shared table and instance handle
+  for provider-scoped services, including `replace_resources`.
 - `ui/world_lab/world_asset.*`: templates support metadata, independent insertion,
   fresh world IDs and preserved stable resource keys. No registration connection
   or automatic availability filtering currently exists.

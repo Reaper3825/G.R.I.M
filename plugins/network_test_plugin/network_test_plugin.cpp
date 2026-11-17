@@ -624,7 +624,7 @@ namespace NetworkTest {
 // New Plugin API Implementation
 // ============================================================================
 
-static const GrimPluginAPI* g_api = nullptr;
+static grim::PluginHost g_api = {};
 
 // Deliver copied results before the local CommandResult is destroyed.
 static GrimResult deliver(GrimToolResultWriter* writer, const CommandResult& value) {
@@ -647,7 +647,8 @@ static GrimResult networkTestStopHandler(const GrimToolCall* call, GrimToolResul
 
 // Plugin metadata
 // Initialize plugin
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api) {
         return GRIM_ERROR_INVALID_PARAM;
     }
@@ -658,7 +659,7 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     
     g_api = api;
     grim::plugin::setLoggingAPI(api);
-    g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin initializing...");
+    g_api->log(g_api.instance(), GRIM_LOG_INFO, "Network Test Plugin initializing...");
     
     return GRIM_OK;
 }
@@ -678,8 +679,8 @@ extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
         // Stop any running test
         GRIM::NetworkTest::stopTest();
         
-        g_api->log(g_api, GRIM_LOG_INFO, "Network Test Plugin unloaded");
-        grim::plugin::setLoggingAPI(nullptr);
-        g_api = nullptr;
+        g_api->log(g_api.instance(), GRIM_LOG_INFO, "Network Test Plugin unloaded");
+        grim::plugin::setLoggingAPI({});
+        g_api = {};
     }
 }

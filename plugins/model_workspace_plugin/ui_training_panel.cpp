@@ -14,8 +14,8 @@ using namespace UITrainingPanelDetail;
 // Constructor
 // ============================================================
 
-UITrainingPanel::UITrainingPanel(std::string_view providerInstance)
-    : UIPanel("GRIM-text Training Control", true, "training_control", providerInstance)
+UITrainingPanel::UITrainingPanel()
+    : UIPanel("GRIM-text Training Control", true, "training_control", false)
 {
     position = { 200, 80 };
     size     = { 1100, 800 };

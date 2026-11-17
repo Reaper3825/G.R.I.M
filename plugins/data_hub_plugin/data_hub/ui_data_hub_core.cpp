@@ -2,8 +2,8 @@
 
 using namespace UIDataHubDetail;
 
-UIDataHubPanel::UIDataHubPanel(std::string_view providerInstance)
-    : UIPanel("DataHub", true, "data_hub", providerInstance)
+UIDataHubPanel::UIDataHubPanel()
+    : UIPanel("DataHub", true, "data_hub", false)
 {
     position = {200, 500};
     size     = {1400, 750};

@@ -18,7 +18,7 @@ class OverlayRenderer;
 
 class ConsolePanel : public UIPanel, public ConsoleNotificationTarget {
 public:
-    explicit ConsolePanel(std::string_view providerInstance);
+    explicit ConsolePanel();
     ~ConsolePanel() override;
     void appendNotification(const std::string& text) override;
 

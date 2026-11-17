@@ -10,51 +10,19 @@ ProviderRegistry& ProviderRegistry::instance() {
     return ToolRegistry::instance().providers_;
 }
 
-void ProviderRegistry::beginGeneration(const std::shared_ptr<const ProviderDescriptor>& provider) {
-    if (!provider || provider->type != ToolProviderType::Plugin || provider->name.empty() || provider->instance.empty())
-        throw std::invalid_argument("Invalid provider identity");
-    auto record = std::make_unique<ProviderRecord>();
-    record->descriptor = provider;
-    std::lock_guard lock(tools_.mutex_);
-    if (providerResourcesLocked(*provider) ||
-        !candidates_.try_emplace(provider->instance, std::move(record)).second)
-        throw std::logic_error("Duplicate candidate generation");
-}
-
 bool ProviderRegistry::publish(const ProviderDescriptor& provider,
-                               const std::vector<ToolRegistration>& registrations,
-                               const std::string& old_instance) {
+                               const std::vector<ToolRegistration>& registrations) {
     if (provider.type != ToolProviderType::Plugin || provider.name.empty() ||
-        provider.instance.empty() || provider.instance == old_instance) return false;
+        provider.instance.empty()) return false;
 
     auto record = std::make_unique<ProviderRecord>();
-    std::unique_ptr<ProviderRecord> retired;
+    record->descriptor = std::make_shared<const ProviderDescriptor>(provider);
     std::vector<ToolRegistryListener*> listeners;
-    std::vector<std::pair<std::string, bool>> published;
-    std::vector<std::string> removed;
+    std::vector<std::string> published;
     {
         std::lock_guard lock(tools_.mutex_);
-        const auto owner = records_.find(provider.name);
-        if (old_instance.empty()) {
-            if (owner != records_.end()) return false;
-        } else if (owner == records_.end() || owner->second->descriptor->instance != old_instance) {
-            return false;
-        }
-        const auto generation = candidates_.find(provider.instance);
-        if (generation != candidates_.end()) {
-            if (generation->second->descriptor->name != provider.name) return false;
-            record->descriptor = generation->second->descriptor;
-        } else {
-            record->descriptor = std::make_shared<const ProviderDescriptor>(provider);
-        }
-
-        auto candidate = tools_.tool_index_;
-        if (owner != records_.end()) {
-            for (const auto& [id, entry] : owner->second->tools) {
-                removed.push_back(id);
-                candidate.erase(id);
-            }
-        }
+        if (records_.contains(provider.name)) return false;
+        auto nextTools = tools_.tool_index_;
         for (const auto& registration : registrations) {
             const auto& desc = registration.descriptor;
             const char* error = nullptr;
@@ -66,43 +34,23 @@ bool ProviderRegistry::publish(const ProviderDescriptor& provider,
                 error = "Invalid tool bindings";
             else if (!validToolShortDescription(desc.short_description))
                 error = "Invalid short description";
-            if (error) {
-                if (old_instance.empty()) throw std::invalid_argument(error);
-                return false;
-            }
-            if (candidate.count(desc.tool_id)) return false;
+            if (error) throw std::invalid_argument(error);
+            if (nextTools.count(desc.tool_id)) return false;
             auto entry = std::make_shared<Entry>(Entry{desc, registration.handler, record->descriptor});
-            candidate.emplace(desc.tool_id, entry.get());
+            nextTools.emplace(desc.tool_id, entry.get());
             record->tools.emplace(desc.tool_id, std::move(entry));
-            published.emplace_back(desc.tool_id, tools_.tool_index_.count(desc.tool_id) != 0);
+            published.push_back(desc.tool_id);
         }
         ToolRegistry::Aliases aliases;
-        if (!ToolRegistry::buildAliases(candidate, aliases)) return false;
+        if (!ToolRegistry::buildAliases(nextTools, aliases)) return false;
         listeners = tools_.listeners_;
-        std::erase_if(removed, [&](const auto& id) { return record->tools.count(id) != 0; });
-        // Finish all potentially throwing work before promoting the candidate record.
-        const auto target = owner == records_.end() ? records_.try_emplace(provider.name).first : owner;
-        if (generation != candidates_.end()) {
-            generation->second->tools.swap(record->tools);
-            record = std::move(generation->second);
-            candidates_.erase(generation);
-        }
-        retired = std::exchange(target->second, std::move(record));
-        if (retired && !retired->resources.empty()) ++resourceVersion_;
-        if (!target->second->resources.empty()) ++resourceVersion_;
-        tools_.tool_index_.swap(candidate);
+        records_.emplace(provider.name, std::move(record));
+        tools_.tool_index_.swap(nextTools);
         tools_.alias_index_.swap(aliases);
         ++tools_.version_;
     }
-    retired.reset();
-    for (const auto& id : removed) for (auto* listener : listeners) {
-        try { listener->onToolUnregistered(id); } catch (...) {}
-    }
-    for (const auto& [id, updated] : published) for (auto* listener : listeners) {
-        try {
-            if (updated) listener->onToolUpdated(id);
-            else listener->onToolRegistered(id);
-        } catch (...) {} // Observers cannot veto a committed mutation.
+    for (const auto& id : published) for (auto* listener : listeners) {
+        try { listener->onToolRegistered(id); } catch (...) {}
     }
     return true;
 }
@@ -201,13 +149,7 @@ bool ProviderRegistry::replaceResources(const ProviderDescriptor& provider, cons
 
     std::lock_guard lock(tools_.mutex_);
     auto* current = providerResourcesLocked(provider);
-    const bool visible = current != nullptr;
-    if (!visible) {
-        const auto generation = candidates_.find(provider.instance);
-        if (generation == candidates_.end() || generation->second->descriptor->name != provider.name)
-            return false;
-        current = &generation->second->resources;
-    }
+    if (!current) return false;
     auto next = *current;
     std::erase_if(next, [&](const auto& entry) { return entry.second.kind == kind; });
     next.merge(batch);
@@ -215,7 +157,7 @@ bool ProviderRegistry::replaceResources(const ProviderDescriptor& provider, cons
     if (next.size() > 10000) throw std::invalid_argument("Provider resource limit exceeded");
     if (next != *current) {
         current->swap(next);
-        if (visible) ++resourceVersion_;
+        ++resourceVersion_;
     }
     return true;
 }
@@ -225,12 +167,6 @@ void ProviderRegistry::retire(const std::string& provider, const std::string& in
     std::vector<ToolRegistryListener*> listeners;
     {
         std::lock_guard lock(tools_.mutex_);
-        const auto generation = candidates_.find(instance);
-        if (generation != candidates_.end() && generation->second->descriptor->name == provider) {
-            retired = std::move(generation->second);
-            candidates_.erase(generation);
-            return;
-        }
         const auto owner = records_.find(provider);
         if (owner == records_.end() || owner->second->descriptor->instance != instance) return;
         listeners = tools_.listeners_;

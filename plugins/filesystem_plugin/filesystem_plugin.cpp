@@ -14,10 +14,10 @@ enum Operation { Ls, Mkdir, Rm };
 struct Provider;
 struct OperationContext { Provider* provider; Operation operation; };
 struct Provider {
-    const GrimPluginAPI* api;
+    grim::PluginHost api;
     const fs::path currentDirectory = fs::current_path();
     OperationContext operations[3] = {{this, Ls}, {this, Mkdir}, {this, Rm}};
-    explicit Provider(const GrimPluginAPI* value) : api(value) {}
+    explicit Provider(grim::PluginHost value) : api(value) {}
     bool publishDirectory(const fs::path& directory) const {
         const auto path = directory.u8string();
         const auto payload = nlohmann::json::array({{
@@ -26,7 +26,7 @@ struct Provider {
             {"state", {{"format", "grim-filesystem-directory"}, {"version", 1},
                 {"path", std::string(path.begin(), path.end())}, {"scope", "provider"}}}
         }}).dump();
-        return api->replace_resources(api, "filesystem.directory", payload.data(), payload.size()) == GRIM_OK;
+        return api->replace_resources(api.instance(), "filesystem.directory", payload.data(), payload.size()) == GRIM_OK;
     }
 };
 std::unique_ptr<Provider> provider;
@@ -87,7 +87,8 @@ GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void*
 }
 }
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->replace_resources)
         return GRIM_ERROR_API_VERSION_MISMATCH;

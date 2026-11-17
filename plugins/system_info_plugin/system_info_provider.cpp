@@ -69,7 +69,7 @@ nlohmann::json Provider::refresh() {
         // Replace the whole capture atomically, removing devices no longer present.
         // Generation checks reject a retired provider's in-flight capture.
         const auto payload = nlohmann::json(resources).dump();
-        if (api_->replace_resources(api_, "system_info.snapshot", payload.data(), payload.size()) != GRIM_OK)
+        if (api_->replace_resources(api_.instance(), "system_info.snapshot", payload.data(), payload.size()) != GRIM_OK)
             throw std::runtime_error("Hardware resource publication rejected");
         lastHardware_ = nextHardware;
     }

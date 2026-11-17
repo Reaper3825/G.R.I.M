@@ -153,10 +153,10 @@ void PluginManager::initialize(const std::string& folder) {
     checkForHotReload();
     nextPoll = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 }
-void PluginManager::requestReload(const GrimPluginAPI* api) {
-    if (!api) return;
+void PluginManager::requestReload(GrimPluginHandle instance) {
+    if (!instance) return;
     std::lock_guard lock(requestMutex);
-    reloadRequests.insert(api);
+    reloadRequests.insert(instance);
 }
 void PluginManager::tick() {
     if (pluginDir.empty()) return;
@@ -196,7 +196,7 @@ void PluginManager::checkForHotReload() {
             if (!present.count(it->first)) it = attempted.erase(it);
             else ++it;
         }
-        std::unordered_set<const GrimPluginAPI*> requests;
+        std::unordered_set<GrimPluginHandle> requests;
         {
             std::lock_guard lock(requestMutex);
             requests.swap(reloadRequests);
@@ -208,7 +208,7 @@ void PluginManager::checkForHotReload() {
             if (!library || !manifest) continue; // Wait for a readable candidate pair.
             const PluginFingerprint current{*library, *manifest};
             const auto old = loadedPlugins.find(name);
-            const bool requested = old != loadedPlugins.end() && requests.count(old->second.api);
+            const bool requested = old != loadedPlugins.end() && requests.count(PluginAPI::instanceHandle(*old->second.provider));
             if (!requested && old != loadedPlugins.end() && old->second.fingerprint == current) continue;
             if (!requested && attempted.count(name) && attempted.at(name).fingerprint == current &&
                 attempted.at(name).surfaceRevision == surfaceRevision) continue;
@@ -230,12 +230,7 @@ void PluginManager::unloadAll() {
 }
 bool PluginManager::loadPlugin(const std::filesystem::path& path, const PluginFingerprint& stamp) {
     const auto name = path.filename().string();
-    auto previous = loadedPlugins.find(name);
-    const auto* oldApi = previous == loadedPlugins.end() ? nullptr : previous->second.api;
-    using Activate = GrimResult (*)(const GrimPluginAPI*);
-    Activate activate = nullptr;
     LoadedPlugin candidate;
-    bool initialized = false;
     try {
         candidate.cacheDirectory = createCacheDirectory();
         const auto copy = candidate.cacheDirectory / path.filename();
@@ -257,74 +252,63 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const PluginFi
         const auto manifestData = nlohmann::json::parse(manifestInput);
         manifestInput.close();
         auto provider = PluginAPI::readManifestProvider(manifestData, path.string());
+        PluginAPI::validateManifestTools(manifestData.at("tools"), provider);
+        const auto previous = loadedPlugins.find(name);
+        if (previous != loadedPlugins.end() && previous->second.providerName != provider.name)
+            throw std::invalid_argument("Reload must retain the provider name");
+        candidate.providerName = provider.name;
+        unloadPlugin(name);
         candidate.handle = loadLib(copy, path.parent_path());
-        using Init = GrimResult (*)(const GrimPluginAPI*);
+        using Init = decltype(&grim_plugin_init);
         auto init = reinterpret_cast<Init>(getSymbol(candidate.handle, "grim_plugin_init"));
-        activate = reinterpret_cast<Activate>(getSymbol(candidate.handle, "grim_plugin_activate"));
         if (!init || !getSymbol(candidate.handle, "grim_plugin_shutdown"))
             throw std::runtime_error("Missing plugin entry points");
-        candidate.api = PluginAPI::createPluginAPI(std::move(provider), true, oldApi);
+
+        candidate.provider = PluginAPI::registerInstance(std::move(provider));
         const auto dispatch = reinterpret_cast<GrimToolDispatch>(getSymbol(candidate.handle, "grim_plugin_dispatch_tool"));
-        const auto tools = PluginAPI::readManifestTools(manifestData.at("tools"), candidate.api, dispatch);
-        initialized = true; // Shutdown must tolerate partially completed init.
-        if (init(candidate.api) != GRIM_OK || !PluginAPI::commitPluginGeneration(candidate.api, oldApi, tools))
-            throw std::runtime_error("Initialization or provider publication rejected");
+        PluginAPI::registerProvider(*candidate.provider, manifestData.at("tools"), dispatch);
+        candidate.initialized = true;
+        if (init(&PluginAPI::hostAPI(), PluginAPI::instanceHandle(*candidate.provider)) != GRIM_OK)
+            throw std::runtime_error("Plugin initialization failed");
+
         candidate.fingerprint = stamp;
+        auto [entry, inserted] = loadedPlugins.try_emplace(name);
+        if (!inserted) throw std::logic_error("Plugin is already loaded");
+        PluginAPI::enableDispatch(*candidate.provider);
+        entry->second = std::move(candidate);
+        candidate.handle = nullptr;
+        ++surfaceRevision;
+        LOG_DEBUG("PluginManager", "Loaded plugin: " + name);
+        return true;
     } catch (const std::exception& error) {
         LOG_ERROR("PluginManager", "Rejected " + name + ": " + error.what());
-        if (initialized) retire(candidate);
-        else {
-            if (candidate.api) PluginAPI::cleanupPluginContext(candidate.api);
-            unloadLib(candidate.handle);
-            removeCache(candidate.cacheDirectory);
-        }
-        return false;
     } catch (...) {
         LOG_ERROR("PluginManager", "Exception initializing " + name);
-        if (initialized) retire(candidate);
-        else {
-            if (candidate.api) PluginAPI::cleanupPluginContext(candidate.api);
-            unloadLib(candidate.handle);
-            removeCache(candidate.cacheDirectory);
-        }
-        return false;
     }
-    const bool replaced = previous != loadedPlugins.end();
-    if (replaced) {
-        retire(previous->second);
-        loadedPlugins.erase(previous);
-    }
-
-    // Activation can take over resources released by the retired generation.
-    try {
-        if (activate && activate(candidate.api) != GRIM_OK)
-            throw std::runtime_error("Post-commit activation failed");
-    } catch (...) {
-        LOG_ERROR("PluginManager", "Activation failed for " + name);
-        retire(candidate);
-        if (replaced) ++surfaceRevision;
-        attempted[name] = {stamp, surfaceRevision};
-        return false;
-    }
-    loadedPlugins.emplace(name, std::move(candidate));
-    ++surfaceRevision;
-    LOG_DEBUG("PluginManager", "Loaded plugin: " + name);
-    return true;
+    retire(candidate);
+    attempted[name] = {stamp, surfaceRevision};
+    return false;
 }
+
 void PluginManager::retire(LoadedPlugin& plugin) {
-    PluginAPI::beginPluginShutdown(plugin.api);
-    try {
-        using Shutdown = void (*)();
-        reinterpret_cast<Shutdown>(getSymbol(plugin.handle, "grim_plugin_shutdown"))();
-    } catch (...) { LOG_ERROR("PluginManager", "Plugin shutdown raised an exception"); }
-    {
-        std::lock_guard lock(requestMutex);
-        reloadRequests.erase(plugin.api);
+    if (plugin.provider) {
+        PluginAPI::retireProvider(*plugin.provider);
+        if (plugin.initialized) {
+            try {
+                using Shutdown = void (*)();
+                reinterpret_cast<Shutdown>(getSymbol(plugin.handle, "grim_plugin_shutdown"))();
+            } catch (...) { LOG_ERROR("PluginManager", "Plugin shutdown raised an exception"); }
+        }
+        {
+            std::lock_guard lock(requestMutex);
+            reloadRequests.erase(PluginAPI::instanceHandle(*plugin.provider));
+        }
+        PluginAPI::releaseInstance(*plugin.provider);
     }
-    PluginAPI::cleanupPluginContext(plugin.api);
     unloadLib(plugin.handle);
     removeCache(plugin.cacheDirectory);
 }
+
 void PluginManager::unloadPlugin(const std::string& name) {
     const auto found = loadedPlugins.find(name);
     if (found == loadedPlugins.end()) return;

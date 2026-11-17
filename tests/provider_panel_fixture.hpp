@@ -1,19 +1,14 @@
 #pragma once
 
+#include "MMO/Core/Registries/ProviderRegistry.hpp"
 #include "ui/ui_panel_service.hpp"
-#include <algorithm>
 
-inline void prepareProviderPanelFixture(
+inline GrimPluginHandle prepareProviderPanelFixture(
     GrimPluginAPI& api, const std::shared_ptr<GRIM::UI::ProviderPanelLease>& lease, bool permitted) {
+    static GrimPluginHandle next = 1;
     lease->uiPermitted = permitted;
-    GRIM::UI::registerProviderPanelLease(lease);
-    api.host_context = lease.get();
-    api.get_provider_identity = [](const GrimPluginAPI* self) -> const char* {
-        const auto& owner = *static_cast<const GRIM::UI::ProviderPanelLease*>(self->host_context);
-        const auto json = nlohmann::json{{"instance", owner.owner}}.dump();
-        auto value = std::make_unique<char[]>(json.size() + 1);
-        std::copy_n(json.c_str(), json.size() + 1, value.get());
-        return value.release();
-    };
-    api.string_free = [](const GrimPluginAPI*, const char* value) { delete[] value; };
+    const auto handle = next++;
+    GRIM::UI::registerProviderPanelLease(handle, lease);
+    api.string_free = [](GrimPluginHandle, const char* value) { delete[] value; };
+    return handle;
 }

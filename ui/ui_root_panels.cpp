@@ -63,7 +63,6 @@ void UIRoot::registerPanel(UIPanel* panel)
 void UIRoot::unregisterPanel(UIPanel* panel) noexcept
 {
     if (!isUIThread()) std::terminate(); // Borrowed UI pointers require same-thread lifetime.
-    GRIM::UI::forgetNativePanel(panel);
     GRIM::UI::InputRouter::get().forgetPanel(panel->getPanelID());
     std::unique_lock lock(m_panelMutex);
     const auto found = std::find(m_panels.begin(), m_panels.end(), panel);

@@ -1,5 +1,5 @@
 #include "core/plugin_manager.hpp"
-#include "core/plugin_api_impl.hpp"
+#include "loaded_provider_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "commands/command_result.hpp"
@@ -19,30 +19,31 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     check(fs::create_directory(folder), "Cannot create inspection test folder");
     struct Cleanup {
         fs::path folder;
-        GrimPluginAPI* api = nullptr;
+        std::unique_ptr<LoadedProviderFixture> api;
         ~Cleanup() {
             PluginManager::unloadAll();
             ProviderRegistry::instance().retire("inspection-fixtures", "fixture-generation");
-            if (api) PluginAPI::cleanupPluginContext(api);
+            api.reset();
             std::error_code error;
             fs::remove(folder / "tool_inspection_plugin.dll", error);
             fs::remove(folder / "tool_inspection_plugin.tools.json", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    cleanup.api = PluginAPI::createPluginAPI({.name = "snapshot-reader", .path = "", .required_permissions = 0});
-    auto* api = cleanup.api;
+    cleanup.api = std::make_unique<LoadedProviderFixture>(GRIM::MMO::ProviderDescriptor{.name = "snapshot-reader", .path = "", .required_permissions = 0});
+    cleanup.api->load();
+    auto& api = *cleanup.api;
     const auto snapshot = [&](const char* id = nullptr) {
-        const auto* text = api->get_tool_snapshot(api, id);
+        const auto* text = api->get_tool_snapshot(api.handle(), id);
         check(text != nullptr, "Snapshot API failed");
         const std::string copy(text);
-        api->string_free(api, text);
+        api->string_free(api.handle(), text);
         const auto value = nlohmann::json::parse(copy);
         check(value.at("format") == "grim-tool-snapshot" && value.at("version") == 1, "Snapshot schema missing");
         return value.at("tools");
     };
     check(snapshot().size() == baseline && snapshot("missing").empty(), "Empty/missing snapshot semantics incorrect");
-    check(api->get_tool_snapshot(nullptr, nullptr) == nullptr, "Invalid API identity accepted");
+    check(api->get_tool_snapshot(0, nullptr) == nullptr, "Invalid API identity accepted");
     fs::copy_file(pluginDirectory / "tool_inspection_plugin.dll", folder / "tool_inspection_plugin.dll");
     fs::copy_file(pluginDirectory / "tool_inspection_plugin.tools.json", folder / "tool_inspection_plugin.tools.json");
     PluginManager::initialize(folder.string());

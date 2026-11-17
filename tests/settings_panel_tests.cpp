@@ -28,28 +28,29 @@ struct Module {
     Module(const std::filesystem::path& path, const std::string& generation) {
         lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
-        api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
+        api.log = [](GrimPluginHandle, GrimLogLevel, const char*) {};
         handle = LoadLibraryW(path.c_str());
         require(handle != nullptr, "Settings DLL failed to load against host exports");
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         require(shutdown != nullptr, "Missing Settings shutdown");
     }
     GrimResult init(bool permission = true) {
-        auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
+        auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         require(init != nullptr, "Missing Settings init");
-        prepareProviderPanelFixture(api, lease, permission);
-        return init(&api);
+        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        publish();
+        return init(&api, instance);
     }
-    void publish(const std::string& replacing = {}) {
+    void publish() {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "Settings provider publish failed");
-        GRIM::UI::activateProviderPanels(lease);
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "Settings provider publish failed");
     }
     void close() {
         if (!handle) return;
-        GRIM::UI::retireProviderPanels(lease); shutdown();
-        require(lease->nativePanels.empty(), "Settings shutdown retained native objects");
         GRIM::MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
+        GRIM::UI::retireProviderPanels(lease); shutdown();
+        require(lease->panels.empty(), "Settings shutdown retained native objects");
+
         FreeLibrary(handle); handle = nullptr;
     }
     ~Module() { close(); }
@@ -66,8 +67,7 @@ void runNativeSettingsDllTests(const char* dllPath) {
         {
             Module first(directory / "first.dll", "settings-first");
             require(first.init() == GRIM_OK, "Settings init failed");
-            require(!root.getPanelByKey("settings"), "Settings attached before commit");
-            first.publish(); root.processPendingTasks();
+            root.processPendingTasks();
             auto* panel = root.getPanelByKey("settings");
             require(panel && !panel->isVisible(), "Settings identity/default visibility changed");
             const auto runtime = panel->getPanelID();
@@ -94,13 +94,11 @@ void runNativeSettingsDllTests(const char* dllPath) {
             click(720,298); // Controls
             click(700,350); // Begin shortcut capture
             require(GRIM::InputBindings::isCaptureActive(), "Controls capture did not start");
-            Module second(directory / "second.dll", "settings-second"); require(second.init() == GRIM_OK, "Replacement init failed");
-            require(!GRIM::UI::validateProviderPanels(second.lease), "Foreign collision accepted");
-            require(GRIM::UI::validateProviderPanels(second.lease, first.lease), "Settings replacement rejected");
-            second.publish(first.lease->owner);
             first.close();
+
             require(!root.getPanelByKey("settings") && !GRIM::InputBindings::isCaptureActive(), "Settings unload retained panel/capture");
             require(settingsTestSaves == 1, "Unload saved pending settings");
+            Module second(directory / "second.dll", "settings-second"); require(second.init() == GRIM_OK, "Replacement init failed");
             root.processPendingTasks();
             require(root.getPanelByKey("settings") && root.getPanelByKey("settings")->getPanelID() != runtime, "Settings replacement missing");
             GRIM::UI::retireProviderPanels(first.lease);
@@ -110,7 +108,7 @@ void runNativeSettingsDllTests(const char* dllPath) {
         {
             Module cancelled(directory / "cancelled.dll", "settings-cancelled");
             require(cancelled.init() == GRIM_OK, "Cancelled Settings init failed");
-            cancelled.publish(); cancelled.close(); root.processPendingTasks();
+            cancelled.close(); root.processPendingTasks();
             require(!root.getPanelByKey("settings"), "Queued activation reached unloaded Settings");
         }
         {
@@ -122,7 +120,7 @@ void runNativeSettingsDllTests(const char* dllPath) {
             settingsTestLoadFailure = true;
             require(failed.init() != GRIM_OK, "Configuration load failure was accepted");
             settingsTestLoadFailure = false;
-            require(failed.lease->nativePanels.empty(), "Failed construction leaked staged panel");
+            require(failed.lease->panels.empty(), "Failed construction leaked panel");
         }
     } catch (...) { std::filesystem::remove_all(directory); throw; }
     std::filesystem::remove_all(directory);

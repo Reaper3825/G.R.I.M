@@ -22,11 +22,8 @@ class ProviderRegistry {
 public:
     static ProviderRegistry& instance();
 
-    // Create an unpublished generation that can receive resource updates.
-    void beginGeneration(const std::shared_ptr<const ProviderDescriptor>& provider);
-    // Publish a plugin generation with its tools and any resources it already owns.
-    bool publish(const ProviderDescriptor&, const std::vector<ToolRegistration>&,
-                 const std::string& old_instance = {});
+    // Register a live provider and its manifest tools in one operation.
+    bool publish(const ProviderDescriptor&, const std::vector<ToolRegistration>&);
     void retire(const std::string& provider, const std::string& instance);
 
     ProviderRegistrySnapshot snapshot() const;
@@ -59,7 +56,6 @@ private:
     // Provider records and tool indexes share the ToolRegistry mutex.
     ToolRegistry& tools_;
     std::map<std::string, std::unique_ptr<ProviderRecord>> records_;
-    std::map<std::string, std::unique_ptr<ProviderRecord>> candidates_; // By instance.
     uint64_t resourceVersion_ = 0;
 };
 

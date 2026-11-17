@@ -319,7 +319,7 @@ API v11 consolidates commands, collection, cache, jobs and Python bridges under
 notification handling. It requires SYSTEM, FILESYSTEM and UI permissions and
 publishes `schedule.state` resources. It also owns Calendar's controller, drafts,
 selection, native widgets and actions as a `UIPanel` subclass. Construction
-registers it under Schedule; the host attaches it after commit and publishes its
+attaches it during Schedule initialization and the host publishes its
 resource under Schedule for World Lab.
 No Calendar-specific host class, factory, or UI-plugin declaration remains.
 Saved records survive unload; overdue delivery resumes on the next provider poll.
@@ -380,7 +380,7 @@ reverse host deployment dependencies to avoid a build cycle. See
 ### Storage plugin
 
 `storage_plugin` owns Shared Storage (`storage`) and its My Files/Devices tabs.
-Its native panel is staged during initialization and detached before DLL shutdown.
+Its native panel attaches during initialization and detaches before DLL shutdown.
 UI Plugin supplies generic operations but neither declares nor owns this panel.
 No agent tools are added.
 

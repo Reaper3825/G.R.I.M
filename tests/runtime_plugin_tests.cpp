@@ -1,7 +1,7 @@
 // Real memory DLL, rotation, storage, and persistence in a private fixture.
 #include "core/plugin_manager.hpp"
 #include "commands/command_result.hpp"
-#include "core/plugin_api_impl.hpp"
+#include "loaded_provider_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "memory/unified_memory.hpp"
 #include "memory/memory_buffer_rotation.hpp"
@@ -27,10 +27,10 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     check(fs::create_directory(folder), "Cannot create runtime plugin fixture");
     struct Cleanup {
         fs::path folder;
-        GrimPluginAPI* api = nullptr;
+        std::unique_ptr<LoadedProviderFixture> api;
         ~Cleanup() {
             PluginManager::unloadAll();
-            if (api) PluginAPI::cleanupPluginContext(api);
+            api.reset();
             g_memoryStorage.shutdown();
             MemoryBufferRotation::instance().clear();
             std::error_code error;
@@ -39,23 +39,25 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    auto* denied = PluginAPI::createPluginAPI({.name = "runtime-denied", .path = "", .required_permissions = 0});
-    check(denied->stage_manual_memory(denied, "fixture") == nullptr && rotation.stats().preproc_count == 0 &&
-          denied->search_memory(denied, "fixture") == nullptr && denied->flush_memory_record_if_present(denied, 1) == nullptr,
+    LoadedProviderFixture denied({.name = "runtime-denied", .path = "", .required_permissions = 0});
+    denied.load();
+    check(denied->stage_manual_memory(denied.handle(), "fixture") == nullptr && rotation.stats().preproc_count == 0 &&
+          denied->search_memory(denied.handle(), "fixture") == nullptr && denied->flush_memory_record_if_present(denied.handle(), 1) == nullptr,
           "Memory permission bypass");
-    check(denied->stage_manual_memory(nullptr, "fixture") == nullptr,
+    check(denied->stage_manual_memory(0, "fixture") == nullptr,
           "Invalid runtime API identity accepted");
-    PluginAPI::cleanupPluginContext(denied);
-    cleanup.api = PluginAPI::createPluginAPI({.name = "runtime-reader", .path = "", .required_permissions = GRIM_PERM_SYSTEM | GRIM_PERM_MEMORY});
-    auto* api = cleanup.api;
+    denied.unload();
+    cleanup.api = std::make_unique<LoadedProviderFixture>(GRIM::MMO::ProviderDescriptor{.name = "runtime-reader", .path = "", .required_permissions = GRIM_PERM_SYSTEM | GRIM_PERM_MEMORY});
+    cleanup.api->load();
+    auto& api = *cleanup.api;
     const auto value = [&](const char* text) {
         check(text != nullptr, "Runtime API failed");
-        const std::string copy(text); api->string_free(api, text);
+        const std::string copy(text); api->string_free(api.handle(), text);
         const auto reply = nlohmann::json::parse(copy);
         check(reply.at("format") == "grim-runtime-service" && reply.at("version") == 1 && reply.at("error").is_null(), "Runtime reply schema/error incorrect");
         return reply.at("value");
     };
-    check(api->stage_manual_memory(api, "") == nullptr && api->search_memory(api, nullptr) == nullptr, "Invalid runtime parameters accepted");
+    check(api->stage_manual_memory(api.handle(), "") == nullptr && api->search_memory(api.handle(), nullptr) == nullptr, "Invalid runtime parameters accepted");
     if (!memoryDirectory.empty()) {
         g_memoryStorage.initialize((folder / "records.fb").string());
         fs::copy_file(memoryDirectory / "memory_plugin.dll", folder / "memory_plugin.dll");
@@ -101,10 +103,10 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
         recent.id = UnifiedMemoryObject::generateID(); recent.raw = "recent blue fact"; recent.normalized = recent.raw;
         g_memoryStorage.storeShortTerm(recent);
         matches(registry.invoke("recall", "blue"), true, "[Memory] recent blue fact", "ERR_NONE", "summary", "Recalled memory for blue", Colors::Cyan);
-        const auto hits = value(api->search_memory(api, "blue"));
+        const auto hits = value(api->search_memory(api.handle(), "blue"));
         check(hits.size() == 2 && hits[0].at("raw") == recent.raw && hits[0].at("id") == recent.id &&
               hits[1].at("id") == staged[0].id, "Memory search result order/data changed");
-        check(!value(api->flush_memory_record_if_present(api, 0)).get<bool>(), "Missing record reported present");
+        check(!value(api->flush_memory_record_if_present(api.handle(), 0)).get<bool>(), "Missing record reported present");
         matches(registry.invoke("forget", "blue"), true, "[Memory] Forgotten entries for: blue", "ERR_NONE", "routine", "Forgotten blue", Colors::Green);
         check(g_memoryStorage.getById(staged[0].id).has_value() && g_memoryStorage.getById(recent.id).has_value(), "Migration changed legacy forget into deletion");
         matches(registry.invoke("remember", "pending stage"), true, "[Memory] Remembered: pending stage", "ERR_NONE", "routine", "Remembered that pending stage", Colors::Green);

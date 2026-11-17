@@ -26,18 +26,19 @@ void runSchedulePluginTests() {
     {
 
         GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
-        api.replace_resources=[](const GrimPluginAPI*,const char*,const char*,size_t){return GRIM_OK;};
-        api.subscribe_system_tick=[](const GrimPluginAPI*,GrimSystemTickCallback,void*){return GRIM_OK;};
-        api.show_notification=[](const GrimPluginAPI*,const char*,const char* text){notifications.emplace_back(text);};
-        api.log=[](const GrimPluginAPI*,GrimLogLevel,const char*){};
+        api.replace_resources=[](GrimPluginHandle,const char*,const char*,size_t){return GRIM_OK;};
+        api.subscribe_system_tick=[](GrimPluginHandle,GrimSystemTickCallback,void*){return GRIM_OK;};
+        api.show_notification=[](GrimPluginHandle,const char*,const char* text){notifications.emplace_back(text);};
+        api.log=[](GrimPluginHandle,GrimLogLevel,const char*){};
         auto lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
         lease->owner = "fixture-1";
-        prepareProviderPanelFixture(api, lease, true);
+        const auto instance = prepareProviderPanelFixture(api, lease, true);
         auto oldApi=api;oldApi.api_version=12u<<16;
-        assert(grim_plugin_init(&oldApi)==GRIM_ERROR_API_VERSION_MISMATCH);
-        assert(grim_plugin_init(&api)==GRIM_OK);
+        assert(grim_plugin_init(&oldApi, 1)==GRIM_ERROR_API_VERSION_MISMATCH);
+        assert(grim_plugin_init(&api, instance)==GRIM_OK);
+        GRIM::UI::retireProviderPanels(lease);
         calendarPanel.reset();
-        provider=std::make_unique<grim::scheduling::Provider>(&api,root/"events.json");
+        provider=std::make_unique<grim::scheduling::Provider>(grim::PluginHost{&api, 1},root/"events.json");
         provider->prepare();
         auto event=invoke("create",{{"id","event"},{"kind","event"},{"title","Meeting"},{"start_utc_ms",now+1000000},{"end_utc_ms",now+2000000}});
         assert(event["success"]==true);

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1179648,
+  "api_version": 1245184,
   "required_permissions": ["system", "filesystem", "network"],
   "provider": "Perception Plugin",
   "version": "2.0.0",
@@ -124,7 +124,7 @@
       "description": "Begin physical camera calibration",
       "is_informational": false,
       "needs_confirmation": true,
-      "short_description": "Begin physical camera calibration",
+      "short_description": "Begin calibration for the physical camera",
       "usage": "perception.calibrate",
       "usage_type": 0,
       "permissions": [

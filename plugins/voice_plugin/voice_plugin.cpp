@@ -12,7 +12,7 @@
 #include <filesystem>
 #include <stdexcept>
 namespace {
-const GrimPluginAPI* host=nullptr;
+grim::PluginHost host={};
 std::mutex operationMutex;
 bool configured=false, tts=false;
 const char* ids[]={"voice.status","voice.configure","voice.capture","voice.stream.start","voice.stream.stop",
@@ -26,7 +26,7 @@ nlohmann::json status() {
 }
 void publish() {
  auto json=nlohmann::json::array({{{"resource_id","status"},{"kind","voice.status"},{"name","Voice status and transcripts"},{"runtime_id",1},{"state",status()}}}).dump();
- if(host->replace_resources(host,"voice.status",json.c_str(),json.size())!=GRIM_OK) throw std::runtime_error("Unable to publish voice status");
+ if(host->replace_resources(host.instance(),"voice.status",json.c_str(),json.size())!=GRIM_OK) throw std::runtime_error("Unable to publish voice status");
 }
 void stop() {
  VoiceRuntime::cancel=true;
@@ -101,14 +101,15 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
  return writer->complete(writer,&result);
 }
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
  if(!api || api->api_version!=GRIM_API_VERSION || !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
  std::lock_guard<std::mutex> lock(operationMutex);
  host=api; configured=false; tts=false; VoiceRuntime::reset(); grim::plugin::setLoggingAPI(api);
  try {
   publish();
   return GRIM_OK;
- } catch(...) { host=nullptr; grim::plugin::setLoggingAPI(nullptr); return GRIM_ERROR_UNKNOWN; }
+ } catch(...) { host={}; grim::plugin::setLoggingAPI({}); return GRIM_ERROR_UNKNOWN; }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
     const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
@@ -123,5 +124,5 @@ extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
  VoiceRuntime::cancel=true;
  std::lock_guard<std::mutex> lock(operationMutex);
  if(!host) return;
- stop(); configured=false; VoiceRuntime::reset(); host=nullptr; grim::plugin::setLoggingAPI(nullptr);
+ stop(); configured=false; VoiceRuntime::reset(); host={}; grim::plugin::setLoggingAPI({});
 }

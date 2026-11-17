@@ -167,7 +167,8 @@ int main() try {
     auto replacement = oldOwner;
     replacement.instance += "-replacement";
     publishTool(replaced, [&](const std::string&) {
-        check(providers.publish(replacement, {{replaced, echo}}, oldOwner.instance),
+        providers.retire(oldOwner.name, oldOwner.instance);
+        check(providers.publish(replacement, {{replaced, echo}}),
               "In-flight provider replacement failed");
         return CommandResult{};
     });

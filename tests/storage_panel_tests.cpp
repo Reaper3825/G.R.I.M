@@ -98,15 +98,15 @@ struct Module {
     HMODULE handle;
     GrimPluginAPI api{};
     std::shared_ptr<GRIM::UI::ProviderPanelLease> lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
-    GrimResult (*initialize)(const GrimPluginAPI*);
+    GrimResult (*initialize)(const GrimPluginAPI*, GrimPluginHandle);
     void (*shutdown)();
     Module(const std::filesystem::path& path, const std::string& generation) {
         lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
-        api.log = [](const GrimPluginAPI*, GrimLogLevel, const char* message) { pluginError = message; };
+        api.log = [](GrimPluginHandle, GrimLogLevel, const char* message) { pluginError = message; };
         handle = LoadLibraryW(path.c_str());
         require(handle != nullptr, "Storage DLL failed to load against host exports");
-        initialize = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
+        initialize = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         if (!initialize || !shutdown) {
             FreeLibrary(handle);
@@ -114,20 +114,21 @@ struct Module {
         }
     }
     GrimResult init(bool permission = true) {
-        prepareProviderPanelFixture(api, lease, permission);
-        return initialize(&api);
+        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        publish();
+        return initialize(&api, instance);
     }
-    void publish(const std::string& replacing = {}) {
+    void publish() {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing),
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}),
             "Storage provider publication failed");
-        GRIM::UI::activateProviderPanels(lease);
     }
     void close() {
         if (!handle) return;
-        GRIM::UI::retireProviderPanels(lease); shutdown();
-        require(lease->nativePanels.empty(), "Storage shutdown retained native panels");
         GRIM::MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
+        GRIM::UI::retireProviderPanels(lease); shutdown();
+        require(lease->panels.empty(), "Storage shutdown retained native panels");
+
         require(FreeLibrary(handle) != 0, "Storage DLL unload failed");
         handle = nullptr;
     }
@@ -145,9 +146,8 @@ void runNativeStorageDllTests(const char* dllPath) {
             std::filesystem::copy_file(dllPath, directory / name);
         {
             Module first(directory / "first.dll", "storage-first");
-            require(first.init() == GRIM_OK && !root.getPanelByKey("storage"),
-                    "Storage init failed or attached before commit");
-            first.publish(); root.processPendingTasks();
+            require(first.init() == GRIM_OK, "Initial panel load failed");
+            root.processPendingTasks();
             auto* panel = root.getPanelByKey("storage");
             require(panel && !panel->isVisible() && panel->getTitle() == "Shared Storage",
                     "Storage identity/default visibility changed");
@@ -186,22 +186,20 @@ void runNativeStorageDllTests(const char* dllPath) {
             click(*panel, {row.x + static_cast<float>(label.size()) * 7.5f + 30, row.y + 80});
             require(disconnected == 1 && !state.connected, "Disconnect did not reach the host service");
 
+            first.close();
+
+            require(!root.getPanelByKey("storage"), "Storage retirement did not detach synchronously");
             {
                 Module failed(directory / "failed.dll", "storage-failed");
                 serviceAvailable = false; pluginError.clear();
                 const auto result = failed.init();
                 serviceAvailable = true;
-                require(result != GRIM_OK && !pluginError.empty() && failed.lease->nativePanels.empty(),
-                        "Unavailable host service was accepted or leaked a staged panel");
-                require(root.getPanelByKey("storage") == panel, "Failed candidate disturbed the live panel");
+                require(result != GRIM_OK && !pluginError.empty() && failed.lease->panels.empty(),
+                        "Unavailable host service was accepted or leaked a panel");
+                require(!root.getPanelByKey("storage"), "Failed init disturbed the live panel");
             }
             Module second(directory / "second.dll", "storage-second");
             require(second.init() == GRIM_OK, "Storage replacement init failed");
-            require(!GRIM::UI::validateProviderPanels(second.lease), "Foreign Storage collision accepted");
-            require(GRIM::UI::validateProviderPanels(second.lease, first.lease), "Storage replacement rejected");
-            second.publish(first.lease->owner);
-            first.close();
-            require(!root.getPanelByKey("storage"), "Storage retirement did not detach synchronously");
             root.processPendingTasks();
             auto* replacement = root.getPanelByKey("storage");
             require(replacement && !replacement->isVisible() && replacement->getPanelID() != runtime,
@@ -216,13 +214,13 @@ void runNativeStorageDllTests(const char* dllPath) {
         {
             Module cancelled(directory / "cancelled.dll", "storage-cancelled");
             require(cancelled.init() == GRIM_OK, "Cancelled Storage init failed");
-            cancelled.publish(); cancelled.close(); root.processPendingTasks();
+            cancelled.close(); root.processPendingTasks();
             require(!root.getPanelByKey("storage"), "Queued activation reached unloaded Storage code");
         }
         {
             Module denied(directory / "denied.dll", "storage-denied");
             require(denied.init(false) != GRIM_OK, "Storage bypassed UI permission");
-            require(denied.lease->nativePanels.empty(), "Denied Storage initialization leaked a panel");
+            require(denied.lease->panels.empty(), "Denied Storage initialization leaked a panel");
         }
     } catch (...) {
         serviceAvailable = true;

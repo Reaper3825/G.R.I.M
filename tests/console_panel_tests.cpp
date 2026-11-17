@@ -28,28 +28,29 @@ struct Module {
     Module(const std::filesystem::path& path, const std::string& generation) {
         lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
-        api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
+        api.log = [](GrimPluginHandle, GrimLogLevel, const char*) {};
         handle = LoadLibraryW(path.c_str());
         require(handle != nullptr, "Console DLL failed to load against host exports");
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         require(shutdown != nullptr, "Missing Console shutdown");
     }
     GrimResult init(bool permission = true) {
-        auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
+        auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         require(init != nullptr, "Missing Console init");
-        prepareProviderPanelFixture(api, lease, permission);
-        return init(&api);
+        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        publish();
+        return init(&api, instance);
     }
-    void publish(const std::string& replacing = {}) {
+    void publish() {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "Console provider publish failed");
-        GRIM::UI::activateProviderPanels(lease);
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "Console provider publish failed");
     }
     void close() {
         if (!handle) return;
-        GRIM::UI::retireProviderPanels(lease); shutdown();
-        require(lease->nativePanels.empty(), "Console shutdown retained native objects");
         GRIM::MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
+        GRIM::UI::retireProviderPanels(lease); shutdown();
+        require(lease->panels.empty(), "Console shutdown retained native objects");
+
         FreeLibrary(handle); handle = nullptr;
     }
     ~Module() { close(); }
@@ -66,8 +67,7 @@ void runNativeConsoleDllTests(const char* dllPath) {
         {
             Module first(directory / "first.dll", "console-first");
             require(first.init() == GRIM_OK, "Console init failed");
-            require(!root.getPanelByKey("console"), "Console attached before commit");
-            first.publish(); root.processPendingTasks();
+            root.processPendingTasks();
             auto* panel = root.getPanelByKey("console");
             require(panel && !panel->isVisible(), "Console identity/default visibility changed");
             const auto runtime = panel->getPanelID();
@@ -83,17 +83,15 @@ void runNativeConsoleDllTests(const char* dllPath) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
             while (!consoleTestCommands && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
             require(consoleTestCommands == 1, "Console input did not reach host command handler");
-            Module second(directory / "second.dll", "console-second"); require(second.init() == GRIM_OK, "Replacement init failed");
-            require(!GRIM::UI::validateProviderPanels(second.lease), "Foreign collision accepted");
-            require(GRIM::UI::validateProviderPanels(second.lease, first.lease), "Console replacement rejected");
-            second.publish(first.lease->owner);
             first.close();
+
             require(consoleTestFinished && !root.getPanelByKey("console"), "Console unload did not drain/detach");
             auto& history = GRIM::MMO::SessionContextManager::instance().displayHistory(consoleTestSession);
             history.ensureWrapped(1000);
             bool delivered = false;
             for (const auto& line : history.wrapped()) if (line.text == "console fixture response") delivered = true;
             require(delivered, "Shutdown lost active command result");
+            Module second(directory / "second.dll", "console-second"); require(second.init() == GRIM_OK, "Replacement init failed");
             root.processPendingTasks();
             require(root.getPanelByKey("console") && root.getPanelByKey("console")->getPanelID() != runtime, "Console replacement missing");
             GRIM::UI::retireProviderPanels(first.lease);
@@ -103,7 +101,7 @@ void runNativeConsoleDllTests(const char* dllPath) {
         {
             Module cancelled(directory / "cancelled.dll", "console-cancelled");
             require(cancelled.init() == GRIM_OK, "Cancelled Console init failed");
-            cancelled.publish(); cancelled.close(); root.processPendingTasks();
+            cancelled.close(); root.processPendingTasks();
             require(!root.getPanelByKey("console"), "Queued activation reached unloaded Console");
         }
         {

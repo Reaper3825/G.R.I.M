@@ -8,7 +8,8 @@ namespace perceptionPlugin {
 void configureOperator(const std::string&, const nlohmann::json&);
 class Runtime {
 public:
-    explicit Runtime(const GrimPluginAPI*);
+    explicit Runtime(grim::PluginHost host);
+    void start();
     ~Runtime();
     nlohmann::json request(const std::string&, const nlohmann::json&);
 private:
@@ -18,7 +19,7 @@ private:
     void stopPhysical();
     void publish();
     nlohmann::json snapshot();
-    const GrimPluginAPI* api;
+    grim::PluginHost api;
     std::chrono::steady_clock::time_point nextPoll;
     std::mutex mutex;
     bool physical = false;

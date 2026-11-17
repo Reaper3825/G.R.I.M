@@ -17,7 +17,8 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
     return writer->complete(writer, &result);
 }
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->get_tool_snapshot) return GRIM_ERROR_API_VERSION_MISMATCH;
     inspection::host = api;
@@ -35,6 +36,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
-    grim::plugin::setLoggingAPI(nullptr);
-    inspection::host = nullptr;
+    grim::plugin::setLoggingAPI({});
+    inspection::host = {};
 }

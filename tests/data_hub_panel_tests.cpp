@@ -36,15 +36,15 @@ struct Module {
     HMODULE handle;
     GrimPluginAPI api{};
     std::shared_ptr<GRIM::UI::ProviderPanelLease> lease = std::make_shared<GRIM::UI::ProviderPanelLease>();
-    GrimResult (*initialize)(const GrimPluginAPI*);
+    GrimResult (*initialize)(const GrimPluginAPI*, GrimPluginHandle);
     void (*shutdown)();
     Module(const std::filesystem::path& path, const std::string& generation) {
         lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
-        api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
+        api.log = [](GrimPluginHandle, GrimLogLevel, const char*) {};
         handle = LoadLibraryW(path.c_str());
         require(handle != nullptr, "DataHub DLL could not import host services");
-        initialize = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
+        initialize = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         if (!initialize || !shutdown) {
             FreeLibrary(handle);
@@ -52,20 +52,21 @@ struct Module {
         }
     }
     GrimResult init(bool permission = true) {
-        prepareProviderPanelFixture(api, lease, permission);
-        return initialize(&api);
+        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        publish();
+        return initialize(&api, instance);
     }
-    void publish(const std::string& replacing = {}) {
+    void publish() {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing),
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}),
             "DataHub provider publication failed");
-        GRIM::UI::activateProviderPanels(lease);
     }
     void close() {
         if (!handle) return;
-        GRIM::UI::retireProviderPanels(lease); shutdown();
-        require(lease->nativePanels.empty(), "DataHub shutdown retained native objects");
         GRIM::MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
+        GRIM::UI::retireProviderPanels(lease); shutdown();
+        require(lease->panels.empty(), "DataHub shutdown retained native objects");
+
         require(FreeLibrary(handle) != 0, "DataHub DLL unload failed");
         handle = nullptr;
     }
@@ -97,10 +98,10 @@ void runNativeDataHubDllTests(const char* dllPath) {
         auto& root = UIRoot::get();
         {
             Module first(directory / "first.dll", "datahub-first");
-            require(first.init() == GRIM_OK && !root.getPanelByKey("data_hub"), "DataHub attached before commit");
+            require(first.init() == GRIM_OK, "Initial panel load failed");
             require(Service::loadSettings().empty() && Service::sources() == persisted,
-                    "Candidate construction persisted panel state");
-            first.publish(); root.processPendingTasks();
+                    "Panel construction persisted panel state");
+            root.processPendingTasks();
             auto* panel = root.getPanelByKey("data_hub");
             require(panel && !panel->isVisible(), "DataHub initial visibility changed");
             const auto runtime = panel->getPanelID();
@@ -120,23 +121,21 @@ void runNativeDataHubDllTests(const char* dllPath) {
                     "HF completion did not update native widgets on the UI thread");
             click(*panel, {browseX, searchY + 14});
             require(pendingDataHubFixtureQueries() == 1, "Second HF request missing");
+            first.close();
+            require(pendingDataHubFixtureQueries() == 0 && !root.getPanelByKey("data_hub"),
+                    "DataHub retirement retained requests or drawing pointers");
             {
                 Module failed(directory / "failed.dll", "datahub-failed");
                 dataHubTestFail = true;
                 const auto result = failed.init();
                 dataHubTestFail = false;
-                require(result != GRIM_OK && failed.lease->nativePanels.empty(),
+                require(result != GRIM_OK && failed.lease->panels.empty(),
                         "Failed DataHub candidate leaked registration");
-                require(root.getPanelByKey("data_hub") == panel && Service::sources() == persisted,
-                        "Failed candidate changed live panel or persisted sources");
+                require(!root.getPanelByKey("data_hub") && Service::sources() == persisted,
+                        "Failed init changed live panel or persisted sources");
             }
             Module second(directory / "second.dll", "datahub-second");
             require(second.init() == GRIM_OK, "DataHub replacement construction failed");
-            require(!GRIM::UI::validateProviderPanels(second.lease), "Foreign panel collision accepted");
-            require(GRIM::UI::validateProviderPanels(second.lease, first.lease), "DataHub replacement rejected");
-            second.publish(first.lease->owner); first.close();
-            require(pendingDataHubFixtureQueries() == 0 && !root.getPanelByKey("data_hub"),
-                    "DataHub retirement retained requests or drawing pointers");
             root.processPendingTasks();
             auto* replacement = root.getPanelByKey("data_hub");
             require(replacement && replacement->getPanelID() != runtime && !replacement->isVisible(),
@@ -153,13 +152,13 @@ void runNativeDataHubDllTests(const char* dllPath) {
         require(!root.getPanelByKey("data_hub"), "Unloaded DataHub remained attached");
         {
             Module cancelled(directory / "cancelled.dll", "datahub-cancelled");
-            require(cancelled.init() == GRIM_OK, "Cancelled candidate init failed");
-            cancelled.publish(); cancelled.close(); root.processPendingTasks();
+            require(cancelled.init() == GRIM_OK, "Cancelled panel init failed");
+            cancelled.close(); root.processPendingTasks();
             require(!root.getPanelByKey("data_hub"), "Activation reached unloaded DataHub");
         }
         {
             Module denied(directory / "denied.dll", "datahub-denied");
-            require(denied.init(false) != GRIM_OK && denied.lease->nativePanels.empty(),
+            require(denied.init(false) != GRIM_OK && denied.lease->panels.empty(),
                     "DataHub bypassed UI permission");
         }
         stopDataHubFixture();

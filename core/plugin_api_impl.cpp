@@ -53,7 +53,7 @@ struct CallGate {
     std::mutex mutex;
     std::condition_variable idle;
     bool accepting = true;
-    bool published = true;
+    bool dispatchEnabled = false;
     size_t active = 0;
 };
 
@@ -63,15 +63,13 @@ struct SystemTickSubscription {
     std::shared_ptr<CallGate> gate;
 };
 
-struct PluginContext {
-    explicit PluginContext(std::shared_ptr<const GRIM::MMO::ProviderDescriptor> descriptor)
+struct LoadedProvider {
+    explicit LoadedProvider(GRIM::MMO::ProviderDescriptor descriptor)
         : identity(std::move(descriptor)) {}
 
-    const std::shared_ptr<const GRIM::MMO::ProviderDescriptor> identity;
-    GrimPluginAPI api{};
+    const GRIM::MMO::ProviderDescriptor identity;
+    GrimPluginHandle handle = 0;
     std::shared_ptr<CallGate> gate = std::make_shared<CallGate>();
-    bool staging = false;
-    bool resource_staging_failed = false;
     std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
         std::make_shared<GRIM::UI::ProviderPanelLease>();
     std::mutex panelRequestsMutex;
@@ -82,9 +80,9 @@ struct PluginContext {
 static std::unordered_map<uint64_t, EventSubscription> s_event_subscriptions;
 static uint64_t s_next_event_id = 1;
 static std::unordered_map<std::string, SystemTickSubscription> s_systemTickSubscriptions;
-static std::unordered_map<std::string, std::string> s_context_storage;
 static std::unordered_map<void*, std::string> s_allocated_strings;
-static std::unordered_map<std::string, std::unique_ptr<PluginContext>> s_plugin_contexts;
+static std::unordered_map<GrimPluginHandle, std::weak_ptr<LoadedProvider>> s_instances;
+static std::mutex s_instanceMutex;
 static uint64_t s_next_instance = 1;
 static std::atomic<uint64_t> s_next_panel_request = 1;
 static std::mutex s_resourceMutex;
@@ -94,15 +92,15 @@ static std::mutex s_stringMutex;
 // Helper Functions
 // ============================================================================
 
-static const PluginContext& pluginContext(const GrimPluginAPI* self) {
-    if (!self || !self->host_context) {
-        throw std::invalid_argument("Plugin API requires its owning API object");
-    }
-    return *static_cast<const PluginContext*>(self->host_context);
+static std::shared_ptr<LoadedProvider> providerFor(GrimPluginHandle handle) {
+    std::lock_guard lock(s_instanceMutex);
+    const auto found = s_instances.find(handle);
+    return found == s_instances.end() ? nullptr : found->second.lock();
 }
 
-static bool checkPermission(const GrimPluginAPI* self, GrimPermission perm) {
-    return (pluginContext(self).identity->required_permissions & perm) == static_cast<uint32_t>(perm);
+static bool checkPermission(GrimPluginHandle self, GrimPermission perm) {
+    const auto owner = providerFor(self);
+    return owner && (owner->identity.required_permissions & perm) == static_cast<uint32_t>(perm);
 }
 
 static const char* allocateString(const std::string& str) {
@@ -118,8 +116,10 @@ static const char* allocateString(const std::string& str) {
 // Logging Implementation
 // ============================================================================
 
-static void api_log(const GrimPluginAPI* self, GrimLogLevel level, const char* message) {
-    std::string prefix = "[Plugin: " + pluginContext(self).identity->name + "] ";
+static void api_log(GrimPluginHandle self, GrimLogLevel level, const char* message) {
+    const auto owner = providerFor(self);
+    if (!owner || !message) return;
+    std::string prefix = "[Plugin: " + owner->identity.name + "] ";
     std::string full_msg = prefix + message;
     
     switch (level) {
@@ -181,9 +181,9 @@ static GrimResult completeResult(GrimToolResultWriter* writer, const GrimToolRes
 struct ActiveCall {
     std::shared_ptr<CallGate> gate;
     bool entered = false;
-    explicit ActiveCall(std::shared_ptr<CallGate> value, bool requirePublished = false) : gate(std::move(value)) {
+    explicit ActiveCall(std::shared_ptr<CallGate> value, bool requireDispatch = false) : gate(std::move(value)) {
         std::lock_guard lock(gate->mutex);
-        if (gate->accepting && (!requirePublished || gate->published)) { ++gate->active; entered = true; }
+        if (gate->accepting && (!requireDispatch || gate->dispatchEnabled)) { ++gate->active; entered = true; }
     }
     ~ActiveCall() {
         if (!entered) return;
@@ -242,17 +242,16 @@ static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
     return out;
 }
 
-std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
-    const nlohmann::json& entries, const GrimPluginAPI* api, GrimToolDispatch dispatch) {
-    const auto& owner = pluginContext(api);
+static std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
+    const nlohmann::json& entries, const LoadedProvider& owner, GrimToolDispatch dispatch) {
     if (!entries.is_array() || entries.size() > 256 || (!entries.empty() && !dispatch))
         throw std::invalid_argument("Invalid tool manifest entries or missing dispatcher");
     std::vector<GRIM::MMO::ToolRegistration> tools;
     tools.reserve(entries.size());
     for (const auto& entry : entries) {
-        auto descriptor = decodeManifestTool(entry, owner.identity->version.c_str(), owner.identity->required_permissions);
+        auto descriptor = decodeManifestTool(entry, owner.identity.version.c_str(), owner.identity.required_permissions);
         auto invoke = [gate = owner.gate, dispatch, id = descriptor.tool_id](const std::string& arguments) -> CommandResult {
-            ActiveCall active(gate);
+            ActiveCall active(gate, true);
             if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
             ResultCapture capture;
             GrimToolResultWriter writer{sizeof(GrimToolResultWriter), &capture, completeResult};
@@ -268,31 +267,33 @@ std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
 }
 
 // Provider-neutral bridge: copied descriptions only; implementation and state stay in the DLL.
-static const char* api_get_provider_identity(const GrimPluginAPI* self) noexcept {
+static const char* api_get_provider_identity(GrimPluginHandle self) noexcept {
     try {
-        const auto& identity = *pluginContext(self).identity;
+        const auto owner = providerFor(self);
+        if (!owner) return nullptr;
+        const auto& identity = owner->identity;
         return allocateString(nlohmann::json{{"name", identity.name}, {"instance", identity.instance},
                                             {"path", identity.path}}.dump());
     } catch (...) { return nullptr; }
 }
-static bool api_is_provider_current(const GrimPluginAPI* self) noexcept {
+static bool api_is_provider_current(GrimPluginHandle self) noexcept {
     try {
-        const auto& owner = pluginContext(self);
-        ActiveCall active(owner.gate, true);
+        const auto owner = providerFor(self);
+        if (!owner) return false;
+        ActiveCall active(owner->gate);
         if (!active.entered) return false;
         const auto snapshot = GRIM::MMO::ProviderRegistry::instance().snapshot();
         return std::any_of(snapshot.providers.begin(), snapshot.providers.end(), [&](const auto& group) {
-            return group.provider.name == owner.identity->name && group.provider.instance == owner.identity->instance;
+            return group.provider.name == owner->identity.name && group.provider.instance == owner->identity.instance;
         });
     } catch (...) { return false; }
 }
-static GrimResult api_replace_resources(const GrimPluginAPI* self, const char* kind,
+static GrimResult api_replace_resources(GrimPluginHandle self, const char* kind,
                                        const char* json, size_t size) noexcept {
-    PluginContext* context = nullptr;
     try {
-        auto& owner = const_cast<PluginContext&>(pluginContext(self));
-        context = &owner;
-        ActiveCall active(owner.gate);
+        const auto owner = providerFor(self);
+        if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        ActiveCall active(owner->gate);
         if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         if (!json || !size || size > 64 * 1024 * 1024) throw std::invalid_argument("Invalid resource payload");
         const auto resourceKind = copyText(kind, true, 256);
@@ -311,28 +312,32 @@ static GrimResult api_replace_resources(const GrimPluginAPI* self, const char* k
             resources.push_back(std::move(resource));
         }
         return GRIM::MMO::ProviderRegistry::instance().replaceResources(
-            *owner.identity, resourceKind, resources)
+            owner->identity, resourceKind, resources)
             ? GRIM_OK : GRIM_ERROR_PLUGIN_NOT_LOADED;
     } catch (...) {
-        if (context && context->staging) context->resource_staging_failed = true;
         return GRIM_ERROR_INVALID_PARAM;
     }
 }
 
-static GrimResult api_unregister_command(const GrimPluginAPI* self, const char* command_name) {
+static GrimResult api_unregister_command(GrimPluginHandle self, const char* command_name) {
     if (!command_name || !*command_name) return GRIM_ERROR_INVALID_PARAM;
     auto& registry = GRIM::MMO::ToolRegistry::instance();
     const auto tool = registry.getTool(command_name);
     if (!tool || tool->tool_id != command_name) return GRIM_ERROR_NOT_FOUND;
-    const auto& owner = pluginContext(self);
-    if (tool->provider.type != GRIM::MMO::ToolProviderType::Plugin || tool->provider.name != owner.identity->name || tool->provider.instance != owner.identity->instance)
+    const auto owner = providerFor(self);
+    if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+    if (tool->provider.type != GRIM::MMO::ToolProviderType::Plugin || tool->provider.name != owner->identity.name || tool->provider.instance != owner->identity.instance)
         return GRIM_ERROR_PERMISSION_DENIED;
-    return registry.unregisterTool(command_name, owner.identity->name, owner.identity->instance) ? GRIM_OK : GRIM_ERROR_NOT_FOUND;
+    return registry.unregisterTool(command_name, owner->identity.name, owner->identity.instance) ? GRIM_OK : GRIM_ERROR_NOT_FOUND;
 }
 
-static GrimResult api_execute_command(const GrimPluginAPI* self, const char* command_text, GrimToolResultWriter* writer) {
+static GrimResult api_execute_command(GrimPluginHandle self, const char* command_text, GrimToolResultWriter* writer) {
     if (!command_text || !writer || writer->struct_size != sizeof(*writer) || !writer->complete)
         return GRIM_ERROR_INVALID_PARAM;
+    const auto owner = providerFor(self);
+    if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+    ActiveCall active(owner->gate);
+    if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     auto [cmd, arg] = GRIMInput::parseInput(command_text);
     const auto value = dispatchCommand(cmd, arg);
     GrimToolResult result;
@@ -350,11 +355,15 @@ static GrimResult api_execute_command(const GrimPluginAPI* self, const char* com
 // Event System Implementation
 // ============================================================================
 
-static GrimEventHandle api_subscribe_event(const GrimPluginAPI* self, const char* event_name, GrimEventCallback callback, void* user_data) {
+static GrimEventHandle api_subscribe_event(GrimPluginHandle self, const char* event_name, GrimEventCallback callback, void* user_data) {
     if (!event_name || !callback) {
         return nullptr;
     }
     
+    const auto owner = providerFor(self);
+    if (!owner) return nullptr;
+    ActiveCall active(owner->gate);
+    if (!active.entered) return nullptr;
     std::lock_guard lock(s_resourceMutex);
     uint64_t handle = s_next_event_id++;
     
@@ -362,8 +371,8 @@ static GrimEventHandle api_subscribe_event(const GrimPluginAPI* self, const char
     sub.event_name = event_name;
     sub.callback = callback;
     sub.user_data = user_data;
-    sub.plugin_name = pluginContext(self).identity->instance;
-    sub.gate = pluginContext(self).gate;
+    sub.plugin_name = owner->identity.instance;
+    sub.gate = owner->gate;
     
     s_event_subscriptions[handle] = sub;
     
@@ -371,7 +380,7 @@ static GrimEventHandle api_subscribe_event(const GrimPluginAPI* self, const char
     return reinterpret_cast<GrimEventHandle>(handle);
 }
 
-static GrimResult api_unsubscribe_event(const GrimPluginAPI* self, GrimEventHandle handle) {
+static GrimResult api_unsubscribe_event(GrimPluginHandle self, GrimEventHandle handle) {
     if (!handle) {
         return GRIM_ERROR_INVALID_PARAM;
     }
@@ -384,7 +393,9 @@ static GrimResult api_unsubscribe_event(const GrimPluginAPI* self, GrimEventHand
         return GRIM_ERROR_NOT_FOUND;
     }
     
-    if (it->second.plugin_name != pluginContext(self).identity->instance) {
+    const auto owner = providerFor(self);
+    if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+    if (it->second.plugin_name != owner->identity.instance) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
     s_event_subscriptions.erase(it);
@@ -403,60 +414,17 @@ static void dispatchEvent(const char* event_name, const void* data, size_t size)
         if (active.entered) sub.callback(event_name, data, size, sub.user_data);
     }
 }
-static GrimResult api_emit_event(const GrimPluginAPI*, const char* event_name, const void* data, size_t data_size) {
+static GrimResult api_emit_event(GrimPluginHandle, const char* event_name, const void* data, size_t data_size) {
     if (!event_name) return GRIM_ERROR_INVALID_PARAM;
     dispatchEvent(event_name, data, data_size);
     return GRIM_OK;
 }
 
 // ============================================================================
-// Context Implementation
-// ============================================================================
-
-static const char* api_get_context(const GrimPluginAPI* self, const char* key) {
-    if (!key) return nullptr;
-    
-    auto it = s_context_storage.find(key);
-    if (it == s_context_storage.end()) {
-        return nullptr;
-    }
-    
-    return allocateString(it->second);
-}
-
-static GrimResult api_set_context(const GrimPluginAPI* self, const char* key, const char* value) {
-    if (!key || !value) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    s_context_storage[key] = value;
-    return GRIM_OK;
-}
-
-static GrimResult api_delete_context(const GrimPluginAPI* self, const char* key) {
-    if (!key) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    auto it = s_context_storage.find(key);
-    if (it == s_context_storage.end()) {
-        return GRIM_ERROR_NOT_FOUND;
-    }
-    
-    s_context_storage.erase(it);
-    return GRIM_OK;
-}
-
-static bool api_has_context(const GrimPluginAPI* self, const char* key) {
-    if (!key) return false;
-    return s_context_storage.find(key) != s_context_storage.end();
-}
-
-// ============================================================================
 // Notification Implementation
 // ============================================================================
 
-static void api_show_notification(const GrimPluginAPI* self, const char* title, const char* message) {
+static void api_show_notification(GrimPluginHandle self, const char* title, const char* message) {
     if (!checkPermission(self, GRIM_PERM_UI)) {
         return;
     }
@@ -470,7 +438,7 @@ static void api_show_notification(const GrimPluginAPI* self, const char* title, 
 }
 
 template<typename Callback>
-static const char* runtimeServiceResponse(const GrimPluginAPI* self, GrimPermission permission, Callback callback) noexcept {
+static const char* runtimeServiceResponse(GrimPluginHandle self, GrimPermission permission, Callback callback) noexcept {
     try {
         if (!checkPermission(self, permission)) return nullptr;
         nlohmann::json response{{"format", "grim-runtime-service"}, {"version", 1}, {"value", nullptr}, {"error", nullptr}};
@@ -480,14 +448,14 @@ static const char* runtimeServiceResponse(const GrimPluginAPI* self, GrimPermiss
         return allocateString(response.dump());
     } catch (...) { return nullptr; }
 }
-static const char* api_stage_manual_memory(const GrimPluginAPI* self, const char* raw) noexcept {
+static const char* api_stage_manual_memory(GrimPluginHandle self, const char* raw) noexcept {
     if (!raw || !*raw) return nullptr;
     return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
         GRIM::CommandMemory::stageManual(raw);
         return nlohmann::json(nullptr);
     });
 }
-static const char* api_search_memory(const GrimPluginAPI* self, const char* query) noexcept {
+static const char* api_search_memory(GrimPluginHandle self, const char* query) noexcept {
     if (!query) return nullptr;
     return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
         auto hits = nlohmann::json::array();
@@ -495,15 +463,15 @@ static const char* api_search_memory(const GrimPluginAPI* self, const char* quer
         return hits;
     });
 }
-static const char* api_flush_memory_record_if_present(const GrimPluginAPI* self, uint64_t id) noexcept {
+static const char* api_flush_memory_record_if_present(GrimPluginHandle self, uint64_t id) noexcept {
     return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
         return nlohmann::json(GRIM::CommandMemory::flushIfPresent(id));
     });
 }
 
-static const char* api_get_tool_snapshot(const GrimPluginAPI* self, const char* tool_id) noexcept {
+static const char* api_get_tool_snapshot(GrimPluginHandle self, const char* tool_id) noexcept {
     try {
-        (void)pluginContext(self);
+        if (!providerFor(self)) return nullptr;
         auto& registry = GRIM::MMO::ToolRegistry::instance();
         auto tools = nlohmann::json::array();
         if (tool_id) {
@@ -516,7 +484,7 @@ static const char* api_get_tool_snapshot(const GrimPluginAPI* self, const char* 
     } catch (...) { return nullptr; }
 }
 
-static const char* api_get_user_error_message(const GrimPluginAPI*, const char* code) noexcept {
+static const char* api_get_user_error_message(GrimPluginHandle, const char* code) noexcept {
     if (!code) return nullptr;
     try { return allocateString(ErrorManager::getUserMessage(code)); }
     catch (...) { return nullptr; }
@@ -526,16 +494,17 @@ static const char* api_get_user_error_message(const GrimPluginAPI*, const char* 
 // System tick subscriptions
 // ============================================================================
 
-static GrimResult api_subscribe_system_tick(const GrimPluginAPI* self,
+static GrimResult api_subscribe_system_tick(GrimPluginHandle self,
                                             GrimSystemTickCallback callback, void* userData) noexcept {
     if (!callback) return GRIM_ERROR_INVALID_PARAM;
     try {
-        const auto& owner = pluginContext(self);
-        ActiveCall active(owner.gate);
+        const auto owner = providerFor(self);
+        if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        ActiveCall active(owner->gate);
         if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         std::lock_guard lock(s_resourceMutex);
         const auto inserted = s_systemTickSubscriptions.try_emplace(
-            owner.identity->instance, SystemTickSubscription{callback, userData, owner.gate}).second;
+            owner->identity.instance, SystemTickSubscription{callback, userData, owner->gate}).second;
         return inserted ? GRIM_OK : GRIM_ERROR_ALREADY_EXISTS;
     } catch (const std::bad_alloc&) {
         return GRIM_ERROR_OUT_OF_MEMORY;
@@ -548,24 +517,31 @@ static GrimResult api_subscribe_system_tick(const GrimPluginAPI* self,
 // Plugin Lifecycle Implementation
 // ============================================================================
 
-static const char* api_get_plugin_name(const GrimPluginAPI* self) {
-    return allocateString(pluginContext(self).identity->name);
+static const char* api_get_plugin_name(GrimPluginHandle self) {
+    const auto owner = providerFor(self);
+    return owner ? allocateString(owner->identity.name) : nullptr;
 }
 
-static const char* api_get_plugin_path(const GrimPluginAPI* self) {
-    return allocateString(pluginContext(self).identity->path);
+static const char* api_get_plugin_path(GrimPluginHandle self) {
+    const auto owner = providerFor(self);
+    return owner ? allocateString(owner->identity.path) : nullptr;
 }
 
-static uint32_t api_get_permissions(const GrimPluginAPI* self) {
-    return pluginContext(self).identity->required_permissions;
+static uint32_t api_get_permissions(GrimPluginHandle self) {
+    const auto owner = providerFor(self);
+    return owner ? owner->identity.required_permissions : 0;
 }
 
-static bool api_has_permission(const GrimPluginAPI* self, GrimPermission perm) {
+static bool api_has_permission(GrimPluginHandle self, GrimPermission perm) {
     return checkPermission(self, perm);
 }
 
-static void api_request_reload(const GrimPluginAPI* self) {
-    LOG_DEBUG("PluginAPI", "Plugin requested reload: " + pluginContext(self).identity->name);
+static void api_request_reload(GrimPluginHandle self) {
+    const auto owner = providerFor(self);
+    if (!owner) return;
+    ActiveCall active(owner->gate);
+    if (!active.entered) return;
+    LOG_DEBUG("PluginAPI", "Plugin requested reload: " + owner->identity.name);
     PluginManager::requestReload(self);
 }
 
@@ -573,7 +549,7 @@ static void api_request_reload(const GrimPluginAPI* self) {
 // Utility Implementation
 // ============================================================================
 
-static void api_string_free(const GrimPluginAPI* self, const char* str) {
+static void api_string_free(GrimPluginHandle self, const char* str) {
     if (!str) return;
     
     std::lock_guard lock(s_stringMutex);
@@ -588,11 +564,12 @@ static void api_string_free(const GrimPluginAPI* self, const char* str) {
 // API Table Construction
 // ============================================================================
 
-static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOperation operation,
+static const char* api_ui_panel_service(GrimPluginHandle self, GrimUIPanelOperation operation,
                                       const char* panel_key, uint64_t request_id) noexcept {
     try {
-        auto& owner = const_cast<PluginContext&>(pluginContext(self));
-        ActiveCall active(owner.gate, true);
+        const auto owner = providerFor(self);
+        if (!owner) return nullptr;
+        ActiveCall active(owner->gate, true);
         if (!active.entered || !checkPermission(self, GRIM_PERM_UI)) return nullptr;
         if (operation > GRIM_UI_HIDE_CURRENT) return nullptr;
         if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
@@ -603,18 +580,18 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
             return nullptr;
         }
         const auto key = copyText(panel_key, false, 256);
-        std::lock_guard lock(owner.panelRequestsMutex);
+        std::lock_guard lock(owner->panelRequestsMutex);
         nlohmann::json response = {{"format", "grim-ui-panel-response"}, {"version", 1},
                                   {"request_id", request_id}, {"status", "pending"}};
         if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
-            const auto found = owner.panelRequests.find(request_id);
-            if (found == owner.panelRequests.end()) {
+            const auto found = owner->panelRequests.find(request_id);
+            if (found == owner->panelRequests.end()) {
                 response["status"] = "error"; response["error"] = "request_not_found";
                 return allocateString(response.dump());
             }
             if (operation == GRIM_UI_CANCEL) {
                 found->second.cancelled->store(true);
-                owner.panelRequests.erase(found);
+                owner->panelRequests.erase(found);
                 response["status"] = "completed";
                 response["result"] = {{"success", true}, {"released", true}};
                 return allocateString(response.dump());
@@ -626,10 +603,10 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
             catch (const std::exception& error) {
                 response["result"] = {{"success", false}, {"error", "host_exception"}, {"message", error.what()}};
             } catch (...) { response["result"] = {{"success", false}, {"error", "host_exception"}}; }
-            owner.panelRequests.erase(found);
+            owner->panelRequests.erase(found);
             return allocateString(response.dump());
         }
-        if (owner.panelRequests.size() >= 64) {
+        if (owner->panelRequests.size() >= 64) {
             response["status"] = "error"; response["error"] = "too_many_requests";
             return allocateString(response.dump());
         }
@@ -640,176 +617,117 @@ static const char* api_ui_panel_service(const GrimPluginAPI* self, GrimUIPanelOp
             operation == GRIM_UI_SHOW_CURRENT ? GRIM_UI_SHOW :
                 (operation == GRIM_UI_HIDE_CURRENT ? GRIM_UI_HIDE : operation), key,
             guarded ? request_id : 0);
-        owner.panelRequests.emplace(id, std::move(request));
+        owner->panelRequests.emplace(id, std::move(request));
         return allocateString(response.dump());
     } catch (...) { return nullptr; }
 }
 
 
-GrimPluginAPI* createPluginAPI(GRIM::MMO::ProviderDescriptor provider, bool staging, const GrimPluginAPI* replacing) {
-    const auto& plugin_name = provider.name;
-    if (plugin_name.empty()) throw std::invalid_argument("Empty plugin identity");
-    for (const auto& [id, context] : s_plugin_contexts) {
-        if (context->identity->name == plugin_name && &context->api != replacing)
-            throw std::invalid_argument("Duplicate plugin identity: " + plugin_name);
-    }
-    if (replacing && pluginContext(replacing).identity->name != plugin_name)
-        throw std::invalid_argument("Replacement must retain provider identity");
-    if (replacing && !staging)
-        throw std::invalid_argument("Replacement must be staged");
+const GrimPluginAPI& hostAPI() {
+    static const GrimPluginAPI table = [] {
+        GrimPluginAPI api{};
+        // Fill in API table
+        api.api_version = GRIM_API_VERSION;
 
-    provider.instance = plugin_name + "#" + std::to_string(s_next_instance++);
-    auto identity = std::make_shared<const GRIM::MMO::ProviderDescriptor>(std::move(provider));
-    const auto& instance = identity->instance;
-    auto context = std::make_unique<PluginContext>(identity);
-    context->panelLease->owner = instance;
-    context->panelLease->uiPermitted = (identity->required_permissions & GRIM_PERM_UI) != 0;
-    context->staging = staging;
-    context->gate->published = !staging;
-    auto& api = context->api;
-    api.host_context = context.get();
-    
-    // Fill in API table
-    api.api_version = GRIM_API_VERSION;
-    
-    // Logging
-    api.log = api_log;
-    
-    // Commands
-    api.unregister_command = api_unregister_command;
-    api.execute_command = api_execute_command;
-    
-    // Events
-    api.subscribe_event = api_subscribe_event;
-    api.unsubscribe_event = api_unsubscribe_event;
-    api.emit_event = api_emit_event;
-    
-    // Context
-    api.get_context = api_get_context;
-    api.set_context = api_set_context;
-    api.delete_context = api_delete_context;
-    api.has_context = api_has_context;
-    
-    // Notifications
-    api.show_notification = api_show_notification;
-    
-    // Plugin Lifecycle
-    api.get_plugin_name = api_get_plugin_name;
-    api.get_plugin_path = api_get_plugin_path;
-    api.get_permissions = api_get_permissions;
-    api.has_permission = api_has_permission;
-    api.request_reload = api_request_reload;
-    
-    // Utilities
-    api.string_free = api_string_free;
-    api.get_user_error_message = api_get_user_error_message;
-    api.get_tool_snapshot = api_get_tool_snapshot;
-    api.stage_manual_memory = api_stage_manual_memory;
-    api.search_memory = api_search_memory;
-    api.flush_memory_record_if_present = api_flush_memory_record_if_present;
-    api.ui_panel_service = api_ui_panel_service;
-    api.get_provider_identity = api_get_provider_identity;
-    api.replace_resources = api_replace_resources;
-    api.is_provider_current = api_is_provider_current;
-    api.subscribe_system_tick = api_subscribe_system_tick;
-    
-    auto* result = &api;
-    auto [entry, inserted] = s_plugin_contexts.emplace(instance, std::move(context));
-    if (!inserted) throw std::logic_error("Duplicate plugin instance: " + instance);
-    bool generationCreated = false;
-    try {
-        if (staging) {
-            GRIM::MMO::ProviderRegistry::instance().beginGeneration(identity);
-            generationCreated = true;
-            GRIM::UI::registerProviderPanelLease(entry->second->panelLease);
-        }
-    } catch (...) {
-        if (generationCreated) GRIM::MMO::ProviderRegistry::instance().retire(identity->name, instance);
-        s_plugin_contexts.erase(entry);
-        throw;
-    }
-    return result;
+        // Logging
+        api.log = api_log;
+
+        // Commands
+        api.unregister_command = api_unregister_command;
+        api.execute_command = api_execute_command;
+
+        // Events
+        api.subscribe_event = api_subscribe_event;
+        api.unsubscribe_event = api_unsubscribe_event;
+        api.emit_event = api_emit_event;
+
+        // Notifications
+        api.show_notification = api_show_notification;
+
+        // Plugin Lifecycle
+        api.get_plugin_name = api_get_plugin_name;
+        api.get_plugin_path = api_get_plugin_path;
+        api.get_permissions = api_get_permissions;
+        api.has_permission = api_has_permission;
+        api.request_reload = api_request_reload;
+
+        // Utilities
+        api.string_free = api_string_free;
+        api.get_user_error_message = api_get_user_error_message;
+        api.get_tool_snapshot = api_get_tool_snapshot;
+        api.stage_manual_memory = api_stage_manual_memory;
+        api.search_memory = api_search_memory;
+        api.flush_memory_record_if_present = api_flush_memory_record_if_present;
+        api.ui_panel_service = api_ui_panel_service;
+        api.get_provider_identity = api_get_provider_identity;
+        api.replace_resources = api_replace_resources;
+        api.is_provider_current = api_is_provider_current;
+        api.subscribe_system_tick = api_subscribe_system_tick;
+
+        return api;
+    }();
+    return table;
 }
 
-// Name-based wrappers are for host callers with exactly one loaded generation.
-static GrimPluginAPI* uniquePlugin(const std::string& name) {
-    GrimPluginAPI* result = nullptr;
-    for (const auto& [id, context] : s_plugin_contexts) if (context->identity->name == name) {
-        if (result) throw std::invalid_argument("Ambiguous plugin generation");
-        result = &context->api;
-    }
-    if (!result) throw std::invalid_argument("Missing plugin context");
-    return result;
+std::shared_ptr<LoadedProvider> registerInstance(GRIM::MMO::ProviderDescriptor provider) {
+    std::lock_guard lock(s_instanceMutex);
+    const auto handle = s_next_instance++;
+    provider.instance = provider.name + "#" + std::to_string(handle);
+    auto owner = std::make_shared<LoadedProvider>(std::move(provider));
+    owner->handle = handle;
+    owner->panelLease->owner = owner->identity.instance;
+    owner->panelLease->uiPermitted = (owner->identity.required_permissions & GRIM_PERM_UI) != 0;
+    s_instances.emplace(handle, owner);
+    return owner;
 }
-bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing,
-                            const std::vector<GRIM::MMO::ToolRegistration>& tools) {
-    auto& owner = const_cast<PluginContext&>(pluginContext(api));
-    if (owner.resource_staging_failed || !owner.staging ||
-        !GRIM::UI::validateProviderPanels(owner.panelLease, replacing ? pluginContext(replacing).panelLease : nullptr)) return false;
-    auto& providers = GRIM::MMO::ProviderRegistry::instance();
-    // Handlers may become reachable as soon as the registry swaps its entries,
-    // including from listeners. Late registrations must no longer be staged.
-    owner.staging = false;
-    owner.panelLease->acceptingPanels = false;
-    bool committed;
-    try {
-        committed = providers.publish(
-            *owner.identity,
-            tools, replacing ? pluginContext(replacing).identity->instance : std::string{});
-    } catch (...) {
-        owner.staging = true;
-        owner.panelLease->acceptingPanels = true;
-        throw;
-    }
-    if (!committed) {
-        owner.staging = true;
-        owner.panelLease->acceptingPanels = true;
-        return false;
-    }
-    // Queue retirement before replacement creation. Generation-specific leases
-    // prevent a later shutdown of the old DLL from removing its replacement.
-    if (replacing) GRIM::UI::retireProviderPanels(pluginContext(replacing).panelLease);
-    if (!owner.panelLease->nativePanels.empty())
-        GRIM::UI::activateProviderPanels(owner.panelLease);
-    if (replacing) {
-        const auto& old = pluginContext(replacing);
-        std::lock_guard lock(old.gate->mutex);
-        old.gate->accepting = false;
-    }
-    owner.staging = false;
-    { std::lock_guard lock(owner.gate->mutex); owner.gate->published = true; }
-    return true;
+
+GrimPluginHandle instanceHandle(const LoadedProvider& provider) { return provider.handle; }
+
+void validateManifestTools(const nlohmann::json& entries, const GRIM::MMO::ProviderDescriptor& provider) {
+    if (!entries.is_array() || entries.size() > 256)
+        throw std::invalid_argument("Invalid tool manifest entries");
+    for (const auto& entry : entries)
+        (void)decodeManifestTool(entry, provider.version.c_str(), provider.required_permissions);
 }
-bool commitPluginGeneration(const std::string& name) { return commitPluginGeneration(uniquePlugin(name), nullptr); }
-void beginPluginShutdown(const GrimPluginAPI* api) {
-    auto& owner = const_cast<PluginContext&>(pluginContext(api));
+
+void registerProvider(LoadedProvider& provider, const nlohmann::json& entries, GrimToolDispatch dispatch) {
+    const auto tools = readManifestTools(entries, provider, dispatch);
+    if (!GRIM::MMO::ProviderRegistry::instance().publish(provider.identity, tools))
+        throw std::runtime_error("Provider registration rejected");
+    GRIM::UI::registerProviderPanelLease(provider.handle, provider.panelLease);
+}
+
+void enableDispatch(LoadedProvider& provider) {
+    std::lock_guard lock(provider.gate->mutex);
+    provider.gate->dispatchEnabled = true;
+}
+
+void retireProvider(LoadedProvider& provider) {
     {
-        std::lock_guard lock(owner.gate->mutex);
-        owner.gate->accepting = false;
+        std::lock_guard lock(provider.gate->mutex);
+        provider.gate->accepting = false;
     }
-    GRIM::MMO::ProviderRegistry::instance().retire(owner.identity->name, owner.identity->instance);
-    GRIM::UI::retireProviderPanels(owner.panelLease);
-    std::unique_lock lock(owner.gate->mutex);
-    owner.gate->idle.wait(lock, [&]{ return owner.gate->active == 0; });
-    lock.unlock();
-    std::lock_guard requestsLock(owner.panelRequestsMutex);
-    for (auto& [id, request] : owner.panelRequests)
-        request.cancelled->store(true);
-    owner.panelRequests.clear();
-}
-void beginPluginShutdown(const std::string& name) { beginPluginShutdown(uniquePlugin(name)); }
-void cleanupPluginContext(const GrimPluginAPI* api) {
-    beginPluginShutdown(api);
-    const auto instance = pluginContext(api).identity->instance;
+    GRIM::MMO::ProviderRegistry::instance().retire(provider.identity.name, provider.identity.instance);
+    GRIM::UI::retireProviderPanels(provider.panelLease);
+    {
+        std::unique_lock lock(provider.gate->mutex);
+        provider.gate->idle.wait(lock, [&] { return provider.gate->active == 0; });
+    }
+    {
+        std::lock_guard lock(provider.panelRequestsMutex);
+        for (auto& [id, request] : provider.panelRequests) request.cancelled->store(true);
+        provider.panelRequests.clear();
+    }
     std::lock_guard lock(s_resourceMutex);
+    const auto& instance = provider.identity.instance;
     s_systemTickSubscriptions.erase(instance);
-    for (auto it = s_event_subscriptions.begin(); it != s_event_subscriptions.end();) {
-        if (it->second.plugin_name == instance) it = s_event_subscriptions.erase(it);
-        else ++it;
-    }
-    s_plugin_contexts.erase(instance);
+    std::erase_if(s_event_subscriptions, [&](const auto& entry) { return entry.second.plugin_name == instance; });
 }
-void cleanupPluginContext(const std::string& name) { cleanupPluginContext(uniquePlugin(name)); }
+
+void releaseInstance(LoadedProvider& provider) {
+    std::lock_guard lock(s_instanceMutex);
+    s_instances.erase(provider.handle);
+}
 
 void dispatchSystemTick(double deltaSeconds, double offsetSeconds) {
     std::vector<SystemTickSubscription> subscribers;

@@ -28,28 +28,29 @@ struct Module {
     Module(const std::filesystem::path& path, const std::string& generation) {
         lease->owner = generation;
         api.api_version = GRIM_API_VERSION;
-        api.log = [](const GrimPluginAPI*, GrimLogLevel, const char*) {};
+        api.log = [](GrimPluginHandle, GrimLogLevel, const char*) {};
         handle = LoadLibraryW(path.c_str());
         require(handle != nullptr, "ModelWorkspace DLL failed to load against host exports");
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         require(shutdown != nullptr, "Missing ModelWorkspace shutdown");
     }
     GrimResult init(bool permission = true) {
-        auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*)>(GetProcAddress(handle, "grim_plugin_init"));
+        auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         require(init != nullptr, "Missing ModelWorkspace init");
-        prepareProviderPanelFixture(api, lease, permission);
-        return init(&api);
+        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        publish();
+        return init(&api, instance);
     }
-    void publish(const std::string& replacing = {}) {
+    void publish() {
         require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}, replacing), "ModelWorkspace provider publish failed");
-        GRIM::UI::activateProviderPanels(lease);
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "ModelWorkspace provider publish failed");
     }
     void close() {
         if (!handle) return;
-        GRIM::UI::retireProviderPanels(lease); shutdown();
-        require(lease->nativePanels.empty(), "ModelWorkspace shutdown retained native objects");
         GRIM::MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
+        GRIM::UI::retireProviderPanels(lease); shutdown();
+        require(lease->panels.empty(), "ModelWorkspace shutdown retained native objects");
+
         FreeLibrary(handle); handle = nullptr;
     }
     ~Module() { close(); }
@@ -67,8 +68,7 @@ void runNativeModelWorkspaceDllTests(const char* dllPath) {
         {
             Module first(directory / "first.dll", "workspace-first");
             require(first.init() == GRIM_OK, "ModelWorkspace init failed");
-            require(!root.getPanelByKey("training_control"), "ModelWorkspace attached before commit");
-            first.publish(); root.processPendingTasks();
+            root.processPendingTasks();
             auto* panel = root.getPanelByKey("training_control");
             require(panel && !panel->isVisible(), "ModelWorkspace identity/default visibility changed");
             const auto runtime = panel->getPanelID();
@@ -80,12 +80,10 @@ void runNativeModelWorkspaceDllTests(const char* dllPath) {
                 input.mousePressed[0]=input.mouseDown[0]=false; input.mouseReleased[0]=true; frame(*panel,input);
                 frame(*panel); require(panel->drawOverlay(renderer), "Workspace tab draw failed");
             }
-            Module second(directory / "second.dll", "workspace-second"); require(second.init() == GRIM_OK, "Replacement init failed");
-            require(!GRIM::UI::validateProviderPanels(second.lease), "Foreign collision accepted");
-            require(GRIM::UI::validateProviderPanels(second.lease, first.lease), "ModelWorkspace replacement rejected");
-            second.publish(first.lease->owner);
             first.close();
+
             require(!root.getPanelByKey("training_control"), "ModelWorkspace unload retained panel/capture");
+            Module second(directory / "second.dll", "workspace-second"); require(second.init() == GRIM_OK, "Replacement init failed");
             root.processPendingTasks();
             require(root.getPanelByKey("training_control") && root.getPanelByKey("training_control")->getPanelID() != runtime, "ModelWorkspace replacement missing");
             GRIM::UI::retireProviderPanels(first.lease);
@@ -95,7 +93,7 @@ void runNativeModelWorkspaceDllTests(const char* dllPath) {
         {
             Module cancelled(directory / "cancelled.dll", "workspace-cancelled");
             require(cancelled.init() == GRIM_OK, "Cancelled ModelWorkspace init failed");
-            cancelled.publish(); cancelled.close(); root.processPendingTasks();
+            cancelled.close(); root.processPendingTasks();
             require(!root.getPanelByKey("training_control"), "Queued activation reached unloaded ModelWorkspace");
         }
         {
@@ -107,7 +105,7 @@ void runNativeModelWorkspaceDllTests(const char* dllPath) {
             modelWorkspaceTestFail = true;
             require(failed.init() != GRIM_OK, "Configuration load failure was accepted");
             modelWorkspaceTestFail = false;
-            require(failed.lease->nativePanels.empty(), "Failed construction leaked staged panel");
+            require(failed.lease->panels.empty(), "Failed construction leaked panel");
         }
     } catch (...) { std::filesystem::remove_all(directory); throw; }
     std::filesystem::remove_all(directory);

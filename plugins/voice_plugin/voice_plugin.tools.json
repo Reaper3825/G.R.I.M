@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1179648,
+  "api_version": 1245184,
   "required_permissions": ["voice", "filesystem", "process"],
   "provider": "Voice Plugin",
   "version": "2.0.0",
@@ -88,7 +88,7 @@
       "description": "Stop streaming transcription",
       "is_informational": false,
       "needs_confirmation": true,
-      "short_description": "Stop streaming transcription",
+      "short_description": "Stop the continuous speech transcription stream",
       "usage": "voice.stream.stop",
       "usage_type": 0,
       "permissions": [
@@ -126,7 +126,7 @@
       "description": "Queue text for speech",
       "is_informational": false,
       "needs_confirmation": true,
-      "short_description": "Queue text for speech",
+      "short_description": "Queue text for synthesized speech playback",
       "usage": "voice.speak",
       "usage_type": 0,
       "permissions": [
@@ -145,7 +145,7 @@
       "description": "Play a WAV file",
       "is_informational": false,
       "needs_confirmation": true,
-      "short_description": "Play a WAV file",
+      "short_description": "Play audio from a WAV file",
       "usage": "voice.play",
       "usage_type": 0,
       "permissions": [
@@ -221,7 +221,7 @@
       "description": "Stop wake detection",
       "is_informational": false,
       "needs_confirmation": true,
-      "short_description": "Stop wake detection",
+      "short_description": "Stop listening for the wake phrase",
       "usage": "voice.wake.stop",
       "usage_type": 0,
       "permissions": [
@@ -240,7 +240,7 @@
       "description": "Enumerate audio devices",
       "is_informational": true,
       "needs_confirmation": false,
-      "short_description": "Enumerate audio devices",
+      "short_description": "List the available audio devices",
       "usage": "voice.devices",
       "usage_type": 0,
       "permissions": [
@@ -278,7 +278,7 @@
       "description": "Read provider cache statistics",
       "is_informational": true,
       "needs_confirmation": false,
-      "short_description": "Read provider cache statistics",
+      "short_description": "Read statistics for the voice provider cache",
       "usage": "voice.cache.status",
       "usage_type": 0,
       "permissions": [

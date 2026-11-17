@@ -17,7 +17,7 @@ struct InputState;
 
 class UIGeoSpatialPanel : public UIPanel {
 public:
-    explicit UIGeoSpatialPanel(std::string_view providerInstance);
+    explicit UIGeoSpatialPanel();
 
     void setController(GRIM::GeoSpatial::GeoSpatialPanelController* controller);
     void setViewportAttachment(std::shared_ptr<UI3DViewportAttachment> attachment);

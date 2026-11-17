@@ -6,7 +6,7 @@
 #include <iostream>
 #include <thread>
 #include <stdexcept>
-extern "C" GrimResult grim_plugin_init(const GrimPluginAPI*);
+extern "C" GrimResult grim_plugin_init(const GrimPluginAPI*, GrimPluginHandle);
 extern "C" void grim_plugin_shutdown();
 extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
 namespace {
@@ -33,11 +33,11 @@ int main(){
  auto original=fs::current_path(); auto temp=fs::temp_directory_path()/("grim-osint-fixture-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
  fs::create_directories(temp);fs::current_path(temp);
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
- api.has_permission=[](const GrimPluginAPI*,GrimPermission){return permitted;};api.is_provider_current=[](const GrimPluginAPI*){return current;};
- api.log=[](const GrimPluginAPI*,GrimLogLevel,const char*){};
+ api.has_permission=[](GrimPluginHandle,GrimPermission){return permitted;};api.is_provider_current=[](GrimPluginHandle){return current;};
+ api.log=[](GrimPluginHandle,GrimLogLevel,const char*){};
  try {
-  auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
-  check(grim_plugin_init(&api)==GRIM_OK,"OSINT initialization failed");
+  auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old, 1)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
+  check(grim_plugin_init(&api, 1)==GRIM_OK,"OSINT initialization failed");
   check(!fs::exists(temp/"cache") && runs==0,"OSINT load had side effects");
   fs::create_directories(osintProvider::scripts());std::ofstream(osintProvider::scripts()/"osit_bridge.py")<<"# fixture";
   invoke(2,"alice");check(success && runs==1,"Report did not use provider process");
@@ -55,7 +55,7 @@ int main(){
   auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
   while(!entered && std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));
   check(entered,"Async process never started");grim_plugin_shutdown();check(osintProvider::cancelled,"Unload failed to cancel children");grim_plugin_shutdown();
-  block=false;check(grim_plugin_init(&api)==GRIM_OK,"OSINT reload failed");invoke(3,"");check(message.find("No active scans")!=std::string::npos,"Jobs survived reload");grim_plugin_shutdown();
+  block=false;check(grim_plugin_init(&api, 1)==GRIM_OK,"OSINT reload failed");invoke(3,"");check(message.find("No active scans")!=std::string::npos,"Jobs survived reload");grim_plugin_shutdown();
   fs::current_path(original);fs::remove_all(temp);
   std::cout<<"OSINT cache, copied findings, permissions, cancellation and reload passed\n";
  }catch(...){osintProvider::cancelled=true;grim_plugin_shutdown();fs::current_path(original);fs::remove_all(temp);throw;}

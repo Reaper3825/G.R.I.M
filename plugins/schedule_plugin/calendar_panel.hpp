@@ -14,7 +14,7 @@
 namespace grim::scheduling {
 class CalendarPanel : public UIPanel {
     using Json = nlohmann::json;
-    const GrimPluginAPI* api_;
+    grim::PluginHost api_;
     Provider& provider_;
     std::chrono::year_month month_;
     std::chrono::sys_days day_;
@@ -44,7 +44,7 @@ class CalendarPanel : public UIPanel {
         auto result = provider_.execute(op, args);
         if (!result.at("success").get<bool>()) throw std::runtime_error(result.at("message").get<std::string>());
         if (result.contains("resource_error"))
-            api_->log(api_, GRIM_LOG_ERROR, result.at("resource_error").get_ref<const std::string&>().c_str());
+            api_->log(api_.instance(), GRIM_LOG_ERROR, result.at("resource_error").get_ref<const std::string&>().c_str());
         return result;
     }
     void refresh() {
@@ -80,7 +80,7 @@ class CalendarPanel : public UIPanel {
     }
     template<class Action> void act(Action action) {
         try { action(); refresh(); }
-        catch (const std::exception& error) { status_ = error.what(); api_->log(api_, GRIM_LOG_ERROR, error.what()); }
+        catch (const std::exception& error) { status_ = error.what(); api_->log(api_.instance(), GRIM_LOG_ERROR, error.what()); }
         nextRefresh_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     }
     void changeMonth(int offset) {
@@ -195,8 +195,8 @@ class CalendarPanel : public UIPanel {
         place(*delete_, editorX + 2 * (editorWidth + 12) / 3, editorY + 426, (editorWidth - 24) / 3, 28);
     }
 public:
-    CalendarPanel(std::string_view providerInstance, const GrimPluginAPI* api, Provider& provider)
-        : UIPanel("Calendar", true, "calendar", providerInstance), api_(api), provider_(provider) {
+    CalendarPanel(grim::PluginHost api, Provider& provider)
+        : UIPanel("Calendar", true, "calendar", false), api_(api), provider_(provider) {
         if (!api_ || !api_->log) throw std::invalid_argument("Calendar requires provider logging");
         setPosition(240, 180); setSize(1160, 600); setVisible(false);
         scroll_ = std::make_shared<UIScrollBox>(); addChild(scroll_);

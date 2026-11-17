@@ -983,11 +983,12 @@ CommandRegistry import or separate command map remains.
 
 ### 14. Plugin provider publication (Phase 0.25)
 
-The host stages each plugin's tool registrations during initialization.
-`commitPluginGeneration()` publishes the generation through `ProviderRegistry::publish()`
-after initialization succeeds. Reload replaces the provider and updates the
-global tool index atomically. `beginPluginShutdown()` retires the exact generation
-and drains active calls before the loader releases the plugin.
+The loader registers each provider and its manifest tools through
+`ProviderRegistry::publish()` before init. The instance can publish resources
+directly while initializing. Tool and callback dispatch opens after init
+succeeds. `retireProvider()` closes entry, removes the exact instance with its
+owned tools and resources, and drains calls before shutdown. Reload unloads
+the outgoing instance before loading its replacement.
 
 `api_unregister_command()` removes an individual command after verifying its
 provider generation. The provider remains published and may continue to own

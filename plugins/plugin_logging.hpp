@@ -2,7 +2,7 @@
 #include "core/plugin_api.hpp"
 #include <string>
 namespace grim::plugin {
-void setLoggingAPI(const GrimPluginAPI* api);
+void setLoggingAPI(grim::PluginHost api);
 void log(GrimLogLevel level, const std::string& tag, const std::string& message);
 }
 #ifdef LOG_DEBUG

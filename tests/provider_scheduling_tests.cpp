@@ -48,8 +48,8 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     check(resource("Schedule Plugin", "panel:calendar").kind == "ui.panel", "Native panel resource missing");
 #endif
     check(registry.toolCount()==baseline+6,"Schedule provider did not register six tools");
-    check(!fs::exists(root/"GRIM/calendar/events.json"),"Initialization accessed durable records before publication");
-    check(resource("Schedule Plugin","items").state.at("ready")==false,"Schedule candidate unexpectedly ready");
+    check(!fs::exists(root/"GRIM/calendar/events.json"),"Initialization accessed durable records before the first poll");
+    check(resource("Schedule Plugin","items").state.at("ready")==false,"Schedule ready before first poll");
     const auto invoke=[&](const char* op,Json args){
         const auto result=registry.invoke("schedule."+std::string(op),args.dump());
         check(result.success,result.message.c_str());
@@ -77,8 +77,8 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     const auto old=resource("Schedule Plugin","items").provider.instance;
     {std::ofstream broken(root/"schedule_plugin.dll",std::ios::binary|std::ios::trunc);broken<<"broken";}
     PluginManager::checkForHotReload();
-    check(resource("Schedule Plugin","items").provider.instance==old && invoke("get",{{"id","persist"}}).at("success")==true,
-          "Failed replacement lost active schedule");
+    check(registry.toolCount() == baseline && resource("Schedule Plugin", "items").resource_id.empty(),
+          "Failed native load retained schedule tools or resources");
     fs::copy_file(scheduleDirectory/"schedule_plugin.dll",root/"schedule_plugin.dll",fs::copy_options::overwrite_existing);
     const auto schedule = root/"schedule_plugin.dll";
     fs::last_write_time(schedule,fs::last_write_time(schedule)+std::chrono::seconds(2));

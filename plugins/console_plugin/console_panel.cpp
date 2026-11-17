@@ -26,8 +26,8 @@ float sessionSidebarWidth(float panelWidth)
 }
 }
 
-ConsolePanel::ConsolePanel(std::string_view providerInstance)
-    : UIPanel("Console", true, "console", providerInstance),  // Enable dragging
+ConsolePanel::ConsolePanel()
+    : UIPanel("Console", true, "console", false),  // Enable dragging
       settingsButton(std::make_shared<UIButton>("Settings", []() {
           auto settingsPanel = UIRoot::get().getPanel("Settings");
           if (settingsPanel) {

@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 namespace {
-const GrimPluginAPI* host = nullptr;
+grim::PluginHost host = {};
 std::unique_ptr<GRIM::Applications::Catalog> catalog;
 std::shared_ptr<GRIM::Applications::UserAliases> userAliases;
 
@@ -23,10 +23,10 @@ GrimResult finish(GrimToolResultWriter* writer, bool success, const std::string&
     return writer->complete(writer, &result);
 }
 std::string errorMessage(const char* code) {
-    const auto* text = host->get_user_error_message(host, code);
+    const auto* text = host->get_user_error_message(host.instance(), code);
     if (!text) throw std::runtime_error("Host error-message lookup failed");
     const std::string result(text);
-    host->string_free(host, text);
+    host->string_free(host.instance(), text);
     return result;
 }
 std::string argument(const GrimToolCall* call) {
@@ -70,7 +70,8 @@ GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, voi
 }
 }
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
         !api->get_user_error_message || !api->get_provider_identity || !api->replace_resources ||
         !api->is_provider_current) return GRIM_ERROR_API_VERSION_MISMATCH;
@@ -78,11 +79,11 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
     try {
         const auto readJson = [api](const char* text) {
             if (!text) throw std::runtime_error("Framework snapshot unavailable");
-            const auto release = [api](const char* p) { api->string_free(api, p); };
+            const auto release = [api](const char* p) { api->string_free(api.instance(), p); };
             std::unique_ptr<const char, decltype(release)> owned(text, release);
             return nlohmann::json::parse(text);
         };
-        const auto identity = readJson(api->get_provider_identity(api));
+        const auto identity = readJson(api->get_provider_identity(api.instance()));
         GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin,
             identity.at("name"), identity.at("instance"), identity.at("path")};
         userAliases = std::make_shared<GRIM::Applications::UserAliases>(GRIM::Applications::UserAliases::defaultDirectory());
@@ -91,9 +92,9 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
             GRIM::Applications::launchNative,
             [api](const auto& resources) {
                 const auto json = nlohmann::json(resources).dump();
-                return api->replace_resources(api, "application", json.data(), json.size()) == GRIM_OK;
-            }, [api] { return api->is_provider_current(api); });
-        // Discovery prepares copied resources; nothing is visible until the manager commits.
+                return api->replace_resources(api.instance(), "application", json.data(), json.size()) == GRIM_OK;
+            }, [api] { return api->is_provider_current(api.instance()); });
+        // Initial discovery publishes under the loaded provider.
         catalog->request("refresh", nlohmann::json::object());
     } catch (...) { catalog.reset(); userAliases.reset(); return GRIM_ERROR_UNKNOWN; }
 
@@ -109,4 +110,4 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
     return dispatchApplicationTool(id, call, writer, *catalog);
 }
 
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); userAliases.reset(); host = nullptr; }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); userAliases.reset(); host = {}; }

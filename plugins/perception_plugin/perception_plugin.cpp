@@ -24,14 +24,16 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, const
     return writer->complete(writer,&result);
 }
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api || api->api_version != GRIM_API_VERSION || !api->subscribe_system_tick ||
         !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
     grim::plugin::setLoggingAPI(api);
     try {
         runtime = std::make_unique<perceptionPlugin::Runtime>(api);
+        runtime->start();
         return GRIM_OK;
-    } catch (...) { runtime.reset(); grim::plugin::setLoggingAPI(nullptr); return GRIM_ERROR_UNKNOWN; }
+    } catch (...) { runtime.reset(); grim::plugin::setLoggingAPI({}); return GRIM_ERROR_UNKNOWN; }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
     const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
@@ -42,4 +44,4 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
     return GRIM_ERROR_NOT_FOUND;
 }
 
-extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { runtime.reset(); grim::plugin::setLoggingAPI(nullptr); }
+extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { runtime.reset(); grim::plugin::setLoggingAPI({}); }

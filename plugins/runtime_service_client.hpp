@@ -5,11 +5,11 @@
 #include <stdexcept>
 
 namespace grim::runtime {
-inline const GrimPluginAPI* host = nullptr;
+inline grim::PluginHost host = {};
 struct UnknownServiceFailure {};
 inline std::string take(const char* text) {
     if (!text) throw std::runtime_error("Host runtime service unavailable");
-    struct Release { const char* text; ~Release() { host->string_free(host, text); } } release{text};
+    struct Release { const char* text; ~Release() { host->string_free(host.instance(), text); } } release{text};
     return text;
 }
 inline nlohmann::json response(const char* text) {

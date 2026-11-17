@@ -43,7 +43,7 @@ enum class StorageView : uint8_t {
 
 class UIStoragePanel : public UIPanel {
 public:
-    explicit UIStoragePanel(std::string_view providerInstance);
+    explicit UIStoragePanel();
     ~UIStoragePanel() override;
 
     void update(const InputState& input, float dt) override;

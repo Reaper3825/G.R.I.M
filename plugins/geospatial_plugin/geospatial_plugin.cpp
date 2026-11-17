@@ -21,7 +21,7 @@ struct GeoSpatialProvider {
     bgfx::ViewId viewId = 0;
     bool clearRegistered = false;
 
-    explicit GeoSpatialProvider(std::string_view providerInstance) : panel(providerInstance) {}
+    GeoSpatialProvider() = default;
     ~GeoSpatialProvider();
 
     void startViewport();
@@ -80,28 +80,21 @@ void GeoSpatialProvider::clearViewport() const {
 
 } // namespace
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
         api->api_version < GRIM_API_VERSION || !api->log || !api->subscribe_system_tick)
         return GRIM_ERROR_API_VERSION_MISMATCH;
 
     grim::plugin::setLoggingAPI(api);
     try {
-        provider = std::make_unique<GeoSpatialProvider>(UIPanel::providerInstanceId(api));
-        return GRIM_OK;
-    } catch (const std::exception& error) {
-        LOG_ERROR("GeoSpatial Plugin", error.what());
-        return GRIM_ERROR_UNKNOWN;
-    }
-}
-
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI* api) {
-    try {
+        provider = std::make_unique<GeoSpatialProvider>();
         provider->startViewport();
-        if (api->subscribe_system_tick(api, [](double deltaSeconds, double, void* context) {
+        if (api->subscribe_system_tick(api.instance(), [](double deltaSeconds, double, void* context) {
                 static_cast<GeoSpatialProvider*>(context)->runtime->tick(static_cast<float>(deltaSeconds));
             }, provider.get()) != GRIM_OK)
             throw std::runtime_error("Could not subscribe to the system tick");
+        provider->panel.attachToProvider(instance);
         return GRIM_OK;
     } catch (const std::exception& error) {
         LOG_ERROR("GeoSpatial Plugin", error.what());
@@ -112,5 +105,5 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI* ap
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {
     // The host has closed the callback gate and detached the panel on this thread.
     provider.reset();
-    grim::plugin::setLoggingAPI(nullptr);
+    grim::plugin::setLoggingAPI({});
 }

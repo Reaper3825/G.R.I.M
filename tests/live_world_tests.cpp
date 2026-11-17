@@ -55,7 +55,8 @@ int main() try {
         check(std::filesystem::last_write_time(file) == timestamp && loadJsonFile(file) == snapshot,
               "Resource update rewrote navigation snapshot");
         auto replacement = provider; replacement.instance = "second";
-        check(providers.publish(replacement, {}, provider.instance), "navigation replacement");
+        providers.retire(provider.name, provider.instance);
+        check(providers.publish(replacement, {}), "navigation replacement");
         check(providers.snapshot().resourceCount() == 0, "Replacement kept retired resources");
         check(!providers.publishResource(provider.instance, resource), "Retired provider republished resource");
         check(providers.publishResource(replacement.instance, resource), "Replacement resource fixture");
@@ -256,11 +257,13 @@ int main() try {
     auto collision = tool("alpha.new"); collision.descriptor.aliases = {"beta.tool"};
     auto betaReplacement = beta;
     betaReplacement.instance = "beta-2";
-    check(providers.publish(betaReplacement, {tool("beta.tool")}, beta.instance), "Beta replacement failed");
+    providers.retire(beta.name, beta.instance);
+    check(providers.publish(betaReplacement, {tool("beta.tool")}), "Beta replacement failed");
+    providers.retire(alpha.name, alpha.instance);
     const auto beforeRejected = providers.snapshot();
-    check(!providers.publish(replacement, {collision}, alpha.instance), "collision accepted");
-    check(ToolRegistry::instance().version() == beforeRejected.revision && ToolRegistry::instance().getTool("alpha.read")->provider.instance == alpha.instance, "failed replacement changed registry");
-    check(providers.publish(replacement, {tool("alpha.new")}, alpha.instance), "replacement rejected");
+    check(!providers.publish(replacement, {collision}), "collision accepted");
+    check(ToolRegistry::instance().version() == beforeRejected.revision && !ToolRegistry::instance().getTool("alpha.read"), "failed replacement changed registry");
+    check(providers.publish(replacement, {tool("alpha.new")}), "replacement rejected");
     session.synchronize();
     check(session.world().location() == room && session.world().roomId(providerKey(alpha)) == room, "replacement changed room/location");
     check(session.world().toolsHere().at(0).tool_id == "alpha.new", "replacement catalog stale");
@@ -302,15 +305,16 @@ int main() try {
     std::thread reader([&] {
         while (!finished) {
             const auto s = providers.snapshot();
-            if (s.providers.size() != 1 || s.providers.front().tools.size() != 1 ||
-                s.providers.front().provider.instance != s.providers.front().tools.front().description)
+            if (!s.providers.empty() && (s.providers.size() != 1 || s.providers.front().tools.size() != 1 ||
+                s.providers.front().provider.instance != s.providers.front().tools.front().description))
                 inconsistent = true;
         }
     });
     bool published = true;
     for (int i = 1; i <= 100; ++i) {
-        const auto old = p.instance; p.instance = std::to_string(i);
-        published &= providers.publish(p, {atomicTool(p.instance)}, old);
+        providers.retire(p.name, p.instance);
+        p.instance = std::to_string(i);
+        published &= providers.publish(p, {atomicTool(p.instance)});
     }
     finished = true; reader.join();
     check(published && !inconsistent, "mixed provider/tool snapshot");

@@ -14,8 +14,8 @@
 static constexpr float kTabBarY     = 35.0f;
 static constexpr float kContentTopY = 68.0f;
 
-UISettingsMenu::UISettingsMenu(std::string_view providerInstance)
-    : UIPanel("Settings", true, "settings", providerInstance), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
+UISettingsMenu::UISettingsMenu()
+    : UIPanel("Settings", true, "settings", false), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
 {
     position = { 200, 250 };
     size = { 620, 700 };

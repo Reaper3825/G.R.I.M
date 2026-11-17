@@ -66,7 +66,8 @@ int main() try {
     auto replacement = owner; replacement.instance = "two";
     const auto latest = state.at("applications").at(0);
     auto retiredLaunch = Json{{"resource_id", latest.at("resource_id")}, {"runtime_id", latest.at("runtime_id")}, {"provider_instance", owner.instance}};
-    check(registry.publish(replacement, {}, owner.instance), "replacement");
+    registry.retire(owner.name, owner.instance);
+    check(registry.publish(replacement, {}), "replacement");
     check(registry.snapshot().resourceCount() == 0, "replacement retained old resources");
     rejects([&] { catalog.request("refresh", Json::object()); });
     rejects([&] { catalog.request("launch", retiredLaunch); });

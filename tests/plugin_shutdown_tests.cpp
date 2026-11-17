@@ -18,8 +18,9 @@ std::set<std::string> active;
 std::vector<std::string> events;
 std::vector<std::string> errors;
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-void fixtureLog(const GrimPluginAPI* self, GrimLogLevel, const char* name) {
-    check(self && *static_cast<const std::string*>(self->host_context) == name, "Wrong API owner during shutdown");
+std::unordered_map<GrimPluginHandle, std::string> owners;
+void fixtureLog(GrimPluginHandle instance, GrimLogLevel, const char* name) {
+    check(owners.at(instance) == name, "Wrong API owner during shutdown");
     check(active.count(name) == 1, "Plugin shutdown ran after its context was removed");
     events.push_back(std::string("shutdown:") + name);
 }
@@ -27,31 +28,30 @@ void fixtureLog(const GrimPluginAPI* self, GrimLogLevel, const char* name) {
 void logDebug(const std::string&, const std::string&) {}
 void logError(const std::string&, const std::string& message) { errors.push_back(message); }
 namespace PluginAPI {
-struct TestAPI { std::string name; GrimPluginAPI api{}; };
-static std::unordered_map<std::string, std::unique_ptr<TestAPI>> apis;
-GrimPluginAPI* createPluginAPI(GRIM::MMO::ProviderDescriptor provider, bool, const GrimPluginAPI*) {
-    const auto& name = provider.name;
-    check(active.insert(name).second, "Plugin loaded more than once");
-    auto instance = std::make_unique<TestAPI>();
-    instance->name = name;
-    instance->api.host_context = &instance->name;
-    instance->api.api_version = GRIM_API_VERSION;
-    instance->api.log = fixtureLog;
-    auto* result = &instance->api;
-    apis.emplace(name, std::move(instance));
-    return result;
+struct LoadedProvider { std::string name; GrimPluginHandle handle; };
+std::shared_ptr<LoadedProvider> registerInstance(GRIM::MMO::ProviderDescriptor provider) {
+    static GrimPluginHandle next = 1;
+    auto owner = std::make_shared<LoadedProvider>(LoadedProvider{std::move(provider.name), next++});
+    owners.emplace(owner->handle, owner->name);
+    return owner;
 }
-std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
-    const nlohmann::json&, const GrimPluginAPI*, GrimToolDispatch) { return {}; }
-bool commitPluginGeneration(const GrimPluginAPI*, const GrimPluginAPI*,
-                            const std::vector<GRIM::MMO::ToolRegistration>&) { return true; }
-void beginPluginShutdown(const GrimPluginAPI*) {}
-void cleanupPluginContext(const GrimPluginAPI* api) {
-    const auto name = *static_cast<const std::string*>(api->host_context);
+GrimPluginHandle instanceHandle(const LoadedProvider& provider) { return provider.handle; }
+const GrimPluginAPI& hostAPI() {
+    static const GrimPluginAPI api{.api_version = GRIM_API_VERSION, .log = fixtureLog};
+    return api;
+}
+void validateManifestTools(const nlohmann::json&, const GRIM::MMO::ProviderDescriptor&) {}
+void registerProvider(LoadedProvider& provider, const nlohmann::json&, GrimToolDispatch) {
+    check(active.insert(provider.name).second, "Plugin loaded more than once");
+}
+void enableDispatch(LoadedProvider&) {}
+void retireProvider(LoadedProvider&) {}
+void releaseInstance(LoadedProvider& provider) {
+    const auto& name = provider.name;
     check(active.erase(name) == 1, "Cleanup used DLL filename instead of declared plugin identity");
     check(name == "Declared-failed" || std::find(events.begin(), events.end(), "shutdown:" + name) != events.end(), "Cleanup ran before shutdown");
     events.push_back("cleanup:" + name);
-    apis.erase(name);
+    owners.erase(provider.handle);
 }
 }
 int main(int argc, char** argv) try {
@@ -78,7 +78,7 @@ int main(int argc, char** argv) try {
     check(active.empty() && events.size() == 8, "Reloaded fixtures did not shut down");
     check(errors.empty(), "Valid plugins reported load errors");
     PluginManager::initialize(argv[2]);
-    check(active.empty() && PluginAPI::apis.empty(), "Failed init or incompatible ABI retained an API instance");
+    check(active.empty() && owners.empty(), "Failed init or incompatible ABI retained an API instance");
     check(events.size() == 10 && events.back() == "cleanup:Declared-failed", "Failed init was not cleaned up");
     check(errors.size() == 2, "Failed init and incompatible ABI were not both rejected");
     PluginManager::unloadAll();

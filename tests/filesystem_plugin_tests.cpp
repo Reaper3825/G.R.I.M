@@ -83,13 +83,13 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     check(fs::current_path() == baseDirectory &&
           GRIM::MMO::ProviderRegistry::instance().resourceVersion() == initialRevision,
           "Filesystem tools changed the working directory or published resources");
-    // Failed candidate leaves the old plugin state/resources intact.
+    // A native load failure after cutover leaves the provider absent.
     { std::ofstream invalid(deployed, std::ios::binary | std::ios::trunc); invalid << "invalid native library"; }
     PluginManager::checkForHotReload();
-    check(registry.toolCount() == baseline + 3 && directoryResource().provider.instance == initialResource.provider.instance &&
-          invoke("ls").success,
-          "Failed replacement discarded the current provider");
-    // A new DLL generation owns a fresh directory; cleanup of the old one cannot remove it.
+    check(registry.toolCount() == baseline && directoryResource().resource_id.empty() &&
+          invoke("ls").errorCode == "ERR_UNKNOWN_CMD",
+          "Failed native load retained filesystem tools or resources");
+    // A fresh DLL instance publishes its own directory.
     fs::copy_file(pluginDirectory / "filesystem_plugin.dll", deployed, fs::copy_options::overwrite_existing);
     fs::last_write_time(deployed, fs::last_write_time(deployed) + std::chrono::seconds(2));
     PluginManager::checkForHotReload();

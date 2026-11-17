@@ -21,11 +21,11 @@ bool success=false;
 int publications=0;
 void check(bool ok,const char* text) { if (!ok) throw std::runtime_error(text); }
 
-GrimResult publish(const GrimPluginAPI*,const char*,const char* json,size_t size) {
+GrimResult publish(GrimPluginHandle,const char*,const char* json,size_t size) {
     const auto value=nlohmann::json::parse(json,json+size);
     check(value.is_array(),"Resources were not structured"); ++publications; return GRIM_OK;
 }
-void log(const GrimPluginAPI*,GrimLogLevel,const char*) {}
+void log(GrimPluginHandle,GrimLogLevel,const char*) {}
 GrimResult complete(GrimToolResultWriter*,const GrimToolResult* result) {
     success=result->success;output=result->structured_output_json ? result->structured_output_json : "";return GRIM_OK;
 }
@@ -45,7 +45,7 @@ int main(int argc,char** argv) try {
     auto lib=dlopen(argv[1],RTLD_NOW);check(lib!=nullptr,"Cannot load voice library");
     auto symbol=[&](const char* name){ return dlsym(lib,name); };
 #endif
-    auto init=reinterpret_cast<GrimResult(*)(const GrimPluginAPI*)>(symbol("grim_plugin_init"));
+    auto init=reinterpret_cast<GrimResult(*)(const GrimPluginAPI*, GrimPluginHandle)>(symbol("grim_plugin_init"));
     auto stop=reinterpret_cast<void(*)()>(symbol("grim_plugin_shutdown"));
     dispatch = reinterpret_cast<GrimToolDispatch>(symbol("grim_plugin_dispatch_tool"));
     check(dispatch != nullptr, "Missing dispatcher export");
@@ -57,12 +57,12 @@ int main(int argc,char** argv) try {
     check(init&&stop,"Missing exports");
     GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
     api.replace_resources=publish;api.log=log;
-    auto old=api;old.api_version=9<<16;check(init(&old)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
+    auto old=api;old.api_version=9<<16;check(init(&old, 1)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
     const auto testRoot=std::filesystem::temp_directory_path() / ("grim-voice-owned-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check(std::filesystem::create_directory(testRoot),"Cannot create private cache fixture");
     struct Cleanup { std::filesystem::path root; ~Cleanup() { std::error_code error; std::filesystem::remove_all(root,error); } } cleanup{testRoot};
     for(int pass=0;pass<2;++pass) {
-        check(init(&api)==GRIM_OK,"Initialization failed");
+        check(init(&api, 1)==GRIM_OK,"Initialization failed");
         check(declared.size()==15,"Tool ownership incorrect");
         check(!declared.count("nevermind")&&!declared.count("voice"),"Legacy wrappers retained");
         invoke("voice.status","{}");check(success,"Idle status failed");
@@ -90,8 +90,8 @@ int main(int argc,char** argv) try {
 #endif
         stop();stop();
     }
-    api.replace_resources=[](const GrimPluginAPI*,const char*,const char*,size_t){return GRIM_ERROR_UNKNOWN;};
-    check(init(&api)!=GRIM_OK,"Resource failure accepted");stop();
+    api.replace_resources=[](GrimPluginHandle,const char*,const char*,size_t){return GRIM_ERROR_UNKNOWN;};
+    check(init(&api, 1)!=GRIM_OK,"Resource failure accepted");stop();
 #ifdef _WIN32
     FreeLibrary(lib);
 #else

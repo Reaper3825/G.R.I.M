@@ -89,7 +89,7 @@ It covers hub-only empty-registry startup, existing and newly loaded provider po
 zero-tool providers, adjacency,
 Model filtering, inspection without handler invocation, replacement rollback,
 stable room identity, stale revision rejection, unload/relocation, automatic reconnection, persistent history, and concurrent atomic snapshot reads.
-Plugin lifecycle fixtures additionally cover provider commit/reload/unload.
+Plugin lifecycle fixtures additionally cover provider load, reload, and unload.
 `tests/run_ui_input_foundation.ps1 -WorldLab` exercises automatic room population and navigation
 controls, reconciliation after hiding, and repeated client stop, alongside the
 existing editor and asset tests.

@@ -94,11 +94,13 @@ Json physicalSnapshot() {
         {"built_at_steady_ns",view.snapshot.built_at_steady_ns},{"entities",entities}};
 }
 }
-Runtime::Runtime(const GrimPluginAPI* host) : api(host) {
-    // No device acquisition, model loading, or worker starts during staged init.
+Runtime::Runtime(grim::PluginHost host) : api(host) {}
+
+void Runtime::start() {
+    // Device acquisition, model loading, and workers start through tools.
     publish();
     nextPoll = std::chrono::steady_clock::now() + pollInterval;
-    if (api->subscribe_system_tick(api, tick, this) != GRIM_OK)
+    if (api->subscribe_system_tick(api.instance(), tick, this) != GRIM_OK)
         throw std::runtime_error("Unable to register perception tick");
 }
 Runtime::~Runtime() {
@@ -153,7 +155,7 @@ Json Runtime::snapshot() {
 void Runtime::publish() {
     const auto payload = Json::array({{{"resource_id","observations"},{"kind","perception.observations"},
         {"name","Perception observations"},{"runtime_id",1},{"state",snapshot()}}}).dump();
-    if (api->replace_resources(api,"perception.observations",payload.data(),payload.size()) != GRIM_OK)
+    if (api->replace_resources(api.instance(),"perception.observations",payload.data(),payload.size()) != GRIM_OK)
         throw std::runtime_error("Perception resource publication failed");
 }
 Json Runtime::request(const std::string& operation, const Json& args) {

@@ -4,39 +4,18 @@
 #include <nlohmann/json_fwd.hpp>
 #include <string>
 
-// ============================================================================
-// Plugin API Implementation Interface
-// ============================================================================
-// These functions are called by the plugin manager to create and manage
-// plugin API instances.
-// ============================================================================
-
+// Host lifecycle operations for loaded provider instances.
 namespace PluginAPI {
 
-/**
- * Create a plugin API table for a specific plugin
- * @param provider Provider metadata from the manifest. The host assigns the instance ID.
- * @return Distinct host-owned API table, valid through shutdown until cleanup.
- * Every host call must pass this table as its first argument.
- */
-GrimPluginAPI* createPluginAPI(
-    GRIM::MMO::ProviderDescriptor provider,
-    bool staging = false,
-    const GrimPluginAPI* replacing = nullptr
-);
-
-std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
-    const nlohmann::json& entries, const GrimPluginAPI* api, GrimToolDispatch dispatch);
-// Publish the staged provider, tools and initial resources after successful initialization.
-bool commitPluginGeneration(const GrimPluginAPI* api, const GrimPluginAPI* replacing = nullptr,
-                            const std::vector<GRIM::MMO::ToolRegistration>& tools = {});
-bool commitPluginGeneration(const std::string& plugin_name);
-// Host lifecycle thread only; never call from inside a plugin callback.
-void beginPluginShutdown(const GrimPluginAPI* api);
-void beginPluginShutdown(const std::string& plugin_name);
-// Remove API context, subscriptions, and timers after shutdown.
-void cleanupPluginContext(const GrimPluginAPI* api);
-void cleanupPluginContext(const std::string& plugin_name);
+struct LoadedProvider;
+std::shared_ptr<LoadedProvider> registerInstance(GRIM::MMO::ProviderDescriptor provider);
+GrimPluginHandle instanceHandle(const LoadedProvider& provider);
+const GrimPluginAPI& hostAPI();
+void validateManifestTools(const nlohmann::json& entries, const GRIM::MMO::ProviderDescriptor& provider);
+void registerProvider(LoadedProvider& provider, const nlohmann::json& entries, GrimToolDispatch dispatch);
+void enableDispatch(LoadedProvider& provider);
+void retireProvider(LoadedProvider& provider);
+void releaseInstance(LoadedProvider& provider);
 
 /** Dispatch the frame tick to published plugin generations. */
 void dispatchSystemTick(double deltaSeconds, double offsetSeconds);

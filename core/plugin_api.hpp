@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v18.0
+// G.R.I.M Plugin API v19.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 18
+#define GRIM_API_VERSION_MAJOR 19
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -139,34 +139,32 @@ typedef void (*GrimSystemTickCallback)(double delta_seconds, double offset_secon
 // Plugin API Function Table
 // ============================================================================
 
+using GrimPluginHandle = uint64_t;
+
 typedef struct GrimPluginAPI {
     // API version info
     uint32_t api_version;
 
-    // Host-owned identity for this loaded plugin. Pass this API object as self
-    // on every call; valid until plugin shutdown and host cleanup complete.
-    const void* host_context;
-    
     // ========================================================================
     // Logging Functions
     // ========================================================================
-    void (*log)(const GrimPluginAPI* self, GrimLogLevel level, const char* message);
+    void (*log)(GrimPluginHandle instance, GrimLogLevel level, const char* message);
     
     // ========================================================================
     // Command Registration
     // ========================================================================
-    // Initialization only. Batches are staged until the loader commits a successful init.
-    GrimResult (*unregister_command)(const GrimPluginAPI* self, const char* command_name);
+    // Remove a tool owned by the current provider.
+    GrimResult (*unregister_command)(GrimPluginHandle instance, const char* command_name);
     
     // Execute a command programmatically
-    GrimResult (*execute_command)(const GrimPluginAPI* self, const char* command_text, GrimToolResultWriter* result);
+    GrimResult (*execute_command)(GrimPluginHandle instance, const char* command_text, GrimToolResultWriter* result);
     
     // ========================================================================
     // Event System
     // ========================================================================
-    GrimEventHandle (*subscribe_event)(const GrimPluginAPI* self, const char* event_name, GrimEventCallback callback, void* user_data);
-    GrimResult (*unsubscribe_event)(const GrimPluginAPI* self, GrimEventHandle handle);
-    GrimResult (*emit_event)(const GrimPluginAPI* self, const char* event_name, const void* data, size_t data_size);
+    GrimEventHandle (*subscribe_event)(GrimPluginHandle instance, const char* event_name, GrimEventCallback callback, void* user_data);
+    GrimResult (*unsubscribe_event)(GrimPluginHandle instance, GrimEventHandle handle);
+    GrimResult (*emit_event)(GrimPluginHandle instance, const char* event_name, const void* data, size_t data_size);
     
     // Common events:
     // - "command_executed" - fired after any command runs
@@ -175,52 +173,44 @@ typedef struct GrimPluginAPI {
     // - "system_shutdown" - clean up resources
     
     // ========================================================================
-    // Context API
-    // ========================================================================
-    const char* (*get_context)(const GrimPluginAPI* self, const char* key);
-    GrimResult (*set_context)(const GrimPluginAPI* self, const char* key, const char* value);
-    GrimResult (*delete_context)(const GrimPluginAPI* self, const char* key);
-    bool (*has_context)(const GrimPluginAPI* self, const char* key);
-    
-    // ========================================================================
     // Notifications
     // ========================================================================
-    void (*show_notification)(const GrimPluginAPI* self, const char* title, const char* message);
+    void (*show_notification)(GrimPluginHandle instance, const char* title, const char* message);
     
     // ========================================================================
     // Plugin Lifecycle & Metadata
     // ========================================================================
-    const char* (*get_plugin_name)(const GrimPluginAPI* self);
-    const char* (*get_plugin_path)(const GrimPluginAPI* self);
-    uint32_t (*get_permissions)(const GrimPluginAPI* self);  // Returns bitmask of GrimPermission
-    bool (*has_permission)(const GrimPluginAPI* self, GrimPermission perm);
+    const char* (*get_plugin_name)(GrimPluginHandle instance);
+    const char* (*get_plugin_path)(GrimPluginHandle instance);
+    uint32_t (*get_permissions)(GrimPluginHandle instance);  // Returns bitmask of GrimPermission
+    bool (*has_permission)(GrimPluginHandle instance, GrimPermission perm);
     
     // Request plugin reload (useful for development)
-    void (*request_reload)(const GrimPluginAPI* self);
+    void (*request_reload)(GrimPluginHandle instance);
     
     // ========================================================================
     // Utility Functions
     // ========================================================================
     // Releases a host-owned string.
-    void (*string_free)(const GrimPluginAPI* self, const char* str);
+    void (*string_free)(GrimPluginHandle instance, const char* str);
     
     // Returns a host-owned string; release with string_free. Null on failure.
-    const char* (*get_user_error_message)(const GrimPluginAPI* self, const char* code);
+    const char* (*get_user_error_message)(GrimPluginHandle instance, const char* code);
     // v3.2: host-owned JSON metadata snapshot, released with string_free.
     // Null tool_id returns all tools in registry order; otherwise resolves the
     // canonical ID, display name, or alias. Missing tools produce an empty array.
     // Envelope: {"format":"grim-tool-snapshot","version":1,"tools":[...]}
     // Null return means API failure. Read-only; does not dispatch or change stats.
-    const char* (*get_tool_snapshot)(const GrimPluginAPI* self, const char* tool_id);
+    const char* (*get_tool_snapshot)(GrimPluginHandle instance, const char* tool_id);
     // Manual memory services
     // (MEMORY). JSON envelope: {format:"grim-runtime-service",version:1,
     // value:...,error:null|{kind,message}}; release with string_free.
     // Null = invalid input, denied permission, or API failure. No command dispatch.
-    const char* (*stage_manual_memory)(const GrimPluginAPI* self, const char* raw);
+    const char* (*stage_manual_memory)(GrimPluginHandle instance, const char* raw);
     // value is an ordered array of {id,raw}; uses the existing search defaults.
-    const char* (*search_memory)(const GrimPluginAPI* self, const char* query);
+    const char* (*search_memory)(GrimPluginHandle instance, const char* query);
     // value is presence bool. Retains legacy forget's check+flush, not deletion.
-    const char* (*flush_memory_record_if_present)(const GrimPluginAPI* self, uint64_t id);
+    const char* (*flush_memory_record_if_present)(GrimPluginHandle instance, uint64_t id);
     // v3.8: UI permission. Submits copied, stable-key panel requests or polls a
     // caller-owned request, not ownership of the target panel. Always nonblocking.
     // Host-owned grim-ui-panel-response v1
@@ -231,19 +221,19 @@ typedef struct GrimPluginAPI {
     // v3.14: HIDE_CURRENT uses the same guarded identity for hiding a panel.
     // CANCEL uses panel_key=null + owned request_id; releases/cancels queued work,
     // but cannot undo an effect already applied. Table/descriptor layouts unchanged.
-    const char* (*ui_panel_service)(const GrimPluginAPI* self, GrimUIPanelOperation operation,
+    const char* (*ui_panel_service)(GrimPluginHandle instance, GrimUIPanelOperation operation,
                                     const char* panel_key, uint64_t request_id);
     // v5.0: Generic provider identity (JSON name/instance/path); string_free releases it.
-    const char* (*get_provider_identity)(const GrimPluginAPI* self);
+    const char* (*get_provider_identity)(GrimPluginHandle instance);
     // Copy an entire resource kind atomically. JSON array <=64 MiB, <=10000 entries.
     // Each entry: resource_id, kind, name, runtime_id (>0), state (object).
     // Initialization calls are serialized on the lifecycle thread (no init workers).
-    // During init this is staged with tools; after publication it replaces that kind.
-    // Empty array removes the kind. Ownership is derived exclusively from self.
-    GrimResult (*replace_resources)(const GrimPluginAPI* self, const char* kind,
+    // The provider must have a live registry record.
+    // Empty array removes the kind. Ownership is derived from the instance handle.
+    GrimResult (*replace_resources)(GrimPluginHandle instance, const char* kind,
                                    const char* resources_json, size_t size);
     // True only while this generation is the currently published provider.
-    bool (*is_provider_current)(const GrimPluginAPI* self);
+    bool (*is_provider_current)(GrimPluginHandle instance);
     // v14 removes the copied-widget transport. Native panels use the exported
     // C++ UI interface and register during the owning provider's init scope.
     // Native UI plugins must match the host compiler, CRT and UI class ABI.
@@ -253,7 +243,7 @@ typedef struct GrimPluginAPI {
     // Delta is time since the previous frame start. Offset is time since the first.
     // Both are zero on the first application frame. The host detaches the
     // callback at shutdown. Keep user_data valid until then.
-    GrimResult (*subscribe_system_tick)(const GrimPluginAPI* self,
+    GrimResult (*subscribe_system_tick)(GrimPluginHandle instance,
                                        GrimSystemTickCallback callback, void* user_data);
     
 } GrimPluginAPI;
@@ -263,16 +253,14 @@ typedef struct GrimPluginAPI {
 // ============================================================================
 
 extern "C" {
-    // Initialize plugin (called on load). Tools stay staged until successful return.
+    // Initialize plugin (called on load). Tool dispatch starts after successful return.
     // Shutdown is also called after failed init; tolerate partial initialization.
     // Returns GRIM_OK on success
-    PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api);
+    PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api, GrimPluginHandle instance);
     
     // Shutdown plugin (called on unload)
     PLUGIN_EXPORT void grim_plugin_shutdown();
     
-    // Optional: called when plugin is reloaded
-    PLUGIN_EXPORT void grim_plugin_reload();
 }
 
 // ============================================================================
@@ -282,46 +270,17 @@ extern "C" {
 #ifdef __cplusplus
 namespace grim {
 
-class PluginAPI {
-private:
-    const GrimPluginAPI* m_api;
-    
+class PluginHost {
 public:
-    explicit PluginAPI(const GrimPluginAPI* api) : m_api(api) {}
-    
-    // Logging
-    void log(GrimLogLevel level, const char* message) { m_api->log(m_api, level, message); }
-    void debug(const char* msg) { log(GRIM_LOG_DEBUG, msg); }
-    void info(const char* msg) { log(GRIM_LOG_INFO, msg); }
-    void warning(const char* msg) { log(GRIM_LOG_WARNING, msg); }
-    void error(const char* msg) { log(GRIM_LOG_ERROR, msg); }
-    
-    // Commands
-    GrimResult unregisterCommand(const char* name) {
-        return m_api->unregister_command(m_api, name);
-    }
-    
-    // Events
-    GrimEventHandle subscribeEvent(const char* name, GrimEventCallback cb, void* data = nullptr) {
-        return m_api->subscribe_event(m_api, name, cb, data);
-    }
-    
-    GrimResult emitEvent(const char* name, const void* data = nullptr, size_t size = 0) {
-        return m_api->emit_event(m_api, name, data, size);
-    }
-    
-    // Context
-    const char* getContext(const char* key) { return m_api->get_context(m_api, key); }
-    GrimResult setContext(const char* key, const char* value) { return m_api->set_context(m_api, key, value); }
-    
-    // Notifications
-    void showNotification(const char* title, const char* msg) { m_api->show_notification(m_api, title, msg); }
-    
-    // Permissions
-    bool hasPermission(GrimPermission perm) { return m_api->has_permission(m_api, perm); }
-    
-    // Raw API access
-    const GrimPluginAPI* raw() const { return m_api; }
+    PluginHost() = default;
+    PluginHost(const GrimPluginAPI* api, GrimPluginHandle instance) : api_(api), instance_(instance) {}
+    const GrimPluginAPI* operator->() const { return api_; }
+    explicit operator bool() const { return api_ != nullptr; }
+    GrimPluginHandle instance() const { return instance_; }
+
+private:
+    const GrimPluginAPI* api_ = nullptr;
+    GrimPluginHandle instance_ = 0;
 };
 
 } // namespace grim

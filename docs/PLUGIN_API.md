@@ -1,4 +1,4 @@
-# G.R.I.M Plugin API v18.0
+# G.R.I.M Plugin API v19.0
 
 API version: **18.0.0**.
 
@@ -73,16 +73,11 @@ libraries (.dll, .so, or .dylib). A plugin exports `grim_plugin_init` and
 `grim_plugin_shutdown`. The loader checks the manifest ABI before opening the library.
 The loader rejects incompatible major versions and newer unsupported versions.
 
-A v15.1 plugin may export `extern "C" PLUGIN_EXPORT GrimResult grim_plugin_activate(const GrimPluginAPI*)`.
-The host calls it once on the lifecycle thread after provider commit and after any
-previous generation has shut down and unloaded. Desktop startup initializes the
-overlay and bgfx before plugin discovery. The UI task pump attaches staged panels
-to the live UI separately. Use activation to connect resources that require the
-initialized host or that the previous generation must release. Returning an error
-retires and unloads the candidate through normal shutdown. At this point the
-previous generation has already retired.
-Version 3.1 consumes two of the function table's reserved pointer slots, retaining
-the table size and existing v3.0 service-field offsets at the time.
+Version 19 passes a shared host function table and a loaded-instance handle
+to `grim_plugin_init(const GrimPluginAPI*, GrimPluginHandle)`. Pass the handle
+as the first argument to host services. Rebuild the host and provider DLLs and
+deploy their matching manifests together. Desktop startup initializes the
+overlay and bgfx before plugin discovery.
 
 ## Tool registration
 
@@ -92,8 +87,8 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 2`, the packed integer `api_version` (1179648
-for 18.0.0), the provider name and version in `provider` and `version`, a
+loader expects `schema_version: 2`, the packed integer `api_version` (1245184
+for 19.0.0), the provider name and version in `provider` and `version`, a
 `required_permissions` array of permission names, and a `tools` array. Use
 empty arrays when there are no permissions or tools. A tool can only declare
 permissions from the provider’s `required_permissions` array. A provider with tools exports `grim_plugin_dispatch_tool`.
@@ -263,20 +258,14 @@ The manifest can supply up to 256 tool entries. The host checks metadata and
 permissions when reading the manifest and checks duplicate tool IDs and aliases
 during publication.
 
-### Initialization transaction
+### Provider initialization
 
-The loader creates a distinct host-owned API table per loaded instance. The
-API context and registry share that generation's immutable provider descriptor.
-The context retains it through shutdown after the registry retires the generation.
-Pass the API table as self on every call and retain it through shutdown.
+The loader registers the provider and its manifest tools in one registry
+operation before invoking init. Init can publish resources and attach panels
+directly to that loaded instance. Tool, event, and tick dispatch starts after
+init returns `GRIM_OK`. Failed init goes through the same teardown as unload.
 
-The loader reads and validates the manifest before initialization. During init,
-resource updates write to the unpublished provider generation. Once init returns
-`GRIM_OK`, the registry publishes the tools and resources together. A failed
-manifest, initialization, or commit leaves the previous generation visible.
-
-unregister_command removes a committed canonical tool owned by the caller;
-is_command_registered queries committed registry entries.
+`unregister_command` removes a canonical tool owned by the calling instance.
 
 ## Result ownership
 
@@ -309,37 +298,31 @@ from background threads. A background operation can return a job identifier;
 it must expose later status through a separate tool. There is no asynchronous
 completion API in v3.
 
-execute_command(api, command_text, writer) also delivers through a synchronous
+execute_command(instance, command_text, writer) also delivers through a synchronous
 writer. The receiving plugin copies any strings it needs before its completion
 callback returns. There are no returned result strings to free.
 
 ## Shutdown and native lifetime
 
-Before calling shutdown, the host closes the provider's tool-call gate,
-removes its registry entries, and waits for active handlers to finish.
-An invocation retaining an old registry entry cannot enter plugin code after
-the gate closes. Handler code and user data remain valid through completion.
+The host closes the instance's callback gate and retires its provider record.
+Retirement removes the provider, tools, aliases, and resources together. The
+host detaches panels and drains active calls, then removes subscriptions and
+cancels queued panel requests before invoking shutdown.
 
-Shutdown must stop and join plugin-owned background work. It is also called
-after failed initialization, so it must tolerate partially initialized state.
-After shutdown, host cleanup removes provider-owned subscriptions and
-the API context, then the loader unloads the native library. Do not retain the
-API pointer after cleanup.
+Shutdown stops and joins plugin-owned background work. It also runs after
+failed init and must tolerate partial initialization. The instance handle
+remains valid for teardown logging through shutdown. The loader then
+invalidates the handle and unloads the DLL.
 
-Lifecycle operations run on the host lifecycle thread, never inside a plugin
-callback: waiting for one's own active call would deadlock. Plugin-created
-threads must not mutate the API's shared service maps concurrently with cleanup.
-Event and timer subscriptions carry the same instance identity and call gate.
-Staged callbacks cannot run before publication. Snapshots of pending callbacks
-cannot enter retired plugin code after its gate closes. The lifecycle waits for
-active tool, event, and system tick callbacks before unloading the library.
+Lifecycle operations run on the host frame thread outside plugin callbacks.
+Cached tool handlers and event or tick snapshots share the instance's call gate.
 
 The migrated OSINT plugin joins outstanding scans at shutdown. The network
 plugin joins its coordinator, which owns worker joins and network cleanup.
 
 ## Other API services and current limits
 
-The function table retains logging, context, events, timers, notifications,
+The function table retains logging, events, notifications,
 manual memory services, and generation-scoped provider resource publication.
 
 Host-returned strings from other services retain their existing string_free
@@ -373,24 +356,15 @@ can resolve companion dependencies from the source folder; on Unix, dependencies
 must be resolvable through the normal loader paths (source-relative $ORIGIN
 dependencies are not relocated automatically).
 
-For a changed file, the current plugin keeps serving tools while a separate
-candidate library loads its manifest and initializes with its own API context.
-A replacement must retain its declared provider name. A bad binary, incompatible
-ABI, failed initialization, or registry collision rejects only the candidate.
-Its subscriptions, timers, and registrations cannot erase the working instance's
-resources.
+For a changed file, the loader reads and validates the manifest before
+cutover. The replacement must retain the declared provider name. Once the
+preflight succeeds, the loader shuts down and unloads the outgoing instance
+before loading the incoming DLL. A failure after cutover leaves the provider
+absent. Other providers continue running.
 
-Successful publication atomically replaces the old instance's entire tool set,
-including removing tools and aliases no longer supplied. The host then closes
-the old instance's callback gate, drains active calls, runs shutdown, removes
-only its resources, and unloads its private library copy. An old call's statistics
-do not get attributed to its replacement. A successful reload starts a new
-instance with fresh statistics.
-
-This transaction protects the registry and host-owned plugin resources. Arbitrary
-external changes performed by plugin initialization are not rolled back.
-Initialization should register capabilities and allocate reversible local state;
-reserve external actions for explicitly invoked tool handlers.
+A successful load gets a fresh instance handle and fresh tool statistics.
+Provider initialization should allocate reversible local state and reserve
+external actions for explicitly invoked tools.
 
 The application frame loop pumps generic plugin callbacks after reconciliation.
 Schedule and Perception subscribe to system ticks and track their own poll deadlines. Unloading a provider removes
@@ -857,29 +831,17 @@ on the next provider poll after reload. See [scheduling contract](SCHEDULING_TOO
 
 ## Native provider panels
 
-A provider obtains its generation ID with `UIPanel::providerInstanceId(api)`
-and passes it through each concrete panel constructor to the `UIPanel` base
-constructor. The base constructor stages the panel against that generation on
-the UI thread. It checks UI permission, stable keys and duplicate keys. A caught
-registration failure for a staging generation still rejects provider commit.
+On the UI thread, construct the complete panel with host auto-registration
+disabled, then call `panel.attachToProvider(instance)` during provider init.
+Attachment checks the instance's UI permission and validates the stable key
+against the live UI. The host binds the panel's `ui.panel` resource as
+`panel:<stable-key>` under that instance. The provider owns the panel object.
 
-Candidate panels are absent from the live UI until provider commit and the UI
-queue pump. Collision validation permits replacement of the old generation's
-panels only. Activation attaches the same native objects and binds `ui.panel`
-resources as `panel:<stable-key>` using the declaring generation ID. The host borrows these objects; the
-plugin owns their storage and implementation. UI callbacks run on the UI thread.
+Retirement detaches the panel synchronously before shutdown destroys it.
+Detachment checks the panel's runtime identity so cleanup applies to the exact
+attachment. Native UI plugins use the host's exported C++ UI interface and
+must match its compiler, CRT, and class layout.
 
-Retirement synchronously detaches that generation's panels before plugin
-shutdown destroys them and before the loader unloads the DLL. Queued activation
-checks the retired lease without dereferencing destroyed plugin objects.
-Destruction unregisters the exact instance, including failed construction and
-failed candidate initialization. Old generation cleanup cannot remove a newer
-panel with the same key. Plugin shutdown must destroy every owned native panel.
-
-Native UI plugins use the exported C++ UI interface with a matching compiler,
-CRT and class layout. API v15 removes the factory declaration entry and changes
-the native host class layout. All plugins must be rebuilt for this ABI. Native
-UI plugins also need to be rebuilt for the provider instance constructor change.
 Windows standalone builds require `GRIM_HOST_IMPORT_LIBRARY`; host-tree builds link
 `GRIM_EXPORT`. Building the host target alone does not build Schedule, since
 Schedule imports the host. An all-target build builds/deploys it after the host.
@@ -891,18 +853,17 @@ saved events survive unload, while unsaved widget drafts do not. The generic UI
 plugin supplies panel discovery and interaction.
 
 GeoSpatial Plugin owns the `geospatial` panel, globe camera, native viewport
-attachment, and Cesium runtime. It connects the attachment in its post-commit
-activation hook. A repeating zero-interval timer dispatches once per
+attachment, and Cesium runtime. It connects the attachment during init and subscribes for ticks once per
 application frame through the provider call gate. The plugin submits its clear
 and scene to the same host bgfx view. Native render callbacks execute on the
 application frame thread, which also retires the plugin. Shutdown unregisters
 the render callbacks, clears native input, and drains Cesium destruction before
 the loader releases the library.
 
-`tests/run_ui_input_foundation.ps1` tests native controls, provider staging,
+`tests/run_ui_input_foundation.ps1` tests native controls, direct provider attachment,
 permissions, collision/replacement, and synchronous retirement. It also builds
 an isolated Schedule DLL against the headless test host's exports and tests
-native draw dispatch, DLL replacement, unload-before-activation and failed init.
+native draw dispatch, DLL replacement, synchronous detach, and failed init.
 No application, renderer backend, model or training process is started.
 
 ## Application provider (v5+)

@@ -1,5 +1,5 @@
 #ifndef GRIM_NATIVE_UI_TEST_HOST
-#include "core/plugin_api_impl.hpp"
+#include "loaded_provider_fixture.hpp"
 #include "core/plugin_manager.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/commands_core.hpp"
@@ -16,19 +16,17 @@ bool visible = false;
 int effects = 0;
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void pump() { auto tasks = std::move(uiTasks); uiTasks.clear(); for (auto& task : tasks) task(); }
-nlohmann::json take(const GrimPluginAPI* api, const char* value) {
+nlohmann::json take(const LoadedProviderFixture& provider, const char* value) {
     check(value != nullptr, "UI API returned null unexpectedly");
-    struct Release { const GrimPluginAPI* api; const char* value; ~Release() { api->string_free(api, value); } } release{api, value};
-    return nlohmann::json::parse(value);
+    const auto release = [&](const char* text) { provider->string_free(provider.handle(), text); };
+    std::unique_ptr<const char, decltype(release)> result(value, release);
+    return nlohmann::json::parse(result.get());
 }
 }
 namespace GRIM::UI {
 // Controlled host boundary: the API/loader/plugin are real, no native UI is started.
 // The native provider panel lifecycle is covered by the UI foundation tests.
-void registerProviderPanelLease(const std::shared_ptr<ProviderPanelLease>&) {}
-bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                            const std::shared_ptr<ProviderPanelLease>&) { return !lease->registrationFailed; }
-void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>&) {}
+void registerProviderPanelLease(GrimPluginHandle, const std::shared_ptr<ProviderPanelLease>&) {}
 void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
     lease->retired = true;
     lease->panels.clear();
@@ -57,44 +55,43 @@ PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std
 
 void runUIPluginTests(const std::filesystem::path& directory) {
 
-    auto* denied = PluginAPI::createPluginAPI({.name = "ui-denied", .path = "", .required_permissions = 0});
-    check(!denied->ui_panel_service(denied, GRIM_UI_LIST, nullptr, 0), "UI permission was not enforced");
-    PluginAPI::cleanupPluginContext(denied);
-    auto* owner = PluginAPI::createPluginAPI({.name = "ui-owner", .path = "", .required_permissions = GRIM_PERM_UI});
-    auto* other = PluginAPI::createPluginAPI({.name = "ui-other", .path = "", .required_permissions = GRIM_PERM_UI});
-    check(!owner->ui_panel_service(owner, GRIM_UI_SHOW, nullptr, 0) &&
-          !owner->ui_panel_service(owner, static_cast<GrimUIPanelOperation>(99), nullptr, 0) &&
-          !owner->ui_panel_service(owner, GRIM_UI_LIST, "unexpected", 0) &&
-          !owner->ui_panel_service(owner, GRIM_UI_SHOW, "settings", 1), "Malformed UI service calls were accepted");
-    const auto submitted = take(owner, owner->ui_panel_service(owner, GRIM_UI_SHOW, "settings", 0));
+    LoadedProviderFixture denied({.name = "ui-denied", .path = "", .required_permissions = 0});
+    denied.load();
+    check(!denied->ui_panel_service(denied.handle(), GRIM_UI_LIST, nullptr, 0), "UI permission was not enforced");
+    denied.unload();
+    LoadedProviderFixture owner({.name = "ui-owner", .path = "", .required_permissions = GRIM_PERM_UI});
+    owner.load();
+    LoadedProviderFixture other({.name = "ui-other", .path = "", .required_permissions = GRIM_PERM_UI});
+    other.load();
+    check(!owner->ui_panel_service(owner.handle(), GRIM_UI_SHOW, nullptr, 0) &&
+          !owner->ui_panel_service(owner.handle(), static_cast<GrimUIPanelOperation>(99), nullptr, 0) &&
+          !owner->ui_panel_service(owner.handle(), GRIM_UI_LIST, "unexpected", 0) &&
+          !owner->ui_panel_service(owner.handle(), GRIM_UI_SHOW, "settings", 1), "Malformed UI service calls were accepted");
+    const auto submitted = take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_SHOW, "settings", 0));
     const auto id = submitted.at("request_id").get<uint64_t>();
     check(submitted.at("status") == "pending" && !visible && effects == 0, "Submission ran UI work synchronously");
-    check(take(owner, owner->ui_panel_service(owner, GRIM_UI_POLL, nullptr, id)).at("status") == "pending",
+    check(take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_POLL, nullptr, id)).at("status") == "pending",
           "Pending request was reported completed");
-    check(take(other, other->ui_panel_service(other, GRIM_UI_POLL, nullptr, id)).at("error") == "request_not_found",
+    check(take(other, other->ui_panel_service(other.handle(), GRIM_UI_POLL, nullptr, id)).at("error") == "request_not_found",
           "Another plugin could read an owned result");
     pump();
-    const auto completed = take(owner, owner->ui_panel_service(owner, GRIM_UI_POLL, nullptr, id));
+    const auto completed = take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_POLL, nullptr, id));
     check(completed.at("result").at("success") && visible && effects == 1, "Completed UI work was not reported");
-    check(take(owner, owner->ui_panel_service(owner, GRIM_UI_POLL, nullptr, id)).at("error") == "request_not_found",
+    check(take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_POLL, nullptr, id)).at("error") == "request_not_found",
           "Completed poll was not consumed");
-    const auto cancelled = take(owner, owner->ui_panel_service(owner, GRIM_UI_HIDE, "settings", 0)).at("request_id").get<uint64_t>();
-    check(take(other, other->ui_panel_service(other, GRIM_UI_CANCEL, nullptr, cancelled)).at("error") == "request_not_found",
+    const auto cancelled = take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_HIDE, "settings", 0)).at("request_id").get<uint64_t>();
+    check(take(other, other->ui_panel_service(other.handle(), GRIM_UI_CANCEL, nullptr, cancelled)).at("error") == "request_not_found",
           "Another provider cancelled an owned request");
-    take(owner, owner->ui_panel_service(owner, GRIM_UI_CANCEL, nullptr, cancelled)); pump();
+    take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_CANCEL, nullptr, cancelled)); pump();
     check(visible && effects == 1, "Cancelled request applied an effect");
     for (int i = 0; i < 64; ++i)
-        check(take(owner, owner->ui_panel_service(owner, GRIM_UI_HIDE, "settings", 0)).at("status") == "pending",
+        check(take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_HIDE, "settings", 0)).at("status") == "pending",
               "UI request capacity rejected too early");
-    check(take(owner, owner->ui_panel_service(owner, GRIM_UI_LIST, nullptr, 0)).at("error") == "too_many_requests",
+    check(take(owner, owner->ui_panel_service(owner.handle(), GRIM_UI_LIST, nullptr, 0)).at("error") == "too_many_requests",
           "UI request capacity was not bounded");
-    PluginAPI::cleanupPluginContext(owner); pump();
+    owner.unload(); pump();
     check(effects == 1 && visible, "Unloaded provider's queued operations still executed");
-    PluginAPI::cleanupPluginContext(other);
-    auto* staging = PluginAPI::createPluginAPI({.name = "ui-staging", .path = "", .required_permissions = GRIM_PERM_UI}, true);
-    check(!staging->ui_panel_service(staging, GRIM_UI_SHOW, "settings", 0), "Staged initialization submitted UI work");
-    PluginAPI::cleanupPluginContext(staging);
-
+    other.unload();
     if (directory.empty()) return;
     namespace fs = std::filesystem;
     const auto folder = fs::absolute(directory);

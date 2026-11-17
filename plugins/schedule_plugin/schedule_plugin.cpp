@@ -27,17 +27,19 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
     return writer->complete(writer,&result);
 }
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if(!api || (api->api_version>>16)!=GRIM_API_VERSION_MAJOR || api->api_version<GRIM_API_VERSION ||
         !api->subscribe_system_tick || !api->replace_resources || !api->show_notification ||
         !api->string_free || !api->log) return GRIM_ERROR_API_VERSION_MISMATCH;
     provider=std::make_unique<grim::scheduling::Provider>(api);
     try {
         provider->prepare();
-        calendarPanel = std::make_unique<grim::scheduling::CalendarPanel>(UIPanel::providerInstanceId(api), api, *provider);
+        calendarPanel = std::make_unique<grim::scheduling::CalendarPanel>(api, *provider);
+        calendarPanel->attachToProvider(instance);
         return GRIM_OK;
     } catch(const std::exception& error) {
-        api->log(api, GRIM_LOG_ERROR, error.what());
+        api->log(api.instance(), GRIM_LOG_ERROR, error.what());
         return GRIM_ERROR_UNKNOWN;
     }
 }

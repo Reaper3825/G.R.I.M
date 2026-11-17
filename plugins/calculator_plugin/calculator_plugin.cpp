@@ -401,7 +401,8 @@ GrimResult calculate(const GrimToolCall* call, GrimToolResultWriter* writer, voi
 
 } // namespace
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* api) {
+extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
+    const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION)
         return GRIM_ERROR_API_VERSION_MISMATCH;
     return GRIM_OK;

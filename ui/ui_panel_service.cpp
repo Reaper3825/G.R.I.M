@@ -7,84 +7,41 @@
 
 namespace GRIM::UI {
 namespace {
-std::map<std::string, std::weak_ptr<ProviderPanelLease>, std::less<>> providerLeases;
-std::unordered_map<UIPanel*, std::weak_ptr<ProviderPanelLease>> nativeOwners;
+std::unordered_map<GrimPluginHandle, std::weak_ptr<ProviderPanelLease>> providerLeases;
 }
-void registerProviderPanelLease(const std::shared_ptr<ProviderPanelLease>& lease) {
-    if (lease->owner.empty() || !providerLeases.emplace(lease->owner, lease).second)
-        throw std::logic_error("Invalid or duplicate panel provider instance: " + lease->owner);
+void registerProviderPanelLease(GrimPluginHandle instance, const std::shared_ptr<ProviderPanelLease>& lease) {
+    if (!instance || lease->owner.empty() || !providerLeases.emplace(instance, lease).second)
+        throw std::logic_error("Invalid or duplicate panel provider instance");
 }
-void stageNativePanel(UIPanel* panel, std::string_view providerInstance) {
-    UIRoot::get().requireUIThread();
-    const auto found = providerLeases.find(providerInstance);
-    const auto owner = found == providerLeases.end() ? nullptr : found->second.lock();
-    if (!owner || !owner->acceptingPanels)
-        throw std::logic_error("Panel provider instance is not accepting construction: " + std::string(providerInstance));
-    auto& lease = *owner;
+void attachNativePanel(UIPanel* panel, GrimPluginHandle instance) {
+    auto& root = UIRoot::get();
+    root.requireUIThread();
+    const auto found = providerLeases.find(instance);
+    const auto lease = found == providerLeases.end() ? nullptr : found->second.lock();
+    if (!lease || lease->retired || !lease->uiPermitted)
+        throw std::logic_error("Native panel attachment requires a live provider with UI permission");
     const auto& key = panel->getPanelKey();
+    if (key.empty() || key.size() > 256 || key.find_first_of("\r\n\0", 0, 3) != std::string::npos)
+        throw std::invalid_argument("Provider panels require a stable key");
+    if (lease->panels.size() >= 64) throw std::logic_error("Provider panel limit exceeded");
+    if (root.getPanelByKey(key)) throw std::logic_error("Duplicate panel key: " + key);
+
+    const auto runtime = panel->getPanelID();
+    lease->panels.emplace_back(key, runtime);
     try {
-        if (!lease.uiPermitted) throw std::logic_error("Native panels require UI permission");
-        if (key.empty() || key.size() > 256 || key.find_first_of("\r\n\0", 0, 3) != std::string::npos)
-            throw std::invalid_argument("Provider panels require a stable key");
-        if (lease.nativePanels.size() >= 64) throw std::logic_error("Provider panel limit exceeded");
-        for (const auto* existing : lease.nativePanels)
-            if (existing->getPanelKey() == key) throw std::logic_error("Duplicate provider panel key: " + key);
-        nativeOwners.emplace(panel, owner);
-        try { lease.nativePanels.push_back(panel); }
-        catch (...) { nativeOwners.erase(panel); throw; }
-    } catch (...) { lease.registrationFailed = true; throw; }
-}
-void forgetNativePanel(UIPanel* panel) {
-    const auto found = nativeOwners.find(panel);
-    if (found == nativeOwners.end()) return;
-    if (auto lease = found->second.lock())
-        std::erase(lease->nativePanels, panel);
-    nativeOwners.erase(found);
-}
-bool validateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease,
-                            const std::shared_ptr<ProviderPanelLease>& replacing) {
-    UIRoot::get().requireUIThread();
-    if (lease->registrationFailed || lease->retired) return false;
-    for (const auto* panel : lease->nativePanels) {
-        const auto* existing = UIRoot::get().getPanelByKey(panel->getPanelKey());
-        if (!existing) continue;
-        if (!replacing || std::find(replacing->panels.begin(), replacing->panels.end(),
-            std::make_pair(existing->getPanelKey(), existing->getPanelID())) == replacing->panels.end()) return false;
+        root.registerPanel(panel);
+        root.bindPanelResource(key, runtime, lease->owner);
+    } catch (...) {
+        if (root.getPanelByKey(key) == panel) root.removePanel(key);
+        lease->panels.pop_back();
+        throw;
     }
-    return true;
-}
-void activateProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
-    lease->acceptingPanels = false;
-    UIRoot::get().postTask([lease] {
-        if (lease->retired) return;
-        auto& root = UIRoot::get();
-        try {
-            lease->panels.reserve(lease->nativePanels.size());
-            for (auto* panel : lease->nativePanels) {
-                lease->panels.emplace_back(panel->getPanelKey(), panel->getPanelID());
-                root.registerPanel(panel);
-            }
-            for (const auto& [key, runtime] : lease->panels)
-                root.bindPanelResource(key, runtime, lease->owner);
-        } catch (const std::exception& error) {
-            for (const auto& [key, runtime] : lease->panels) {
-                auto* panel = root.getPanelByKey(key);
-                if (panel && panel->getPanelID() == runtime) root.removePanel(key);
-            }
-            lease->panels.clear();
-            LOG_ERROR("UIPanelService", lease->owner + " panel activation failed: " + error.what());
-        }
-    });
 }
 void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>& lease) {
-    // Detach synchronously, before plugin shutdown destroys objects or unloads code.
-    const bool hasPanels = !lease->nativePanels.empty() || !lease->panels.empty();
-    if (hasPanels) UIRoot::get().requireUIThread();
+    if (!lease->panels.empty()) UIRoot::get().requireUIThread();
     if (lease->retired.exchange(true)) return;
-    const auto registered = providerLeases.find(lease->owner);
-    if (registered != providerLeases.end() && registered->second.lock() == lease)
-        providerLeases.erase(registered);
-    if (!hasPanels) return;
+    std::erase_if(providerLeases, [&](const auto& entry) { return entry.second.lock() == lease; });
+    if (lease->panels.empty()) return;
     auto& root = UIRoot::get();
     for (const auto& [key, runtime] : lease->panels) {
         auto* panel = root.getPanelByKey(key);
