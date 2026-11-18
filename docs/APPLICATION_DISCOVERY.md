@@ -57,7 +57,7 @@ not look like uninstallations. The merged resource batch replaces only the
 current provider's `application` kind in one registry transaction. Other resource
 kinds are preserved. Stale generations cannot republish.
 
-Discovery runs during staged initialization and explicit `applications.refresh`; there is
+Discovery runs during plugin initialization and explicit `applications.refresh`; there is
 no filesystem watcher or periodic scanning yet. Calls are synchronous and serialized
 per catalog. User aliases reload from provider-owned configuration; only explicit
 user records from the legacy database are retained. Existing absolute Windows
@@ -74,14 +74,16 @@ old program-directory coverage without persisting automatic aliases. See
 | `applications.list` | `{}` or `{"offset":25,"limit":25}` |
 | `applications.refresh` | `{}` |
 | `applications.inspect` | `{"resource_id":"application:<id>"}` |
-| `applications.launch` | `{"resource_id":"application:<id>","provider_instance":"<observed instance>","runtime_id":1}` |
+| `applications.launch` | `{"resource_id":"application:<id>","runtime_id":1}` |
 
-The last two identity values must be copied from the actual resource, not the
-example. Discovery/inspection require SYSTEM + FILESYSTEM. Launch also requires
+Copy both launch IDs from the observed resource. Discovery and inspection require
+SYSTEM + FILESYSTEM. Launch also requires
 PROCESS and is marked as requiring confirmation under normal tool policy.
-Tools return a `grim-application-result` version 1 envelope with `success` and
+Tools return a `grim-application-result` version 2 envelope with `success` and
 either `value` or `error`. Catalog values include `applications`, `complete`, and
-`errors`. Listings/refresh return the first 25 entries by default; list accepts
+`errors`. List, refresh, inspect, and launch return plain resource descriptors
+with `resource_id`, `kind`, `name`, `parent_id`, `runtime_id`, and `state`.
+Listings and refresh return the first 25 entries by default. List accepts
 offset and limit (1-50), with a byte budget below the plugin result limit.
 Follow `next_offset` until null; `total` is the full catalog size. All resources
 are published regardless of pagination. A successful refresh can be incomplete;
@@ -114,24 +116,24 @@ Platform references:
 - https://specifications.freedesktop.org/desktop-entry/latest-single/
 - https://developer.apple.com/documentation/appkit/nsworkspace
 
-## Generic publication boundary (API v5.0)
+## Generic publication boundary
 
-`get_provider_identity` returns the framework-assigned name, generation and path.
+The host registry owns provider attribution and resolves it from the plugin handle.
 `replace_resources` copies a JSON array and atomically replaces one resource kind
-owned by the calling API context; an empty array removes it. Initial calls are
-serialized on the lifecycle thread and staged alongside tools. Live updates are
-serialized and validated, and stale generations cannot update another generation.
+owned by the calling plugin handle. An empty array removes that kind. During
+initialization, the provider already has a registry record and publishes its
+initial resources on the lifecycle thread. Live updates are validated and apply
+only to the calling generation.
 Resource IDs must be unique across kinds within a provider. Resource-only
-providers are supported. Payloads are bounded to 64 MiB and 10,000 resources;
-malformed staged registration rejects the entire candidate.
+providers are supported. Payloads are bounded to 64 MiB and 10,000 resources.
+An invalid batch leaves the registry unchanged.
 
-`is_provider_current` permits the plugin to reject stale launch requests. The
-existing host callback gate protects DLL lifetime; the plugin additionally checks
-observed provider instance and runtime identity before invoking its native launcher.
+The host callback gate blocks new dispatch during retirement and drains admitted
+calls before shutdown. The catalog checks the supplied
+resource ID and runtime ID against its current entries before invoking the native launcher.
 
 The removed `launch_app`, `open_target`, `register_application_catalog` and
 `application_service` API entries and their retired layout slots are removed.
-The current v12 table does not preserve their old offsets. Older DLLs are rejected
-before initialization. Rebuild plugins
-against the matching SDK when deploying a rebuilt host. No host runtime or
-watched-folder deployment is part of this migration's tests.
+API v21 removed the provider identity callback. API v22 removes the current-provider callback. The loader rejects older DLLs
+before initialization. Rebuild plugins against the matching SDK before deploying
+them with the updated host.

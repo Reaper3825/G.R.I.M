@@ -13,9 +13,6 @@
 
 // Forward declarations with exports
 class NLP;
-namespace GRIM {
-    class UnifiedMemoryStorage;
-}
 struct LocationInfo;
 class ConsoleHistory;
 namespace GRIM::MMO { struct HardwareInventory; }
@@ -29,7 +26,6 @@ namespace nlohmann {
 // Exported global variables
 extern "C" {
     GRIM_EXPORT_SYMBOL NLP g_nlp;
-    GRIM_EXPORT_SYMBOL GRIM::UnifiedMemoryStorage g_memoryStorage;
     GRIM_EXPORT_SYMBOL GRIM::MMO::HardwareInventory g_hardwareInventory;
     GRIM_EXPORT_SYMBOL LocationInfo g_location;
     GRIM_EXPORT_SYMBOL std::filesystem::path g_currentDir;

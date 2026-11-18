@@ -9,7 +9,7 @@
       "name": "Memory room",
       "kind": "room",
       "parent": "",
-      "description": "Manual memory staging, search and legacy flush operations.",
+      "description": "Manual memory staging, search, and persistence.",
       "state": "open",
       "plugin_binding": {
         "provider_name": "Memory Plugin",
@@ -27,7 +27,7 @@
       "name": "Memory records",
       "kind": "supporter",
       "parent": "plugin_memory",
-      "description": "Host-owned memory records and staging state. The forget tool checks and flushes matches; it does not delete records.",
+      "description": "Provider-owned memory records and staging state.",
       "state": "open",
       "resource_binding": {
         "type": "memory.store",

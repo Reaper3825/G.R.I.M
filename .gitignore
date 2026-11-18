@@ -323,7 +323,7 @@ cache/geospatial/*.sqlite-wal
 !/plugins/memory_plugin/CMakeLists.txt
 !/plugins/memory_plugin/memory_plugin.cpp
 !/plugins/memory_plugin/memory_commands.cpp
-!/plugins/memory_plugin/host_memory.hpp
+!/plugins/memory_plugin/memory_provider.hpp
 !/plugins/perception_plugin/
 /plugins/perception_plugin/*
 !/plugins/perception_plugin/CMakeLists.txt

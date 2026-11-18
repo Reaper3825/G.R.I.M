@@ -35,7 +35,7 @@
     "debug": "cmdRemember argument missing key/value format."
   },
   "ERR_MEMORY_MISSING_KEY": {
-    "user": "[Memory] Usage: recall/forget <key>",
+    "user": "[Memory] Usage: recall <key>",
     "debug": "Memory command called without key argument."
   },
   "ERR_MEMORY_KEY_NOT_FOUND": {

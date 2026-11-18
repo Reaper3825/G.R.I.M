@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1245184,
+  "api_version": 1441792,
   "required_permissions": ["ui"],
   "provider": "DataHub Plugin",
   "version": "1.0.0",

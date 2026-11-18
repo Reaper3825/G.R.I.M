@@ -58,9 +58,8 @@ using API v3.2 read-only metadata snapshots. The redundant Aliases plugin has
 been removed; application discovery uses the Application plugin. The host alias
 cache and API v3.3 services remain available for compatibility. `system_info` comes
 from the **System Information Plugin**, using API v3.4 for fresh host hardware
-snapshots. `remember`, `recall`, and
-`forget` come from the **Memory Plugin**, using API v3.5 host queue/rotation/storage
-services. Forget flushes records without deleting them. The three `perception_*` observation commands
+snapshots. The **Memory Plugin** owns storage and supplies `remember` and
+`recall`. The three `perception_*` observation commands
 come from the **Perception Plugin**, using API v3.6 and existing host perception
 services. The eleven voice/TTS-cache tools come from the **Voice Plugin** using
 API v3.7, with capture, streaming, playback, configuration, and cache lifecycle

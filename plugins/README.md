@@ -230,9 +230,9 @@ can be checked with `tests/run_system_info_native.ps1`.
 
 ## Schedule and memory plugins
 
-`memory_plugin` still uses host memory rotation/storage under MEMORY permission.
-Remember stages records; recall searches; forget flushes but does not delete.
-Memory state survives unload.
+`memory_plugin` owns staging, storage, and persistence. The orchestrator reads
+copied hits through the System tool `memory.retrieve`. Pending and short-term
+records survive unload and reload. See [Manual memory](../docs/PLUGIN_API.md#manual-memory).
 
 Build the focused Schedule DLL fixture and run lifecycle checks with:
 

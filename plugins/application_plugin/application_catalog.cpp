@@ -1,5 +1,4 @@
 #include "application_catalog.hpp"
-#include "MMO/Core/Descriptors/RegisteredResource.hpp"
 #include <iomanip>
 #include <sstream>
 #include <set>
@@ -20,11 +19,10 @@ std::string resourceId(const Application& a) {
     return out.str();
 }
 }
-Catalog::Catalog(MMO::ProviderDescriptor owner, std::vector<Backend> backends, Launcher launcher,
-                 Publisher publish, Current current)
-    : owner_(std::move(owner)), backends_(std::move(backends)), launcher_(std::move(launcher)),
-      publish_(std::move(publish)), current_(std::move(current)) {
-    if (backends_.size() > 8 || !launcher_ || !publish_ || !current_) throw std::invalid_argument("Invalid application catalog configuration");
+Catalog::Catalog(std::vector<Backend> backends, Launcher launcher, Publisher publish)
+    : backends_(std::move(backends)), launcher_(std::move(launcher)),
+      publish_(std::move(publish)) {
+    if (backends_.size() > 8 || !launcher_ || !publish_) throw std::invalid_argument("Invalid application catalog configuration");
     std::set<std::string> names;
     for (const auto& b : backends_)
         if (!valid(b.name, 256) || !b.discover || !names.insert(b.name).second)
@@ -93,7 +91,7 @@ nlohmann::json Catalog::snapshot(size_t offset, size_t limit) const {
     size_t index = 0, bytes = 0;
     for (const auto& [id, e] : entries_) {
         if (index++ < offset) continue;
-        const nlohmann::json record = MMO::RegisteredResource{resource(id, e), owner_};
+        const nlohmann::json record = resource(id, e);
         const auto size = record.dump().size();
         if (apps.size() >= limit || (!apps.empty() && bytes + size > 48000)) break;
         apps.push_back(record); bytes += size;
@@ -120,19 +118,17 @@ nlohmann::json Catalog::request(const std::string& operation, const nlohmann::js
         return snapshot(offset, limit);
     }
     if (operation != "inspect" && operation != "launch") throw std::invalid_argument("Unknown application operation");
-    if (args.size() != (operation == "launch" ? 3 : 1) || !args.contains("resource_id") || !args.at("resource_id").is_string())
-        throw std::invalid_argument("Expected resource_id; launch also requires provider_instance and runtime_id");
+    if (args.size() != (operation == "launch" ? 2 : 1) || !args.contains("resource_id") || !args.at("resource_id").is_string())
+        throw std::invalid_argument("Expected resource_id; launch also requires runtime_id");
     const auto id = args.at("resource_id").get<std::string>();
     const auto found = entries_.find(id);
     if (found == entries_.end()) throw std::invalid_argument("Unknown application resource; refresh discovery");
     if (operation == "launch") {
-        if (!current_()) throw std::runtime_error("Application provider is no longer current");
         if (!args.contains("runtime_id") || !args.at("runtime_id").is_number_unsigned() ||
-            args.at("runtime_id") != found->second.runtime || !args.contains("provider_instance") ||
-            args.at("provider_instance") != owner_.instance)
+            args.at("runtime_id") != found->second.runtime)
             throw std::invalid_argument("Stale application identity; inspect the current resource");
         launcher_(found->second.app);
     }
-    return {{"application", MMO::RegisteredResource{resource(id, found->second), owner_}}, {"launch_requested", operation == "launch"}};
+    return {{"application", resource(id, found->second)}, {"launch_requested", operation == "launch"}};
 }
 }

@@ -7,8 +7,6 @@
 #include "../bootstrap/bootstrap.hpp"
 #include "../control/devices/server/device_comm_server.hpp"
 #include "../logger.hpp"
-#include "../memory/memory_buffer_rotation.hpp"
-#include "../memory/unified_memory.hpp"
 #include "../net/websocket_server.hpp"
 #include "../ui/ui_root.hpp"
 #include "../ui/storage_panel_services.hpp"
@@ -88,7 +86,6 @@ bool isApplicationShutdownRequested()
 }
 
 void shutdownApplication(
-    UnifiedMemoryStorage& memoryStorage,
     WebSocketServer& webSocketServer,
     std::unique_ptr<DeviceCommServer>& deviceCommServer)
 {
@@ -98,26 +95,17 @@ void shutdownApplication(
     WakeKey::stop();
 
     // Plugins may stop workers and use host services during shutdown. Unload
-    // them before destroying memory, UI, voice, and orchestration services.
+    // them before destroying UI and orchestration services.
     PluginManager::unloadAll();
     if (!deviceCommServer)
         throw std::runtime_error("Storage panel teardown requires the host device server");
     UI::Storage::unbindServer(*deviceCommServer);
     shutdownDatasetServices();
 
-
-    MemoryBufferRotation::instance().mergeToWorking();
-    MemoryBufferRotation::instance().syncToLongTerm(memoryStorage);
-    MemoryBufferRotation::instance().clear();
-
     if (g_orchestrator) {
         g_orchestrator->shutdown();
         delete g_orchestrator;
         g_orchestrator = nullptr;
-    }
-    if (g_memoryFacade) {
-        delete g_memoryFacade;
-        g_memoryFacade = nullptr;
     }
     if (g_modelLoader) {
         g_modelLoader->unloadAll();
@@ -156,8 +144,6 @@ void shutdownApplication(
         deviceCommServer->stop();
         deviceCommServer.reset();
     }
-
-    memoryStorage.shutdown();
 
     LOG_PHASE("All subsystems shut down", true);
     LOG_PHASE("G.R.I.M terminated successfully", true);

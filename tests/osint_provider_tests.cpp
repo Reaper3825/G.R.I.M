@@ -11,7 +11,7 @@ extern "C" void grim_plugin_shutdown();
 extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
 namespace {
 constexpr const char* tools[] = {"profile_person", "sherlock_sweep", "osint_report", "osint_status", "osint_clear_cache", "osint_scan_secrets", "osint_show_secrets"};
- std::atomic<int> runs{0}; bool permitted=true,current=true;
+ std::atomic<int> runs{0}; bool permitted=true;
 std::atomic<bool> block{false},entered{false}; bool success;std::string output,message;
 void check(bool value,const char* text){if(!value)throw std::runtime_error(text);}
 GrimResult invoke(size_t index,const std::string& args){
@@ -33,7 +33,7 @@ int main(){
  auto original=fs::current_path(); auto temp=fs::temp_directory_path()/("grim-osint-fixture-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
  fs::create_directories(temp);fs::current_path(temp);
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
- api.has_permission=[](GrimPluginHandle,GrimPermission){return permitted;};api.is_provider_current=[](GrimPluginHandle){return current;};
+ api.has_permission=[](GrimPluginHandle,GrimPermission){return permitted;};
  api.log=[](GrimPluginHandle,GrimLogLevel,const char*){};
  try {
   auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old, 1)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
@@ -47,7 +47,6 @@ int main(){
   bool invalidCacheTarget=false;try{invoke(5,"alice ../../escape");}catch(const std::invalid_argument&){invalidCacheTarget=true;}
   check(invalidCacheTarget && runs==1,"Full cache target bypassed validation");
   permitted=false;check(invoke(2,"alice")==GRIM_ERROR_PERMISSION_DENIED,"Permission bypass");permitted=true;
-  current=false;check(invoke(2,"alice")==GRIM_ERROR_PERMISSION_DENIED,"Inactive provider accepted work");current=true;
   std::ofstream(osintProvider::cache()/"sensitive_alice.jsonl")<<R"({"domain":"example.invalid","source_url":"https://example.invalid","findings":[{"tag":"fixture","severity":9,"match":"redacted"},{"severity":2}]})"<<"\n";
   invoke(6,"alice --severity high");check(success,"Findings read failed");auto snapshot=nlohmann::json::parse(output);
   check(snapshot.at("entries").at(0).at("findings").size()==1,"Copied findings ignored severity filter");

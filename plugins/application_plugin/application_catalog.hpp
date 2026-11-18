@@ -1,5 +1,4 @@
 #pragma once
-#include "MMO/Core/Descriptors/ProviderDescriptor.hpp"
 #include "MMO/Core/Descriptors/ResourceDescriptor.hpp"
 #include <vector>
 #include <functional>
@@ -31,20 +30,16 @@ void launchNative(const Application& application);
 class Catalog {
 public:
     using Publisher = std::function<bool(const std::vector<MMO::ResourceDescriptor>&)>;
-    using Current = std::function<bool()>;
-    Catalog(MMO::ProviderDescriptor owner, std::vector<Backend> backends, Launcher launcher,
-            Publisher publish, Current current);
+    Catalog(std::vector<Backend> backends, Launcher launcher, Publisher publish);
     nlohmann::json request(const std::string& operation, const nlohmann::json& arguments);
 private:
     struct Entry { Application app; std::vector<std::string> sources; uint64_t runtime = 0; };
     void refresh();
     nlohmann::json snapshot(size_t offset = 0, size_t limit = 25) const;
     MMO::ResourceDescriptor resource(const std::string& id, const Entry& entry) const;
-    MMO::ProviderDescriptor owner_;
     std::vector<Backend> backends_;
     Launcher launcher_;
     Publisher publish_;
-    Current current_;
     std::mutex mutex_;
     std::map<std::string, std::vector<Application>> backendSnapshots_;
     std::map<std::string, Entry> entries_;

@@ -12,7 +12,6 @@
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
-#include "memory/command_memory_services.hpp"
 #include "ui/ui_panel_service.hpp"
 #include "../MMO/Core/Registries/ToolRegistry.hpp"  // Phase 0.25: pluginâ†”ToolRegistry sync
 #include "../MMO/Core/Descriptors/ToolDescriptorJson.hpp"
@@ -267,27 +266,6 @@ static std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
 }
 
 // Provider-neutral bridge: copied descriptions only; implementation and state stay in the DLL.
-static const char* api_get_provider_identity(GrimPluginHandle self) noexcept {
-    try {
-        const auto owner = providerFor(self);
-        if (!owner) return nullptr;
-        const auto& identity = owner->identity;
-        return allocateString(nlohmann::json{{"name", identity.name}, {"instance", identity.instance},
-                                            {"path", identity.path}}.dump());
-    } catch (...) { return nullptr; }
-}
-static bool api_is_provider_current(GrimPluginHandle self) noexcept {
-    try {
-        const auto owner = providerFor(self);
-        if (!owner) return false;
-        ActiveCall active(owner->gate);
-        if (!active.entered) return false;
-        const auto snapshot = GRIM::MMO::ProviderRegistry::instance().snapshot();
-        return std::any_of(snapshot.providers.begin(), snapshot.providers.end(), [&](const auto& group) {
-            return group.provider.name == owner->identity.name && group.provider.instance == owner->identity.instance;
-        });
-    } catch (...) { return false; }
-}
 static GrimResult api_replace_resources(GrimPluginHandle self, const char* kind,
                                        const char* json, size_t size) noexcept {
     try {
@@ -435,38 +413,6 @@ static void api_show_notification(GrimPluginHandle self, const char* title, cons
         
         publishPluginNotification(title, message);
     }
-}
-
-template<typename Callback>
-static const char* runtimeServiceResponse(GrimPluginHandle self, GrimPermission permission, Callback callback) noexcept {
-    try {
-        if (!checkPermission(self, permission)) return nullptr;
-        nlohmann::json response{{"format", "grim-runtime-service"}, {"version", 1}, {"value", nullptr}, {"error", nullptr}};
-        try { response["value"] = callback(); }
-        catch (const std::exception& error) { response["error"] = {{"kind", "exception"}, {"message", error.what()}}; }
-        catch (...) { response["error"] = {{"kind", "unknown"}, {"message", ""}}; }
-        return allocateString(response.dump());
-    } catch (...) { return nullptr; }
-}
-static const char* api_stage_manual_memory(GrimPluginHandle self, const char* raw) noexcept {
-    if (!raw || !*raw) return nullptr;
-    return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
-        GRIM::CommandMemory::stageManual(raw);
-        return nlohmann::json(nullptr);
-    });
-}
-static const char* api_search_memory(GrimPluginHandle self, const char* query) noexcept {
-    if (!query) return nullptr;
-    return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
-        auto hits = nlohmann::json::array();
-        for (const auto& hit : GRIM::CommandMemory::search(query)) hits.push_back({{"id", hit.id}, {"raw", hit.raw}});
-        return hits;
-    });
-}
-static const char* api_flush_memory_record_if_present(GrimPluginHandle self, uint64_t id) noexcept {
-    return runtimeServiceResponse(self, GRIM_PERM_MEMORY, [&] {
-        return nlohmann::json(GRIM::CommandMemory::flushIfPresent(id));
-    });
 }
 
 static const char* api_get_tool_snapshot(GrimPluginHandle self, const char* tool_id) noexcept {
@@ -655,13 +601,8 @@ const GrimPluginAPI& hostAPI() {
         api.string_free = api_string_free;
         api.get_user_error_message = api_get_user_error_message;
         api.get_tool_snapshot = api_get_tool_snapshot;
-        api.stage_manual_memory = api_stage_manual_memory;
-        api.search_memory = api_search_memory;
-        api.flush_memory_record_if_present = api_flush_memory_record_if_present;
         api.ui_panel_service = api_ui_panel_service;
-        api.get_provider_identity = api_get_provider_identity;
         api.replace_resources = api_replace_resources;
-        api.is_provider_current = api_is_provider_current;
         api.subscribe_system_tick = api_subscribe_system_tick;
 
         return api;

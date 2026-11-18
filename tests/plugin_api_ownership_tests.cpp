@@ -236,7 +236,6 @@ int main(int argc, char** argv) try {
     check(alpha->has_permission(alpha.handle(), GRIM_PERM_MEMORY), "Alpha lost permissions");
     check(!beta->has_permission(beta.handle(), GRIM_PERM_MEMORY), "Beta inherited Alpha permissions");
     check(!alpha->has_permission(alpha.handle(), static_cast<GrimPermission>(GRIM_PERM_MEMORY | GRIM_PERM_UI)), "Combined permissions partially accepted");
-    check(beta->search_memory(beta.handle(), "key") == nullptr, "API used another owner's permissions");
     check(dispatchCommand("alpha_tool", "").success, "Command callback used wrong owner");
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
     auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_second");

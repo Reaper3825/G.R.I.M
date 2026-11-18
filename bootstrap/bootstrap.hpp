@@ -8,7 +8,6 @@
 #include "../MMO/Core/ModelLoader.hpp"
 #include "../MMO/Core/ProcessManager.hpp"
 #include "../MMO/Core/Orchestrator.hpp"
-#include "../memory/MemoryFacade.hpp"
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/Registries/ToolRegistry.hpp"
 #include "../MMO/Core/ActionPolicyRegistry.hpp"
@@ -18,7 +17,6 @@ struct GRIMWindow;
 
 namespace GRIM {
 class DeviceCommServer;
-class UnifiedMemoryStorage;
 class WebSocketServer;
 }
 
@@ -27,9 +25,6 @@ void runBootstrapChecks(int argc, char** argv);
 
 std::unique_ptr<GRIM::DeviceCommServer> bootstrapNetworkServices(
 	GRIM::WebSocketServer& webSocketServer);
-
-
-void bootstrapMemorySubsystem(GRIM::UnifiedMemoryStorage& memoryStorage);
 
 struct UIBootstrapResult {
 	GRIMWindow& overlayWindow;
@@ -51,4 +46,3 @@ extern GRIM::MMO::ResourceCoordinator* g_resourceCoordinator;
 extern GRIM::MMO::ModelLoader*      g_modelLoader;
 extern GRIM::MMO::ProcessManager*   g_processManager;
 extern GRIM::MMO::Orchestrator*     g_orchestrator;
-extern GRIM::MMO::MemoryFacade*     g_memoryFacade;

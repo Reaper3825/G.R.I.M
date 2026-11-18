@@ -19,7 +19,6 @@
 #pragma once
 
 #include "Contracts.hpp"
-#include "MemoryFacade.hpp"
 #include "ModelLoader.hpp"
 #include "Registries/ModelRegistry.hpp"
 #include "RequestContext.hpp"
@@ -76,17 +75,13 @@ class Orchestrator {
 public:
     Orchestrator(ModelRegistry& registry,
                  ModelLoader& loader,
-                 const OrchestratorConfig& config,
-                 MemoryFacade* memory = nullptr);
+                 const OrchestratorConfig& config);
 
     // Run the full orchestration flow for a request.
     // Returns Unavailable-style errors in OrchestratorResult::error
     // rather than throwing, so callers can handle gracefully.
     // Throws only on programming errors (null model, bad state).
     OrchestratorResult generate(const RequestContext& ctx);
-
-    // Set or replace the memory facade (called from main after memory init).
-    void setMemoryFacade(MemoryFacade* memory);
 
     // Register a backend for a specific model_id.
     // The orchestrator takes ownership of the backend.
@@ -121,7 +116,6 @@ private:
 
     ModelRegistry& registry_;
     ModelLoader&   loader_;
-    MemoryFacade*  memory_;    // nullptr if memory not wired yet
     OrchestratorConfig config_;
     ModelRouter    router_;
     ToolGapPlanner tool_gap_planner_;

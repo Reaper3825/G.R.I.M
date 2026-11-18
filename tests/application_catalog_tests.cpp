@@ -16,19 +16,12 @@ int main() try {
     const auto publisher = [&](const ProviderDescriptor& identity) {
         return [&, identity](const auto& resources) { return registry.replaceResources(identity, "application", resources); };
     };
-    const auto current = [&](const ProviderDescriptor& identity) {
-        return [&, identity] {
-            for (const auto& group : registry.snapshot().providers)
-                if (group.provider == identity) return true;
-            return false;
-        };
-    };
     Application first{"fixture", "a", "Same display name", "fixture", "first", ""};
     Application second{"fixture", "b", "Same display name", "fixture", "second", ""};
     std::vector<Application> primary{first, second}, secondary{first};
     bool fail = false; int launches = 0;
-    Catalog catalog(owner, {{"primary", [&] { if (fail) throw std::runtime_error("offline"); return primary; }},
-        {"secondary", [&] { return secondary; }}}, [&](const Application& app) { check(app.nativeId == "a", "Wrong launch target"); ++launches; }, publisher(owner), current(owner));
+    Catalog catalog({{"primary", [&] { if (fail) throw std::runtime_error("offline"); return primary; }},
+        {"secondary", [&] { return secondary; }}}, [&](const Application& app) { check(app.nativeId == "a", "Wrong launch target"); ++launches; }, publisher(owner));
     auto state = catalog.request("refresh", Json::object());
     check(state.at("complete") && state.at("applications").size() == 2, "dedup by identity, not name");
     Json selected;
@@ -37,14 +30,12 @@ int main() try {
     check(!selected.contains("operations"), "Application resource retained operations metadata");
     const auto id = selected.at("resource_id");
     const auto runtime = selected.at("runtime_id");
-    Json launch{{"resource_id", id}, {"runtime_id", runtime}, {"provider_instance", owner.instance}};
+    Json launch{{"resource_id", id}, {"runtime_id", runtime}};
     const auto revision = registry.resourceVersion();
     catalog.request("refresh", Json::object());
     check(registry.resourceVersion() == revision, "unchanged refresh churned resources");
     catalog.request("launch", launch); check(launches == 1, "launch not dispatched");
     rejects([&] { catalog.request("launch", {{"resource_id", id}}); });
-    auto wrongOwner = launch; wrongOwner["provider_instance"] = "old";
-    rejects([&] { catalog.request("launch", wrongOwner); });
     primary[0].launchTarget = "changed";
     catalog.request("refresh", Json::object());
     rejects([&] { catalog.request("launch", launch); });
@@ -64,20 +55,17 @@ int main() try {
     rejects([&] { registry.replaceResources(owner, "application", malformed); });
     check(registry.resourceVersion() == before && registry.snapshot().resourceCount() == 1, "invalid batch partially published");
     auto replacement = owner; replacement.instance = "two";
-    const auto latest = state.at("applications").at(0);
-    auto retiredLaunch = Json{{"resource_id", latest.at("resource_id")}, {"runtime_id", latest.at("runtime_id")}, {"provider_instance", owner.instance}};
     registry.retire(owner.name, owner.instance);
     check(registry.publish(replacement, {}), "replacement");
     check(registry.snapshot().resourceCount() == 0, "replacement retained old resources");
     rejects([&] { catalog.request("refresh", Json::object()); });
-    rejects([&] { catalog.request("launch", retiredLaunch); });
     check(registry.snapshot().resourceCount() == 0, "retired catalog republished");
     registry.retire(replacement.name, replacement.instance);
     owner.instance = "three";
     check(registry.publish(owner, {}), "pagination provider");
     primary.clear();
     for (int i = 0; i < 180; ++i) primary.push_back({"fixture", std::to_string(i), "Application " + std::to_string(i), "fixture", "target", ""});
-    Catalog paged(owner, {{"many", [&] { return primary; }}}, [](const auto&) {}, publisher(owner), current(owner));
+    Catalog paged({{"many", [&] { return primary; }}}, [](const auto&) {}, publisher(owner));
     auto page = paged.request("refresh", Json::object());
     check(page.at("applications").size() == 25 && page.at("total") == 180, "default pagination missing");
     std::set<std::string> observed;
@@ -91,7 +79,7 @@ int main() try {
     registry.retire(owner.name, owner.instance);
     owner.instance = "four";
     check(registry.publish(owner, {}), "failed backend provider");
-    Catalog unavailable(owner, {{"unavailable", []() -> std::vector<Application> { throw std::runtime_error("offline"); }}}, [](const auto&) {}, publisher(owner), current(owner));
+    Catalog unavailable({{"unavailable", []() -> std::vector<Application> { throw std::runtime_error("offline"); }}}, [](const auto&) {}, publisher(owner));
     for (int i = 0; i < 2; ++i) {
         const auto failed = unavailable.request("refresh", Json::object());
         check(!failed.at("complete").get<bool>() && !failed.at("errors").at(0).at("retained_previous").get<bool>(),

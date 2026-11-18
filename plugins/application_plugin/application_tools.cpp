@@ -14,7 +14,7 @@ GrimResult dispatchApplicationTool(std::string_view id, const GrimToolCall* call
         if (!call || call->arguments_size > 65536 || (call->arguments_size && !call->arguments))
             throw std::invalid_argument("Invalid application arguments");
         const auto args = nlohmann::json::parse(std::string(call->arguments ? call->arguments : "", call->arguments_size));
-        const auto value = nlohmann::json{{"format", "grim-application-result"}, {"version", 1},
+        const auto value = nlohmann::json{{"format", "grim-application-result"}, {"version", 2},
             {"success", true}, {"value", catalog.request(operation, args)}};
         result.success = value.at("success").get<bool>();
         output = value.dump();
@@ -29,7 +29,7 @@ GrimResult dispatchApplicationTool(std::string_view id, const GrimToolCall* call
         } else message = operation == "launch" ? "Application launch requested." : value.at("value").at("application").dump(2);
     } catch (const std::exception& e) {
         result.success = false; message = e.what();
-        output = nlohmann::json{{"format", "grim-application-result"}, {"version", 1},
+        output = nlohmann::json{{"format", "grim-application-result"}, {"version", 2},
             {"success", false}, {"error", message}}.dump();
     }
     result.message = message.c_str(); result.structured_output_json = output.empty() ? nullptr : output.c_str();

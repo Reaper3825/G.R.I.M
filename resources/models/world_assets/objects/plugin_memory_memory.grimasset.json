@@ -9,7 +9,7 @@
       "name": "Memory records",
       "kind": "supporter",
       "parent": "",
-      "description": "Host-owned memory records and staging state. The forget tool checks and flushes matches; it does not delete records.",
+      "description": "Provider-owned memory records and staging state.",
       "state": "open",
       "resource_binding": {
         "type": "memory.store",

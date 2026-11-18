@@ -23,7 +23,6 @@ GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
         "[Help] Available commands:\n"
         "- remember <key> <value>\n"
         "- recall <key>\n"
-        "- forget <key>\n"
         "- pwd\n"
         "- cd <dir>\n"
         "- ls\n"

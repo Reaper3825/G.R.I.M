@@ -42,7 +42,6 @@ GRIM::MMO::ResourceCoordinator* g_resourceCoordinator = nullptr;
 GRIM::MMO::ModelLoader*      g_modelLoader      = nullptr;
 GRIM::MMO::ProcessManager*   g_processManager   = nullptr;
 GRIM::MMO::Orchestrator*     g_orchestrator     = nullptr;
-GRIM::MMO::MemoryFacade*     g_memoryFacade     = nullptr;
 
 // Idle-tick background thread for ModelLoader TTL management
 static std::atomic<bool> s_idleTickStop{false};

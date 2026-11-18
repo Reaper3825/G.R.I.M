@@ -73,27 +73,17 @@ GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, voi
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
     const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR || api->api_version < GRIM_API_VERSION ||
-        !api->get_user_error_message || !api->get_provider_identity || !api->replace_resources ||
-        !api->is_provider_current) return GRIM_ERROR_API_VERSION_MISMATCH;
+        !api->get_user_error_message || !api->replace_resources) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
     try {
-        const auto readJson = [api](const char* text) {
-            if (!text) throw std::runtime_error("Framework snapshot unavailable");
-            const auto release = [api](const char* p) { api->string_free(api.instance(), p); };
-            std::unique_ptr<const char, decltype(release)> owned(text, release);
-            return nlohmann::json::parse(text);
-        };
-        const auto identity = readJson(api->get_provider_identity(api.instance()));
-        GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin,
-            identity.at("name"), identity.at("instance"), identity.at("path")};
         userAliases = std::make_shared<GRIM::Applications::UserAliases>(GRIM::Applications::UserAliases::defaultDirectory());
         auto backends = GRIM::Applications::systemBackends([store=userAliases] { return store->reload(); });
-        catalog = std::make_unique<GRIM::Applications::Catalog>(owner, std::move(backends),
+        catalog = std::make_unique<GRIM::Applications::Catalog>(std::move(backends),
             GRIM::Applications::launchNative,
             [api](const auto& resources) {
                 const auto json = nlohmann::json(resources).dump();
                 return api->replace_resources(api.instance(), "application", json.data(), json.size()) == GRIM_OK;
-            }, [api] { return api->is_provider_current(api.instance()); });
+            });
         // Initial discovery publishes under the loaded provider.
         catalog->request("refresh", nlohmann::json::object());
     } catch (...) { catalog.reset(); userAliases.reset(); return GRIM_ERROR_UNKNOWN; }

@@ -30,12 +30,6 @@
     "what do you remember",
     "load"
   ],
-  "forget": [
-    "delete memory",
-    "clear memory",
-    "remove",
-    "erase"
-  ],
   "ai_backend": [
     "switch ai",
     "change ai",

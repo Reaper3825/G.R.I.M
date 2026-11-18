@@ -61,10 +61,10 @@ graph TB
         POLICY["ActionPolicyRegistry — Training Wheels gate"]
     end
 
-    subgraph MEMORY["Memory System"]
+    subgraph MEMORY["Memory Plugin"]
         UNIFIED["UnifiedMemoryStorage — Persistent store"]
-        ROTATE["MemoryBufferRotation — Hot → Working → Long-term"]
-        FACADE["MemoryFacade — Unified retrieval surface"]
+        ROTATE["Pending records → Long-term"]
+        FACADE["memory.retrieve — Copied retrieval results"]
     end
 
     subgraph VOICE_TIER["Voice & Wake"]
@@ -132,7 +132,7 @@ sequenceDiagram
     participant User
     participant Orchestrator
     participant SessionCtx as SessionContextManager
-    participant Memory as MemoryFacade
+    participant Memory as Memory Plugin
     participant Router as Router Model
     participant SubModel as Sub-Model
     participant Policy as ActionPolicyRegistry
@@ -140,7 +140,8 @@ sequenceDiagram
 
     User->>Orchestrator: Input
     Orchestrator->>SessionCtx: snapshot()
-    Orchestrator->>Memory: retrieveForPrompt()
+    Orchestrator->>Memory: memory.retrieve
+    Memory-->>Orchestrator: Copied hits and retrieval diagnostics
     Note over Orchestrator: Phase 1: Request Composition
 
     Orchestrator->>Router: POST /api/route (RequestEnvelope)
@@ -484,7 +485,7 @@ G.R.I.M/
 ├── MMO/                    # Multi-Model Orchestration framework
 │   ├── Backends/           #   GrimNative, Ollama, LlamaCpp, External backends
 │   ├── Core/               #   Orchestrator, ModelLoader, ResourceCoordinator, SessionContext,
-│   │                       #   ToolRegistry, ActionPolicy, MemoryFacade, HardwareInventory
+│   │                       #   ToolRegistry, ActionPolicy, HardwareInventory
 │   ├── Router/             #   ModelRouter, RouteDecision parsing
 │   ├── Shared/             #   MMD containers, Contracts, request/response validation
 │   └── UI/                 #   UISurfaceRegistry, UISurfaceSpec, EmotionPresentation

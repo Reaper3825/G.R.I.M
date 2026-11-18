@@ -11,12 +11,6 @@
     "showmemory",
     "lookupmemory"
   ],
-  "forget": [
-    "erase",
-    "delete",
-    "remove",
-    "clear"
-  ],
 
   "ai_backend": [
     "switchai",

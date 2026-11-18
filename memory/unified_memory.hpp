@@ -216,6 +216,7 @@ public:
     
     // Storage operations
     void storeShortTerm(const UnifiedMemoryObject& obj);
+    std::vector<UnifiedMemoryObject> shortTermSnapshot() const;
     void storeLongTerm(const UnifiedMemoryObject& obj); // non-blocking disk path
     
     // Retrieval
@@ -228,13 +229,9 @@ public:
     std::vector<UnifiedMemoryObject> getByTags(const std::vector<std::string>& tags, bool matchAll = false);
     
     // Type-specific queries
-    std::optional<UnifiedMemoryObject> findLearnedCommand(const std::string& phrase);
-    std::vector<UnifiedMemoryObject> getAllLearnedCommands();
     std::vector<UnifiedMemoryObject> getByType(TypeTag type);
     std::vector<UnifiedMemoryObject> getByDomain(MemoryDomain domain);
     
-    // Specialized storage
-    void storeLearnedCommand(const std::string& phrase, const std::string& action, float confidence = 1.0f);
  
     // Maintenance
     void decay(float rate);

@@ -58,7 +58,7 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
               tool->category == (isHelp ? "information" : "system"), "Utility metadata changed policy or provider");
     }
     const std::string expectedHelp = "[Help] Available commands:\n"
-        "- remember <key> <value>\n- recall <key>\n- forget <key>\n"
+        "- remember <key> <value>\n- recall <key>\n"
         "- pwd\n- cd <dir>\n- ls\n- mkdir <dir>\n- rm <file>\n"
         "- sysinfo\n- clean\n- help\n- voice\n- voice_stream\n";
     // Both original handlers ignore arguments. Compare every result field,

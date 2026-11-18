@@ -1,11 +1,12 @@
 #pragma once
+#include <ctime>
 #include <string>
 #include <vector>
 #include <regex>
 #include <memory>
 #include <unordered_map>
+#include <nlohmann/json.hpp>
 #include "intent.hpp"
-#include "memory/unified_memory.hpp"
 
 // Forward declare to avoid heavy include
 struct CommandResult;
@@ -29,12 +30,11 @@ public:
         std::vector<std::string> slot_names; // slot names for regex groups
         std::string category;                // optional grouping (system, app, alias)
         
-        // ✅ NEW: Dynamic learning metadata
+        // Rule statistics
         int usage_count = 0;           // How many times this rule matched
         double success_rate = 1.0;     // Percentage of successful executions
         std::time_t last_used = 0;     // Last time this rule was used
-        bool learned = false;          // True if learned from user, not from file
-        std::string source = "static"; // "static", "learned", "plugin"
+        std::string source = "static"; // "static", "plugin"
     };
 
     // --- Construction ---
@@ -54,14 +54,6 @@ public:
     // ✅ NEW: Plugin support
     bool registerPluginRule(const Rule& rule);
     void unregisterPluginRules(const std::string& pluginName);
-    
-    // ✅ NEW: Dynamic learning
-    bool learnPattern(const std::string& userInput, const std::string& intent, 
-                     const std::vector<std::string>& slotNames = {});
-    
-    // ✅ NEW: Memory integration
-    void loadLearnedRules(GRIM::UnifiedMemoryStorage& storage);
-    void saveLearnedRules(GRIM::UnifiedMemoryStorage& storage);
     
     // ✅ NEW: RL feedback integration
     void recordSuccess(const std::string& intent, const std::string& input);
@@ -87,17 +79,14 @@ private:
     // ✅ NEW: Context-aware scoring
     double computeContextScore(const Rule& rule, const std::string& previousCommand);
     
-    // ✅ NEW: Pattern generation from examples
-    std::string generatePattern(const std::string& example);
-    
     // ✅ NEW: Rule conflict resolution
     Rule* resolveConflicts(const std::vector<std::pair<Rule*, double>>& candidates);
     
     std::vector<Rule> rules;
     std::unordered_map<std::string, std::vector<Rule*>> pluginRules; // plugin_name -> rules
     
-    // ✅ NEW: Learning state
-    struct LearningStats {
+    // Parser statistics
+    struct ParseStats {
         int totalParses = 0;
         int successfulMatches = 0;
         int failedMatches = 0;

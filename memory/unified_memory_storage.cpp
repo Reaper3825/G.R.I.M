@@ -1,7 +1,11 @@
 #include "unified_memory.hpp"
 #include <grim_memory/unified_memory_generated.h>
 #include "atomic_writer.hpp"
+#ifdef GRIM_BUILD_PLUGIN
+#include "plugins/plugin_logging.hpp"
+#else
 #include "logger.hpp"
+#endif
 #include <fstream>
 #include <filesystem>
 #include <random>
@@ -518,6 +522,11 @@ void UnifiedMemoryStorage::storeShortTerm(const UnifiedMemoryObject& obj) {
     shortTerm.push_back(obj);
 }
 
+std::vector<UnifiedMemoryObject> UnifiedMemoryStorage::shortTermSnapshot() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return shortTerm;
+}
+
 void UnifiedMemoryStorage::storeLongTerm(const UnifiedMemoryObject& obj) {
     std::lock_guard<std::mutex> lock(mtx);
     if (!initialized_ || shutdown_complete_) {
@@ -698,45 +707,6 @@ std::vector<UnifiedMemoryObject> UnifiedMemoryStorage::getByDomain(MemoryDomain 
     }
     
     return results;
-}
-
-std::optional<UnifiedMemoryObject> UnifiedMemoryStorage::findLearnedCommand(const std::string& phrase) {
-    std::lock_guard<std::mutex> lock(mtx);
-    
-    auto match = [&](const UnifiedMemoryObject& obj) {
-     if (std::find(obj.tags.begin(), obj.tags.end(), "learned") == obj.tags.end() ||
-         std::find(obj.tags.begin(), obj.tags.end(), "command") == obj.tags.end()) return false;
-        return obj.raw == phrase || obj.normalized == phrase || obj.raw.find(phrase) != std::string::npos;
-    };
-    
-    for (const auto& [id, obj] : longTerm) {
-        if (match(obj)) return obj;
-    }
-    
-    for (auto it = shortTerm.rbegin(); it != shortTerm.rend(); ++it) {
-     if (match(*it)) return *it;
-    }
-    
-    return std::nullopt;
-}
-
-std::vector<UnifiedMemoryObject> UnifiedMemoryStorage::getAllLearnedCommands() {
-    return getByTags({"learned", "command"}, true);
-}
-
-void UnifiedMemoryStorage::storeLearnedCommand(const std::string& phrase, const std::string& action, float confidence) {
-    UnifiedMemoryObject obj;
-    obj.id = UnifiedMemoryObject::generateID();
-  obj.timestamp = std::time(nullptr);
-    obj.domain = MemoryDomain::USER;
-    obj.type = TypeTag::STRING;
-    obj.context = ContextType::CONVERSATION;
-    obj.raw = phrase;
-    obj.normalized = action;
-  obj.confidence = confidence;
-    obj.tags = {"learned", "command"};
-    
-    storeLongTerm(obj);
 }
 
 void UnifiedMemoryStorage::decay(float rate) {

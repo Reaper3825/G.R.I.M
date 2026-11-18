@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1245184,
+  "api_version": 1441792,
   "required_permissions": ["memory"],
   "provider": "Memory Plugin",
   "version": "1.0.0",
@@ -9,7 +9,7 @@
       "tool_id": "remember",
       "argument_format": "raw_text",
       "category": "action",
-      "description": "Stage manual information in the host memory rotation pipeline",
+      "description": "Stage manual information in the provider memory pipeline",
       "is_informational": false,
       "needs_confirmation": true,
       "parameters": [
@@ -20,7 +20,7 @@
           "type": "string"
         }
       ],
-      "short_description": "Stage supplied information for the host memory pipeline",
+      "short_description": "Stage supplied information for the provider memory pipeline",
       "usage": "remember <text>",
       "permissions": [
         "memory"
@@ -35,7 +35,7 @@
       "needs_confirmation": false,
       "parameters": [
         {
-          "description": "Unmodified query for the existing host memory search",
+          "description": "Unmodified query for the provider memory search",
           "name": "query",
           "required": true,
           "type": "string"
@@ -48,25 +48,38 @@
       ]
     },
     {
-      "tool_id": "forget",
-      "argument_format": "raw_text",
-      "category": "action",
-      "description": "Request legacy forget behavior: check and flush matching records without deleting them",
+      "tool_id": "memory.retrieve",
+      "argument_format": "json",
+      "category": "information",
+      "description": "Retrieve ranked memory and lookup diagnostics for the orchestrator",
+      "usage": "memory.retrieve",
+      "usage_type": 2,
       "is_informational": false,
-      "needs_confirmation": true,
-      "parameters": [
-        {
-          "description": "Unmodified query for the existing host memory search",
-          "name": "query",
-          "required": true,
-          "type": "string"
-        }
-      ],
-      "short_description": "Check and flush matching memories without deleting records",
-      "usage": "forget <query>",
+      "needs_confirmation": false,
       "permissions": [
         "memory"
-      ]
+      ],
+      "argument_schema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "nlp_category": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "prompt",
+          "nlp_category",
+          "limit"
+        ]
+      }
     }
   ]
 }

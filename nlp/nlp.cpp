@@ -2,6 +2,7 @@
 #include "grammar_parser.hpp"  // ? CHANGED: Use GrammarParser instead of NativeGrammarParser
 #include "intent.hpp"
 #include "error_manager.hpp"
+#include "logger.hpp"
 #include "resources.hpp"
 #include "console_history.hpp"
 #include "settings/intervention_gate.hpp"
@@ -264,81 +265,6 @@ void NLP::unregisterPluginRules(const std::string& pluginName) {
 }
 
 // ====================================================
-// Learn pattern dynamically
-// ====================================================
-bool NLP::learnPattern(const std::string& userInput, const std::string& intent,
-         const std::vector<std::string>& slotNames) {
-    Rule rule;
-    rule.intent = intent;
-  rule.description = "Learned from user input";
-    rule.pattern_str = generatePattern(userInput);
-    rule.slot_names = slotNames;
-    rule.learned = true;
-    rule.source = "learned";
-    rule.case_insensitive = true;
-
-    try {
-        rule.pattern = std::regex(rule.pattern_str, std::regex::ECMAScript | std::regex::icase);
-rules.push_back(rule);
-        return true;
-    } catch (const std::regex_error&) {
-     return false;
-    }
-}
-
-// ====================================================
-// Load learned rules from memory storage
-// ====================================================
-void NLP::loadLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
-    auto commands = storage.getAllLearnedCommands();
-    for (const auto& obj : commands) {
-        // Each learned command stores raw as the pattern and normalized as the action.
-        if (obj.raw.empty() || obj.normalized.empty()) continue;
-
-        // Skip if a rule with this intent+pattern already exists
-        bool duplicate = false;
-        for (const auto& existing : rules) {
-            if (existing.intent == obj.normalized && existing.pattern_str == obj.raw) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) continue;
-
-        Rule rule;
-        rule.intent          = obj.normalized;
-        rule.pattern_str     = obj.raw;
-        rule.case_insensitive = true;
-        rule.learned         = true;
-        rule.source          = "memory";
-        rule.success_rate    = static_cast<double>(obj.confidence);
-        rule.category        = "learned";
-
-        try {
-            rule.pattern = std::regex(rule.pattern_str,
-                std::regex::ECMAScript | std::regex::icase);
-            rules.push_back(std::move(rule));
-        } catch (const std::regex_error&) {
-            // Skip malformed patterns — do not crash
-        }
-    }
-}
-
-// ====================================================
-// Save learned rules to memory storage
-// ====================================================
-void NLP::saveLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
-    for (const auto& rule : rules) {
-        if (!rule.learned) continue;
-        storage.storeLearnedCommand(
-            rule.pattern_str,   // phrase = the pattern string
-            rule.intent,        // action = the intent name
-            static_cast<float>(rule.success_rate)
-        );
-    }
-}
-
-// ====================================================
 // Record successful intent match
 // ====================================================
 void NLP::recordSuccess(const std::string& intent, const std::string& input) {
@@ -417,18 +343,15 @@ nlohmann::json NLP::getStats() const {
  nlohmann::json j;
     
     int staticRules = 0;
-    int learnedRules = 0;
     int pluginRulesCount = 0;
     
     for (const auto& rule : rules) {
         if (rule.source == "static") staticRules++;
-        else if (rule.source == "learned") learnedRules++;
         else pluginRulesCount++;
     }
     
     j["total_rules"] = rules.size();
     j["static_rules"] = staticRules;
-    j["learned_rules"] = learnedRules;
     j["plugin_rules"] = pluginRulesCount;
     
     j["total_parses"] = stats.totalParses;
@@ -498,28 +421,6 @@ double NLP::computeContextScore(const Rule& rule, const std::string& previousCom
     // This is a placeholder for more sophisticated context analysis
     (void)rule;
     return 0.1;
-}
-
-// ====================================================
-// Private: Generate pattern from example
-// ====================================================
-std::string NLP::generatePattern(const std::string& example) {
-    // Escape special regex characters
-  std::string pattern = example;
-    const std::string specialChars = R"([\^$.|?*+(){})";
-    
-    for (char c : specialChars) {
-        std::string from(1, c);
-        std::string to = "\\" + from;
-      size_t pos = 0;
-        while ((pos = pattern.find(c, pos)) != std::string::npos) {
-            pattern.replace(pos, 1, to);
-       pos += to.length();
-        }
-    }
-    
-    // Make it match loosely (allow extra words before/after)
-    return ".*" + pattern + ".*";
 }
 
 // ====================================================

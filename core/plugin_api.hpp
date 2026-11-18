@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v19.0
+// G.R.I.M Plugin API v22.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 19
+#define GRIM_API_VERSION_MAJOR 22
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -202,15 +202,6 @@ typedef struct GrimPluginAPI {
     // Envelope: {"format":"grim-tool-snapshot","version":1,"tools":[...]}
     // Null return means API failure. Read-only; does not dispatch or change stats.
     const char* (*get_tool_snapshot)(GrimPluginHandle instance, const char* tool_id);
-    // Manual memory services
-    // (MEMORY). JSON envelope: {format:"grim-runtime-service",version:1,
-    // value:...,error:null|{kind,message}}; release with string_free.
-    // Null = invalid input, denied permission, or API failure. No command dispatch.
-    const char* (*stage_manual_memory)(GrimPluginHandle instance, const char* raw);
-    // value is an ordered array of {id,raw}; uses the existing search defaults.
-    const char* (*search_memory)(GrimPluginHandle instance, const char* query);
-    // value is presence bool. Retains legacy forget's check+flush, not deletion.
-    const char* (*flush_memory_record_if_present)(GrimPluginHandle instance, uint64_t id);
     // v3.8: UI permission. Submits copied, stable-key panel requests or polls a
     // caller-owned request, not ownership of the target panel. Always nonblocking.
     // Host-owned grim-ui-panel-response v1
@@ -223,8 +214,6 @@ typedef struct GrimPluginAPI {
     // but cannot undo an effect already applied. Table/descriptor layouts unchanged.
     const char* (*ui_panel_service)(GrimPluginHandle instance, GrimUIPanelOperation operation,
                                     const char* panel_key, uint64_t request_id);
-    // v5.0: Generic provider identity (JSON name/instance/path); string_free releases it.
-    const char* (*get_provider_identity)(GrimPluginHandle instance);
     // Copy an entire resource kind atomically. JSON array <=64 MiB, <=10000 entries.
     // Each entry: resource_id, kind, name, runtime_id (>0), state (object).
     // Initialization calls are serialized on the lifecycle thread (no init workers).
@@ -232,8 +221,6 @@ typedef struct GrimPluginAPI {
     // Empty array removes the kind. Ownership is derived from the instance handle.
     GrimResult (*replace_resources)(GrimPluginHandle instance, const char* kind,
                                    const char* resources_json, size_t size);
-    // True only while this generation is the currently published provider.
-    bool (*is_provider_current)(GrimPluginHandle instance);
     // v14 removes the copied-widget transport. Native panels use the exported
     // C++ UI interface and register during the owning provider's init scope.
     // Native UI plugins must match the host compiler, CRT and UI class ABI.

@@ -282,10 +282,6 @@ add_custom_command(
 )
 add_custom_target(generate_grim_unified_memory_schema
   DEPENDS ${GRIM_UNIFIED_MEMORY_GENERATED_HEADER})
-add_dependencies(GRIM generate_grim_unified_memory_schema)
-target_sources(GRIM PRIVATE ${GRIM_UNIFIED_MEMORY_GENERATED_HEADER})
-target_include_directories(GRIM PRIVATE ${GRIM_UNIFIED_MEMORY_GENERATED_ROOT})
-
 if(TARGET unified_memory_async_tests)
   add_dependencies(unified_memory_async_tests generate_grim_unified_memory_schema)
   target_sources(unified_memory_async_tests PRIVATE

@@ -1,4 +1,4 @@
-# G.R.I.M Plugin API v19.0
+# G.R.I.M Plugin API v22.0
 
 API version: **18.0.0**.
 
@@ -87,8 +87,8 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 2`, the packed integer `api_version` (1245184
-for 19.0.0), the provider name and version in `provider` and `version`, a
+loader expects `schema_version: 2`, the packed integer `api_version` (1441792
+for 22.0.0), the provider name and version in `provider` and `version`, a
 `required_permissions` array of permission names, and a `tools` array. Use
 empty arrays when there are no permissions or tools. A tool can only declare
 permissions from the provider’s `required_permissions` array. A provider with tools exports `grim_plugin_dispatch_tool`.
@@ -687,6 +687,14 @@ Host alias APIs, startup loading, scanning, and cached state are removed.
 and native discovery. ToolRegistry command aliases are unchanged.
 See [provider configuration and compatibility](../plugins/application_plugin/README.md).
 
+### Application catalog descriptors (v21)
+
+Application catalog results return plain resource descriptors. The host assigns
+provider identity when publishing resources through `replace_resources`.
+API v21 removed the provider identity callback. API v22 removes the
+current-provider callback. The host gate blocks new dispatch during retirement
+and lets admitted calls drain before shutdown. Rebuild plugin DLLs against v22.
+
 ### System information provider (v6)
 
 `system_info_plugin` supplies the `system_info` tool and its hardware resources.
@@ -700,11 +708,16 @@ failure handling, native detection and lifecycle validation.
 
 ### Manual memory
 
-`memory_plugin` still uses `stage_manual_memory`, `search_memory` and
-`flush_memory_record_if_present` under MEMORY permission. Memory rotation,
-storage and persistence remain host-owned. Remember stages the original manual
-record; recall selects the first search hit; forget checks and flushes records
-without deleting them. Memory state survives plugin unload.
+`memory_plugin` owns memory staging, search, and persistence under MEMORY permission.
+`remember` queues a record and `recall` returns the first stored match. The next
+`memory.retrieve` request promotes pending records before performing text and
+tag lookup. The orchestrator dispatches this System tool and receives copied
+hits and retrieval diagnostics in `structured_output_json`.
+
+The provider opens `memory_plugin_data/records.fb` beside the deployed DLL.
+It writes pending and short-term records to an atomic transient snapshot at
+unload and restores their tiers on load. The storage worker drains and joins
+before unload. API v20 removes the three former host memory callback slots. Plugins must be rebuilt for the new table layout.
 
 ### Perception observation migration (v3.6)
 

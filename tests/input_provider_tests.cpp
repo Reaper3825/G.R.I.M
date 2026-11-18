@@ -10,7 +10,7 @@ extern "C" void grim_plugin_shutdown();
 extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
 namespace {
 constexpr const char* tools[] = {"move_mouse", "click", "type", "key"};
- bool permitted=true,current=true; std::vector<std::string> effects;
+ bool permitted=true; std::vector<std::string> effects;
 void check(bool value,const char* message){if(!value) throw std::runtime_error(message);}
 GrimToolResult result; std::string message,error;
 GrimResult complete(GrimToolResultWriter*,const GrimToolResult* r){result=*r;message=r->message?r->message:"";error=r->error_code?r->error_code:"";return GRIM_OK;}
@@ -26,11 +26,9 @@ void InputController::combo(const std::vector<WORD>& keys){effects.push_back("co
 int main(){
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
  api.has_permission=[](GrimPluginHandle,GrimPermission){return permitted;};
- api.is_provider_current=[](GrimPluginHandle){return current;};
  auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old, 1)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
  check(grim_plugin_init(&api, 1)==GRIM_OK,"Initialization failed");check(effects.empty(),"Initialization injected input");
  permitted=false;check(invoke(1,"")==GRIM_ERROR_PERMISSION_DENIED && effects.empty(),"Permission bypass");permitted=true;
- current=false;check(invoke(1,"")==GRIM_ERROR_PERMISSION_DENIED && effects.empty(),"Inactive provider injected input");current=true;
 #ifndef _WIN32
  invoke(0,"-1200,300 trailing");check(!result.success && effects.empty(),"Unsupported platform accepted native input");
  grim_plugin_shutdown();return 0;

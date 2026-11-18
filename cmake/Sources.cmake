@@ -35,7 +35,6 @@ file(GLOB bootstrap_SOURCES CONFIGURE_DEPENDS "bootstrap/*.cpp")
 file(GLOB bootstrap_HEADERS CONFIGURE_DEPENDS "bootstrap/*.hpp")
 file(GLOB helpers_SOURCES "helpers/*.cpp")
 file(GLOB helpers_HEADERS "helpers/*.hpp")
-file(GLOB memory_SOURCES "memory/*.cpp")
 file(GLOB memory_HEADERS "memory/*.hpp")
 file(GLOB core_SOURCES CONFIGURE_DEPENDS "core/*.cpp")
 if(APPLE)
@@ -108,7 +107,6 @@ set(GRIM_SOURCES
     ${ui_SOURCES}
     ${bootstrap_SOURCES}
     ${helpers_SOURCES}
-    ${memory_SOURCES}
     ${core_SOURCES}
     ${input_SOURCES}
     ${NET_SOURCES}

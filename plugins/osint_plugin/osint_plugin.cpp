@@ -35,37 +35,37 @@ static GrimResult deliver(GrimToolResultWriter* writer, const CommandResult& val
 }
 static GrimResult handleProfilePerson(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->is_provider_current(g_api.instance()) || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
     return deliver(writer, cmdProfilePerson(arguments(call)));
 }
 static GrimResult handleSherlockSweep(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->is_provider_current(g_api.instance()) || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
     return deliver(writer, cmdSherlockSweep(arguments(call)));
 }
 static GrimResult handleOsintReport(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->is_provider_current(g_api.instance()) || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
     return deliver(writer, cmdOsintReport(arguments(call)));
 }
 static GrimResult handleOsintStatus(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->is_provider_current(g_api.instance()) || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
     return deliver(writer, cmdOsintStatus(arguments(call)));
 }
 static GrimResult handleOsintClearCache(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->is_provider_current(g_api.instance()) || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
     return deliver(writer, cmdOsintClearCache(arguments(call, false)));
 }
 static GrimResult handleOsintScanSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->is_provider_current(g_api.instance()) || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
     return deliver(writer, cmdOsintScanSecrets(arguments(call)));
 }
 static GrimResult handleOsintShowSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->is_provider_current(g_api.instance()) || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
     return deliver(writer, cmdOsintShowSecrets(arguments(call)));
 }
 // ============================================================================
@@ -77,7 +77,7 @@ extern "C" {
 PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
     const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        api->api_version < GRIM_API_VERSION || !api->is_provider_current || !api->has_permission) {
+        api->api_version < GRIM_API_VERSION || !api->has_permission) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
     osintProvider::initializePaths();

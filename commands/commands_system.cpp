@@ -5,13 +5,9 @@
 #include "error_manager.hpp"
 #include "logger.hpp"
 #include "nlp/nlp.hpp"
-#include "memory/unified_memory.hpp"
 #include <algorithm>
 #include <sstream>
 #include <vector>
-
-// Externals
-extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 
 // ====================================================
 // Test command for Intent Classifier
@@ -87,7 +83,6 @@ CommandResult cmdNlpStats([[maybe_unused]] const std::string& arg) {
     output << "=== NLP System Statistics ===\n\n";
     output << "Total Rules      : " << stats["total_rules"].get<int>() << "\n";
     output << "  - Static       : " << stats["static_rules"].get<int>() << "\n";
-    output << "  - Learned      : " << stats["learned_rules"].get<int>() << "\n";
     output << "  - Plugin       : " << stats["plugin_rules"].get<int>() << "\n\n";
     
     output << "Parse Statistics:\n";
@@ -104,85 +99,6 @@ CommandResult cmdNlpStats([[maybe_unused]] const std::string& arg) {
         "NLP statistics displayed",
         Colors::Cyan
     };
-}
-
-// ====================================================
-// ? NEW: NLP Learn Command
-// ====================================================
-CommandResult cmdNlpLearn(const std::string& arg) {
-    // Expect format: "user input" -> "intent_name"
-    size_t arrowPos = arg.find("->");
-    if (arrowPos == std::string::npos) {
-        return {
-            false,
-            "[Error] Usage: nlp_learn \"user input\" -> \"intent_name\"",
-            "ERR_INVALID_FORMAT",
-            "error",
-            "Invalid format for learning",
-            Colors::Red
-        };
-    }
-    
-    std::string userInput = arg.substr(0, arrowPos);
-    std::string intent = arg.substr(arrowPos + 2);
-    
-    // Trim whitespace
-    userInput.erase(0, userInput.find_first_not_of(" \t\""));
-    userInput.erase(userInput.find_last_not_of(" \t\"") + 1);
-    intent.erase(0, intent.find_first_not_of(" \t\""));
-    intent.erase(intent.find_last_not_of(" \t\"") + 1);
-    
-    LOG_DEBUG("NLP", "Learning pattern: \"" + userInput + "\" -> " + intent);
-    
-    if (g_nlp.learnPattern(userInput, intent)) {
-        return {
-            true,
-            "[NLP] Learned new pattern: \"" + userInput + "\" -> " + intent,
-            "ERR_NONE",
-            "routine",
-            "Pattern learned successfully",
-            Colors::Green
-        };
-    } else {
-        return {
-            false,
-            "[NLP] Failed to learn pattern",
-            "ERR_NLP_LEARN_FAILED",
-            "error",
-            "Failed to learn pattern",
-            Colors::Red
-        };
-    }
-}
-
-// ====================================================
-// ? NEW: NLP Save Command
-// ====================================================
-CommandResult cmdNlpSave([[maybe_unused]] const std::string& arg) {
-    LOG_DEBUG("NLP", "Saving learned rules to memory");
-    
-    try {
-        g_nlp.saveLearnedRules(g_memoryStorage);
-        
-        return {
-            true,
-            "[NLP] Learned rules saved to memory",
-            "ERR_NONE",
-            "routine",
-            "Rules saved successfully",
-            Colors::Green
-        };
-    } catch (const std::exception& e) {
-        LOG_ERROR("NLP", std::string("Failed to save rules: ") + e.what());
-        return {
-            false,
-            "[NLP] Failed to save learned rules",
-            "ERR_NLP_SAVE_FAILED",
-            "error",
-            "Failed to save rules",
-            Colors::Red
-        };
-    }
 }
 
 // ====================================================
@@ -246,38 +162,8 @@ CommandResult cmdTestNlp([[maybe_unused]] const std::string& arg) {
     }
     output << "\n";
     
-    // TEST 3: Learning New Pattern
-    output << "[TEST 3] Testing dynamic learning...\n";
-    try {
-        std::string testInput = "launch my browser";
-        std::string testIntent = "open_app";
-        
-        bool learned = g_nlp.learnPattern(testInput, testIntent);
-        if (learned) {
-            output << "  ? PASS: Learned pattern \"" << testInput << "\" -> " << testIntent << "\n";
-            passed++;
-            
-            // Verify the learned pattern works
-            Intent result = g_nlp.parse(testInput);
-            if (result.matched && result.name == testIntent) {
-                output << "  ? PASS: Learned pattern matched successfully\n";
-                passed++;
-            } else {
-                output << "  ? FAIL: Learned pattern did not match\n";
-                failed++;
-            }
-        } else {
-            output << "  ? FAIL: Failed to learn pattern\n";
-            failed++;
-        }
-    } catch (const std::exception& e) {
-        output << "  ? FAIL: Exception - " << e.what() << "\n";
-        failed++;
-    }
-    output << "\n";
-    
-    // TEST 4: Context-Aware Parsing
-    output << "[TEST 4] Testing context-aware parsing...\n";
+    // TEST 3: Context-Aware Parsing
+    output << "[TEST 3] Testing context-aware parsing...\n";
     try {
         Intent result1 = g_nlp.parseWithContext("open chrome", "");
         Intent result2 = g_nlp.parseWithContext("open chrome", "open_app");
@@ -304,8 +190,8 @@ CommandResult cmdTestNlp([[maybe_unused]] const std::string& arg) {
     }
     output << "\n";
     
-    // TEST 5: Fuzzy Matching
-    output << "[TEST 5] Testing fuzzy matching...\n";
+    // TEST 4: Fuzzy Matching
+    output << "[TEST 4] Testing fuzzy matching...\n";
     try {
         // Should match even with variations
         std::vector<std::string> variations = {
@@ -334,8 +220,8 @@ CommandResult cmdTestNlp([[maybe_unused]] const std::string& arg) {
     }
     output << "\n";
     
-    // TEST 6: Statistics Accuracy
-    output << "[TEST 6] Verifying statistics...\n";
+    // TEST 5: Statistics Accuracy
+    output << "[TEST 5] Verifying statistics...\n";
     try {
         auto stats = g_nlp.getStats();
         int totalParses = stats["total_parses"].get<int>();

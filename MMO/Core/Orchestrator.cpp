@@ -9,8 +9,9 @@
 #include "CorrectionTuple.hpp"
 #include "ToolTrainingParser.hpp"
 
+#include "SessionContextManager.hpp"
+#include "../../commands/command_result.hpp"
 #include "../../logger.hpp"
-#include "../../memory/memory_buffer_rotation.hpp"
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
@@ -25,22 +26,11 @@ namespace GRIM::MMO {
 
 Orchestrator::Orchestrator(ModelRegistry& registry,
                            ModelLoader& loader,
-                           const OrchestratorConfig& config,
-                           MemoryFacade* memory)
+                           const OrchestratorConfig& config)
     : registry_(registry)
     , loader_(loader)
-    , memory_(memory)
     , config_(config)
     , tool_gap_planner_(ToolRegistry::instance()) {}
-
-// =========================================================
-// setMemoryFacade — late-bind memory after init
-// =========================================================
-
-void Orchestrator::setMemoryFacade(MemoryFacade* memory) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    memory_ = memory;
-}
 
 // =========================================================
 // registerBackend — register an IGenerationBackend for a model
@@ -330,14 +320,17 @@ void Orchestrator::shutdown() {
 // =========================================================
 
 std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
-    // Drain preprocessing buffer into working context before building scope
-    GRIM::MemoryBufferRotation::instance().mergeToWorking();
+    const auto context = SessionContextManager::instance().snapshot("default");
+    const auto result = ToolRegistry::instance().invoke("memory.retrieve", nlohmann::json{
+        {"prompt", ctx.prompt}, {"nlp_category", context.lastNlpCategory}, {"limit", 10}
+    }.dump());
+    if (!result.success) return ctx.metadata_json;
 
-    if (!memory_) {
+    auto retrieval = nlohmann::json::parse(result.structuredOutputJson, nullptr, false);
+    if (!retrieval.is_object() || !retrieval.contains("memories") ||
+        !retrieval.contains("retrieval_breadcrumbs") ||
+        !retrieval["memories"].is_array() || !retrieval["retrieval_breadcrumbs"].is_array())
         return ctx.metadata_json;
-    }
-
-    auto retrieval = memory_->retrieveForPrompt(ctx.prompt);
 
     nlohmann::json scope;
     // Preserve any caller-provided metadata
@@ -351,41 +344,19 @@ std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
 
     // Add context snapshot
     nlohmann::json ctx_json;
-    ctx_json["session_id"]            = retrieval.context.session_id;
-    ctx_json["turn_id"]               = retrieval.context.turn_id;
-    ctx_json["active_task_id"]        = retrieval.context.active_task_id;
-    ctx_json["current_mood"]          = retrieval.context.current_mood;
-    ctx_json["resource_pressure"]     = retrieval.context.resource_pressure;
-    ctx_json["latest_nlp_summary"]    = retrieval.context.latest_nlp_summary;
-    ctx_json["recent_turn_summaries"] = retrieval.context.recent_turn_summaries;
-    ctx_json["last_nlp_category"]     = retrieval.context.lastNlpCategory;
-    ctx_json["consecutive_commands"]  = retrieval.context.consecutiveCommands;
+    ctx_json["session_id"]            = context.session_id;
+    ctx_json["turn_id"]               = context.turn_id;
+    ctx_json["active_task_id"]        = context.active_task_id;
+    ctx_json["current_mood"]          = context.current_mood;
+    ctx_json["resource_pressure"]     = context.resource_pressure;
+    ctx_json["latest_nlp_summary"]    = context.latest_nlp_summary;
+    ctx_json["recent_turn_summaries"] = context.recent_turn_summaries;
+    ctx_json["last_nlp_category"]     = context.lastNlpCategory;
+    ctx_json["consecutive_commands"]  = context.consecutiveCommands;
     scope["context"] = std::move(ctx_json);
 
-    // Add ranked memories
-    nlohmann::json mem_array = nlohmann::json::array();
-    for (const auto& hit : retrieval.hits) {
-        const auto& m = hit.memory;
-        nlohmann::json entry;
-        entry["id"]         = m.id;
-        entry["raw"]        = m.raw;
-        entry["normalized"] = m.normalized;
-        entry["confidence"] = m.confidence;
-        entry["score"]      = hit.score;
-        entry["tags"]       = m.tags;
-        mem_array.push_back(std::move(entry));
-    }
-    scope["memories"] = std::move(mem_array);
-
-    // Add breadcrumbs for diagnostics
-    nlohmann::json bc_array = nlohmann::json::array();
-    for (const auto& bc : retrieval.breadcrumbs) {
-        nlohmann::json b;
-        b["query"]         = bc.query;
-        b["results_found"] = bc.results_found;
-        bc_array.push_back(std::move(b));
-    }
-    scope["retrieval_breadcrumbs"] = std::move(bc_array);
+    scope["memories"] = std::move(retrieval["memories"]);
+    scope["retrieval_breadcrumbs"] = std::move(retrieval["retrieval_breadcrumbs"]);
 
     return scope.dump();
 }

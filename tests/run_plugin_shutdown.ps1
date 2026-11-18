@@ -6,9 +6,6 @@ $fixtures = Join-Path $output 'fixtures'
 New-Item -ItemType Directory -Force -Path $fixtures | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $output 'rejected') | Out-Null
 Set-Content -LiteralPath (Join-Path $output '.gitignore') -Value '*' -Encoding ascii
-$memoryGenerated = Join-Path $output 'generated/grim_memory'
-New-Item -ItemType Directory -Force -Path $memoryGenerated | Out-Null
-Copy-Item -LiteralPath (Join-Path $workspace 'memory/unified_memory_generated.h') -Destination (Join-Path $memoryGenerated 'unified_memory_generated.h')
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
@@ -45,7 +42,7 @@ if ($BuildUIFixture) {
     $uiFixtureArgs = $common + @('/LD', ('"' + (Join-Path $workspace 'plugins/ui_plugin/ui_plugin.cpp') + '"'), '/Fe:ui-fixture/ui_plugin.dll')
     Set-Content -LiteralPath (Join-Path $output 'ui-fixture.rsp') -Value $uiFixtureArgs -Encoding ascii
 }
-function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switch]$Extra, [switch]$Collision, [int]$ApiVersion = 1245184) {
+function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switch]$Extra, [switch]$Collision, [int]$ApiVersion = 1441792) {
     $entries = @()
     if ($Tools) {
         $entry = @{
@@ -73,7 +70,7 @@ foreach ($fixture in @('alpha', 'beta')) {
 foreach ($fixture in @('failed', 'legacy')) {
     $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:rejected/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
-    $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1245184 }
+    $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1441792 }
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
     Write-FixtureManifest 'rejected' $fixture ('Declared-' + $fixture) -ApiVersion $apiVersion
 }
@@ -84,7 +81,7 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     $folder = if ($fixture -in @('failed', 'legacy')) { 'integration-rejected' } else { 'integration' }
     $argsForFixture = $common + @('/LD','/DFIXTURE_TOOLS',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $folder + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
-    $apiVersion = if ($fixture -eq 'legacy') { 393216 } else { 1245184 }
+    $apiVersion = if ($fixture -eq 'legacy') { 393216 } else { 1441792 }
     Set-Content -LiteralPath (Join-Path $output ('integration-' + $fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
     Write-FixtureManifest $folder $fixture ('Declared-' + $fixture) -Tools -ApiVersion $apiVersion
 }
@@ -99,7 +96,7 @@ foreach ($variant in $variants.Keys) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output ('replacement/' + $variant)) | Out-Null
     $variantArgs = $common + @('/LD','/DFIXTURE_TOOLS','/DFIXTURE_NAME=\"Declared-alpha\"',$fixtureSource,('/Fe:replacement/' + $variant + '/alpha.dll')) + $variants[$variant]
     Set-Content -LiteralPath (Join-Path $output ('replacement-' + $variant + '.rsp')) -Value $variantArgs -Encoding ascii
-    $apiVersion = if ($variant -eq 'legacy') { 1114112 } else { 1245184 }
+    $apiVersion = if ($variant -eq 'legacy') { 1114112 } else { 1441792 }
     Write-FixtureManifest ('replacement/' + $variant) 'alpha' 'Declared-alpha' -Tools -Extra:($variant -eq 'old') -Collision:($variant -eq 'collision') -ApiVersion $apiVersion
 }
 $testArgs = $common + '/DGRIM_BUILD_HOST'
@@ -107,17 +104,15 @@ $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | Fo
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
-$apiArgs += '/I"' + (Join-Path $output 'generated') + '"'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp','memory/command_memory_services.cpp','memory/unified_memory_storage.cpp','memory/memory_buffer_rotation.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp','commands/command_dispatch.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($BuildSchedulingFixtures -or $SchedulePluginDirectory) {
     $apiArgs += @('/DGRIM_NATIVE_UI_TEST_HOST', ('/I"' + $workspace + '/ui"'), ('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
     $apiArgs += @('tests/ui_native_host_stubs.cpp','ui/primitives/ui_button.cpp','ui/primitives/ui_inputbox.cpp','ui/primitives/ui_textarea.cpp','ui/primitives/ui_slider.cpp','ui/primitives/ui_scrollbox.cpp','ui/primitives/ui_dropdown.cpp','ui/primitives/ui_panel.cpp','helpers/widget.cpp','helpers/vector2.cpp','ui/ui_focus_manager.cpp','ui/ui_root_panels.cpp','ui/ui_panel_service.cpp','ui/dynamic_surface_panel.cpp','MMO/UI/UISurfaceRegistry.cpp','MMO/UI/UISurfaceSpec.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 }
-$apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib', ('"' + (Join-Path $workspace 'vcpkg_installed/x64-windows/lib/flatbuffers.lib') + '"'))
+$apiArgs += @('/Fe:plugin_api_ownership_tests.exe', '/link', 'psapi.lib')
 Set-Content -LiteralPath (Join-Path $output 'api.rsp') -Value $apiArgs -Encoding ascii
 $syntaxArgs = $common + @('/DGRIM_BUILD_HOST','/Zs','/utf-8','/DWIN32_LEAN_AND_MEAN',('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
-$syntaxArgs += '/I"' + (Join-Path $output 'generated') + '"'
-$syntaxArgs += @('plugins/osint_plugin/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','plugins/osint_plugin/commands_osint.cpp','commands/commands_osint_ui.cpp','commands/commands_question.cpp','ui/ui_osint_results.cpp','plugins/application_plugin/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$syntaxArgs += @('plugins/osint_plugin/osint_plugin.cpp','plugins/network_test_plugin/network_test_plugin.cpp','plugins/osint_plugin/commands_osint.cpp','commands/commands_osint_ui.cpp','ui/ui_osint_results.cpp','plugins/application_plugin/shell_open.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($BuildInputFixture) {
     $syntaxArgs += '"' + (Join-Path $workspace 'plugins/input_plugin/input_service.cpp') + '"'
 }

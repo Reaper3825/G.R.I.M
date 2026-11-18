@@ -50,11 +50,21 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     check(registry.invoke("open","EDITOR").success,"Plugin did not resolve a user alias before native launch");
     const auto app = apps.at(0);
     const auto applicationId = app.at("resource_id");
-    check(registry.invoke("applications.inspect", nlohmann::json{{"resource_id", applicationId}}.dump()).success, "Application inspection failed");
-    auto launchArgs = nlohmann::json{{"resource_id", applicationId}, {"provider_instance", app.at("provider_instance")}, {"runtime_id", app.at("runtime_id")}};
+    const auto originalTool = registry.getTool("applications.list");
+    check(originalTool.has_value(), "Application list tool missing");
+    const auto snapshot = GRIM::MMO::ProviderRegistry::instance().snapshot();
+    bool foundPublishedDescriptor = false;
+    for (const auto& group : snapshot.providers) {
+        if (group.provider.instance != originalTool->provider.instance) continue;
+        for (const auto& resource : group.resources)
+            if (app == nlohmann::json(resource)) foundPublishedDescriptor = true;
+    }
+    check(foundPublishedDescriptor, "Catalog list did not return the plain published descriptor");
+    const auto inspect = registry.invoke("applications.inspect", nlohmann::json{{"resource_id", applicationId}}.dump());
+    check(inspect.success && nlohmann::json::parse(inspect.structuredOutputJson).at("value").at("application") == app,
+          "Application inspection did not return the plain descriptor");
+    const auto launchArgs = nlohmann::json{{"resource_id", applicationId}, {"runtime_id", app.at("runtime_id")}};
     check(registry.invoke("applications.launch", launchArgs.dump()).success, "Plugin application launch failed");
-    launchArgs["provider_instance"] = "retired";
-    check(!registry.invoke("applications.launch", launchArgs.dump()).success, "Stale application reached launcher");
     check(registry.invoke("applications.refresh", "{}").success, "Application refresh failed");
     check(!registry.invoke("applications.inspect", "{}").success, "Malformed inspect accepted");
     for (const auto* id : {"open", "search"}) {
@@ -82,18 +92,17 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     matches(result("open", "missing"), false, "updated:ERR_APP_LAUNCH_FAILED: missing", "ERR_APP_LAUNCH_FAILED", "error", "Failed to open missing", Colors::Red);
     matches(result("search", "  query  "), false, "updated:ERR_WEB_OPEN_FAILED: query", "ERR_WEB_OPEN_FAILED", "error", "Web search failed", Colors::Red);
     errorPrefix = "configured:";
-    // Reload the same implementation into a new DLL generation; old observed identities must fail.
+    // Reload into a new DLL generation and launch using the matching application IDs.
     fs::last_write_time(folder / "application_plugin.dll",
         fs::last_write_time(folder / "application_plugin.dll") + std::chrono::seconds(2));
     PluginManager::checkForHotReload();
     const auto reloaded = nlohmann::json::parse(registry.invoke("applications.list", "{}").structuredOutputJson)
         .at("value").at("applications").at(0);
-    check(reloaded.at("provider_instance") != app.at("provider_instance"), "Application DLL did not reload");
-    launchArgs["provider_instance"] = app.at("provider_instance");
-    check(!registry.invoke("applications.launch", launchArgs.dump()).success, "Old observation launched after reload");
-    launchArgs["provider_instance"] = reloaded.at("provider_instance");
-    launchArgs["runtime_id"] = reloaded.at("runtime_id");
-    check(registry.invoke("applications.launch", launchArgs.dump()).success, "Replacement lost its own catalog");
+    const auto reloadedTool = registry.getTool("applications.list");
+    check(reloadedTool && reloadedTool->provider.instance != originalTool->provider.instance, "Application DLL did not reload");
+    check(reloaded.at("resource_id") == applicationId && reloaded.at("runtime_id") == app.at("runtime_id"),
+          "Reload fixture did not retain matching application IDs");
+    check(registry.invoke("applications.launch", launchArgs.dump()).success, "Matching application IDs failed after reload");
     fs::remove(folder / "application_plugin.dll");
     PluginManager::checkForHotReload();
     for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)

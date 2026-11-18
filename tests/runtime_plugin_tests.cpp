@@ -1,124 +1,116 @@
-// Real memory DLL, rotation, storage, and persistence in a private fixture.
+// Real memory provider with a private persistence directory.
 #include "core/plugin_manager.hpp"
 #include "commands/command_result.hpp"
-#include "loaded_provider_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "memory/unified_memory.hpp"
-#include "memory/memory_buffer_rotation.hpp"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
-GRIM::UnifiedMemoryStorage g_memoryStorage;
-
 void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     namespace fs = std::filesystem;
-    using namespace GRIM;
     using namespace GRIM::MMO;
+    using nlohmann::json;
+    if (memoryDirectory.empty()) return;
+
     const auto check = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
     auto& registry = ToolRegistry::instance();
     const auto baseline = registry.toolCount();
-    auto& rotation = MemoryBufferRotation::instance();
-    rotation.clear();
     const auto folder = fs::temp_directory_path() / ("grim-runtime-plugins-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    check(fs::create_directory(folder), "Cannot create runtime plugin fixture");
+    const auto stateDirectory = folder / "memory_plugin_data";
+    check(fs::create_directories(stateDirectory), "Cannot create runtime plugin fixture");
     struct Cleanup {
         fs::path folder;
-        std::unique_ptr<LoadedProviderFixture> api;
         ~Cleanup() {
             PluginManager::unloadAll();
-            api.reset();
-            g_memoryStorage.shutdown();
-            MemoryBufferRotation::instance().clear();
             std::error_code error;
-            for (const auto* name : {"memory_plugin.dll", "memory_plugin.tools.json", "records.fb", "records.json", "records.idx",
-                                     "records.fb.tmp", "records.json.tmp", "records.idx.tmp"}) fs::remove(folder / name, error);
-            fs::remove(folder, error);
+            fs::remove_all(folder, error);
         }
     } cleanup{folder};
-    LoadedProviderFixture denied({.name = "runtime-denied", .path = "", .required_permissions = 0});
-    denied.load();
-    check(denied->stage_manual_memory(denied.handle(), "fixture") == nullptr && rotation.stats().preproc_count == 0 &&
-          denied->search_memory(denied.handle(), "fixture") == nullptr && denied->flush_memory_record_if_present(denied.handle(), 1) == nullptr,
-          "Memory permission bypass");
-    check(denied->stage_manual_memory(0, "fixture") == nullptr,
-          "Invalid runtime API identity accepted");
-    denied.unload();
-    cleanup.api = std::make_unique<LoadedProviderFixture>(GRIM::MMO::ProviderDescriptor{.name = "runtime-reader", .path = "", .required_permissions = GRIM_PERM_SYSTEM | GRIM_PERM_MEMORY});
-    cleanup.api->load();
-    auto& api = *cleanup.api;
-    const auto value = [&](const char* text) {
-        check(text != nullptr, "Runtime API failed");
-        const std::string copy(text); api->string_free(api.handle(), text);
-        const auto reply = nlohmann::json::parse(copy);
-        check(reply.at("format") == "grim-runtime-service" && reply.at("version") == 1 && reply.at("error").is_null(), "Runtime reply schema/error incorrect");
-        return reply.at("value");
-    };
-    check(api->stage_manual_memory(api.handle(), "") == nullptr && api->search_memory(api.handle(), nullptr) == nullptr, "Invalid runtime parameters accepted");
-    if (!memoryDirectory.empty()) {
-        g_memoryStorage.initialize((folder / "records.fb").string());
+
+    // Seed a short-term record without adding a production write endpoint for tests.
+    const json shortTerm{{"id", 101}, {"raw", "recent blue fact"}, {"tags", {"recent"}},
+                         {"embedding", std::vector<float>(768, 0.25f)}};
+    std::ofstream snapshot(stateDirectory / "transient.json");
+    snapshot << json{{"version", 1}, {"pending", json::array()}, {"short_term", json::array({shortTerm})}};
+    snapshot.close();
+    check(!snapshot.fail(), "Cannot seed short-term memory");
+
+    const auto deploy = [&] {
         fs::copy_file(memoryDirectory / "memory_plugin.dll", folder / "memory_plugin.dll");
-        fs::copy_file(memoryDirectory / "memory_plugin.tools.json", folder / "memory_plugin.tools.json");
-    }
-    PluginManager::initialize(folder.string());
-    const auto expectedCount = baseline + (memoryDirectory.empty() ? 0 : 3);
-    check(registry.toolCount() == expectedCount && rotation.stats().preproc_count == 0, "Runtime plugin load changed state or registration count");
-    const auto matches = [&](const CommandResult& r, bool ok, const std::string& message, const char* code,
-                             const char* category, const std::string& voice, Color color) {
-        check(r.success == ok && r.message == message && r.errorCode == code && r.category == category &&
-              r.voice == voice && r.color.toUInt() == color.toUInt() && r.structuredOutputJson.empty(), "Runtime command result differs from original");
     };
-    if (!memoryDirectory.empty()) {
-        for (const auto* id : {"remember", "recall", "forget"}) {
-            const auto d = registry.getTool(id); const bool recall = std::string(id) == "recall";
-            check(d && d->provider.name == "Memory Plugin" && d->permission_bits == GRIM_PERM_MEMORY && d->is_informational == recall && d->needs_confirmation != recall,
-                  "Memory metadata/policy incorrect");
-        }
-        matches(registry.invoke("remember", ""), false, "configured:ERR_MEMORY_MISSING_INPUT", "ERR_MEMORY_MISSING_INPUT", "error", "Missing memory input", Colors::Red);
-        for (const auto* id : {"recall", "forget"}) {
-            matches(registry.invoke(id, ""), false, "configured:ERR_MEMORY_MISSING_KEY", "ERR_MEMORY_MISSING_KEY", "error", "Missing memory key", Colors::Red);
-            matches(registry.invoke(id, "not-present"), false, "configured:ERR_MEMORY_KEY_NOT_FOUND: not-present", "ERR_MEMORY_KEY_NOT_FOUND", "error", "Memory key not found", Colors::Red);
-        }
-        const std::vector<std::string> inputs = {"my color is blue", "place = home", "fact words", "single", "  spaced text  "};
-        for (const auto& text : inputs)
-            matches(registry.invoke("remember", text), true, "[Memory] Remembered: " + text, "ERR_NONE", "routine", "Remembered that " + text, Colors::Green);
-        check(rotation.stats().preproc_count == inputs.size() && g_memoryStorage.search("blue").empty(), "Remember bypassed preprocessing or wrote directly to storage");
-        rotation.mergeToWorking();
-        const auto staged = rotation.workingSnapshot();
-        check(staged.size() == inputs.size(), "Staged memory count incorrect");
-        for (size_t i = 0; i < staged.size(); ++i) {
-            const auto& obj = staged[i];
-            check(obj.id != 0 && obj.timestamp != 0 && obj.domain == MemoryDomain::USER && obj.type == TypeTag::STRING &&
-                  obj.context == ContextType::CONVERSATION && obj.confidence == 0.98f && obj.raw == inputs[i] &&
-                  obj.normalized == "remember " + inputs[i] && obj.tags == std::vector<std::string>{"manual", "remember"},
-                  "Manual memory record fields changed");
-        }
-        rotation.syncToLongTerm(g_memoryStorage); g_memoryStorage.flush();
-        matches(registry.invoke("recall", "blue"), true, "[Memory] my color is blue", "ERR_NONE", "summary", "Recalled memory for blue", Colors::Cyan);
-        matches(registry.invoke("recall", "BLUE"), false, "configured:ERR_MEMORY_KEY_NOT_FOUND: BLUE", "ERR_MEMORY_KEY_NOT_FOUND", "error", "Memory key not found", Colors::Red);
-        UnifiedMemoryObject recent;
-        recent.id = UnifiedMemoryObject::generateID(); recent.raw = "recent blue fact"; recent.normalized = recent.raw;
-        g_memoryStorage.storeShortTerm(recent);
-        matches(registry.invoke("recall", "blue"), true, "[Memory] recent blue fact", "ERR_NONE", "summary", "Recalled memory for blue", Colors::Cyan);
-        const auto hits = value(api->search_memory(api.handle(), "blue"));
-        check(hits.size() == 2 && hits[0].at("raw") == recent.raw && hits[0].at("id") == recent.id &&
-              hits[1].at("id") == staged[0].id, "Memory search result order/data changed");
-        check(!value(api->flush_memory_record_if_present(api.handle(), 0)).get<bool>(), "Missing record reported present");
-        matches(registry.invoke("forget", "blue"), true, "[Memory] Forgotten entries for: blue", "ERR_NONE", "routine", "Forgotten blue", Colors::Green);
-        check(g_memoryStorage.getById(staged[0].id).has_value() && g_memoryStorage.getById(recent.id).has_value(), "Migration changed legacy forget into deletion");
-        matches(registry.invoke("remember", "pending stage"), true, "[Memory] Remembered: pending stage", "ERR_NONE", "routine", "Remembered that pending stage", Colors::Green);
-        fs::remove(folder / "memory_plugin.dll"); PluginManager::checkForHotReload();
-        check(!registry.isRegistered("remember") && !registry.isRegistered("recall") && !registry.isRegistered("forget") &&
-              g_memoryStorage.search("blue").size() == 2 && rotation.stats().preproc_count == 1,
-              "Memory plugin unload changed storage/staging or retained commands");
-        g_memoryStorage.shutdown();
-        UnifiedMemoryStorage reloaded; reloaded.initialize((folder / "records.fb").string());
-        check(reloaded.search("blue").size() == 1, "Memory state did not persist to fixture store");
-        reloaded.shutdown();
+    const auto recall = [&](const char* query) { return registry.invoke("recall", query); };
+    const auto retrieve = [&](const char* prompt, const char* category) {
+        const auto result = registry.invoke("memory.retrieve",
+            json{{"prompt", prompt}, {"nlp_category", category}, {"limit", 10}}.dump());
+        check(result.success, "Provider retrieval failed");
+        return json::parse(result.structuredOutputJson);
+    };
+
+    deploy();
+    fs::copy_file(memoryDirectory / "memory_plugin.tools.json", folder / "memory_plugin.tools.json");
+    PluginManager::initialize(folder.string());
+    check(registry.toolCount() == baseline + 3, "Memory provider registration count differs");
+    for (const auto* id : {"remember", "recall"}) {
+        const auto tool = registry.getTool(id);
+        const bool informational = std::string_view(id) == "recall";
+        check(tool && tool->provider.name == "Memory Plugin" && tool->permission_bits == GRIM_PERM_MEMORY &&
+              tool->is_informational == informational && tool->needs_confirmation != informational,
+              "Memory tool metadata differs");
     }
+    const auto retrievalTool = registry.getTool("memory.retrieve");
+    check(retrievalTool && retrievalTool->usage_type == ToolUsage::System, "Retrieval is not classified as a System tool");
+    const auto modelTools = registry.getModelTools();
+    check(std::none_of(modelTools.begin(), modelTools.end(),
+        [](const auto& tool) { return tool.tool_id == "memory.retrieve"; }), "Retrieval leaked into model discovery");
+    check(!registry.isRegistered("forget"), "Retired forget tool was registered");
+    check(registry.invoke("remember", "").errorCode == "ERR_MEMORY_MISSING_INPUT", "Empty remember was accepted");
+    check(recall("").errorCode == "ERR_MEMORY_MISSING_KEY", "Empty recall was accepted");
+    check(!registry.invoke("memory.retrieve", R"({"prompt":"blue","nlp_category":"","limit":0})").success,
+          "Invalid retrieval limit was accepted");
+
+    const auto remembered = registry.invoke("remember", "my color is blue");
+    check(remembered.success && remembered.message == "[Memory] Remembered: my color is blue", "Remember failed");
+    check(!recall("my color").success, "Remembered record was committed before retrieval");
+    check(recall("blue").message == "[Memory] recent blue fact", "Short-term recall failed");
+
+    fs::remove(folder / "memory_plugin.dll");
+    PluginManager::checkForHotReload();
+    check(registry.toolCount() == baseline, "Unloaded memory provider retained tools");
+    deploy();
+    PluginManager::checkForHotReload();
+    check(registry.toolCount() == baseline + 3, "Memory provider did not reload");
+    check(!recall("my color").success, "Reload changed the pending record to long-term");
+    check(recall("blue").message == "[Memory] recent blue fact", "Reload lost short-term memory");
+
+    const auto copied = retrieve("blue", "manual");
+    const auto& hits = copied.at("memories");
+    check(hits.size() == 2 && hits[0].at("id") == 101 &&
+          hits[1].at("raw") == "my color is blue" &&
+          hits[1].at("normalized") == "remember my color is blue" &&
+          hits[1].at("confidence") == json(0.98f) && hits[1].at("score") == json(0.98f) &&
+          hits[1].at("tags") == json({"manual", "remember"}), "Retrieval lost ordering or manual record fields");
+    check(copied.at("retrieval_breadcrumbs") == json::array({
+        {{"query", "blue"}, {"results_found", 2}},
+        {{"query", "tag:manual"}, {"results_found", 1}}
+    }), "Retrieval breadcrumbs or tag deduplication differ");
+    check(recall("my color").message == "[Memory] my color is blue", "Pending memory was not promoted");
+    check(recall("BLUE").errorCode == "ERR_MEMORY_KEY_NOT_FOUND", "Recall case sensitivity changed");
+
+    PluginManager::unloadAll();
+    check(hits[0].at("raw") == "recent blue fact", "Copied results were invalidated by unload");
+    std::ifstream saved(stateDirectory / "transient.json");
+    const auto transient = json::parse(saved);
+    check(transient.at("pending").empty() && transient.at("short_term").at(0).at("embedding").at(0) == 0.25,
+          "Transient snapshot lost state");
+    saved.close();
+    PluginManager::initialize(folder.string());
+    check(retrieve("blue", "").at("memories") == hits, "Committed or short-term memory did not survive a second load");
+    PluginManager::unloadAll();
     check(registry.toolCount() == baseline, "Runtime plugin cleanup left registrations");
-    std::cout << "Memory plugin: rotation, storage, persistence, compatibility, and unload tests passed\n";
+    std::cout << "Memory provider: ownership, copied retrieval, persistence and reload tests passed\n";
 }

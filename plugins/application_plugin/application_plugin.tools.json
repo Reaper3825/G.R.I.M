@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1245184,
+  "api_version": 1441792,
   "required_permissions": ["process", "system", "filesystem"],
   "provider": "Application Plugin",
   "version": "1.0.0",
@@ -108,7 +108,7 @@
     },
     {
       "tool_id": "applications.launch",
-      "description": "Launch a discovered application using its current generation",
+      "description": "Launch a discovered application by resource ID and runtime ID",
       "usage": "applications.launch {t}",
       "bindings": { "t": "t" },
       "category": "application",
@@ -122,9 +122,6 @@
           "resource_id": {
             "type": "string"
           },
-          "provider_instance": {
-            "type": "string"
-          },
           "runtime_id": {
             "type": "integer",
             "minimum": 1
@@ -132,7 +129,6 @@
         },
         "required": [
           "resource_id",
-          "provider_instance",
           "runtime_id"
         ],
         "additionalProperties": false

@@ -136,16 +136,6 @@
     "case_insensitive": true
   },
   {
-    "intent": "forget",
-    "description": "Forget a stored memory",
-    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:forget|remove|delete)\\s+(.+)$",
-    "slot_names": [
-      "key"
-    ],
-    "score_boost": 0.3,
-    "case_insensitive": true
-  },
-  {
     "intent": "sysinfo",
     "description": "Show system hardware and usage information",
     "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(system info|system status|show system|system)$",

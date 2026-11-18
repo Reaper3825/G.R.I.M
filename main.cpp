@@ -1,7 +1,6 @@
 #include "bootstrap/bootstrap.hpp"
 #include "logger.hpp"
 #include "wake/wake_key.hpp"
-#include "memory/unified_memory.hpp"
 #include "core/window_manager.hpp"
 #include "core/system_tick.hpp"
 #include "core/system_teardown.hpp"
@@ -11,7 +10,6 @@
 #include "control/devices/server/device_comm_server.hpp"
 #include "resources.hpp"
 
-GRIM::UnifiedMemoryStorage g_memoryStorage;
 static GRIM::WebSocketServer wsServer;
 static std::unique_ptr<GRIM::DeviceCommServer> g_deviceCommServer;
 
@@ -36,8 +34,6 @@ int main(int argc, char* argv[])
     PluginManager::initialize((std::filesystem::path(getGrimRootDir()) / "plugins").string());
     LOG_PHASE("Plugin manager initialized", true);
 
-    bootstrapMemorySubsystem(g_memoryStorage);
-
     WakeKey::start();
     LOG_PHASE("WakeKey listener started", true);
 
@@ -52,7 +48,7 @@ int main(int argc, char* argv[])
 
     LOG_PHASE("Main thread render loop exited", true);
 
-    GRIM::shutdownApplication(g_memoryStorage, wsServer, g_deviceCommServer);
+    GRIM::shutdownApplication(wsServer, g_deviceCommServer);
     return 0;
 }
   
