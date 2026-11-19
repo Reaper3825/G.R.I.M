@@ -1,3 +1,4 @@
+#include "core/plugin_tool_result.hpp"
 #include "application_tools.hpp"
 #include <nlohmann/json.hpp>
 #include <string>
@@ -8,7 +9,7 @@ GrimResult dispatchApplicationTool(std::string_view id, const GrimToolCall* call
         id != "applications.inspect" && id != "applications.launch")
         return GRIM_ERROR_NOT_FOUND;
     const std::string operation(id.substr(std::string_view("applications.").size()));
-    GrimToolResult result;
+    bool success = false;
     std::string message, output;
     try {
         if (!call || call->arguments_size > 65536 || (call->arguments_size && !call->arguments))
@@ -16,9 +17,9 @@ GrimResult dispatchApplicationTool(std::string_view id, const GrimToolCall* call
         const auto args = nlohmann::json::parse(std::string(call->arguments ? call->arguments : "", call->arguments_size));
         const auto value = nlohmann::json{{"format", "grim-application-result"}, {"version", 2},
             {"success", true}, {"value", catalog.request(operation, args)}};
-        result.success = value.at("success").get<bool>();
+        success = value.at("success").get<bool>();
         output = value.dump();
-        if (!result.success) message = value.value("error", "Application operation failed");
+        if (!success) message = value.value("error", "Application operation failed");
         else if (operation == "list" || operation == "refresh") {
             const auto& catalog = value.at("value");
             message = "Applications: " + std::to_string(catalog.at("applications").size()) + " of " + catalog.at("total").dump();
@@ -28,12 +29,12 @@ GrimResult dispatchApplicationTool(std::string_view id, const GrimToolCall* call
                 message += "\n" + app.at("name").get<std::string>() + " (" + app.at("resource_id").get<std::string>() + ")";
         } else message = operation == "launch" ? "Application launch requested." : value.at("value").at("application").dump(2);
     } catch (const std::exception& e) {
-        result.success = false; message = e.what();
+        success = false; message = e.what();
         output = nlohmann::json{{"format", "grim-application-result"}, {"version", 2},
             {"success", false}, {"error", message}}.dump();
     }
-    result.message = message.c_str(); result.structured_output_json = output.empty() ? nullptr : output.c_str();
-    result.error_code = result.success ? "ERR_NONE" : "ERR_APPLICATION_SERVICE";
-    result.category = result.success ? "application" : "error";
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, success, message.c_str(),
+                                    success ? "ERR_NONE" : "ERR_APPLICATION_SERVICE",
+                                    success ? "application" : "error", 0, nullptr,
+                                    output.empty() ? nullptr : output.c_str());
 }

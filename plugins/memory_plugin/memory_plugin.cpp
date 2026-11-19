@@ -1,3 +1,4 @@
+#include "core/plugin_tool_result.hpp"
 #include "memory_provider.hpp"
 #include "memory/atomic_writer.hpp"
 #include "plugins/plugin_logging.hpp"
@@ -110,11 +111,7 @@ GrimResult retrieveTool(const GrimToolCall& request, GrimToolResultWriter* write
 
     const auto payload = retrieve(args["prompt"].get<std::string>(),
         args["nlp_category"].get<std::string>(), args["limit"].get<int>()).dump();
-    GrimToolResult result{};
-    result.success = true;
-    result.error_code = "ERR_NONE";
-    result.structured_output_json = payload.c_str();
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, true, nullptr, "ERR_NONE", nullptr, 0, nullptr, payload.c_str());
 }
 }  // namespace
 
@@ -162,8 +159,8 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
     try {
         if (id == "memory.retrieve") return retrieveTool(*request, writer);
         const std::string arguments(request->arguments, request->arguments_size);
-        if (id == "remember") return grim::runtime::deliver(writer, cmdRemember(arguments));
-        if (id == "recall") return grim::runtime::deliver(writer, cmdRecall(arguments));
+        if (id == "remember") return grim::completeToolResult(writer, cmdRemember(arguments));
+        if (id == "recall") return grim::completeToolResult(writer, cmdRecall(arguments));
         return GRIM_ERROR_NOT_FOUND;
     } catch (const std::exception& error) {
         LOG_ERROR("Memory", error.what());

@@ -1,4 +1,5 @@
 #pragma once
+#include "commands/command_result.hpp"
 #include "plugins/runtime_service_client.hpp"
 #include "memory/unified_memory.hpp"
 

@@ -1,5 +1,6 @@
 #include <string_view>
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
@@ -8,12 +9,9 @@ namespace {
 grim::PluginHost host = {};
 GrimResult deliver(GrimToolResultWriter* writer, bool success, const std::string& message,
                    const char* error, const std::string& json = {}) {
-    GrimToolResult result;
-    result.success = success; result.message = message.c_str();
-    result.error_code = error; result.category = "ui";
-    result.color_rgb = success ? 0x64FFFF : 0xFF6464;
-    result.structured_output_json = json.empty() ? nullptr : json.c_str();
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, success, message.c_str(), error, "ui",
+                                    success ? 0x64FFFF : 0xFF6464, nullptr,
+                                    json.empty() ? nullptr : json.c_str());
 }
 template<GrimUIPanelOperation Operation>
 GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {

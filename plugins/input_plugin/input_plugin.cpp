@@ -1,3 +1,4 @@
+#include "core/plugin_tool_result.hpp"
 #include <string_view>
 #include "core/plugin_api.hpp"
 #include "input_commands.hpp"
@@ -27,11 +28,7 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
     } catch (const inputCommands::ServiceUnavailable&) {
         value = {false, "Input request unavailable or invalid", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
     }
-    GrimToolResult result;
-    result.success = value.success; result.message = value.message.c_str();
-    result.error_code = value.errorCode.c_str(); result.category = value.category.c_str(); result.voice = value.voice.c_str();
-    result.color_rgb = (value.color.r << 16) | (value.color.g << 8) | value.color.b;
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, value);
 }
 }
 

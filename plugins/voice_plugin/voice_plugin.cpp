@@ -1,5 +1,6 @@
 #include <string_view>
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 #include "plugins/plugin_logging.hpp"
 #include "runtime/runtime_state.hpp"
 #include "runtime/voice.hpp"
@@ -36,7 +37,9 @@ void stop() {
 }
 GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const char* toolId) {
  std::lock_guard<std::mutex> lock(operationMutex);
- GrimToolResult result; std::string message,output; nlohmann::json detail;
+ bool success = false;
+ const char* errorCode;
+ std::string message,output; nlohmann::json detail;
  try {
   auto args=request->arguments_size ? nlohmann::json::parse(request->arguments,request->arguments+request->arguments_size) : nlohmann::json::object();
   if(!args.is_object()) throw std::invalid_argument("Expected JSON object");
@@ -94,11 +97,11 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
    }
   }
   publish(); auto response=status(); if(!detail.is_null()) response["result"]=detail; output=response.dump(); message="Voice operation completed";
-  result.success=true; result.error_code="ERR_NONE";
- } catch(const std::exception& error) { message=error.what(); result.error_code="ERR_VOICE"; }
- catch(...) { message="Unknown voice failure"; result.error_code="ERR_VOICE"; }
- result.message=message.c_str(); result.category="voice"; result.structured_output_json=output.empty()?nullptr:output.c_str();
- return writer->complete(writer,&result);
+  success=true; errorCode="ERR_NONE";
+ } catch(const std::exception& error) { message=error.what(); errorCode="ERR_VOICE"; }
+ catch(...) { message="Unknown voice failure"; errorCode="ERR_VOICE"; }
+ return grim::completeToolResult(writer, success, message.c_str(), errorCode, "voice", 0,
+                                 nullptr, output.empty() ? nullptr : output.c_str());
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {

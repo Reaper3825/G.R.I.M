@@ -1,4 +1,5 @@
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 #include "application_tools.hpp"
 #include "shell_open.hpp"
 #include "user_aliases.hpp"
@@ -13,14 +14,7 @@ std::shared_ptr<GRIM::Applications::UserAliases> userAliases;
 
 GrimResult finish(GrimToolResultWriter* writer, bool success, const std::string& message,
                   const char* error, const char* category, const std::string& voice, uint32_t color) {
-    GrimToolResult result;
-    result.success = success;
-    result.message = message.c_str();
-    result.error_code = error;
-    result.category = category;
-    result.voice = voice.c_str();
-    result.color_rgb = color;
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, success, message.c_str(), error, category, color, voice.c_str());
 }
 std::string errorMessage(const char* code) {
     const auto* text = host->get_user_error_message(host.instance(), code);

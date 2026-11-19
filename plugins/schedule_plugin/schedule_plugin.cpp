@@ -1,5 +1,6 @@
 #include <string_view>
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 #include "schedule_provider.hpp"
 #include "calendar_panel.hpp"
 #include <memory>
@@ -22,9 +23,9 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
     const bool success=value.value("success",false);
     const std::string message=success?"Scheduling operation completed":value.value("message",std::string("Scheduling operation failed"));
     const std::string code=success?"ERR_NONE":value.value("error",std::string("service_error"));
-    GrimToolResult result;result.success=success;result.message=message.c_str();result.error_code=code.c_str();
-    result.category=success?"schedule":"error";result.structured_output_json=output.c_str();result.color_rgb=success?0x66CC99:0xFF6464;
-    return writer->complete(writer,&result);
+    return grim::completeToolResult(writer, success, message.c_str(), code.c_str(),
+                                    success ? "schedule" : "error", success ? 0x66CC99 : 0xFF6464,
+                                    nullptr, output.c_str());
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {

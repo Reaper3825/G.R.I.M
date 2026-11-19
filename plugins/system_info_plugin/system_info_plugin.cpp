@@ -1,3 +1,4 @@
+#include "core/plugin_tool_result.hpp"
 #include <string_view>
 #include "core/plugin_api.hpp"
 #include "system_info_provider.hpp"
@@ -9,14 +10,7 @@ namespace {
 std::unique_ptr<GRIM::SystemInfo::Provider> provider;
 GrimResult call(const GrimToolCall*, GrimToolResultWriter* writer, void* context) {
     const auto value = formatSystemInfo(static_cast<GRIM::SystemInfo::Provider*>(context)->detectHardware());
-    GrimToolResult result;
-    result.success = value.success;
-    result.message = value.message.c_str();
-    result.error_code = value.errorCode.c_str();
-    result.category = value.category.c_str();
-    result.voice = value.voice.c_str();
-    result.color_rgb = (value.color.r << 16) | (value.color.g << 8) | value.color.b;
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, value);
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {

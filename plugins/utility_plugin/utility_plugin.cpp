@@ -1,25 +1,18 @@
 #include <string_view>
 // Fixed-response utility commands.
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 
 namespace {
 GrimResult clean(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
-    GrimToolResult result;
-    result.success = 1;
-    result.message = "[Utility] Console cleared.";
-    result.error_code = "ERR_NONE";
-    result.category = "routine";
-    result.voice = "Console cleared";
-    result.color_rgb = 0x64FF64; // Colors::Green
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, true, "[Utility] Console cleared.",
+                                    "ERR_NONE", "routine", 0x64FF64, "Console cleared");
 }
 
 GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
     // Static legacy help excludes retired agent/admin commands.
     // Dynamic registry help is available separately through list_tools/tool_info.
-    GrimToolResult result;
-    result.success = 1;
-    result.message =
+    const char* message =
         "[Help] Available commands:\n"
         "- remember <key> <value>\n"
         "- recall <key>\n"
@@ -33,11 +26,8 @@ GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
         "- help\n"
         "- voice\n"
         "- voice_stream\n";
-    result.error_code = "ERR_NONE";
-    result.category = "summary";
-    result.voice = "Help shown";
-    result.color_rgb = 0x64FFFF; // Colors::Cyan
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, true, message, "ERR_NONE", "summary",
+                                    0x64FFFF, "Help shown");
 }
 }
 

@@ -5,6 +5,7 @@
 // function table. These are the actual implementations that plugins call.
 // ============================================================================
 
+#include "core/plugin_tool_result.hpp"
 #include "plugin_api_impl.hpp"
 #include "plugin_manager.hpp"
 #include "plugin_manifest.hpp"
@@ -318,15 +319,7 @@ static GrimResult api_execute_command(GrimPluginHandle self, const char* command
     if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     auto [cmd, arg] = GRIMInput::parseInput(command_text);
     const auto value = dispatchCommand(cmd, arg);
-    GrimToolResult result;
-    result.success = value.success;
-    result.message = value.message.c_str();
-    result.error_code = value.errorCode.c_str();
-    result.category = value.category.c_str();
-    result.voice = value.voice.c_str();
-    result.structured_output_json = value.structuredOutputJson.c_str();
-    result.color_rgb = (value.color.r << 16) | (value.color.g << 8) | value.color.b;
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, value);
 }
 
 // ============================================================================

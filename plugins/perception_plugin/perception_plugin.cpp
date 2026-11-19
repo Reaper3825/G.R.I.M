@@ -1,5 +1,6 @@
 #include <string_view>
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 #include "perception_runtime.hpp"
 #include "plugins/plugin_logging.hpp"
 #include <memory>
@@ -9,19 +10,21 @@ const char* ids[] = {"perception.observe", "perception.digital.start", "percepti
     "perception.physical.open", "perception.physical.close", "perception.configure", "perception.calibrate"};
 GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, const char* toolId) {
     std::string message, structured;
-    GrimToolResult result;
+    bool success = false;
+    const char* errorCode;
+    const char* category;
     try {
         const auto args = request->arguments_size ? nlohmann::json::parse(request->arguments,request->arguments+request->arguments_size) : nlohmann::json::object();
         structured = runtime->request(toolId,args).dump();
-        result.success = true; result.error_code = "ERR_NONE"; result.category = "information";
+        success = true; errorCode = "ERR_NONE"; category = "information";
         message = "Perception snapshot";
     } catch (const std::exception& e) {
-        message = e.what(); result.error_code = "ERR_PERCEPTION"; result.category = "error";
+        message = e.what(); errorCode = "ERR_PERCEPTION"; category = "error";
     } catch (...) {
-        message = "Unknown perception failure"; result.error_code = "ERR_PERCEPTION"; result.category = "error";
+        message = "Unknown perception failure"; errorCode = "ERR_PERCEPTION"; category = "error";
     }
-    result.message = message.c_str(); result.structured_output_json = structured.c_str();
-    return writer->complete(writer,&result);
+    return grim::completeToolResult(writer, success, message.c_str(), errorCode, category,
+                                    0, nullptr, structured.c_str());
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {

@@ -1,3 +1,4 @@
+#include "core/plugin_tool_result.hpp"
 #include <string_view>
 
 
@@ -627,22 +628,11 @@ namespace NetworkTest {
 static grim::PluginHost g_api = {};
 
 // Deliver copied results before the local CommandResult is destroyed.
-static GrimResult deliver(GrimToolResultWriter* writer, const CommandResult& value) {
-    GrimToolResult result;
-    result.success = value.success;
-    result.message = value.message.c_str();
-    result.error_code = value.errorCode.c_str();
-    result.category = value.category.c_str();
-    result.voice = value.voice.c_str();
-    result.structured_output_json = value.structuredOutputJson.c_str();
-    result.color_rgb = (value.color.r << 16) | (value.color.g << 8) | value.color.b;
-    return writer->complete(writer, &result);
-}
 static GrimResult networkTestHandler(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, GRIM::NetworkTest::cmdNetworkTest(std::string(call->arguments, call->arguments_size)));
+    return grim::completeToolResult(writer, GRIM::NetworkTest::cmdNetworkTest(std::string(call->arguments, call->arguments_size)));
 }
 static GrimResult networkTestStopHandler(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return deliver(writer, GRIM::NetworkTest::cmdNetworkTestStop(std::string(call->arguments, call->arguments_size)));
+    return grim::completeToolResult(writer, GRIM::NetworkTest::cmdNetworkTestStop(std::string(call->arguments, call->arguments_size)));
 }
 
 // Plugin metadata

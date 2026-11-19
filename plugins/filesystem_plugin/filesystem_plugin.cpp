@@ -1,6 +1,7 @@
 #include <string_view>
 // Filesystem provider owns operations and captures its base directory at load.
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <memory>
@@ -33,13 +34,8 @@ std::unique_ptr<Provider> provider;
 
 GrimResult complete(GrimToolResultWriter* writer, bool success,
                     const std::string& message, const char* error = "ERR_NONE") {
-    GrimToolResult result;
-    result.success = success;
-    result.message = message.c_str();
-    result.error_code = error;
-    result.category = success ? "routine" : "error";
-    result.color_rgb = success ? 0x00FFFF : 0xFF0000;
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, success, message.c_str(), error,
+                                    success ? "routine" : "error", success ? 0x00FFFF : 0xFF0000);
 }
 
 GrimResult execute(const GrimToolCall* call, GrimToolResultWriter* writer, void* data) {

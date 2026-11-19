@@ -1,5 +1,6 @@
 #include <string_view>
 #include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -363,8 +364,9 @@ GrimResult calculate(const GrimToolCall* call, GrimToolResultWriter* writer, voi
     if (!call || !writer || !writer->complete || (!call->arguments && call->arguments_size))
         return GRIM_ERROR_INVALID_PARAM;
     const std::string_view equation(call->arguments ? call->arguments : "", call->arguments_size);
-    GrimToolResult result;
-    result.category = "math";
+    bool success = false;
+    const char* errorCodeText = nullptr;
+    uint32_t color = 0;
     std::string message;
     std::string output;
     try {
@@ -380,23 +382,22 @@ GrimResult calculate(const GrimToolCall* call, GrimToolResultWriter* writer, voi
         numeric << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
         output = "{\"success\":true,\"value\":" + numeric.str() +
                  ",\"answer\":" + jsonString(message) + "}";
-        result.success = 1;
-        result.error_code = "ERR_NONE";
-        result.color_rgb = 0x64FF64;
+        success = true;
+        errorCodeText = "ERR_NONE";
+        color = 0x64FF64;
     } catch (const ParseFailure& failure) {
-        result.error_code = errorCode(failure.error);
+        errorCodeText = errorCode(failure.error);
         message = failure.what();
-        output = "{\"success\":false,\"error\":" + jsonString(result.error_code) +
+        output = "{\"success\":false,\"error\":" + jsonString(errorCodeText) +
                  ",\"error_message\":" + jsonString(message) +
                  ",\"error_offset\":" + std::to_string(failure.offset) + "}";
-        result.color_rgb = 0xFF6464;
+        color = 0xFF6464;
     } catch (...) {
         // Never let C++ exceptions cross the plugin ABI.
         return GRIM_ERROR_UNKNOWN;
     }
-    result.message = message.c_str();
-    result.structured_output_json = output.c_str();
-    return writer->complete(writer, &result);
+    return grim::completeToolResult(writer, success, message.c_str(), errorCodeText, "math",
+                                    color, nullptr, output.c_str());
 }
 
 } // namespace
