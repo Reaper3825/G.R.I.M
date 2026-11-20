@@ -3,7 +3,8 @@
 #include "ui_theme.hpp"
 #include "logger.hpp"
 #include "core/input_parser.hpp"  // For InputState
-#include "commands/commands_core.hpp"
+#include "commands/command_result.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <sstream>
@@ -35,7 +36,7 @@ bool UIOsintResults::loadFindings(const std::string& username) {
     allFindings.clear();
     filteredFindings.clear();
     
-    const auto response = dispatchCommand("osint_show_secrets", username);
+    const auto response = GRIM::MMO::ToolRegistry::instance().invoke("osint_show_secrets", username);
     
     if (!response.success || response.structuredOutputJson.empty()) {
         LOG_ERROR("OSINT-UI", "No scan results found for: " + username);

@@ -42,24 +42,25 @@ SOLUTION = ["open toolbox", "take brass key from toolbox", "unlock oak door with
 
 
 class WorkerTests(unittest.TestCase):
-    def test_host_ui_dispatch_is_explicit_state_preserving_and_not_replayed(self):
+    def test_host_action_dispatch_is_explicit_state_preserving_and_not_replayed(self):
         self.session.handle(compile_request(puzzle()))
         before = self.session.handle({"op": "step", "command": "look"})["state"]
-        for command in ("ui.list", "ui.inspect panel:settings", "ui.show panel:settings", "ui.hide panel:settings"):
-            with self.assertRaises(WorldError):
-                self.session.handle({"op": "step", "command": command})
-            state = self.session.handle({"op": "step", "command": command, "host_ui_dispatch": True})["state"]
+        allowed = ["object.list", "object.inspect", "object.show", "object.hide"]
+        for command in ("object.list", "object.inspect fixture@7", "object.show fixture@7", "object.hide fixture@7"):
+            state = self.session.handle({"op": "step", "command": command, "host_action_tools": allowed})["state"]
             self.assertEqual(state["host_action_request"], {"command": command})
             for key in ("facts", "moves", "episode", "done"):
                 self.assertEqual(state[key], before[key])
             with self.assertRaisesRegex(WorldError, "cannot be replayed"):
-                self.session.handle({"op": "verify_solution", "commands": [command]})
-        with self.assertRaisesRegex(WorldError, "Unsupported"):
-            self.session.handle({"op": "step", "command": "ui.bring_to_front panel:settings", "host_ui_dispatch": True})
+                self.session.handle({"op": "verify_solution", "commands": [command], "host_action_tools": allowed})
+        native = self.session.handle({"op": "step", "command": "object.list"})["state"]
+        self.assertNotIn("host_action_request", native)
+        native = self.session.handle({"op": "step", "command": "object.move fixture@7", "host_action_tools": allowed})["state"]
+        self.assertNotIn("host_action_request", native)
         for command in SOLUTION:
             self.session.handle({"op": "step", "command": command})
         with self.assertRaisesRegex(WorldError, "finished"):
-            self.session.handle({"op": "step", "command": "ui.show panel:settings", "host_ui_dispatch": True})
+            self.session.handle({"op": "step", "command": "object.show fixture@7", "host_action_tools": allowed})
 
     def test_virtual_tools_require_unambiguous_accessible_catalogs(self):
         world = {"format": "grim-world", "version": 3, "spawn": "room", "entities": [

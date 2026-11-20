@@ -509,77 +509,34 @@ tool documentation. `native-open-catalog-v3` invalidates older provider-bound
 witnesses. The worker emits a request and the host fulfills that response without
 an additional worker round trip.
 
-### Manual UI resource discovery and dispatch
-
-The Play command field now supports a deliberately small host UI route:
+### Host object actions in Play
 
 ```text
 ui.list
-ui.inspect panel:settings
-ui.show panel:settings
-ui.hide panel:settings
+ui.inspect panel:settings@42
+ui.show panel:settings@42
+ui.hide panel:settings@42
 ```
 
-`ui.list` uses the loaded UI Plugin's registry handler to discover instantiated
-panels. It returns brief `{reference, name, type}` records, where `panel:<stable key>`
-is the session's observed reference and `type` is `t`. Panels are virtual host
-resources, not authored TextWorld entities. A unique exact title (ASCII case
-insensitive) is also accepted; duplicate titles require the explicit reference.
-Visible feedback lists panel names as plain text, adding references only for
-ambiguous or unusable names. Inspect/show/hide feedback reports a short state sentence.
-Structured records remain available to host consumers; the environment model
-input projection uses visible feedback without serializing the host envelope.
-Unobserved targets fail rather than guessing. Hidden panels are discoverable;
-uninstantiated panels are not. Discovery is explicit and independent of location.
+Use the object reference returned by `ui.list`. In this example, `42` identifies
+the current instance. The UI layer reads existing resources published by
+providers and returns `{reference, name, kind, state}` records. Published objects
+are available across Play resets. If an object is replaced, run `ui.list` to get
+its new reference.
 
-The host session caches this directory. Its revision changes when membership,
-title, or runtime generation changes; stable repeated listings retain the revision.
-Inspect/show/hide reuse the directory without re-listing everything. Reset, successful
-compile/start, and Stop clear observed references. Registry changes require a fresh
-`ui.list`. Names are readable labels; stable keys remain the underlying identity.
+The Play worker routes only the host action IDs supplied by the client. The
+client matches each request to the submitted command and attaches its action ID
+to the result. The host UI layer resolves the object reference, manages
+asynchronous completion and cancellation, and returns the current object state.
+Show and hide check the runtime identity on the UI thread before applying changes.
+An interrupted request with an uncertain outcome returns `unknown`.
 
-Host ownership is split across the following components:
+Host actions leave native moves, facts, and Goal progress alone. Native witness
+replay rejects them. Reset restarts the native episode and leaves host effects
+in place. The model observation uses the returned feedback text. The structured
+result remains available to host consumers.
 
-| Component | Responsibility |
-|---|---|
-| `world_tool_dispatch.hpp` | Manual command parsing and action result envelope. |
-| `ui_tool_adapter.hpp` | Explicit UI adapter table and shared family orchestration; maps `{t}` to `panel_id` and guarded mutations to `expected_runtime_id`. |
-| `ui_panel_resources.hpp` | Session-owned observed panel directory, transactional refresh, name/reference resolution, generation tracking, and visible resource projection. |
-| `ui_tool_completion.hpp` | Shared asynchronous submission, polling, cancellation, and provider ownership checks. |
-| `ui_tool_contract.hpp` | Shared registry eligibility checks and UI adapter contract helpers. |
-| `ToolRegistry` | Sole owner of executable handlers and plugin registration lifetime. |
-
-The adapter table holds host-side mappings, not executable registrations or plugin
-state. It is checked against the current descriptor's binding and parameter metadata;
-usage prose is never parsed or compared to select an argument mapping. All four
-UI actions share one directory and completion protocol. Adding a supported panel
-operation requires an explicit table entry; unknown tools never inherit a mapping.
-Only canonical loaded Model tools are eligible. The registry
-atomically checks the validated revision/classification when selecting the handler.
-The adapter verifies poll/inspect provider ownership. Inspect supplies state on
-demand. Show and hide recheck the observed runtime generation on the UI thread before
-changing visibility, so removal/recreation cannot redirect the effect.
-
-The worker validates a live, nonterminal step and emits a host action request;
-the client verifies it matches the submitted command and invokes the host adapter
-once. Native actions keep their existing route; unsupported `ui.*` commands fail.
-Host feedback includes an action ID and completed/failed/unknown status. Async requests
-are polled off the UI thread for up to ten seconds; pending submission is never
-reported as completed. Cancellation releases owned requests and cancels still-queued
-work. Already applied effects cannot be undone, so interrupted completion is unknown
-and requires inspection before retrying. No automatic resubmission occurs.
-
-Host operations do not advance native moves, inject facts, or award Goal success.
-Their commands are rejected by native witness replay, including recorded solutions.
-Reset restarts native state but does not undo host effects. This route is for explicit
-manual Play commands and validated model Execute commands through the Phase2 controller.
-Only completed Execute command contents reach this route, and host actions retain the
-adapter's Model-tool policy checks. Full worker facts remain host data and are
-excluded from the model's visible-field observation projection.
-World Lab uses the existing-resource operations supplied by the UI plugin.
-
-Use a host and UI Plugin built with API v3.14 for guarded show/hide and cancellation.
-Existing descriptor and registration layouts are unchanged. Focused checks:
+Focused checks:
 
 ```powershell
 ./tests/run_world_tool_dispatch.ps1

@@ -1,12 +1,30 @@
 #pragma once
-#include "ui_tool_contract.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
+#include <nlohmann/json.hpp>
+#include <stdexcept>
 #include "commands/command_result.hpp"
 #include <chrono>
 #include <functional>
 #include <thread>
 
-namespace GRIM::WorldLab::UITools {
-// Stateless request protocol. Poll/cancel stay with the submitting plugin generation.
+namespace GRIM::UI {
+using Json = nlohmann::json;
+
+struct CompletionUnknown : std::runtime_error { using std::runtime_error::runtime_error; };
+
+inline void require(bool condition, const std::string& message) {
+    if (!condition) throw std::runtime_error(message);
+}
+
+inline MMO::RegisteredTool panelTool(const std::string& id, uint64_t version) {
+    auto& registry = MMO::ToolRegistry::instance();
+    const auto tool = registry.getTool(id);
+    require(tool && registry.version() == version && tool->tool_id == id &&
+            tool->usage_type == MMO::ToolUsage::Model && tool->argument_format == "json",
+            "UI tool is unavailable or changed");
+    return *tool;
+}
+// Stateless client for the UI plugin request protocol.
 class PanelRequestCompletion {
     static Json invoke(const std::string& id, const Json& args, uint64_t version) {
         const auto result = MMO::ToolRegistry::instance().invoke(
@@ -19,9 +37,8 @@ class PanelRequestCompletion {
     }
 public:
     static Json complete(const std::string& id, const Json& args, uint64_t version,
-                         const MMO::RegisteredTool& owner, const std::function<bool()>& cancelled) {
-        auto poll = descriptor("ui.poll", version);
-        require(sameProvider(poll, owner), "UI poll provider mismatch");
+                         const std::function<bool()>& cancelled) {
+        panelTool("ui.poll", version);
         require(!cancelled(), "UI action cancelled before submission");
         auto response = invoke(id, args, version);
         const auto requestId = response.at("request_id").get<uint64_t>();
@@ -34,17 +51,16 @@ public:
                 response = invoke("ui.poll", {{"request_id", requestId}}, version);
                 require(response.at("request_id") == requestId, "UI response identity mismatch");
             }
+            require(response.at("status") == "completed", response.value("error", "UI request failed"));
         } catch (const std::exception& error) {
-            // Reap even after unrelated metadata changes, but never poll a replacement owner.
+            // The panel service scopes request IDs to the calling plugin instance.
             try {
                 const auto currentVersion = MMO::ToolRegistry::instance().version();
-                const auto current = descriptor("ui.poll", currentVersion);
-                if (sameProvider(current, owner))
-                    invoke("ui.poll", {{"request_id", requestId}, {"cancel", true}}, currentVersion);
+                panelTool("ui.poll", currentVersion);
+                invoke("ui.poll", {{"request_id", requestId}, {"cancel", true}}, currentVersion);
             } catch (...) {}
             throw CompletionUnknown(std::string("UI completion unknown: ") + error.what() + "; inspect before retrying");
         }
-        require(response.at("status") == "completed", response.value("error", "UI request failed"));
         const auto result = response.at("result");
         require(result.at("success").get<bool>(), result.value("error", "UI operation failed"));
         return result;

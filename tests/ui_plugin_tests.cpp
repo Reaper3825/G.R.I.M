@@ -2,7 +2,7 @@
 #include "loaded_provider_fixture.hpp"
 #include "core/plugin_manager.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "commands/commands_core.hpp"
+#include "commands/command_result.hpp"
 #include "ui/ui_panel_service.hpp"
 #include <filesystem>
 #include <functional>
@@ -104,20 +104,20 @@ void runUIPluginTests(const std::filesystem::path& directory) {
         check(entry && entry->provider.name == "UI Plugin" && entry->permission_bits == GRIM_PERM_UI &&
               entry->argument_format == "json" && !entry->argument_schema_json.empty(), "UI tool metadata incomplete");
     }
-    auto invoke = [](const char* tool, const std::string& args) {
-        auto result = dispatchCommand(tool, args);
+    auto invoke = [&registry](const char* tool, const std::string& args) {
+        auto result = registry.invoke(tool, args);
         check(result.success, "UI plugin command failed");
         return nlohmann::json::parse(result.structuredOutputJson);
     };
     const auto count = uiTasks.size();
     for (const char* args : {"", "null", "[]", "{}", "{\"panel_id\":4}", "{\"panel_id\":\"\"}",
                               "{\"panel_id\":\"settings\",\"extra\":true}"})
-        check(dispatchCommand("ui.show", args).errorCode == "ERR_INVALID_ARGS", "Malformed panel arguments accepted");
+        check(registry.invoke("ui.show", args).errorCode == "ERR_INVALID_ARGS", "Malformed panel arguments accepted");
     for (const char* args : {"{\"request_id\":-1}", "{\"request_id\":0}", "{\"request_id\":1.2}", "{\"request_id\":\"1\"}"})
-        check(dispatchCommand("ui.poll", args).errorCode == "ERR_INVALID_ARGS", "Malformed request ID accepted");
+        check(registry.invoke("ui.poll", args).errorCode == "ERR_INVALID_ARGS", "Malformed request ID accepted");
     check(uiTasks.size() == count, "Invalid plugin arguments reached UI service");
     for (const char* args : {"null", "[]", "{\"unexpected\":true}", "garbage"})
-        check(dispatchCommand("ui.list", args).errorCode == "ERR_INVALID_ARGS", "Invalid listing arguments accepted");
+        check(registry.invoke("ui.list", args).errorCode == "ERR_INVALID_ARGS", "Invalid listing arguments accepted");
     check(uiTasks.size() == count, "Invalid listing reached UI service");
     for (const char* args : {"", " \t "}) {
         const auto bare = invoke("ui.list", args);
@@ -134,11 +134,11 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     const auto effectsBefore = effects;
     auto stale = invoke("ui.show", R"({"panel_id":"settings","expected_runtime_id":41})");
     pump();
-    check(!dispatchCommand("ui.poll", nlohmann::json{{"request_id", stale.at("request_id")}}.dump()).success && effects == effectsBefore,
+    check(!registry.invoke("ui.poll", nlohmann::json{{"request_id", stale.at("request_id")}}.dump()).success && effects == effectsBefore,
           "Guarded plugin show ignored runtime identity");
     stale = invoke("ui.hide", R"({"panel_id":"settings","expected_runtime_id":41})");
     pump();
-    check(!dispatchCommand("ui.poll", nlohmann::json{{"request_id", stale.at("request_id")}}.dump()).success && visible && effects == effectsBefore,
+    check(!registry.invoke("ui.poll", nlohmann::json{{"request_id", stale.at("request_id")}}.dump()).success && visible && effects == effectsBefore,
           "Guarded plugin hide ignored runtime identity");
     auto released = invoke("ui.hide", R"({"panel_id":"settings"})");
     invoke("ui.poll", nlohmann::json{{"request_id", released.at("request_id")}, {"cancel", true}}.dump()); pump();
@@ -150,11 +150,25 @@ void runUIPluginTests(const std::filesystem::path& directory) {
           "UI hide completion was not preserved");
     auto missing = invoke("ui.inspect", "{\"panel_id\":\"missing\"}");
     pump();
-    auto failure = dispatchCommand("ui.poll", nlohmann::json{{"request_id", missing.at("request_id")}}.dump());
+    auto failure = registry.invoke("ui.poll", nlohmann::json{{"request_id", missing.at("request_id")}}.dump());
     check(!failure.success && failure.errorCode == "ERR_UI_OPERATION", "Host failure became tool success");
-    invoke("ui.show", "{\"panel_id\":\"settings\"}");
+    const auto retired = invoke("ui.show", R"({"panel_id":"settings"})").at("request_id").get<uint64_t>();
     PluginManager::unloadAll(); pump();
     check(!visible && registry.toolCount() == baseline, "Unload retained UI operations or queued side effects");
+
+    PluginManager::initialize(folder.string());
+    const auto current = invoke("ui.list", "{}").at("request_id").get<uint64_t>();
+    for (const bool cancel : {false, true}) {
+        const auto staleRequest = registry.invoke("ui.poll",
+            nlohmann::json{{"request_id", retired}, {"cancel", cancel}}.dump());
+        check(!staleRequest.success && staleRequest.errorCode == "ERR_UI_REQUEST" &&
+              nlohmann::json::parse(staleRequest.structuredOutputJson).at("error") == "request_not_found",
+              "Replacement provider accepted a retired request");
+    }
+    pump();
+    check(invoke("ui.poll", nlohmann::json{{"request_id", current}}.dump()).at("status") == "completed",
+          "Retired request disturbed the replacement provider's request");
+    PluginManager::unloadAll();
     std::cout << "UI plugin metadata, permissions, asynchronous completion, ownership and unload tests passed\n";
 }
 

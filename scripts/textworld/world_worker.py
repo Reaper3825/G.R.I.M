@@ -374,6 +374,11 @@ class Session:
         roster = request.get("catalog_tools", [])
         need(isinstance(roster, list) and all(isinstance(tool_id, str) and tool_id and
              not any(c in tool_id for c in "\r\n\x00") for tool_id in roster), "Invalid catalog tool roster")
+        host_tools = request.get("host_action_tools", [])
+        need(isinstance(host_tools, list) and all(isinstance(tool_id, str) and tool_id and
+             not any(c.isspace() or c == "\x00" for c in tool_id) for tool_id in host_tools),
+             "Invalid host action tool roster")
+        host_tools = set(host_tools)
         if op in ("compile", "validate"):
             document = request["document"]
             open_providers = {e["id"]: e["open_provider"] for e in document.get("entities", [])
@@ -428,10 +433,7 @@ class Session:
         if op == "step":
             need(not self.done, "Episode is finished; reset or start another Goal")
             command = self.command(request.get("command", ""))
-            if command.startswith("ui."):
-                tool = command.split(" ", 1)[0]
-                need(tool in ("ui.list", "ui.inspect", "ui.show", "ui.hide"), "Unsupported World Lab UI action")
-                need(request.get("host_ui_dispatch") is True, "Host UI dispatch support required")
+            if command.partition(" ")[0] in host_tools:
                 result = self.observation(self.env.state)
                 result.pop("observation_request", None)
                 result["host_action_request"] = {"command": command}
@@ -443,8 +445,8 @@ class Session:
             commands = request.get("commands", [])
             need(isinstance(commands, list) and len(commands) <= 1000, "A solution supports 0-1000 commands")
             commands = [self.command(command) for command in commands]
-            need(not any(command.startswith("ui.") for command in commands),
-                 "Host UI actions cannot be replayed as native solution witnesses")
+            need(not any(command.partition(" ")[0] in host_tools for command in commands),
+                 "Host actions cannot be replayed as native solution witnesses")
             witness = request.get("witness")
             if witness is not None:
                 need(isinstance(witness, dict) and witness.get("identity") == self.episode.identity,

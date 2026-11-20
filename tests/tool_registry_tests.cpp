@@ -1,7 +1,7 @@
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "MMO/Core/ToolGapPlanner.hpp"
-#include "commands/commands_core.hpp"
+#include "commands/command_result.hpp"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -120,7 +120,7 @@ int main() try {
     first.aliases = {"alias"};
     check(publishTool(first, echo), "Registration failed");
     check(registry.toolCount() == 1 && registry.resolveAlias("alias") == "first", "Metadata and callable not published together");
-    check(dispatchCommand("alias", "argument").message == "argument", "Alias used a different execution store");
+    check(registry.invoke("alias", "argument").message == "argument", "Alias used a different execution store");
     check(registry.getTool("first")->usage_count == 1 && registry.getTool("alias")->success_count == 1, "Dispatch did not count exactly once on canonical tool");
     const auto version = registry.version();
     check(!publishTool(first, echo), "Duplicate replaced tool implicitly");
@@ -143,7 +143,7 @@ int main() try {
     check(registry.updateMetadata(first, ownerFor(first.tool_id)), "Metadata update failed");
     check(!registry.isRegistered("alias") && registry.isRegistered("new_alias"), "Metadata update retained stale alias");
     check(registry.getTool("first")->usage_count == 1, "Metadata update reset stats");
-    check(dispatchCommand("new_alias", "still callable").message == "still callable", "Metadata update lost handler");
+    check(registry.invoke("new_alias", "still callable").message == "still callable", "Metadata update lost handler");
     const ProviderDescriptor batchProvider{ToolProviderType::Plugin, "batch", "batch-1", {}};
     auto batchGood = descriptor("batch_good");
     auto batchBad = descriptor("batch_bad");
@@ -156,11 +156,11 @@ int main() try {
     providers.retire(batchProvider.name, batchProvider.instance);
     auto throwing = descriptor("throwing");
     publishTool(throwing, [](const std::string&) -> CommandResult { throw std::runtime_error("test"); });
-    check(dispatchCommand("throwing", "").errorCode == "ERR_CMD_EXCEPTION", "Handler exception escaped dispatch");
+    check(registry.invoke("throwing", "").errorCode == "ERR_CMD_EXCEPTION", "Handler exception escaped dispatch");
     check(registry.getTool("throwing")->failure_count == 1, "Failure counted incorrectly");
     auto nested = descriptor("nested");
-    publishTool(nested, [](const std::string& args) { return dispatchCommand("first", args); });
-    check(dispatchCommand("nested", "nested result").message == "nested result", "Nested registry dispatch failed");
+    publishTool(nested, [&registry](const std::string& args) { return registry.invoke("first", args); });
+    check(registry.invoke("nested", "nested result").message == "nested result", "Nested registry dispatch failed");
 
     auto replaced = descriptor("replaced");
     const auto oldOwner = ownerFor(replaced.tool_id);
@@ -172,12 +172,12 @@ int main() try {
               "In-flight provider replacement failed");
         return CommandResult{};
     });
-    dispatchCommand("replaced", "");
+    registry.invoke("replaced", "");
     check(registry.getTool("replaced")->usage_count == 0, "Old execution updated replacement's stats");
     for (const auto* id : {"first", "throwing", "nested"}) retireToolProvider(id);
     providers.retire(replacement.name, replacement.instance);
     check(registry.toolCount() == 0 && !registry.isRegistered("new_alias"), "Provider cleanup left execution or aliases");
-    check(dispatchCommand("new_alias", "").errorCode == "ERR_UNKNOWN_CMD", "Removed handler remained executable");
+    check(registry.invoke("new_alias", "").errorCode == "ERR_UNKNOWN_CMD", "Removed handler remained executable");
 
     check(observer.changes > 0, "No registry notifications");
     registry.removeListener(&observer);

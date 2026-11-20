@@ -11,7 +11,6 @@
 #include "plugin_manifest.hpp"
 #include "plugin_notifications.hpp"
 #include "logger.hpp"
-#include "commands/commands_core.hpp"
 #include "error_manager.hpp"
 #include "ui/ui_panel_service.hpp"
 #include "../MMO/Core/Registries/ToolRegistry.hpp"  // Phase 0.25: pluginâ†”ToolRegistry sync
@@ -318,7 +317,7 @@ static GrimResult api_execute_command(GrimPluginHandle self, const char* command
     ActiveCall active(owner->gate);
     if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     auto [cmd, arg] = GRIMInput::parseInput(command_text);
-    const auto value = dispatchCommand(cmd, arg);
+    const auto value = GRIM::MMO::ToolRegistry::instance().invoke(cmd, arg);
     return grim::completeToolResult(writer, value);
 }
 
@@ -523,6 +522,7 @@ static const char* api_ui_panel_service(GrimPluginHandle self, GrimUIPanelOperat
         nlohmann::json response = {{"format", "grim-ui-panel-response"}, {"version", 1},
                                   {"request_id", request_id}, {"status", "pending"}};
         if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
+            // Resolve requests only within the calling plugin instance.
             const auto found = owner->panelRequests.find(request_id);
             if (found == owner->panelRequests.end()) {
                 response["status"] = "error"; response["error"] = "request_not_found";

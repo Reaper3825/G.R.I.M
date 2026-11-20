@@ -1,7 +1,7 @@
 // Real loader/API/registry reconciliation using tiny native fixtures.
 #include "core/plugin_manager.hpp"
 #include "core/plugin_api_impl.hpp"
-#include "commands/commands_core.hpp"
+#include "commands/command_result.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <filesystem>
 #include <fstream>
@@ -19,7 +19,7 @@ void check(bool value, const char* message) { if (!value) throw std::runtime_err
 struct ChangeObserver : GRIM::MMO::ToolRegistryListener {
     bool callable = false;
     void onToolRegistered(const std::string& id) override {
-        callable = dispatchCommand(id, "").success;
+        callable = GRIM::MMO::ToolRegistry::instance().invoke(id, "").success;
         throw std::runtime_error("observer failure");
     }
     void onToolUnregistered(const std::string&) override { throw std::runtime_error("observer failure"); }
@@ -109,7 +109,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(provider() && replacement && provider()->instance == replacement->provider.instance,
           "Replacement provider and tools have different generations");
     check(replacement && replacement->provider.instance != firstInstance &&
-          dispatchCommand("Declared-alpha", "").message == "new-result", "Valid replacement was not committed");
+          registry.invoke("Declared-alpha", "").message == "new-result", "Valid replacement was not committed");
     check(!registry.isRegistered("Declared-alpha-extra"), "Replacement retained a removed tool");
     PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
     PluginAPI::dispatchSystemTick(0, 0);
@@ -117,7 +117,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
           "Retiring old generation removed replacement resources");
 
     const auto secondInstance = replacement->provider.instance;
-    check(dispatchCommand("Declared-alpha", "reload").message == "new-result", "Reload request did not return normally");
+    check(registry.invoke("Declared-alpha", "reload").message == "new-result", "Reload request did not return normally");
     check(registry.getTool("Declared-alpha")->provider.instance == secondInstance, "Plugin reloaded from inside its callback");
     PluginManager::tick();
     check(registry.getTool("Declared-alpha")->provider.instance != secondInstance, "Queued API reload request was not serviced");

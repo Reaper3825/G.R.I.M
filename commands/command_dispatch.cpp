@@ -1,8 +1,0 @@
-#include "commands_core.hpp"
-#include "MMO/Core/Registries/ToolRegistry.hpp"
-
-// Only explicitly selected registered tools execute here. Intent and policy
-// selection remain the caller's responsibility.
-CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
-    return GRIM::MMO::ToolRegistry::instance().invoke(cmd, arg);
-}

@@ -635,11 +635,10 @@ sessions, and RL updates remain pending. The current source ConceptBlock stores 
 each phase; a whole episode is not assumed to map 1:1 to an SFT block. This
 controller remains separate from manual Play-tab behavior.
 
-Manual Play now has a separate host UI route for `ui.list`, `ui.inspect`, and
-`ui.show`, and `ui.hide`, with observed virtual resource references, guarded visibility changes, completion
-polling, and replay rejection. See [manual UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
-Validated model Execute commands may use the same supported host UI route. The worker's
-full facts remain excluded from the model-visible observation projection.
+Manual Play and validated model Execute commands use the same route for
+explicitly enabled host object tools. The UI layer supplies object references
+and action results. The worker's full facts remain excluded from model-visible
+observations. See [host object actions in Play](WORLD_LAB.md#host-object-actions-in-play).
 
 ## Validation workflow
 

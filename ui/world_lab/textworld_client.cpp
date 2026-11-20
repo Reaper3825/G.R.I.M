@@ -158,7 +158,6 @@ pid_t launch(const fs::path& executable,const std::vector<std::string>& argument
 #endif
 }
 struct TextWorldClient::Impl {
-    WorldToolDispatch toolDispatch;
     std::future<nlohmann::json> pending;
     std::atomic<bool> cancelled{false};
     bool stopping=false; // Caller-thread state, independent of future readiness.
@@ -179,7 +178,6 @@ struct TextWorldClient::Impl {
         return text;
     }
     void shutdown() noexcept {
-        toolDispatch.clear();
         try {
 #ifdef _WIN32
             if(directoryOwned) {std::ofstream stop(directory/"stop");}
@@ -285,7 +283,7 @@ struct TextWorldClient::Impl {
             start();
             const auto requestId=++sequence;
             request["id"]=requestId;request["protocol"]=2;
-            request["host_ui_dispatch"]=true;
+            request["host_action_tools"]=WorldToolDispatch::tools();
             if(request.value("op",std::string{})=="step" && request.contains("command") && request["command"].is_string()) {
                 auto command=request.at("command").get<std::string>();
                 const auto first=command.find_first_not_of(" \t");
@@ -316,12 +314,11 @@ struct TextWorldClient::Impl {
                             state.erase("host_action_request");
                             if(request.at("op")!="step" || request.at("command")!=command)
                                 throw std::runtime_error("Unsolicited host action request");
-                            state["host_action"]=toolDispatch.execute(command,requestId,[this]{return cancelled.load();});
+                            state["host_action"]=WorldToolDispatch::execute(command,requestId,[this]{return cancelled.load();});
                             state["feedback"]=state.at("host_action").at("feedback");
                             if(cancelled)throw std::runtime_error("TextWorld request cancelled. "+state.at("feedback").get<std::string>());
                         } else if(request.at("op")=="compile" || request.at("op")=="reset" || request.at("op")=="start_episode") {
-                            toolDispatch.clear();
-                        }
+                                            }
                     }
                     return result;
                 }

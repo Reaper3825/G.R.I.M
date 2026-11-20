@@ -10,10 +10,7 @@
 //      if (risk >= threshold || confidence <= floor) → VerifyWithUser
 //      else → Execute
 //
-// Replaces direct ActionExecutor::executeAction() / dispatchCommand()
-// paths with one gated policy check.
-//
-// No action is ever executed without passing through this gate.
+// Callers evaluate proposed model actions here before invoking a selected tool.
 //======================================================//
 #pragma once
 

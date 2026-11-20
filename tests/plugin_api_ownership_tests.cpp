@@ -8,7 +8,7 @@
 #include <chrono>
 #include <atomic>
 #include <thread>
-#include "commands/commands_core.hpp"
+#include "commands/command_result.hpp"
 #include "MMO/Core/HardwareInventory.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <iostream>
@@ -236,7 +236,7 @@ int main(int argc, char** argv) try {
     check(alpha->has_permission(alpha.handle(), GRIM_PERM_MEMORY), "Alpha lost permissions");
     check(!beta->has_permission(beta.handle(), GRIM_PERM_MEMORY), "Beta inherited Alpha permissions");
     check(!alpha->has_permission(alpha.handle(), static_cast<GrimPermission>(GRIM_PERM_MEMORY | GRIM_PERM_UI)), "Combined permissions partially accepted");
-    check(dispatchCommand("alpha_tool", "").success, "Command callback used wrong owner");
+    check(GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "").success, "Command callback used wrong owner");
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
     auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_second");
     check(tool && tool->provider.name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY,
@@ -271,14 +271,14 @@ int main(int argc, char** argv) try {
           executionMessage == "owned local message", "Command execution writer failed");
     check(alpha->execute_command(alpha.handle(), nullptr, &recipient) == GRIM_ERROR_INVALID_PARAM,
           "Null execution input accepted");
-    auto copiedResult = dispatchCommand("alpha_tool", "");
+    auto copiedResult = GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "");
     check(copiedResult.message == "owned local message" &&
           copiedResult.structuredOutputJson == R"({"answer":42})", "Host did not copy result data immediately");
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
         brokenHandler = handler;
         LoadedProviderFixture brokenProvider({.name = "broken-fixture", .path = "", .version = "1.2.3", .required_permissions = 0});
         loadTools(brokenProvider, {definition("broken")}, dispatchBroken);
-        check(dispatchCommand("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
+        check(GRIM::MMO::ToolRegistry::instance().invoke("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
         brokenProvider.unload();
     }
     LoadedProviderFixture metadata({.name = "metadata", .path = "metadata.dll", .version = "1.2.3", .required_permissions = 0});
@@ -355,14 +355,14 @@ int main(int argc, char** argv) try {
     rejects([&] { loadTools(conflict, {definition("new_tool"), definition("reserved_fixture_tool")}); },
             "Tool collision accepted");
     check(!ToolRegistry::instance().isRegistered("new_tool"), "Failed load left a partial manifest");
-    auto running = std::async(std::launch::async, [] { return dispatchCommand("blocking", ""); });
+    auto running = std::async(std::launch::async, [] { return GRIM::MMO::ToolRegistry::instance().invoke("blocking", ""); });
     blocked.entered.get_future().wait();
     auto stopping = std::async(std::launch::async, [&] { beta.unload(); });
     // Once unregistered, no new invocation can enter; shutdown must still await the old call.
     while (GRIM::MMO::ToolRegistry::instance().isRegistered("blocking")) std::this_thread::yield();
     check(stopping.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout,
           "Shutdown did not wait for an active call");
-    check(!dispatchCommand("blocking", "").success, "Stopping provider accepted a new call");
+    check(!GRIM::MMO::ToolRegistry::instance().invoke("blocking", "").success, "Stopping provider accepted a new call");
     blocked.release.set_value();
     check(running.get().success, "Active call was interrupted");
     stopping.get();
@@ -378,7 +378,7 @@ int main(int argc, char** argv) try {
     const auto count = GRIM::MMO::ToolRegistry::instance().toolCount();
     PluginManager::initialize(argv[1]);
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count + 2, "Folder load did not populate registry");
-    check(dispatchCommand("Declared-alpha", "").message == "fixture result", "Loaded DLL handler failed");
+    check(GRIM::MMO::ToolRegistry::instance().invoke("Declared-alpha", "").message == "fixture result", "Loaded DLL handler failed");
     PluginManager::unloadAll();
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count, "DLL unload left registry entries");
     PluginManager::initialize(argv[2]);

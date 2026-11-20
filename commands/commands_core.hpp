@@ -18,9 +18,6 @@ extern std::filesystem::path g_currentDir;
 // Parse user input into (command, argument)
 std::pair<std::string, std::string> parseInput(const std::string& input);
 
-// Dispatch a specific command by name
-CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
-
 // Process raw model input and return the response to the owning surface.
 CommandResult handleCommand(const std::string& line);
 GRIM_HOST_API CommandResult handleCommand(const std::string& line, const std::string& session_id,

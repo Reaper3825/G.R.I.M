@@ -112,7 +112,7 @@ void runTextWorldClientTests(){
             registrations.push_back({tool, [&, id = std::string(id)](const std::string& text) {
                 const auto args = nlohmann::json::parse(text);
                 nlohmann::json result = {{"success", true}};
-                if ((id == "ui.list" && stall) || id == "ui.poll") {
+                if (id == "ui.poll" && stall) {
                     submitted = true;
                     if (args.value("cancel", false)) released = true;
                     else {
@@ -122,8 +122,7 @@ void runTextWorldClientTests(){
                         return pending;
                     }
                 }
-                if (id == "ui.list") result["panels"] = {{{"panel_id", "settings"}, {"title", "Settings panel"}, {"runtime_id", 42}}};
-                else if (id != "ui.poll") {
+                if (id != "ui.poll") {
                     check(args.at("panel_id") == "settings", "Client adapter encoded incorrect key");
                     if (id == "ui.show" || id == "ui.hide") {
                         check(args.at("expected_runtime_id") == 42, "Client omitted generation guard");
@@ -133,36 +132,40 @@ void runTextWorldClientTests(){
                     result["panel"] = {{"panel_id", "settings"}, {"title", "Settings panel"}, {"runtime_id", 42},
                         {"visible", visible}, {"minimized", false}, {"maximized", false}};
                 }
+                if (id == "ui.inspect" && stall)
+                    result = nlohmann::json::object();
                 CommandResult output;
                 output.structuredOutputJson = nlohmann::json{{"format", "grim-ui-panel-response"}, {"version", 1},
-                    {"request_id", 1}, {"status", "completed"}, {"result", result}}.dump();
+                    {"request_id", 1}, {"status", id == "ui.inspect" && stall ? "pending" : "completed"}, {"result", result}}.dump();
                 return output;
             }});
         }
         check(providers.publish(owner, registrations), "Client UI fixture publication failed");
+        GRIM::MMO::ResourceDescriptor published{"panel:settings", "ui.panel", "Settings panel", {}, 42, {{"visible", false}}};
+        check(providers.publishResource(owner.instance, published), "Client object publication failed");
         TextWorldClient uiClient;
         const auto initial = request(uiClient, {{"op", "compile"}, {"document", Document::initial().gameJson()}}).at("state");
         auto state = request(uiClient, {{"op", "step"}, {"command", " ui.list "}}).at("state");
-        check(state.at("host_action").at("resources")[0].at("reference") == "panel:settings", "Client did not project UI discovery");
+        check(state.at("host_action").at("resources")[0].at("reference") == "panel:settings@42", "Client did not return the published object");
         check(!state.contains("host_action_request"), "Internal dispatch request leaked");
-        state = request(uiClient, {{"op", "step"}, {"command", "ui.inspect Settings panel"}}).at("state");
+        state = request(uiClient, {{"op", "step"}, {"command", "ui.inspect panel:settings@42"}}).at("state");
         check(state.at("host_action").at("status") == "completed" && shows == 0, "Client inspection caused effects");
-        state = request(uiClient, {{"op", "step"}, {"command", "ui.show panel:settings"}}).at("state");
+        state = request(uiClient, {{"op", "step"}, {"command", "ui.show panel:settings@42"}}).at("state");
         check(state.at("host_action").at("status") == "completed" && shows == 1, "Client did not execute one UI action");
-        state = request(uiClient, {{"op", "step"}, {"command", "ui.hide Settings panel"}}).at("state");
-        check(state.at("host_action").at("resource").at("visible") == false && hides == 1,
+        state = request(uiClient, {{"op", "step"}, {"command", "ui.hide panel:settings@42"}}).at("state");
+        check(state.at("host_action").at("resource").at("state").at("visible") == false && hides == 1,
               "Client did not execute hide and report completion");
         check(state.at("facts") == initial.at("facts") && state.at("moves") == initial.at("moves") &&
             state.at("episode") == initial.at("episode"), "Host effect altered native verification state");
-        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.show panel:settings"}}}), "Cannot submit replay");
+        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.show panel:settings@42"}}}), "Cannot submit replay");
         check(!wait(uiClient).at("ok").get<bool>() && shows == 1, "Replay executed a host effect");
-        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.hide panel:settings"}}}), "Cannot submit hide replay");
+        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.hide panel:settings@42"}}}), "Cannot submit hide replay");
         check(!wait(uiClient).at("ok").get<bool>() && hides == 1, "Replay repeated hide");
         request(uiClient, {{"op", "reset"}});
-        state = request(uiClient, {{"op", "step"}, {"command", "ui.show panel:settings"}}).at("state");
-        check(state.at("host_action").at("status") == "failed" && shows == 1, "Reset retained observed resources");
+        check(request(uiClient, {{"op", "step"}, {"command", "ui.list"}}).at("state").at("host_action")
+                  .at("resources").size() == 1, "Reset changed published objects");
         stall = true;
-        check(uiClient.begin({{"op", "step"}, {"command", "ui.list"}}), "Cannot start pending host request");
+        check(uiClient.begin({{"op", "step"}, {"command", "ui.inspect panel:settings@42"}}), "Cannot start pending host request");
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!submitted && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
         check(submitted, "Host request did not reach submission");

@@ -1,6 +1,6 @@
 #include "core/plugin_manager.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "commands/commands_core.hpp"
+#include "commands/command_result.hpp"
 #include <filesystem>
 #include <stdexcept>
 void runInputPluginTests(const std::filesystem::path& directory) {
@@ -19,8 +19,8 @@ void runInputPluginTests(const std::filesystem::path& directory) {
   check(tool && tool->provider.name=="Input Plugin" && tool->permission_bits==GRIM_PERM_INPUT,"Input ownership/permissions changed");
  }
  // Invalid requests never inject native input. Device effects are tested with a provider-local fixture.
- check(!dispatchCommand("type","").success,"Empty typing accepted");
- check(!dispatchCommand("move_mouse","bad").success,"Malformed move accepted");
+ check(!registry.invoke("type","").success,"Empty typing accepted");
+ check(!registry.invoke("move_mouse","bad").success,"Malformed move accepted");
  PluginManager::unloadAll(); check(registry.toolCount()==baseline,"Input tools survived unload");
  PluginManager::initialize(folder.string());
  fs::remove(folder/"input_plugin.dll"); PluginManager::checkForHotReload();
