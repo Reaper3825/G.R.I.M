@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["network"],
+  "api_version": 1572864,
   "provider": "Network Test Plugin",
   "version": "1.0.0",
   "tools": [
@@ -25,10 +24,7 @@
       ],
       "short_description": "Start a network load test against selected targets",
       "usage": "networktest {t} <port> [options...]",
-      "usage_type": 3,
-      "permissions": [
-        "network"
-      ]
+      "usage_type": 3
     },
     {
       "tool_id": "networktest_stop",
@@ -39,10 +35,7 @@
       "needs_confirmation": true,
       "short_description": "Stop the currently running network load test",
       "usage": "networktest_stop",
-      "usage_type": 3,
-      "permissions": [
-        "network"
-      ]
+      "usage_type": 3
     }
   ]
 }

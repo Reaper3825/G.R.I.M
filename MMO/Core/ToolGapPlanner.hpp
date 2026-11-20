@@ -33,7 +33,6 @@ namespace GRIM::MMO {
 enum class ToolGapReason : uint8_t {
     NoMatchingCapability   = 0,  // registry has nothing close
     CapabilityMismatch     = 1,  // tool exists but wrong params/scope
-    PermissionInsufficient = 2,  // tool exists but needs higher perms
     PolicyBlocked          = 3,  // tool exists but policy forbids
 };
 
@@ -49,7 +48,6 @@ struct ProposedToolSpec {
     std::string    display_name;
     std::string    description;
     std::string    category;        // "action", "information", etc.
-    uint32_t       permission_bits = 0;
     bool           needs_confirmation = true;  // default: require confirm
     std::vector<ToolParameter> parameters;
     std::vector<std::string>   capability_tags;

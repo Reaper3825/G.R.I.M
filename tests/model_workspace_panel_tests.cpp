@@ -34,10 +34,10 @@ struct Module {
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         require(shutdown != nullptr, "Missing ModelWorkspace shutdown");
     }
-    GrimResult init(bool permission = true) {
+    GrimResult init(bool registered = true) {
         auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         require(init != nullptr, "Missing ModelWorkspace init");
-        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        const auto instance = prepareProviderPanelFixture(api, lease, registered);
         publish();
         return init(&api, instance);
     }
@@ -98,7 +98,7 @@ void runNativeModelWorkspaceDllTests(const char* dllPath) {
         }
         {
             Module denied(directory / "denied.dll", "workspace-denied");
-            require(denied.init(false) != GRIM_OK, "ModelWorkspace bypassed UI permission");
+            require(denied.init(false) != GRIM_OK, "ModelWorkspace accepted an unregistered provider");
         }
         {
             Module failed(directory / "failed.dll", "workspace-failed");

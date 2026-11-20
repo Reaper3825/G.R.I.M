@@ -4,7 +4,7 @@ The host owns registration, generation call gates, system tick dispatch and
 copied UI notifications. Schedule owns calendar storage and due-item logic.
 
 `schedule_plugin` owns six `schedule.*` tools, persistent UTC records and a
-one-second delivery poll driven by host system ticks. It requires SYSTEM, FILESYSTEM and UI permissions.
+one-second delivery poll driven by host system ticks.
 API v14 makes Calendar a native `UIPanel` subclass owned by Schedule. It directly
 owns buttons, inputs, scrolling, layout and actions and uses the provider service.
 Constructor registration is staged during provider initialization. After commit,

@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["voice", "filesystem", "process"],
+  "api_version": 1572864,
   "provider": "Voice Plugin",
   "version": "2.0.0",
   "tools": [
@@ -15,11 +14,6 @@
       "short_description": "Read voice status and the latest 64 transcript/wake/error events",
       "usage": "voice.status",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -34,11 +28,6 @@
       "short_description": "Configure provider root, voice and whisper settings without starting devices",
       "usage": "voice.configure",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -53,11 +42,6 @@
       "short_description": "Capture and transcribe speech without executing it",
       "usage": "voice.capture",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -72,11 +56,6 @@
       "short_description": "Start continuous transcription without conversation dispatch",
       "usage": "voice.stream.start",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -91,11 +70,6 @@
       "short_description": "Stop the continuous speech transcription stream",
       "usage": "voice.stream.stop",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -110,11 +84,6 @@
       "short_description": "Explicitly initialize the configured TTS provider",
       "usage": "voice.tts.start",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -129,11 +98,6 @@
       "short_description": "Queue text for synthesized speech playback",
       "usage": "voice.speak",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -148,11 +112,6 @@
       "short_description": "Play audio from a WAV file",
       "usage": "voice.play",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -167,11 +126,6 @@
       "short_description": "Stop voice workers, models and playback",
       "usage": "voice.stop",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -186,11 +140,6 @@
       "short_description": "Generate and cache common phrases synchronously",
       "usage": "voice.precache",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -205,11 +154,6 @@
       "short_description": "Start wake detection without command dispatch",
       "usage": "voice.wake.start",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -224,11 +168,6 @@
       "short_description": "Stop listening for the wake phrase",
       "usage": "voice.wake.stop",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -243,11 +182,6 @@
       "short_description": "List the available audio devices",
       "usage": "voice.devices",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -262,11 +196,6 @@
       "short_description": "Synthesize text to an audio file without playback",
       "usage": "voice.synthesize",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }
@@ -281,11 +210,6 @@
       "short_description": "Read statistics for the voice provider cache",
       "usage": "voice.cache.status",
       "usage_type": 0,
-      "permissions": [
-        "filesystem",
-        "process",
-        "voice"
-      ],
       "argument_schema": {
         "type": "object"
       }

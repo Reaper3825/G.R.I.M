@@ -24,37 +24,37 @@ static grim::PluginHost g_api = {};
 
 static GrimResult handleProfilePerson(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     return grim::completeToolResult(writer, cmdProfilePerson(arguments(call)));
 }
 static GrimResult handleSherlockSweep(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     return grim::completeToolResult(writer, cmdSherlockSweep(arguments(call)));
 }
 static GrimResult handleOsintReport(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     return grim::completeToolResult(writer, cmdOsintReport(arguments(call)));
 }
 static GrimResult handleOsintStatus(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     return grim::completeToolResult(writer, cmdOsintStatus(arguments(call)));
 }
 static GrimResult handleOsintClearCache(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     return grim::completeToolResult(writer, cmdOsintClearCache(arguments(call, false)));
 }
 static GrimResult handleOsintScanSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     return grim::completeToolResult(writer, cmdOsintScanSecrets(arguments(call)));
 }
 static GrimResult handleOsintShowSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api || !g_api->has_permission(g_api.instance(), GRIM_PERM_FILESYSTEM) || !g_api->has_permission(g_api.instance(), GRIM_PERM_NETWORK) || !g_api->has_permission(g_api.instance(), GRIM_PERM_PROCESS)) return GRIM_ERROR_PERMISSION_DENIED;
+    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     return grim::completeToolResult(writer, cmdOsintShowSecrets(arguments(call)));
 }
 // ============================================================================
@@ -66,7 +66,7 @@ extern "C" {
 PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
     const grim::PluginHost api{table, instance};
     if (!api || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        api->api_version < GRIM_API_VERSION || !api->has_permission) {
+        api->api_version < GRIM_API_VERSION) {
         return GRIM_ERROR_API_VERSION_MISMATCH;
     }
     osintProvider::initializePaths();

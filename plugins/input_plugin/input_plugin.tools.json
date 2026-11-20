@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["input"],
+  "api_version": 1572864,
   "provider": "Input Plugin",
   "version": "1.0.0",
   "tools": [
@@ -26,10 +25,7 @@
       ],
       "short_description": "Move the pointer to specified desktop coordinates",
       "usage": "move_mouse <x> <y>",
-      "usage_type": 0,
-      "permissions": [
-        "input"
-      ]
+      "usage_type": 0
     },
     {
       "tool_id": "click",
@@ -52,10 +48,7 @@
       ],
       "short_description": "Click a mouse button at the current position",
       "usage": "click [left|right|middle]",
-      "usage_type": 0,
-      "permissions": [
-        "input"
-      ]
+      "usage_type": 0
     },
     {
       "tool_id": "type",
@@ -78,10 +71,7 @@
       ],
       "short_description": "Type supplied text into the focused application",
       "usage": "type <text>",
-      "usage_type": 0,
-      "permissions": [
-        "input"
-      ]
+      "usage_type": 0
     },
     {
       "tool_id": "key",
@@ -104,10 +94,7 @@
       ],
       "short_description": "Press a key or combination of keys",
       "usage": "key <key|key+key>",
-      "usage_type": 0,
-      "permissions": [
-        "input"
-      ]
+      "usage_type": 0
     }
   ]
 }

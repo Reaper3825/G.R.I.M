@@ -34,10 +34,10 @@ struct Module {
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         require(shutdown != nullptr, "Missing Settings shutdown");
     }
-    GrimResult init(bool permission = true) {
+    GrimResult init(bool registered = true) {
         auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         require(init != nullptr, "Missing Settings init");
-        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        const auto instance = prepareProviderPanelFixture(api, lease, registered);
         publish();
         return init(&api, instance);
     }
@@ -113,7 +113,7 @@ void runNativeSettingsDllTests(const char* dllPath) {
         }
         {
             Module denied(directory / "denied.dll", "settings-denied");
-            require(denied.init(false) != GRIM_OK, "Settings bypassed UI permission");
+            require(denied.init(false) != GRIM_OK, "Settings accepted an unregistered provider");
         }
         {
             Module failed(directory / "failed.dll", "settings-failed");

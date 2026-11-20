@@ -7,7 +7,7 @@ authorize network scanning. See [tools](TOOLS.md#commands) for self-audit scope.
 
 ## Prerequisites
 
-- A host and loaded OSINT plugin with the required permissions; see
+- A host and loaded OSINT plugin; see
   [plugin deployment](../../plugins/README.md) and [API](../PLUGIN_API.md).
   Registration metadata is not a sandbox or a substitute for authorization.
 - Launch from the intended repository/process working directory.

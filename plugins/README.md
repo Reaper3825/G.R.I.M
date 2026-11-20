@@ -137,7 +137,7 @@ native launch sink and does not open applications or browsers.
 No host calculator service or forwarding layer is involved.
 
 Pass a raw expression, for example `calculate sqrt(144) + 2^3`. The tool is
-informational and requires no permissions or confirmation. It supports arithmetic,
+informational and requires no confirmation. It supports arithmetic,
 parentheses, constants `pi` and `e`, and the mathematical functions documented in
 its registry descriptor. Angles are radians and arithmetic uses finite doubles.
 Inputs are limited to 4096 bytes and 64 active recursive parsing levels.
@@ -165,7 +165,7 @@ payloads are preserved: message, success/error code, category, voice, and color.
 Both still ignore arguments. `help` retains a static command list, with retired
 `ai_backend` and `reloadnlp` entries removed; use `list_tools` for current registrations.
 `clean` retains the original response-only handler; this migration adds no UI
-clearing operation. Neither tool requires access to host state or permissions.
+clearing operation. Neither tool requires access to host state.
 
     cmake -S plugins/utility_plugin -B .codex-build/utility-plugin -G "Visual Studio 17 2022" -A x64
     cmake --build .codex-build/utility-plugin --config Release --target utility_plugin --parallel 2
@@ -183,7 +183,7 @@ policy metadata, old-host collisions, and removal through folder reconciliation.
 API v3.2's read-only registry snapshots. The original formatting and argument
 behavior are preserved, including exact category matching, alias/display-name
 lookup, and the existing statistics integer-prefix parsing. The plugin registers
-usage, parameter, and example metadata and requires no permissions or confirmation.
+usage, parameter, and example metadata and requires no confirmation.
 
     cmake -S plugins/tool_inspection_plugin -B .codex-build/tool-inspection-plugin -G "Visual Studio 17 2022" -A x64
     cmake --build .codex-build/tool-inspection-plugin --config Release --target tool_inspection_plugin --parallel 2
@@ -223,7 +223,7 @@ See [System Information resources](../docs/SYSTEM_INFO_RESOURCES.md).
     cmake --build .codex-build/system-info-plugin --config Release --target system_info_plugin --parallel 2
 
 Deploy only alongside a host and plugins rebuilt for API v6. No deployment occurs
-in the tests. The tool declares SYSTEM permission and is informational.
+in the tests. The tool is informational.
 For deterministic DLL/resource tests, run
 `tests/run_plugin_shutdown.ps1 -BuildSystemInfoFixture`. Native detection/linking
 can be checked with `tests/run_system_info_native.ps1`.
@@ -295,7 +295,7 @@ This plugin uses the panel operations introduced in v3.8. The new host no longer
 Surface lifecycle and OSINT findings panel handlers remain in the host.
 
 Tests load the real DLL against a controlled host UI queue and check metadata,
-validation, permissions, pending/completed/failure results, ownership, request
+validation, pending/completed/failure results, ownership, request
 limits, and cancellation on unload. The separate UI foundation suite exercises
 the production host adapter against real panel management without native UI.
 No model, renderer, training, package installation, or application startup occurs.
@@ -316,7 +316,7 @@ API v11 consolidates commands, collection, cache, jobs and Python bridges under
 
 `schedule_plugin` owns `schedule.create`, `schedule.get`, `schedule.list`,
 `schedule.update`, `schedule.cancel`, `schedule.status`, durable storage and due
-notification handling. It requires SYSTEM, FILESYSTEM and UI permissions and
+notification handling. It
 publishes `schedule.state` resources. It also owns Calendar's controller, drafts,
 selection, native widgets and actions as a `UIPanel` subclass. Construction
 attaches it during Schedule initialization and the host publishes its
@@ -332,7 +332,7 @@ See [tool contract](../docs/SCHEDULING_TOOLS.md) and
 The Application plugin now also supplies applications.list, applications.refresh,
 applications.inspect and applications.launch. It declares a host application catalog
 at initialization; native discovery publishes resources into its provider room.
-It requires SYSTEM + FILESYSTEM + PROCESS permissions. Existing open/search retain
+Existing open/search retain
 their original behavior. Rebuild the host and Application plugin together before
 using these services; older hosts reject this newer plugin API version.
 See [Application discovery](../docs/APPLICATION_DISCOVERY.md) for backend boundaries,

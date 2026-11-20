@@ -113,8 +113,8 @@ struct Module {
             throw std::runtime_error("Storage DLL lifecycle exports missing");
         }
     }
-    GrimResult init(bool permission = true) {
-        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+    GrimResult init(bool registered = true) {
+        const auto instance = prepareProviderPanelFixture(api, lease, registered);
         publish();
         return initialize(&api, instance);
     }
@@ -219,7 +219,7 @@ void runNativeStorageDllTests(const char* dllPath) {
         }
         {
             Module denied(directory / "denied.dll", "storage-denied");
-            require(denied.init(false) != GRIM_OK, "Storage bypassed UI permission");
+            require(denied.init(false) != GRIM_OK, "Storage accepted an unregistered provider");
             require(denied.lease->panels.empty(), "Denied Storage initialization leaked a panel");
         }
     } catch (...) {

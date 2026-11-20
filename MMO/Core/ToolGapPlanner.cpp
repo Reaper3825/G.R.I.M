@@ -183,9 +183,6 @@ std::string ToolGapPlanner::formatRationale(const ToolGapProposal& proposal) {
         case ToolGapReason::CapabilityMismatch:
             out << "Reason: A similar tool exists but doesn't match the needed parameters.\n";
             break;
-        case ToolGapReason::PermissionInsufficient:
-            out << "Reason: A matching tool exists but requires additional permissions.\n";
-            break;
         case ToolGapReason::PolicyBlocked:
             out << "Reason: A matching tool exists but is blocked by current policy.\n";
             break;

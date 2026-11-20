@@ -72,7 +72,7 @@ See [System Information resources](SYSTEM_INFO_RESOURCES.md) for examples.
 Tool inspection uses the current provider generation and
 only Loaded, Model-classified tools. Invalid or stale selections produce rejected
 action entries. Tool contracts are copied from ToolDescriptor, including argument
-schema, permissions, confirmation metadata, and bindings.
+schema, confirmation metadata, and bindings.
 
 This foundation projects registered resource objects and never executes provider
 tools. Inspection reads published state without triggering capture or mutation.

@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["ui"],
+  "api_version": 1572864,
   "provider": "Console Plugin",
   "version": "1.0.0",
   "tools": []

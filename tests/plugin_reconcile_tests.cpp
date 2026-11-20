@@ -46,8 +46,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     auto old = registry.getTool("Declared-alpha");
     check(old && !old->provider.instance.empty() && old->provider.path == (watched / "alpha.dll").string(),
           "Loaded generation/source identity missing");
-    check(old->provider.version == "1.0" && old->provider.api_version == GRIM_API_VERSION &&
-          old->provider.required_permissions == 0, "Provider metadata did not come from the sidecar");
+    check(old->provider.version == "1.0" && old->provider.api_version == GRIM_API_VERSION, "Provider metadata did not come from the sidecar");
     const auto firstInstance = old->provider.instance;
     const auto provider = [&]() -> std::optional<GRIM::MMO::ProviderDescriptor> {
         for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)

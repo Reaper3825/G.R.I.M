@@ -57,13 +57,9 @@ PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std
 
 void runUIPluginTests(const std::filesystem::path& directory) {
 
-    LoadedProviderFixture denied({.name = "ui-denied", .path = "", .required_permissions = 0});
-    denied.load();
-    check(!denied->ui_panel_service(denied.handle(), GRIM_UI_LIST, nullptr, 0), "UI permission was not enforced");
-    denied.unload();
-    LoadedProviderFixture owner({.name = "ui-owner", .path = "", .required_permissions = GRIM_PERM_UI});
+    LoadedProviderFixture owner({.name = "ui-owner", .path = ""});
     owner.load();
-    LoadedProviderFixture other({.name = "ui-other", .path = "", .required_permissions = GRIM_PERM_UI});
+    LoadedProviderFixture other({.name = "ui-other", .path = ""});
     other.load();
     check(!owner->ui_panel_service(owner.handle(), GRIM_UI_SHOW, nullptr, 0) &&
           !owner->ui_panel_service(owner.handle(), static_cast<GrimUIPanelOperation>(99), nullptr, 0) &&
@@ -103,7 +99,7 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     check(registry.toolCount() == baseline + 6, "UI DLL did not publish six operations");
     for (const char* tool : {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front", "ui.poll"}) {
         const auto entry = registry.getTool(tool);
-        check(entry && entry->provider.name == "UI Plugin" && entry->permission_bits == GRIM_PERM_UI &&
+        check(entry && entry->provider.name == "UI Plugin" &&
               entry->argument_format == "json" && !entry->argument_schema_json.empty(), "UI tool metadata incomplete");
     }
     auto invoke = [&registry](const char* tool, const std::string& args) {
@@ -179,7 +175,7 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     check(invoke("ui.poll", nlohmann::json{{"request_id", current}}.dump()).at("status") == "completed",
           "Retired request disturbed the replacement provider's request");
     PluginManager::unloadAll();
-    std::cout << "UI plugin metadata, permissions, asynchronous completion, ownership and unload tests passed\n";
+    std::cout << "UI plugin metadata, asynchronous completion, ownership and unload tests passed\n";
 }
 
 #else

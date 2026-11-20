@@ -33,7 +33,6 @@ std::string detailText(const RegisteredTool& tool) {
         << "Version: " << documented(tool.version) << '\n'
         << "Type: " << (tool.is_informational ? "Informational" : "State-changing") << '\n'
         << "Confirmation required: " << (tool.needs_confirmation ? "Yes" : "No") << '\n'
-        << "Permission bits: " << tool.permission_bits << "\n\n"
         << "Argument format: " << documented(tool.argument_format) << '\n'
         << "Argument schema: " << documented(tool.argument_schema_json) << "\n\n"
         << "Usage: " << documented(tool.usage) << "\n\nBindings:";

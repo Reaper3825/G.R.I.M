@@ -86,11 +86,6 @@ static std::shared_ptr<LoadedProvider> providerFor(GrimPluginHandle handle) {
     return found == s_instances.end() ? nullptr : found->second.lock();
 }
 
-static bool checkPermission(GrimPluginHandle self, GrimPermission perm) {
-    const auto owner = providerFor(self);
-    return owner && (owner->identity.required_permissions & perm) == static_cast<uint32_t>(perm);
-}
-
 static const char* allocateString(const std::string& str) {
     std::lock_guard lock(s_stringMutex);
     auto owned=std::make_unique<char[]>(str.size()+1);
@@ -181,10 +176,9 @@ struct ActiveCall {
     }
 };
 static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
-                                                     const char* version, uint32_t providerPermissions) {
+                                                     const char* version) {
     using namespace GRIM::MMO;
     ToolDescriptor out;
-    out.permission_bits = readManifestPermissions(entry.at("permissions"));
     readToolDescriptorMetadata(entry, out, version);
 
     if (out.argument_format == "json") {
@@ -203,9 +197,6 @@ static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
             }
         }
     }
-    if ((out.permission_bits & providerPermissions) != out.permission_bits)
-        throw std::invalid_argument("Tool requires undeclared permissions");
-
     const auto validateText = [](const std::string& value, bool required = true) {
         if ((required && value.empty()) || value.size() > 65536 || value.find('\0') != std::string::npos)
             throw std::invalid_argument("Invalid tool text");
@@ -238,16 +229,15 @@ static std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
     std::vector<GRIM::MMO::ToolRegistration> tools;
     tools.reserve(entries.size());
     for (const auto& entry : entries) {
-        auto descriptor = decodeManifestTool(entry, owner.identity.version.c_str(), owner.identity.required_permissions);
+        auto descriptor = decodeManifestTool(entry, owner.identity.version.c_str());
         auto invoke = [gate = owner.gate, dispatch, id = descriptor.tool_id](const std::string& arguments,
                              bool waitForCompletion) -> CommandResult {
             ActiveCall active(gate, true);
             if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
             ResultCapture capture;
             GrimToolResultWriter writer{sizeof(GrimToolResultWriter), &capture, completeResult};
-            constexpr auto baseCallSize = offsetof(GrimToolCall, wait_for_completion);
-            GrimToolCall call{static_cast<uint32_t>(waitForCompletion ? sizeof(GrimToolCall) : baseCallSize),
-                              arguments.c_str(), arguments.size(), waitForCompletion ? 1u : 0u};
+            GrimToolCall call{.arguments = arguments.c_str(), .arguments_size = arguments.size(),
+                              .wait_for_completion = waitForCompletion ? 1u : 0u};
             const auto delivered = dispatch(id.c_str(), &call, &writer);
             if (delivered != GRIM_OK || !capture.completed || capture.invalid)
                 return {false, "Plugin did not deliver a valid result", "ERR_PLUGIN_RESULT"};
@@ -319,9 +309,7 @@ static GrimResult api_execute_command(GrimPluginHandle self, const char* command
 // ============================================================================
 
 static void api_show_notification(GrimPluginHandle self, const char* title, const char* message) {
-    if (!checkPermission(self, GRIM_PERM_UI)) {
-        return;
-    }
+    if (!providerFor(self)) return;
     
     if (title && message) {
         std::string full_msg = std::string(title) + ": " + message;
@@ -389,15 +377,6 @@ static const char* api_get_plugin_path(GrimPluginHandle self) {
     return owner ? allocateString(owner->identity.path) : nullptr;
 }
 
-static uint32_t api_get_permissions(GrimPluginHandle self) {
-    const auto owner = providerFor(self);
-    return owner ? owner->identity.required_permissions : 0;
-}
-
-static bool api_has_permission(GrimPluginHandle self, GrimPermission perm) {
-    return checkPermission(self, perm);
-}
-
 static void api_request_reload(GrimPluginHandle self) {
     const auto owner = providerFor(self);
     if (!owner) return;
@@ -432,7 +411,7 @@ static const char* api_ui_panel_service(GrimPluginHandle self, GrimUIPanelOperat
         const auto owner = providerFor(self);
         if (!owner) return nullptr;
         ActiveCall active(owner->gate, true);
-        if (!active.entered || !checkPermission(self, GRIM_PERM_UI)) return nullptr;
+        if (!active.entered) return nullptr;
         if (operation > GRIM_UI_HIDE_CURRENT) return nullptr;
         if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
             if (panel_key || !request_id) return nullptr;
@@ -505,8 +484,6 @@ const GrimPluginAPI& hostAPI() {
         // Plugin Lifecycle
         api.get_plugin_name = api_get_plugin_name;
         api.get_plugin_path = api_get_plugin_path;
-        api.get_permissions = api_get_permissions;
-        api.has_permission = api_has_permission;
         api.request_reload = api_request_reload;
 
         // Utilities
@@ -529,7 +506,6 @@ std::shared_ptr<LoadedProvider> registerInstance(GRIM::MMO::ProviderDescriptor p
     auto owner = std::make_shared<LoadedProvider>(std::move(provider));
     owner->handle = handle;
     owner->panelLease->owner = owner->identity.instance;
-    owner->panelLease->uiPermitted = (owner->identity.required_permissions & GRIM_PERM_UI) != 0;
     s_instances.emplace(handle, owner);
     return owner;
 }
@@ -540,7 +516,7 @@ void validateManifestTools(const nlohmann::json& entries, const GRIM::MMO::Provi
     if (!entries.is_array() || entries.size() > 256)
         throw std::invalid_argument("Invalid tool manifest entries");
     for (const auto& entry : entries)
-        (void)decodeManifestTool(entry, provider.version.c_str(), provider.required_permissions);
+        (void)decodeManifestTool(entry, provider.version.c_str());
 }
 
 void registerProvider(LoadedProvider& provider, const nlohmann::json& entries, GrimToolDispatch dispatch) {

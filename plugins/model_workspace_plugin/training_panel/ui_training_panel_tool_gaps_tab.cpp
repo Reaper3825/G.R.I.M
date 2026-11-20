@@ -64,7 +64,6 @@ void UITrainingPanel::drawToolGapsTab(OverlayRenderer& renderer, const PanelRect
         switch (proposal.reason) {
             case GRIM::MMO::ToolGapReason::NoMatchingCapability:   reasonStr = "No match"; break;
             case GRIM::MMO::ToolGapReason::CapabilityMismatch:     reasonStr = "Mismatch"; break;
-            case GRIM::MMO::ToolGapReason::PermissionInsufficient: reasonStr = "Permissions"; break;
             case GRIM::MMO::ToolGapReason::PolicyBlocked:          reasonStr = "Policy"; break;
         }
         renderer.drawText({x + 300.0f, y}, reasonStr, Colors::Warning);

@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["ui"],
+  "api_version": 1572864,
   "provider": "UI Plugin",
   "version": "1.0.0",
   "tools": [
@@ -21,9 +20,6 @@
       ],
       "short_description": "Request a list of instantiated interface panels",
       "usage": "ui.list",
-      "permissions": [
-        "ui"
-      ],
       "argument_schema": {
         "type": "object",
         "properties": {},
@@ -57,9 +53,6 @@
       ],
       "short_description": "Request current state for a selected interface panel",
       "usage": "ui.inspect {t}",
-      "permissions": [
-        "ui"
-      ],
       "argument_schema": {
         "type": "object",
         "properties": {
@@ -102,9 +95,6 @@
       ],
       "short_description": "Request showing a panel and bringing it forward",
       "usage": "ui.show {t}",
-      "permissions": [
-        "ui"
-      ],
       "argument_schema": {
         "type": "object",
         "properties": {
@@ -151,9 +141,6 @@
       ],
       "short_description": "Request hiding a selected interface panel from view",
       "usage": "ui.hide {t}",
-      "permissions": [
-        "ui"
-      ],
       "argument_schema": {
         "type": "object",
         "properties": {
@@ -200,9 +187,6 @@
       ],
       "short_description": "Request bringing a panel ahead of other panels",
       "usage": "ui.bring_to_front {t}",
-      "permissions": [
-        "ui"
-      ],
       "argument_schema": {
         "type": "object",
         "properties": {
@@ -243,9 +227,6 @@
       ],
       "short_description": "Check completion of an earlier interface panel request",
       "usage": "ui.poll <request_id>",
-      "permissions": [
-        "ui"
-      ],
       "argument_schema": {
         "type": "object",
         "properties": {

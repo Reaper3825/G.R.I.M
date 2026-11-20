@@ -19,7 +19,6 @@ inline void to_json(nlohmann::json& j, const ToolDescriptor& t) {
     // Older version-1 readers require this key.
     j["examples"] = nlohmann::json::array();
     j["category"] = t.category;
-    j["permission_bits"] = t.permission_bits;
     j["needs_confirmation"] = t.needs_confirmation;
     j["is_informational"] = t.is_informational;
     j["argument_format"] = t.argument_format;
@@ -78,7 +77,6 @@ inline void readToolDescriptorMetadata(const nlohmann::json& j, ToolDescriptor& 
 }
 inline void from_json(const nlohmann::json& j, ToolDescriptor& t) {
     readToolDescriptorMetadata(j, t);
-    j.at("permission_bits").get_to(t.permission_bits);
     j.at("argument_schema_json").get_to(t.argument_schema_json);
     j.at("usage_count").get_to(t.usage_count);
     j.at("success_count").get_to(t.success_count);
@@ -96,7 +94,6 @@ inline void to_json(nlohmann::json& j, const RegisteredTool& tool) {
     j["provider_path"] = tool.provider.path;
     j["provider_version"] = tool.provider.version;
     j["provider_api_version"] = tool.provider.api_version;
-    j["provider_required_permissions"] = tool.provider.required_permissions;
 }
 inline void from_json(const nlohmann::json& j, RegisteredTool& tool) {
     from_json(j, static_cast<ToolDescriptor&>(tool));
@@ -106,6 +103,5 @@ inline void from_json(const nlohmann::json& j, RegisteredTool& tool) {
     j.at("provider_path").get_to(tool.provider.path);
     tool.provider.version = j.value("provider_version", std::string{});
     tool.provider.api_version = j.value("provider_api_version", uint32_t{});
-    tool.provider.required_permissions = j.value("provider_required_permissions", uint32_t{});
 }
 }

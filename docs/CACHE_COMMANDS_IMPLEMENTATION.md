@@ -7,7 +7,7 @@ Source-verified November 8, 2026.
 [voice_plugin::grim_plugin_init](../plugins/voice_plugin/voice_plugin.cpp#L19)
 registers `clear_tts_cache` and `reset_tts_cache`. Both are raw-text tools with
 no declared parameters or aliases; their handlers ignore supplied arguments.
-They require VOICE and FILESYSTEM permissions and request confirmation.
+They request confirmation.
 `clear_cache` / `reset_cache` are not the registered tool names.
 
 | Tool | Implemented behavior |

@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["system", "filesystem", "ui"],
+  "api_version": 1572864,
   "provider": "Schedule Plugin",
   "version": "1.0.0",
   "tools": [
@@ -18,11 +17,6 @@
       "needs_confirmation": true,
       "short_description": "Create a saved event or local notification",
       "usage": "schedule.create <json>",
-      "permissions": [
-        "filesystem",
-        "ui",
-        "system"
-      ],
       "argument_schema": {
         "additionalProperties": false,
         "oneOf": [
@@ -119,11 +113,6 @@
       "needs_confirmation": false,
       "short_description": "Retrieve a scheduled item by its identifier",
       "usage": "schedule.get <json>",
-      "permissions": [
-        "filesystem",
-        "ui",
-        "system"
-      ],
       "argument_schema": {
         "additionalProperties": false,
         "properties": {
@@ -152,11 +141,6 @@
       "needs_confirmation": false,
       "short_description": "Find scheduled items by time and kind",
       "usage": "schedule.list <json>",
-      "permissions": [
-        "filesystem",
-        "ui",
-        "system"
-      ],
       "argument_schema": {
         "additionalProperties": false,
         "properties": {
@@ -205,11 +189,6 @@
       "needs_confirmation": true,
       "short_description": "Modify a scheduled item using its revision",
       "usage": "schedule.update <json>",
-      "permissions": [
-        "filesystem",
-        "ui",
-        "system"
-      ],
       "argument_schema": {
         "additionalProperties": false,
         "properties": {
@@ -265,11 +244,6 @@
       "needs_confirmation": true,
       "short_description": "Cancel a scheduled item using its revision",
       "usage": "schedule.cancel <json>",
-      "permissions": [
-        "filesystem",
-        "ui",
-        "system"
-      ],
       "argument_schema": {
         "additionalProperties": false,
         "properties": {
@@ -303,11 +277,6 @@
       "needs_confirmation": false,
       "short_description": "Inspect scheduler capabilities and item delivery status",
       "usage": "schedule.status <json>",
-      "permissions": [
-        "filesystem",
-        "ui",
-        "system"
-      ],
       "argument_schema": {
         "additionalProperties": false,
         "properties": {

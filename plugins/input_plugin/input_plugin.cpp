@@ -15,8 +15,7 @@ template<GrimInputOperation Operation>
 GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
     std::lock_guard<std::mutex> lock(operationMutex);
     CommandResult value;
-    if (!host || !host->has_permission(host.instance(), GRIM_PERM_INPUT))
-        return GRIM_ERROR_PERMISSION_DENIED;
+    if (!host) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     if (request->arguments_size > 65536 || (request->arguments_size && !request->arguments)) {
         value = {false, "Input request unavailable or invalid", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
     } else try {
@@ -34,8 +33,7 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
 
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
     const grim::PluginHost api{table, instance};
-    if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR ||
-        !api->has_permission) return GRIM_ERROR_API_VERSION_MISMATCH;
+    if (!api || api->api_version < GRIM_API_VERSION || (api->api_version >> 16) != GRIM_API_VERSION_MAJOR) return GRIM_ERROR_API_VERSION_MISMATCH;
     host = api;
     return GRIM_OK;
 }

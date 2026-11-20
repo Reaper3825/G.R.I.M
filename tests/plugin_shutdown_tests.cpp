@@ -92,7 +92,7 @@ int main(int argc, char** argv) try {
     }
     const auto invalidSidecar = invalid.parent_path() / "invalid.tools.json";
     std::ofstream(invalidSidecar) << R"({"schema_version":2,"api_version":)" << GRIM_API_VERSION
-        << R"(,"provider":"Invalid fixture","version":"1.0","required_permissions":[],"tools":[]})";
+        << R"(,"provider":"Invalid fixture","version":"1.0","tools":[]})";
     errors.clear();
     PluginManager::initialize(argv[2]);
     PluginManager::unloadAll();

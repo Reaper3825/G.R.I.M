@@ -105,7 +105,6 @@ struct ToolPolicyOverride {
     bool         always_confirm = false;    // always require user confirmation
     bool         blocked = false;           // tool is temporarily blocked
     std::string  sandbox_root;              // filesystem sandbox path (if applicable)
-    std::vector<std::string> required_permissions;  // GrimPermission names
 };
 
 // =========================================================

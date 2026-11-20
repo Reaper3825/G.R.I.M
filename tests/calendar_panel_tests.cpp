@@ -39,8 +39,8 @@ struct Fixture {
         api.log = [](GrimPluginHandle, GrimLogLevel, const char*) {};
         provider = std::make_unique<grim::scheduling::Provider>(grim::PluginHost{&api, 0}, path);
     }
-    void initialize(bool permitted = true) {
-        const auto instance = prepareProviderPanelFixture(api, lease, permitted);
+    void initialize(bool registered = true) {
+        const auto instance = prepareProviderPanelFixture(api, lease, registered);
         publish();
         calendar = std::make_unique<TestCalendar>(grim::PluginHost{&api, instance}, *provider);
         calendar->attachToProvider(instance);
@@ -82,7 +82,7 @@ void runCalendarPanelTests() {
         Fixture denied(directory / "denied.json", "denied");
         bool rejected = false;
         try { denied.initialize(false); } catch (const std::logic_error&) { rejected = true; }
-        require(rejected && !root.getPanelByKey("calendar"), "Permission denial attached Calendar");
+        require(rejected && !root.getPanelByKey("calendar"), "Unregistered provider attached Calendar");
     }
     {
         Fixture first(directory / "events.json", "first"); first.initialize();

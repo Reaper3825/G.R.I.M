@@ -147,7 +147,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
           "Live inspection omitted objects or triggered hardware capture");
     const auto descriptor = registry.getTool("system_info");
     check(descriptor && descriptor->provider.name == "System Information Plugin" && descriptor->provider.type == ToolProviderType::Plugin &&
-          descriptor->permission_bits == GRIM_PERM_SYSTEM && descriptor->is_informational && !descriptor->needs_confirmation &&
+          descriptor->is_informational && !descriptor->needs_confirmation &&
           descriptor->category == "information" && descriptor->parameters.empty(),
           "System information metadata/policy incorrect");
     const auto invoke = [&](const std::string& args = "") { prepareDetection(); return registry.invoke("system_info", args); };
@@ -233,5 +233,5 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     check(registry.toolCount() == baseline && !registry.isRegistered("system_info") && detectionCalls() == beforeRemoval &&
           g_hardwareInventory.os_name == "startup cache" && resourcesFor("System Information Plugin").empty(),
           "Plugin removal retained tool/resource or mutated hardware state");
-    std::cout << "System information plugin topology, permissions, exact results, detection errors, and removal tests passed\n";
+    std::cout << "System information plugin topology, exact results, detection errors, and removal tests passed\n";
 }

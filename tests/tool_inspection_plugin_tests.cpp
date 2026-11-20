@@ -30,7 +30,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    cleanup.api = std::make_unique<LoadedProviderFixture>(GRIM::MMO::ProviderDescriptor{.name = "snapshot-reader", .path = "", .required_permissions = 0});
+    cleanup.api = std::make_unique<LoadedProviderFixture>(GRIM::MMO::ProviderDescriptor{.name = "snapshot-reader", .path = ""});
     cleanup.api->load();
     auto& api = *cleanup.api;
     const auto snapshot = [&](const char* id = nullptr) {
@@ -51,7 +51,7 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     for (const auto* id : {"list_tools", "tool_info", "tool_stats"}) {
         const auto d = registry.getTool(id);
         check(d && d->provider.name == "Tool Inspection Plugin" && d->provider.type == ToolProviderType::Plugin &&
-              d->is_informational && !d->needs_confirmation && d->permission_bits == 0 && d->parameters.size() == 1,
+              d->is_informational && !d->needs_confirmation && d->parameters.size() == 1,
               "Inspection tool metadata/provider/policy incorrect");
     }
     const auto invoke = [&](const char* id, const std::string& args = "") { return registry.invoke(id, args); };
@@ -77,7 +77,6 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     rich.category = "fixture";
     rich.is_informational = false;
     rich.needs_confirmation = true;
-    rich.permission_bits = GRIM_PERM_FILESYSTEM;
     rich.argument_format = "json";
     rich.argument_schema_json = "{\"type\":\"object\"}";
     rich.parameters = {{"value", "string", "Value description", true}, {"optional", "number", "Optional value", false}};

@@ -21,8 +21,7 @@ tools, with raw-text arguments rather than JSON parameter objects:
 | `osint_show_secrets` | `<username> [--severity critical\|high\|medium\|low\|all]` | Reads existing JSONL with a minimum-severity filter |
 
 Aliases: **`sherlock` â†’ `sherlock_sweep`**, **`osint` â†’ `osint_report`**.
-There is no `profile_self` registration. All descriptors request FILESYSTEM,
-NETWORK and PROCESS permissions. Six carry confirmation metadata;
+There is no `profile_self` registration. Six descriptors carry confirmation metadata;
 only `osint_show_secrets` is informational. Status can consume state.
 The source marks these tools `ToolUsage::Ignore`; registration does not
 promise normal model-catalog selection or literal console dispatch.

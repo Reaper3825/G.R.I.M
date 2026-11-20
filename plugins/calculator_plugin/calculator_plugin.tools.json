@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": [],
+  "api_version": 1572864,
   "provider": "Calculator Plugin",
   "version": "1.0.0",
   "tools": [
@@ -24,8 +23,7 @@
         }
       ],
       "short_description": "Evaluate arithmetic expressions with constants and mathematical functions",
-      "usage": "calculate {t}",
-      "permissions": []
+      "usage": "calculate {t}"
     }
   ]
 }

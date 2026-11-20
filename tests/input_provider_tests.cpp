@@ -10,7 +10,7 @@ extern "C" void grim_plugin_shutdown();
 extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
 namespace {
 constexpr const char* tools[] = {"move_mouse", "click", "type", "key"};
- bool permitted=true; std::vector<std::string> effects;
+ std::vector<std::string> effects;
 void check(bool value,const char* message){if(!value) throw std::runtime_error(message);}
 GrimToolResult result; std::string message,error;
 GrimResult complete(GrimToolResultWriter*,const GrimToolResult* r){result=*r;message=r->message?r->message:"";error=r->error_code?r->error_code:"";return GRIM_OK;}
@@ -25,10 +25,8 @@ void InputController::combo(const std::vector<WORD>& keys){effects.push_back("co
 }
 int main(){
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
- api.has_permission=[](GrimPluginHandle,GrimPermission){return permitted;};
  auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old, 1)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
  check(grim_plugin_init(&api, 1)==GRIM_OK,"Initialization failed");check(effects.empty(),"Initialization injected input");
- permitted=false;check(invoke(1,"")==GRIM_ERROR_PERMISSION_DENIED && effects.empty(),"Permission bypass");permitted=true;
 #ifndef _WIN32
  invoke(0,"-1200,300 trailing");check(!result.success && effects.empty(),"Unsupported platform accepted native input");
  grim_plugin_shutdown();return 0;
@@ -42,7 +40,7 @@ int main(){
  invoke(2,"");check(!result.success && effects.size()==count,"Empty text caused effect");
  for(auto entry:{std::pair<size_t,const char*>{1,"bogus"},{3,"bogus"},{3,"ctrl+bogus"},{3,"+"}}){bool rejected=false;try{invoke(entry.first,entry.second);}catch(const std::invalid_argument&){rejected=true;}check(rejected && effects.size()==count,"Unknown native input accepted");}
  invoke(2,std::string(65537,'x'));check(!result.success && effects.size()==count,"Size bound lost");
- grim_plugin_shutdown();grim_plugin_shutdown();check(invoke(1,"")==GRIM_ERROR_PERMISSION_DENIED,"Retired provider injected input");
+ grim_plugin_shutdown();grim_plugin_shutdown();check(invoke(1,"")==GRIM_ERROR_PLUGIN_NOT_LOADED,"Retired provider injected input");
  check(grim_plugin_init(&api, 1)==GRIM_OK,"Reload failed");grim_plugin_shutdown();
- std::cout<<"Input provider permissions, parsing, native mapping, rejection and lifecycle passed\n";
+ std::cout<<"Input provider parsing, native mapping, rejection and lifecycle passed\n";
 }

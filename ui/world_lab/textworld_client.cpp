@@ -157,7 +157,7 @@ pid_t launch(const fs::path& executable,const std::vector<std::string>& argument
 }
 #endif
 }
-1struct TextWorldClient::Impl {
+struct TextWorldClient::Impl {
     std::future<nlohmann::json> pending;
     std::atomic<bool> cancelled{false};
     bool stopping=false; // Caller-thread state, independent of future readiness.

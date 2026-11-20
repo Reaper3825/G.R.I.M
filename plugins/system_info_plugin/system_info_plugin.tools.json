@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["system"],
+  "api_version": 1572864,
   "provider": "System Information Plugin",
   "version": "1.0.0",
   "tools": [
@@ -13,10 +12,7 @@
       "is_informational": true,
       "needs_confirmation": false,
       "short_description": "Display information about system hardware and software",
-      "usage": "system_info",
-      "permissions": [
-        "system"
-      ]
+      "usage": "system_info"
     }
   ]
 }

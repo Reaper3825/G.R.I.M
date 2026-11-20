@@ -51,8 +51,8 @@ struct Module {
             throw std::runtime_error("Missing DataHub lifecycle exports");
         }
     }
-    GrimResult init(bool permission = true) {
-        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+    GrimResult init(bool registered = true) {
+        const auto instance = prepareProviderPanelFixture(api, lease, registered);
         publish();
         return initialize(&api, instance);
     }
@@ -159,7 +159,7 @@ void runNativeDataHubDllTests(const char* dllPath) {
         {
             Module denied(directory / "denied.dll", "datahub-denied");
             require(denied.init(false) != GRIM_OK && denied.lease->panels.empty(),
-                    "DataHub bypassed UI permission");
+                    "DataHub accepted an unregistered provider");
         }
         stopDataHubFixture();
     } catch (...) {

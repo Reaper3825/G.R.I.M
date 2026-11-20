@@ -19,7 +19,6 @@ struct ProviderPanelLease {
     std::atomic<bool> retired{false};
     std::string owner;
     std::vector<std::pair<std::string, uint64_t>> panels;
-    bool uiPermitted = false;
 };
 void registerProviderPanelLease(GrimPluginHandle instance, const std::shared_ptr<ProviderPanelLease>& lease);
 void attachNativePanel(UIPanel* panel, GrimPluginHandle instance);

@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["filesystem"],
+  "api_version": 1572864,
   "provider": "Filesystem Plugin",
   "version": "1.0.0",
   "tools": [
@@ -14,10 +13,7 @@
       "needs_confirmation": false,
       "short_description": "List entries inside the current working directory",
       "usage": "ls",
-      "usage_type": 2,
-      "permissions": [
-        "filesystem"
-      ]
+      "usage_type": 2
     },
     {
       "tool_id": "mkdir",
@@ -39,10 +35,7 @@
       ],
       "short_description": "Create a new directory within an existing parent",
       "usage": "mkdir {c}",
-      "usage_type": 2,
-      "permissions": [
-        "filesystem"
-      ]
+      "usage_type": 2
     },
     {
       "tool_id": "rm",
@@ -64,10 +57,7 @@
       ],
       "short_description": "Remove one file or empty directory without recursion",
       "usage": "rm {t}",
-      "usage_type": 2,
-      "permissions": [
-        "filesystem"
-      ]
+      "usage_type": 2
     }
   ]
 }

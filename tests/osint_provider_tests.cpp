@@ -11,7 +11,7 @@ extern "C" void grim_plugin_shutdown();
 extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
 namespace {
 constexpr const char* tools[] = {"profile_person", "sherlock_sweep", "osint_report", "osint_status", "osint_clear_cache", "osint_scan_secrets", "osint_show_secrets"};
- std::atomic<int> runs{0}; bool permitted=true;
+ std::atomic<int> runs{0};
 std::atomic<bool> block{false},entered{false}; bool success;std::string output,message;
 void check(bool value,const char* text){if(!value)throw std::runtime_error(text);}
 GrimResult invoke(size_t index,const std::string& args){
@@ -33,7 +33,6 @@ int main(){
  auto original=fs::current_path(); auto temp=fs::temp_directory_path()/("grim-osint-fixture-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
  fs::create_directories(temp);fs::current_path(temp);
  GrimPluginAPI api{};api.api_version=GRIM_API_VERSION;
- api.has_permission=[](GrimPluginHandle,GrimPermission){return permitted;};
  api.log=[](GrimPluginHandle,GrimLogLevel,const char*){};
  try {
   auto old=api;old.api_version=10<<16;check(grim_plugin_init(&old, 1)==GRIM_ERROR_API_VERSION_MISMATCH,"Old ABI accepted");
@@ -46,7 +45,6 @@ int main(){
   for(const auto* name:{"../escape","x/y","x\\y","--flag","CON.json"}) {bool rejected=false;try{invoke(2,name);}catch(const std::invalid_argument&){rejected=true;}check(rejected && runs==1,"Invalid target reached runtime");}
   bool invalidCacheTarget=false;try{invoke(5,"alice ../../escape");}catch(const std::invalid_argument&){invalidCacheTarget=true;}
   check(invalidCacheTarget && runs==1,"Full cache target bypassed validation");
-  permitted=false;check(invoke(2,"alice")==GRIM_ERROR_PERMISSION_DENIED,"Permission bypass");permitted=true;
   std::ofstream(osintProvider::cache()/"sensitive_alice.jsonl")<<R"({"domain":"example.invalid","source_url":"https://example.invalid","findings":[{"tag":"fixture","severity":9,"match":"redacted"},{"severity":2}]})"<<"\n";
   invoke(6,"alice --severity high");check(success,"Findings read failed");auto snapshot=nlohmann::json::parse(output);
   check(snapshot.at("entries").at(0).at("findings").size()==1,"Copied findings ignored severity filter");
@@ -56,6 +54,6 @@ int main(){
   check(entered,"Async process never started");grim_plugin_shutdown();check(osintProvider::cancelled,"Unload failed to cancel children");grim_plugin_shutdown();
   block=false;check(grim_plugin_init(&api, 1)==GRIM_OK,"OSINT reload failed");invoke(3,"");check(message.find("No active scans")!=std::string::npos,"Jobs survived reload");grim_plugin_shutdown();
   fs::current_path(original);fs::remove_all(temp);
-  std::cout<<"OSINT cache, copied findings, permissions, cancellation and reload passed\n";
+  std::cout<<"OSINT cache, copied findings, cancellation and reload passed\n";
  }catch(...){osintProvider::cancelled=true;grim_plugin_shutdown();fs::current_path(original);fs::remove_all(temp);throw;}
 }

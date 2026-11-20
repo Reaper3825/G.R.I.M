@@ -10,7 +10,7 @@
 
 namespace GRIM::MMO {
 
-// Intended consumer, independent of effects, permissions, and provider.
+// Intended consumer, independent of effects and provider.
 enum class ToolUsage : uint32_t {
     Debug = 0,  // Developer diagnostics and manual inspection.
     Model = 1,  // Capabilities exposed to the model.
@@ -46,7 +46,7 @@ struct ToolParameter {
 //
 // Fields from MMO plan Section "Unified ToolRegistry":
 //   tool_id, display_name, version,
-//   description, usage, category, permission_bits,
+//   description, usage, category,
 //   needs_confirmation, argument_schema, preconditions,
 //   aliases, keywords, capability_tags, success_stats.
 // =========================================================
@@ -69,7 +69,6 @@ struct ToolDescriptor {
 
     // Policy
     ToolUsage             usage_type = ToolUsage::Model;
-    uint32_t              permission_bits = 0;  // GrimPermission flags
     bool                  needs_confirmation = false;
     bool                  is_informational   = true;
 

@@ -43,7 +43,7 @@ GrimResult identify(const GrimToolCall*, GrimToolResultWriter* writer, void* dat
     (*api)->log(api->handle(), GRIM_LOG_INFO, "callback");
     std::string message = "owned local message";
     GrimToolResult result;
-    result.success = (*api)->has_permission(api->handle(), GRIM_PERM_MEMORY);
+    result.success = true;
     result.message = message.c_str();
     result.structured_output_json = "{\"answer\":42}";
     auto status = writer->complete(writer, &result);
@@ -51,9 +51,9 @@ GrimResult identify(const GrimToolCall*, GrimToolResultWriter* writer, void* dat
     return status;
 }
 using Json = nlohmann::json;
-Json definition(const char* id, Json permissions = Json::array()) {
+Json definition(const char* id) {
     return {{"tool_id", id}, {"description", "A complete test tool"}, {"usage", "test [arguments]"},
-        {"category", "test"}, {"argument_format", "raw_text"}, {"permissions", std::move(permissions)},
+        {"category", "test"}, {"argument_format", "raw_text"},
         {"is_informational", false}, {"needs_confirmation", false}};
 }
 
@@ -131,7 +131,7 @@ void runProviderResourceTests() {
         return PluginAPI::hostAPI().replace_resources(instance, "fixture", text.data(), text.size());
     };
     const ProviderDescriptor descriptor{.name = "resource-provider", .path = "fixture",
-        .version = "1.2.3", .required_permissions = 0};
+        .version = "1.2.3"};
     LoadedProviderFixture first(descriptor);
     first.load(Json::array({definition("generation_tool")}), dispatchEmpty);
     const auto oldHandle = first.handle();
@@ -183,7 +183,7 @@ static void runSystemTickTests() {
     };
 
     const GRIM::MMO::ProviderDescriptor descriptor{.name = "tick-provider", .path = "tick.dll",
-        .version = "1.2.3", .required_permissions = 0};
+        .version = "1.2.3"};
     LoadedProviderFixture first(descriptor);
     first.load();
     check(first->subscribe_system_tick(first.handle(), callback, &firstTick) == GRIM_OK, "Tick subscription failed");
@@ -212,30 +212,27 @@ int main(int argc, char** argv) try {
     {
         auto& registry = GRIM::MMO::ProviderRegistry::instance();
         const auto count = registry.snapshot().providers.size();
-        LoadedProviderFixture empty({.name = "zero-tool-provider", .path = "empty.dll", .version = "1.2.3", .required_permissions = 0});
+        LoadedProviderFixture empty({.name = "zero-tool-provider", .path = "empty.dll", .version = "1.2.3"});
         empty.load();
         check(registry.snapshot().providers.size() == count + 1, "Zero-tool provider was not published");
         empty.unload();
         check(registry.snapshot().providers.size() == count, "Zero-tool provider survived unload");
     }
-    LoadedProviderFixture alpha({.name = "alpha", .path = "alpha.dll", .version = "1.2.3", .required_permissions = GRIM_PERM_MEMORY});
+    LoadedProviderFixture alpha({.name = "alpha", .path = "alpha.dll", .version = "1.2.3"});
     alphaAPI = &alpha;
-    loadTools(alpha, {definition("alpha_tool", {"memory"}), definition("alpha_second", {"memory"})}, dispatchIdentify);
+    loadTools(alpha, {definition("alpha_tool"), definition("alpha_second")}, dispatchIdentify);
     Blocking blocked;
     blockedCall = &blocked;
-    LoadedProviderFixture beta({.name = "beta", .path = "beta.dll", .version = "1.2.3", .required_permissions = GRIM_PERM_UI});
+    LoadedProviderFixture beta({.name = "beta", .path = "beta.dll", .version = "1.2.3"});
     loadTools(beta, {definition("blocking")}, dispatchBlocking);
     check(alpha.handle() != beta.handle() && alpha.operator->() == beta.operator->(),
           "Providers do not share one API table with distinct handles");
     checkName(&alpha, "alpha");
     checkName(&beta, "beta");
-    check(alpha->has_permission(alpha.handle(), GRIM_PERM_MEMORY), "Alpha lost permissions");
-    check(!beta->has_permission(beta.handle(), GRIM_PERM_MEMORY), "Beta inherited Alpha permissions");
-    check(!alpha->has_permission(alpha.handle(), static_cast<GrimPermission>(GRIM_PERM_MEMORY | GRIM_PERM_UI)), "Combined permissions partially accepted");
     check(GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "").success, "Command callback used wrong owner");
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
     auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_second");
-    check(tool && tool->provider.name == "alpha" && tool->permission_bits == GRIM_PERM_MEMORY,
+    check(tool && tool->provider.name == "alpha",
           "Staged registration lost provider ownership");
     check(beta->unregister_command(beta.handle(), "alpha_tool") == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's tool");
     using namespace GRIM::MMO;
@@ -247,7 +244,7 @@ int main(int argc, char** argv) try {
     }), "Collision fixture publication failed");
 
     bool duplicateRejected = false;
-    try { LoadedProviderFixture duplicate({.name = "alpha", .path = "duplicate.dll", .version = "1.2.3", .required_permissions = 0}); duplicate.load(); }
+    try { LoadedProviderFixture duplicate({.name = "alpha", .path = "duplicate.dll", .version = "1.2.3"}); duplicate.load(); }
     catch (const std::runtime_error&) { duplicateRejected = true; }
     check(duplicateRejected, "Duplicate identity replaced a retained API");
 
@@ -268,12 +265,12 @@ int main(int argc, char** argv) try {
           copiedResult.structuredOutputJson == R"({"answer":42})", "Host did not copy result data immediately");
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
         brokenHandler = handler;
-        LoadedProviderFixture brokenProvider({.name = "broken-fixture", .path = "", .version = "1.2.3", .required_permissions = 0});
+        LoadedProviderFixture brokenProvider({.name = "broken-fixture", .path = "", .version = "1.2.3"});
         loadTools(brokenProvider, {definition("broken")}, dispatchBroken);
         check(GRIM::MMO::ToolRegistry::instance().invoke("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
         brokenProvider.unload();
     }
-    LoadedProviderFixture metadata({.name = "metadata", .path = "metadata.dll", .version = "1.2.3", .required_permissions = 0});
+    LoadedProviderFixture metadata({.name = "metadata", .path = "metadata.dll", .version = "1.2.3"});
     auto complete = definition("metadata_tool");
     complete.update({
         {"description", "copied metadata"}, {"argument_format", "json"},
@@ -304,14 +301,14 @@ int main(int argc, char** argv) try {
     auto first = definition("batch_first");
     auto second = definition("batch_second");
     second["usage_type"] = 0;
-    LoadedProviderFixture batchProvider({.name = "batch-fixture", .path = "", .version = "1.2.3", .required_permissions = 0});
+    LoadedProviderFixture batchProvider({.name = "batch-fixture", .path = "", .version = "1.2.3"});
     loadTools(batchProvider, {first, second});
     check(ToolRegistry::instance().getTool("batch_first")->usage_type == ToolUsage::Model &&
           ToolRegistry::instance().getTool("batch_second")->usage_type == ToolUsage::Debug,
           "Manifest lost tool metadata");
     batchProvider.unload();
 
-    LoadedProviderFixture invalidProvider({.name = "invalid-fixture", .path = "", .version = "1.2.3", .required_permissions = GRIM_PERM_UI});
+    LoadedProviderFixture invalidProvider({.name = "invalid-fixture", .path = "", .version = "1.2.3"});
     const auto rejects = [&](const auto& read, const char* reason) {
         try { read(); } catch (const std::exception&) { return; }
         throw std::runtime_error(reason);
@@ -334,16 +331,13 @@ int main(int argc, char** argv) try {
     invalid["usage_type"] = 99;
     rejects([&] { loadTools(invalidProvider, {first, invalid}); }, "Invalid usage type accepted");
     invalid.erase("usage_type");
-    invalid["permissions"] = {"memory"};
-    rejects([&] { loadTools(invalidProvider, {invalid}); }, "Undeclared permissions accepted");
-    invalid["permissions"] = Json::array();
     invalid["argument_format"] = "json";
     invalid["argument_schema"] = Json::array();
     rejects([&] { loadTools(invalidProvider, {invalid}); }, "Invalid schema accepted");
     check(!ToolRegistry::instance().isRegistered("batch_first"), "Invalid manifest partially published");
     invalidProvider.unload();
 
-    LoadedProviderFixture conflict({.name = "conflict", .path = "conflict.dll", .version = "1.2.3", .required_permissions = 0});
+    LoadedProviderFixture conflict({.name = "conflict", .path = "conflict.dll", .version = "1.2.3"});
     rejects([&] { loadTools(conflict, {definition("new_tool"), definition("reserved_fixture_tool")}); },
             "Tool collision accepted");
     check(!ToolRegistry::instance().isRegistered("new_tool"), "Failed load left a partial manifest");
@@ -360,10 +354,9 @@ int main(int argc, char** argv) try {
     stopping.get();
     alpha.unload();
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_tool") && !GRIM::MMO::ToolRegistry::instance().getTool("alpha_second"), "Owner cleanup retained tools");
-    LoadedProviderFixture replacement({.name = "alpha", .path = "new-alpha.dll", .version = "1.2.3", .required_permissions = 0});
+    LoadedProviderFixture replacement({.name = "alpha", .path = "new-alpha.dll", .version = "1.2.3"});
     replacement.load();
     checkName(&replacement, "alpha");
-    check(!replacement->has_permission(replacement.handle(), GRIM_PERM_MEMORY), "Reload inherited old permissions");
     replacement.unload();
 
     check(argc >= 4, "Expected valid/rejected/replacement DLL fixture folders");

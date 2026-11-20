@@ -27,7 +27,7 @@ static bool publishCalculator(const std::filesystem::path& path) {
     check(entries.size() == 1, "Expected one calculator tool");
     const auto& entry = entries[0];
     check(entry.value("usage_type", 1) == 1 && entry.at("is_informational") == true &&
-          entry.at("needs_confirmation") == false && entry.at("permissions").empty(), "Invalid tool policy");
+          entry.at("needs_confirmation") == false, "Invalid tool policy");
     check(entry.at("parameters").size() == 1 && entry.at("parameters")[0].at("required") == true &&
           entry.at("parameters")[0].at("name") == "expression", "Missing expression parameter");
     ToolDescriptor descriptor;

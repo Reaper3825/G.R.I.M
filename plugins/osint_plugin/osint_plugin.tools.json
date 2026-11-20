@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["filesystem", "network", "process"],
+  "api_version": 1572864,
   "provider": "OSINT Self-Audit Plugin",
   "version": "2.1.0",
   "tools": [
@@ -25,12 +24,7 @@
       ],
       "short_description": "Build a public source profile for a username",
       "usage": "profile_person {t} [--no-cache] [--verbose]",
-      "usage_type": 3,
-      "permissions": [
-        "filesystem",
-        "process",
-        "network"
-      ]
+      "usage_type": 3
     },
     {
       "tool_id": "sherlock_sweep",
@@ -55,12 +49,7 @@
       ],
       "short_description": "Search public websites for accounts matching a username",
       "usage": "sherlock_sweep {t} [--async]",
-      "usage_type": 3,
-      "permissions": [
-        "filesystem",
-        "process",
-        "network"
-      ]
+      "usage_type": 3
     },
     {
       "tool_id": "osint_report",
@@ -86,12 +75,7 @@
       ],
       "short_description": "Read a username report and optionally export findings",
       "usage": "osint_report {t} [--export {o}]",
-      "usage_type": 3,
-      "permissions": [
-        "filesystem",
-        "process",
-        "network"
-      ]
+      "usage_type": 3
     },
     {
       "tool_id": "osint_status",
@@ -113,12 +97,7 @@
       ],
       "short_description": "Check scan status and collect completed scan results",
       "usage": "osint_status [{t}]",
-      "usage_type": 3,
-      "permissions": [
-        "filesystem",
-        "process",
-        "network"
-      ]
+      "usage_type": 3
     },
     {
       "tool_id": "osint_clear_cache",
@@ -129,12 +108,7 @@
       "needs_confirmation": true,
       "short_description": "Delete locally cached reports from previous public searches",
       "usage": "osint_clear_cache",
-      "usage_type": 3,
-      "permissions": [
-        "filesystem",
-        "process",
-        "network"
-      ]
+      "usage_type": 3
     },
     {
       "tool_id": "osint_scan_secrets",
@@ -156,12 +130,7 @@
       ],
       "short_description": "Scan discovered web addresses for exposed sensitive information",
       "usage": "osint_scan_secrets {t}",
-      "usage_type": 3,
-      "permissions": [
-        "filesystem",
-        "process",
-        "network"
-      ]
+      "usage_type": 3
     },
     {
       "tool_id": "osint_show_secrets",
@@ -183,12 +152,7 @@
       ],
       "short_description": "Read sensitive information findings for a selected username",
       "usage": "osint_show_secrets {t} [--severity <level>]",
-      "usage_type": 3,
-      "permissions": [
-        "filesystem",
-        "process",
-        "network"
-      ]
+      "usage_type": 3
     }
   ]
 }

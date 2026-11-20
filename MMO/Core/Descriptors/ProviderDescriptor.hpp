@@ -14,13 +14,11 @@ struct ProviderDescriptor {
     std::string path;
     std::string version;
     uint32_t api_version = 0;
-    uint32_t required_permissions = 0;
 
     bool operator==(const ProviderDescriptor& other) const {
         return type == other.type && name == other.name &&
                instance == other.instance && path == other.path &&
-               version == other.version && api_version == other.api_version &&
-               required_permissions == other.required_permissions;
+               version == other.version && api_version == other.api_version;
     }
 };
 }

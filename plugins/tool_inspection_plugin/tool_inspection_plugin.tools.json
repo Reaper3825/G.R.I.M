@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": [],
+  "api_version": 1572864,
   "provider": "Tool Inspection Plugin",
   "version": "1.0.0",
   "tools": [
@@ -21,8 +20,7 @@
         }
       ],
       "short_description": "List registered tools and their documented descriptions",
-      "usage": "list_tools [category]",
-      "permissions": []
+      "usage": "list_tools [category]"
     },
     {
       "tool_id": "tool_info",
@@ -43,8 +41,7 @@
         }
       ],
       "short_description": "Inspect a registered tool and its usage documentation",
-      "usage": "tool_info {t}",
-      "permissions": []
+      "usage": "tool_info {t}"
     },
     {
       "tool_id": "tool_stats",
@@ -62,8 +59,7 @@
         }
       ],
       "short_description": "Show recorded tool execution counts and success rates",
-      "usage": "tool_stats [limit]",
-      "permissions": []
+      "usage": "tool_stats [limit]"
     }
   ]
 }

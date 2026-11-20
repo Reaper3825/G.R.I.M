@@ -1,7 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1507328,
-  "required_permissions": ["memory"],
+  "api_version": 1572864,
   "provider": "Memory Plugin",
   "version": "1.0.0",
   "tools": [
@@ -21,10 +20,7 @@
         }
       ],
       "short_description": "Stage supplied information for the provider memory pipeline",
-      "usage": "remember <text>",
-      "permissions": [
-        "memory"
-      ]
+      "usage": "remember <text>"
     },
     {
       "tool_id": "recall",
@@ -42,10 +38,7 @@
         }
       ],
       "short_description": "Retrieve stored information matching the supplied memory query",
-      "usage": "recall <query>",
-      "permissions": [
-        "memory"
-      ]
+      "usage": "recall <query>"
     },
     {
       "tool_id": "memory.retrieve",
@@ -56,9 +49,6 @@
       "usage_type": 2,
       "is_informational": false,
       "needs_confirmation": false,
-      "permissions": [
-        "memory"
-      ],
       "argument_schema": {
         "type": "object",
         "properties": {

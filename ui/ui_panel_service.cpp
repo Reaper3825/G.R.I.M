@@ -18,8 +18,8 @@ void attachNativePanel(UIPanel* panel, GrimPluginHandle instance) {
     root.requireUIThread();
     const auto found = providerLeases.find(instance);
     const auto lease = found == providerLeases.end() ? nullptr : found->second.lock();
-    if (!lease || lease->retired || !lease->uiPermitted)
-        throw std::logic_error("Native panel attachment requires a live provider with UI permission");
+    if (!lease || lease->retired)
+        throw std::logic_error("Native panel attachment requires a live provider");
     const auto& key = panel->getPanelKey();
     if (key.empty() || key.size() > 256 || key.find_first_of("\r\n\0", 0, 3) != std::string::npos)
         throw std::invalid_argument("Provider panels require a stable key");

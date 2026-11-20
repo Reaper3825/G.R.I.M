@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v23.0
+// G.R.I.M Plugin API v24.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 23
+#define GRIM_API_VERSION_MAJOR 24
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -71,20 +71,6 @@ typedef enum {
     GRIM_LOG_ERROR = 3,
     GRIM_LOG_CRITICAL = 4
 } GrimLogLevel;
-
-// Plugin permissions
-typedef enum {
-    GRIM_PERM_FILESYSTEM = (1 << 0),    // Can read/write files
-    GRIM_PERM_PROCESS = (1 << 1),       // Can launch processes
-    GRIM_PERM_NETWORK = (1 << 2),       // Can use network (still offline-first!)
-    GRIM_PERM_MEMORY = (1 << 3),        // Can access memory system
-    GRIM_PERM_VOICE = (1 << 4),         // Can use TTS/STT
-    GRIM_PERM_UI = (1 << 5),            // Can show UI elements
-    GRIM_PERM_SYSTEM = (1 << 6),        // Can query system info
-    GRIM_PERM_INPUT = (1 << 7),         // Can send mouse/keyboard input through host services
-    GRIM_PERM_ALL = 0xFFFFFFFF
-} GrimPermission;
-
 
 // All pointers are borrowed for the duration of the API call. The host copies
 // result data before returning. No STL crosses the ABI.
@@ -167,8 +153,6 @@ typedef struct GrimPluginAPI {
     // ========================================================================
     const char* (*get_plugin_name)(GrimPluginHandle instance);
     const char* (*get_plugin_path)(GrimPluginHandle instance);
-    uint32_t (*get_permissions)(GrimPluginHandle instance);  // Returns bitmask of GrimPermission
-    bool (*has_permission)(GrimPluginHandle instance, GrimPermission perm);
     
     // Request plugin reload (useful for development)
     void (*request_reload)(GrimPluginHandle instance);

@@ -6,7 +6,7 @@ input implementation and has no perception runtime dependency. The public ABI
 has no input forwarding slot. Load/unload never injects input.
 
 Four Debug tools retain raw-text arguments: `move_mouse`, `click`, `type`, `key`.
-INPUT permission and a current provider are checked before execution. Calls are
+Execution requires a current provider. Calls are
 serialized; the host registry drains active tool calls before unloading the DLL.
 Unknown buttons/keys and empty combinations fail. Windows send/move failures
 fail explicitly; success does not verify the focused application's response.

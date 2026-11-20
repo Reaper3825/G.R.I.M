@@ -34,10 +34,10 @@ struct Module {
         shutdown = reinterpret_cast<void(*)()>(GetProcAddress(handle, "grim_plugin_shutdown"));
         require(shutdown != nullptr, "Missing Console shutdown");
     }
-    GrimResult init(bool permission = true) {
+    GrimResult init(bool registered = true) {
         auto init = reinterpret_cast<GrimResult (*)(const GrimPluginAPI*, GrimPluginHandle)>(GetProcAddress(handle, "grim_plugin_init"));
         require(init != nullptr, "Missing Console init");
-        const auto instance = prepareProviderPanelFixture(api, lease, permission);
+        const auto instance = prepareProviderPanelFixture(api, lease, registered);
         publish();
         return init(&api, instance);
     }
@@ -106,7 +106,7 @@ void runNativeConsoleDllTests(const char* dllPath) {
         }
         {
             Module denied(directory / "denied.dll", "console-denied");
-            require(denied.init(false) != GRIM_OK, "Console bypassed UI permission");
+            require(denied.init(false) != GRIM_OK, "Console accepted an unregistered provider");
         }
     } catch (...) { std::filesystem::remove_all(directory); throw; }
     std::filesystem::remove_all(directory);

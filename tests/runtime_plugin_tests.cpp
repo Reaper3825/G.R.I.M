@@ -58,7 +58,7 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     for (const auto* id : {"remember", "recall"}) {
         const auto tool = registry.getTool(id);
         const bool informational = std::string_view(id) == "recall";
-        check(tool && tool->provider.name == "Memory Plugin" && tool->permission_bits == GRIM_PERM_MEMORY &&
+        check(tool && tool->provider.name == "Memory Plugin" &&
               tool->is_informational == informational && tool->needs_confirmation != informational,
               "Memory tool metadata differs");
     }

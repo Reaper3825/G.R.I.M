@@ -82,7 +82,7 @@ or network targets are inferred. Calculator and Utility have no resource objects
 their current handlers do not retain resource state. In particular, Utility clean
 returns a fixed acknowledgment; it does not mutate console visibility/history.
 
-The registry remains the source for tools, usage classifications and permissions.
+The registry remains the source for tools and usage classifications.
 These assets do not make Debug/System/Ignore tools model-selectable, mount the
 registry in inventory, load plugin DLLs, or activate sandbox dispatch. Existing
 `preset_grim_*` reference rooms and saved worlds remain independent and unchanged.

@@ -1,6 +1,9 @@
-# G.R.I.M Plugin API v23.0
+# G.R.I.M Plugin API v24.0
 
-API version: **23.0.0**.
+API version: **24.0.0**.
+
+Version 24 removes the plugin permission bitmask and its API entries. Rebuild
+and deploy the host, plugin DLLs, and manifests together.
 
 Version 23 removes the retired event slots from the function table. The loader
 rejects v22 binaries. Rebuild and deploy the host, plugin DLLs, and manifests
@@ -57,7 +60,7 @@ objects, engines, devices, or C++ pointers cross the ABI. See
 [perception ownership and tools](../plugins/perception_plugin/README.md).
 
 The input plugin supplies `move_mouse`, `click`, `type`, and `key` using its
-own native implementation. INPUT permission and an active provider are required.
+own native implementation. Dispatch requires an active provider.
 Success reports OS acceptance, not an application's reaction. `click_on` remains
 retired; pure targeting geometry and checked-click helpers remain under `core/input`.
 
@@ -91,16 +94,14 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 2`, the packed integer `api_version` (1507328
-for 23.0.0), the provider name and version in `provider` and `version`, a
-`required_permissions` array of permission names, and a `tools` array. Use
-empty arrays when there are no permissions or tools. A tool can only declare
-permissions from the provider’s `required_permissions` array. A provider with tools exports `grim_plugin_dispatch_tool`.
+loader expects `schema_version: 2`, the packed integer `api_version` (1572864
+for 24.0.0), the provider name and version in `provider` and `version`, and a
+`tools` array. A provider with tools exports `grim_plugin_dispatch_tool`.
 See [Application's manifest](../plugins/application_plugin/application_plugin.tools.json)
 for raw text and JSON tool declarations.
 
 The loader passes the manifest's canonical `tool_id` to the dispatcher. Each
-tool declares named `permissions` and an `argument_format` of `raw_text` or
+tool declares an `argument_format` of `raw_text` or
 `json`. JSON tools provide an `argument_schema` object. `display_name` defaults
 to the tool ID, `version` to the manifest version, and `usage_type` to `Model`.
 
@@ -137,7 +138,7 @@ registrations set `ToolDescriptor::usage_type` using `ToolUsage`:
 
 The default is **Model**, preserving existing exposure. This field is independent
 of the existing `usage` syntax string, category, informational/action flags,
-permissions, and confirmation policy. Only loaded Model entries appear in
+and confirmation policy. Only loaded Model entries appear in
 `getModelTools()`, registry model prompts, the RL action list, and capability-gap
 matching. Developer inspection, full snapshots, host command discovery, and
 explicit dispatch continue to include all classifications. Classification is
@@ -239,8 +240,7 @@ description, usage, category, and argument format. They can additionally supply:
 - Named parameters with types, descriptions, and required flags.
 - Aliases, keywords, and capability tags.
 - Preconditions.
-- Required permission bits, informational/action classification, and a
-  confirmation requirement.
+- Informational/action classification and a confirmation requirement.
 - An argument schema encoded as JSON.
 
 The argument format is raw_text or json. A json tool must supply a JSON
@@ -252,13 +252,11 @@ explicitly describe their raw command-line argument strings.
 
 The host derives provider name, source path, and a unique loaded-instance ID from the plugin. Plugins
 cannot supply another provider's identity, load status, or execution statistics.
-Tool permission requirements must be a subset of the plugin's declared
-permissions. Metadata flags describe policy; direct registry invocation does
+Metadata flags describe policy; direct registry invocation does
 not itself implement confirmation or the orchestration policy gate.
 
 The host owns the decoded descriptors and initializes execution statistics.
-The manifest can supply up to 256 tool entries. The host checks metadata and
-permissions when reading the manifest and checks duplicate tool IDs and aliases
+The manifest can supply up to 256 tool entries. The host checks metadata when reading the manifest and checks duplicate tool IDs and aliases
 during publication.
 
 ### Provider initialization
@@ -332,8 +330,7 @@ manual memory services, and generation-scoped provider resource publication.
 
 Host-returned strings from other services retain their existing string_free
 ownership contract; the new result writer applies specifically to tool results
-and command execution. The API does not sandbox native code. Declared
-permissions gate supported host services, not arbitrary native OS calls.
+and command execution. The API does not sandbox native code.
 
 ## Folder reconciliation and reloads
 
@@ -388,8 +385,8 @@ before unloading the DLL.
 
 ## Generic UI operations (v3.8)
 
-`ui_panel_service(self, operation, panel_key, request_id)` requires `GRIM_PERM_UI`
-and a published, accepting plugin instance. Initialization cannot submit UI work.
+`ui_panel_service(self, operation, panel_key, request_id)` requires a published,
+accepting plugin instance. Initialization cannot submit UI work.
 The service never dispatches another command and never blocks on the UI thread.
 
 - Submit `GRIM_UI_LIST` with a null key and request ID zero.
@@ -413,7 +410,7 @@ Polling is nonblocking. A completed poll consumes the result; unknown, consumed,
 or foreign request IDs return `status:error` with `error:request_not_found`.
 Each plugin instance can retain at most 64 requests, including unconsumed
 completed results. Further submissions return `too_many_requests`. Null returns
-mean invalid arguments, denied permission, a nonpublished/stopping provider, or
+mean invalid arguments, a nonpublished/stopping provider, or
 an API failure. Host execution exceptions become failed completed results.
 
 Queued work contains copied host data and cancellation flags, not plugin code,
@@ -473,7 +470,7 @@ The plugin preserves every result field, including `click_on`'s structured
 coordinates and `application_response_verified:false`. Standard/unknown host
 exceptions are encoded in an `exception` field and rethrown on the plugin side,
 preserving the registry's `ERR_CMD_EXCEPTION` policy. Null denotes invalid API
-arguments, denied permissions, a nonpublished/stopping provider, or API failure;
+arguments, a nonpublished/stopping provider, or API failure;
 the plugin reports `ERR_INPUT_SERVICE` in that case.
 
 Raw argument behavior is unchanged: coordinate commas/integer-prefix parsing,
@@ -528,7 +525,7 @@ Run the focused host-only suite with an existing MSVC installation:
 It compiles tiny plugin DLL fixtures and the real loader/API/registry with host
 service sinks. Coverage includes folder loading, ABI rejection, failed-init
 cleanup, atomic initialization, aliases, copied metadata/results, malformed or
-missing results, provider ownership, permission declarations, active-call draining,
+missing results, provider ownership, active-call draining,
 folder additions/removals, queued reloads, rejected replacements, successful
 cutovers, and generation-isolated resource cleanup. It builds and runs no GRIM
 application or training/runtime target.
@@ -549,7 +546,7 @@ and refresh on plugin registration/removal. Its focused host UI regression is:
 
 `filesystem_plugin` owns the `ls`, `mkdir`, and `rm`
 tools. It registers one atomic batch with path parameters, usage,
-filesystem permissions, and informational/confirmation metadata. It uses no
+and informational/confirmation metadata. It uses no
 host globals or imported host symbols. `clean` and `help` are provided by the
 separate `utility_plugin`.
 
@@ -575,8 +572,7 @@ removal, resource updates, failed replacement, reload, and DLL removal. Use
 ### Native calculator plugin
 
 `calculator_plugin` owns its parser and evaluation handler, and registers the
-informational Model tool `calculate` in its sidecar manifest. It has no required
-permissions, confirmation, or host-service dependency. The raw expression parameter
+informational Model tool `calculate` in its sidecar manifest. It has no confirmation or host-service dependency. The raw expression parameter
 is documented as `calculate {t}` with the text binding `t`.
 
 The synchronous result writer receives a human-readable answer and JSON containing
@@ -627,14 +623,13 @@ Two v3.1 host services provide the required shared boundary:
   platforms return `GRIM_ERROR_UNSUPPORTED`. This service does not dispatch a
   registered command, so it cannot recurse into `open` or `search`.
 
-The existing status-only `launch_app` service retains its success/failure and
-permission behavior, using the same native primitive without depending on the
+The existing status-only `launch_app` service uses the same native primitive without depending on the
 removed `cmdOpenApp` handler. Neither service confirms that an application has
 finished opening or that a web search completed.
 
 The focused suite's `-ApplicationPluginDirectory` option loads the real DLL and
 checks exact result compatibility, raw/trimmed arguments, native status 32/33,
-current host error messages, permissions, and DLL removal. The OS primitive is
+current host error messages and DLL removal. The OS primitive is
 replaced with a test sink; no applications or browsers are opened. The production
 OS implementation receives a separate syntax check. See the
 [build and deployment instructions](../plugins/README.md#application-plugin).
@@ -717,7 +712,7 @@ failure handling, native detection and lifecycle validation.
 
 ### Manual memory
 
-`memory_plugin` owns memory staging, search, and persistence under MEMORY permission.
+`memory_plugin` owns memory staging, search, and persistence.
 `remember` queues a record and `recall` returns the first stored match. The next
 `memory.retrieve` request promotes pending records before performing text and
 tag lookup. The orchestrator dispatches this System tool and receives copied
@@ -762,7 +757,7 @@ unchanged. No output is silently truncated.
 
 The optional `-PerceptionPluginDirectory` test argument exercises the real DLL,
 API, registry, and result writer against controlled host observation services.
-It checks permissions, initialization/availability transitions, exact routing and
+It checks initialization/availability transitions, exact routing and
 OCR defaults, ignored arguments, literal/empty/error results, 70-KB text and voice,
 exception paths, and DLL removal without changing host state. No screen capture,
 OCR engine, object model, or model server runs during validation. The remaining
@@ -815,8 +810,7 @@ their original results. Non-Windows unsupported responses remain unchanged.
 Cache commands retain their original direct-directory `.wav` removal rules,
 index handling, shutdown/init order, exception responses, and reset precaching.
 The original absolute `D:/G.R.I.M/resources/...` cache/embedding paths and relative
-`resources/test.wav` path are preserved. Native plugin filesystem operations are
-covered by tool permission metadata; this does not introduce sandboxing.
+`resources/test.wav` path are preserved.
 
 Existing placeholders are not upgraded by migration: `nevermind` acknowledges
 cancellation and checks speaking status but does not stop playback/streaming.
@@ -830,7 +824,7 @@ dispatcher, session context/history, registry, and result writer with controlled
 capture/audio/cache/native-query endpoints. Cache and embedding file operations
 run only in a private temporary directory. Tests cover all eleven tools, exact
 results, shared stream references, live configuration, SAPI status branches,
-placeholders, large transcripts, permissions, exception behavior, cache ordering,
+placeholders, large transcripts, exception behavior, cache ordering,
 and unload survival. Native COM/SAPI code receives a syntax check. Validation
 does not record audio, play sound, start a model/server, or modify the real cache.
 See [build and deployment instructions](../plugins/README.md#voice-plugin).
@@ -855,7 +849,7 @@ on the next provider poll after reload. See [scheduling contract](SCHEDULING_TOO
 
 On the UI thread, construct the complete panel with host auto-registration
 disabled, then call `panel.attachToProvider(instance)` during provider init.
-Attachment checks the instance's UI permission and validates the stable key
+Attachment checks the live provider instance and validates the stable key
 against the live UI. The host binds the panel's `ui.panel` resource as
 `panel:<stable-key>` under that instance. The provider owns the panel object.
 
@@ -883,7 +877,7 @@ the render callbacks, clears native input, and drains Cesium destruction before
 the loader releases the library.
 
 `tests/run_ui_input_foundation.ps1` tests native controls, direct provider attachment,
-permissions, collision/replacement, and synchronous retirement. It also builds
+collision/replacement, and synchronous retirement. It also builds
 an isolated Schedule DLL against the headless test host's exports and tests
 native draw dispatch, DLL replacement, synchronous detach, and failed init.
 No application, renderer backend, model or training process is started.
