@@ -44,6 +44,8 @@ int main() try {
         check(implicit.success && implicit.message == "implicit" &&
               Json::parse(implicit.structuredOutputJson).at("actual") == "implicit" && calls == 1,
               "Revision check alone blocked an alias or changed the Production result");
+        check(implicit.structuredOutput == Json{{"actual", "implicit"}},
+              "Successful invocation did not attach the parsed provider payload");
         check(registry.invoke("execution_mode_alias", "", {.require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL",
               "Canonical Model check depended on a registry revision");
         check(registry.invoke(definition.tool_id, "explicit", {.mode = ToolExecutionMode::Production}).success && calls == 2,
@@ -61,6 +63,8 @@ int main() try {
         const auto sandbox = registry.invoke(definition.tool_id, "sandbox", {.mode = ToolExecutionMode::Sandbox});
         check(!sandbox.success && sandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
               "Reserved Sandbox invoked Production or claimed success");
+        check(sandbox.structuredOutput.is_null(),
+              "Registry failure unexpectedly had a provider payload");
         const auto modelSandbox = registry.invoke(definition.tool_id, "sandbox",
             {.mode = ToolExecutionMode::Sandbox, .expected_registry_version = version, .require_canonical_model = true});
         check(!modelSandbox.success && modelSandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,

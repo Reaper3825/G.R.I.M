@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <string>
+#include <nlohmann/json.hpp>
 #include "helpers/color.hpp"
 
 // ====================================================
@@ -14,6 +15,8 @@ struct CommandResult {
     std::string voice;
     Color color = Colors::Default;
     std::string structuredOutputJson;
+    // Parsed provider payload, populated by ToolRegistry::invoke.
+    nlohmann::json structuredOutput;
 };
 
 // ====================================================

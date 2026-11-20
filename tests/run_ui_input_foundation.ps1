@@ -18,7 +18,7 @@ $sources += 'tests/settings_panel_tests.cpp', 'tests/settings_host_stubs.cpp', '
 $sources += 'tests/console_panel_tests.cpp', 'tests/console_host_stubs.cpp', 'console_history.cpp', 'ui/primitives/ui_layout_box.cpp'
 $sources += 'tests/storage_panel_tests.cpp'
 $sources += 'ui/primitives/ui_canvas.cpp', 'ui/primitives/ui_node.cpp', 'tests/ui_canvas_tests.cpp'
-$sources += @('MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/Registries/ProviderRegistry.cpp') # Panel resource publication is a base UI dependency.
+$sources += @('MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp', 'MMO/Core/Registries/ProviderRegistry.cpp') # Panel resource publication is a base UI dependency.
 if ($ModelWorkspace) {
     $sources += 'tests/model_workspace_panel_tests.cpp', 'tests/model_workspace_host_stubs.cpp', 'MMO/Core/Registries/ModelRegistry.cpp', 'ui/primitives/ui_progress_bar.cpp', 'ui/primitives/ui_label.cpp'
     $arguments += '/DGRIM_MODEL_WORKSPACE_TESTS'

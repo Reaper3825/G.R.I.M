@@ -27,10 +27,10 @@ inline MMO::RegisteredTool panelTool(const std::string& id, uint64_t version) {
 // Stateless client for the UI plugin request protocol.
 class PanelRequestCompletion {
     static Json invoke(const std::string& id, const Json& args, uint64_t version) {
-        const auto result = MMO::ToolRegistry::instance().invoke(
+        auto result = MMO::ToolRegistry::instance().invoke(
             id, args.dump(), {.expected_registry_version = version, .require_canonical_model = true});
-        require(!result.structuredOutputJson.empty(), result.errorCode + ": " + result.message);
-        auto response = Json::parse(result.structuredOutputJson);
+        require(!result.structuredOutput.is_null(), result.errorCode + ": " + result.message);
+        auto response = std::move(result.structuredOutput);
         require(response.at("format") == "grim-ui-panel-response" && response.at("version") == 1,
                 "Unsupported UI response");
         return response;

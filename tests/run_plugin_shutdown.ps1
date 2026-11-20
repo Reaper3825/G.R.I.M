@@ -104,7 +104,7 @@ $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | Fo
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + '/DGRIM_BUILD_HOST'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($BuildSchedulingFixtures -or $SchedulePluginDirectory) {
     $apiArgs += @('/DGRIM_NATIVE_UI_TEST_HOST', ('/I"' + $workspace + '/ui"'), ('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
     $apiArgs += @('tests/ui_native_host_stubs.cpp','ui/primitives/ui_button.cpp','ui/primitives/ui_inputbox.cpp','ui/primitives/ui_textarea.cpp','ui/primitives/ui_slider.cpp','ui/primitives/ui_scrollbox.cpp','ui/primitives/ui_dropdown.cpp','ui/primitives/ui_panel.cpp','helpers/widget.cpp','helpers/vector2.cpp','ui/ui_focus_manager.cpp','ui/ui_root_panels.cpp','ui/ui_panel_service.cpp','ui/dynamic_surface_panel.cpp','MMO/UI/UISurfaceRegistry.cpp','MMO/UI/UISurfaceSpec.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
@@ -118,7 +118,7 @@ if ($BuildInputFixture) {
 }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
 $registryArgs = $common + '/DGRIM_BUILD_HOST'
-$registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/ToolGapPlanner.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/ToolGapPlanner.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
 if ($BuildApplicationFixture) {

@@ -7,6 +7,7 @@
 #include "ui/primitives/ui_inputbox.hpp"
 #include "ui/primitives/ui_scrollbox.hpp"
 #include "ui/overlay_renderer.hpp"
+#include "ui/ui_theme.hpp"
 #include <array>
 #include <random>
 #include <sstream>
@@ -134,7 +135,7 @@ class CalendarPanel : public UIPanel {
         return result;
     }
     void layout() {
-        using namespace UITheme;
+        namespace Colors = UITheme::Colors;
         const auto content = getContentRect();
         scroll_->setPosition(content.origin); scroll_->setSize(content.size);
         const float width = (std::max)(1.0f, content.size.x - 40);

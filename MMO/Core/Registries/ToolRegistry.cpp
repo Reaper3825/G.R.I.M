@@ -1,4 +1,5 @@
 #include "ToolRegistry.hpp"
+#include "../ToolResultJson.hpp"
 #include "../../../commands/command_result.hpp"
 #include <algorithm>
 
@@ -85,6 +86,13 @@ bool ToolRegistry::unregisterTool(const std::string& id, const std::string& prov
 
 CommandResult ToolRegistry::invoke(const std::string& name, const std::string& arguments,
                                    const ToolInvocationOptions& options) {
+    auto result = invokeRaw(name, arguments, options);
+    result.structuredOutput = formatToolResult(result.structuredOutputJson);
+    return result;
+}
+
+CommandResult ToolRegistry::invokeRaw(const std::string& name, const std::string& arguments,
+                                      const ToolInvocationOptions& options) {
     // Route at the shared boundary; a reserved mode must never fall through
     // to a real handler or affect its production execution statistics.
     switch (options.mode) {

@@ -8,6 +8,7 @@ if(NOT TARGET grim_environment_runtime)
         "${GRIM_ENVIRONMENT_REPO}/ui/world_lab/world_document.cpp"
         "${GRIM_ENVIRONMENT_REPO}/ui/world_lab/textworld_client.cpp"
         "${GRIM_ENVIRONMENT_REPO}/MMO/Core/Registries/ProviderRegistry.cpp"
+        "${GRIM_ENVIRONMENT_REPO}/MMO/Core/ToolResultJson.cpp"
         "${GRIM_ENVIRONMENT_REPO}/MMO/Core/Registries/ToolRegistry.cpp")
     target_compile_features(grim_environment_runtime PRIVATE cxx_std_20)
     target_compile_definitions(grim_environment_runtime PRIVATE NOMINMAX)
