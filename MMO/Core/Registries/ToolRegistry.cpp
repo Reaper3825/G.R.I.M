@@ -1,5 +1,4 @@
 #include "ToolRegistry.hpp"
-#include "../ToolResultJson.hpp"
 #include "../../../commands/command_result.hpp"
 #include <algorithm>
 
@@ -87,7 +86,10 @@ bool ToolRegistry::unregisterTool(const std::string& id, const std::string& prov
 CommandResult ToolRegistry::invoke(const std::string& name, const std::string& arguments,
                                    const ToolInvocationOptions& options) {
     auto result = invokeRaw(name, arguments, options);
-    result.structuredOutput = formatToolResult(result.structuredOutputJson);
+    if (result.structuredOutput.is_null() && !result.structuredOutputJson.empty())
+        result.structuredOutput = nlohmann::json::parse(result.structuredOutputJson, nullptr, false);
+    if (!result.structuredOutput.is_object())
+        result.structuredOutput = nlohmann::json::object();
     return result;
 }
 
@@ -117,7 +119,11 @@ CommandResult ToolRegistry::invokeRaw(const std::string& name, const std::string
             return {false, "Canonical Model tool required", "ERR_TOOL_NOT_MODEL", "", "", Colors::Red};
     }
     CommandResult result;
-    try { result = entry->handler(arguments); }
+    try {
+        result = entry->completion_handler
+            ? entry->completion_handler(arguments, options.wait_for_completion)
+            : entry->handler(arguments);
+    }
     catch (const std::exception& error) {
         result = {false, "[Error] Exception while running command: " + name + ": " + error.what(), "ERR_CMD_EXCEPTION", "", "", Colors::Red};
     } catch (...) {
@@ -145,8 +151,9 @@ std::optional<RegisteredTool> ToolRegistry::getTool(const std::string& name) con
     return RegisteredTool{entry.descriptor, *entry.provider};
 }
 
-std::vector<ToolDescriptor> ToolRegistry::getAllTools() const {
+std::vector<ToolDescriptor> ToolRegistry::getAllTools(uint64_t* revision) const {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (revision) *revision = version_;
     std::vector<ToolDescriptor> result;
     for (const auto& [id, entry] : tool_index_) result.push_back(entry->descriptor);
     std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
@@ -165,8 +172,8 @@ std::vector<RegisteredTool> ToolRegistry::getRegisteredTools() const {
     return result;
 }
 
-std::vector<ToolDescriptor> ToolRegistry::getModelTools() const {
-    auto result = getAllTools();
+std::vector<ToolDescriptor> ToolRegistry::getModelTools(uint64_t* revision) const {
+    auto result = getAllTools(revision);
     std::erase_if(result, [](const auto& tool) {
         return tool.usage_type != ToolUsage::Model;
     });

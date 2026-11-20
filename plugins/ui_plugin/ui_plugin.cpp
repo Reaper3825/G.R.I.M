@@ -1,4 +1,6 @@
+#include <chrono>
 #include <string_view>
+#include <thread>
 #include "core/plugin_api.hpp"
 #include "core/plugin_tool_result.hpp"
 #include <nlohmann/json.hpp>
@@ -13,13 +15,52 @@ GrimResult deliver(GrimToolResultWriter* writer, bool success, const std::string
                                     success ? 0x64FFFF : 0xFF6464, nullptr,
                                     json.empty() ? nullptr : json.c_str());
 }
+nlohmann::json panelRequest(GrimUIPanelOperation operation, const char* key, uint64_t id) {
+    const char* raw = host->ui_panel_service(host.instance(), operation, key, id);
+    if (!raw) throw std::runtime_error("UI panel service unavailable or request denied");
+    struct Release {
+        const char* text;
+        ~Release() { host->string_free(host.instance(), text); }
+    } release{raw};
+    auto response = nlohmann::json::parse(raw);
+    if (response.at("format") != "grim-ui-panel-response" || response.at("version") != 1)
+        throw std::runtime_error("Unsupported UI service response");
+    return response;
+}
+
+GrimResult completePanelRequest(GrimToolResultWriter* writer, nlohmann::json response) {
+    if (response.at("status") == "pending") {
+        const auto id = response.at("request_id").get<uint64_t>();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        try {
+            do {
+                if (std::chrono::steady_clock::now() >= deadline)
+                    throw std::runtime_error("UI request timed out");
+                response = panelRequest(GRIM_UI_POLL, nullptr, id);
+                if (response.at("request_id") != id)
+                    throw std::runtime_error("UI request identity mismatch");
+                if (response.at("status") == "pending") std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            } while (response.at("status") == "pending");
+            if (response.at("status") != "completed")
+                throw std::runtime_error(response.value("error", "UI request failed"));
+        } catch (const std::exception& error) {
+            try { panelRequest(GRIM_UI_CANCEL, nullptr, id); } catch (...) {}
+            return deliver(writer, false, error.what(), "ERR_TOOL_COMPLETION_UNKNOWN");
+        }
+    }
+    if (response.at("status") != "completed")
+        return deliver(writer, false, response.value("error", "UI request failed"), "ERR_UI_REQUEST");
+    const auto& result = response.at("result");
+    const bool success = result.at("success").get<bool>();
+    const auto payload = result.dump();
+    return deliver(writer, success, payload, success ? "ERR_NONE" : "ERR_UI_OPERATION", payload);
+}
+
 template<GrimUIPanelOperation Operation>
 GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
     try {
         const std::string textArgs = request->arguments_size
             ? std::string(request->arguments, request->arguments_size) : std::string{};
-        // ui.list is advertised without arguments. Direct command dispatch supplies
-        // an empty string; the World Lab adapter supplies an explicit empty object.
         const auto args = Operation == GRIM_UI_LIST && textArgs.find_first_not_of(" \t\r\n") == std::string::npos
             ? nlohmann::json::object() : nlohmann::json::parse(textArgs);
         if (!args.is_object()) throw std::invalid_argument("Expected a JSON object");
@@ -47,16 +88,13 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
             if (key.empty() || key.size() > 256 || key.find('\0') != std::string::npos)
                 throw std::invalid_argument("panel_id must contain 1-256 bytes without NUL");
         }
-        const char* raw = host->ui_panel_service(host.instance(), cancel ? GRIM_UI_CANCEL :
+        const auto response = panelRequest(cancel ? GRIM_UI_CANCEL :
             (Operation == GRIM_UI_SHOW && id ? GRIM_UI_SHOW_CURRENT :
                 (Operation == GRIM_UI_HIDE && id ? GRIM_UI_HIDE_CURRENT : Operation)),
             Operation == GRIM_UI_LIST || Operation == GRIM_UI_POLL ? nullptr : key.c_str(), id);
-        if (!raw) return deliver(writer, false, "UI panel service unavailable or request denied", "ERR_UI_SERVICE");
-        std::string text;
-        { struct Release { const char* raw; ~Release() { host->string_free(host.instance(), raw); } } release{raw}; text = raw; }
-        const auto response = nlohmann::json::parse(text);
-        if (response.at("format") != "grim-ui-panel-response" || response.at("version") != 1)
-            throw std::runtime_error("Unsupported UI service response");
+        if (request->struct_size >= sizeof(GrimToolCall) && request->wait_for_completion)
+            return completePanelRequest(writer, response);
+        const auto text = response.dump();
         const auto status = response.at("status").get<std::string>();
         if (status == "pending")
             return deliver(writer, true, "UI request " + std::to_string(response.at("request_id").get<uint64_t>()) +

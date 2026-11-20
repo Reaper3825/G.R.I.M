@@ -1,10 +1,10 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
-#include <string_view>
+#include <string>
 
 namespace GRIM::MMO {
 
-nlohmann::json formatToolResult(std::string_view payload);
+std::string formatToolResult(const nlohmann::json& payload);
 
 }

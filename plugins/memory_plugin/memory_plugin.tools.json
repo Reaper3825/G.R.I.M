@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1441792,
+  "api_version": 1507328,
   "required_permissions": ["memory"],
   "provider": "Memory Plugin",
   "version": "1.0.0",

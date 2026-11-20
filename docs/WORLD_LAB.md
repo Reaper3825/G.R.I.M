@@ -509,32 +509,31 @@ tool documentation. `native-open-catalog-v3` invalidates older provider-bound
 witnesses. The worker emits a request and the host fulfills that response without
 an additional worker round trip.
 
-### Host object actions in Play
+### Host tool actions in Play
+
+World Lab gets executable action IDs and catalog entries from the model tools
+in `ToolRegistry`. Enter the canonical tool ID followed by its arguments.
+JSON tools accept a JSON arguments object. A bare JSON tool ID supplies `{}`.
 
 ```text
 ui.list
-ui.inspect panel:settings@42
-ui.show panel:settings@42
-ui.hide panel:settings@42
+ui.inspect {"panel_id":"settings"}
+ui.show {"panel_id":"settings","expected_runtime_id":42}
+ui.hide {"panel_id":"settings","expected_runtime_id":42}
 ```
 
-Use the object reference returned by `ui.list`. In this example, `42` identifies
-the current instance. The UI layer reads existing resources published by
-providers and returns `{reference, name, kind, state}` records. Published objects
-are available across Play resets. If an object is replaced, run `ui.list` to get
-its new reference.
+Use the panel ID returned by the UI plugin's `ui.list`. Show and hide can also
+take the listed runtime ID to guard against a replacement panel. The UI plugin
+handles request completion.
 
-The Play worker routes only the host action IDs supplied by the client. The
-client matches each request to the submitted command and attaches its action ID
-to the result. The host UI layer resolves the object reference, manages
-asynchronous completion and cancellation, and returns the current object state.
-Show and hide check the runtime identity on the UI thread before applying changes.
-An interrupted request with an uncertain outcome returns `unknown`.
+The client matches the worker request to the submitted command and invokes the
+canonical tool at the advertised registry revision. World Lab tracks action
+identity and completion separately. The host formats the provider's JSON object
+as model-facing feedback. A tool that supplies no object yields `{}`.
 
 Host actions leave native moves, facts, and Goal progress alone. Native witness
 replay rejects them. Reset restarts the native episode and leaves host effects
-in place. The model observation uses the returned feedback text. The structured
-result remains available to host consumers.
+in place.
 
 Focused checks:
 

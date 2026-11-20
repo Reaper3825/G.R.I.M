@@ -15,7 +15,7 @@ struct CommandResult {
     std::string voice;
     Color color = Colors::Default;
     std::string structuredOutputJson;
-    // Parsed provider payload, populated by ToolRegistry::invoke.
+    // Provider-authored data. The registry supplies an empty object when omitted.
     nlohmann::json structuredOutput;
 };
 

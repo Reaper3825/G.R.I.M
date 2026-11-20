@@ -20,7 +20,6 @@ static GrimResult publish(const char* kind) {
         FIXTURE_RESULT + "\"}}]";
     return api->replace_resources(api.instance(), kind, json.data(), json.size());
 }
-static void event(const char*, const void*, size_t, void*) { publish("fixture_event"); }
 static void tick(double, double, void*) { publish("fixture_tick"); }
 static GrimResult run(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
     if (std::string(call->arguments, call->arguments_size) == "reload") api->request_reload(api.instance());
@@ -39,7 +38,6 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value,
 #ifdef FIXTURE_TOOLS
     api->log(instance, GRIM_LOG_INFO, "init " FIXTURE_RESULT);
     if (publish("fixture_init") != GRIM_OK) return GRIM_ERROR_UNKNOWN;
-    api->subscribe_event(instance, "fixture_event", event, nullptr);
     if (const auto result = api->subscribe_system_tick(instance, tick, nullptr); result != GRIM_OK)
         return result;
 #endif

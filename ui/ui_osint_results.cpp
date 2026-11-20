@@ -38,13 +38,13 @@ bool UIOsintResults::loadFindings(const std::string& username) {
     
     const auto response = GRIM::MMO::ToolRegistry::instance().invoke("osint_show_secrets", username);
     
-    if (!response.success || response.structuredOutputJson.empty()) {
+    if (!response.success || response.structuredOutput.empty()) {
         LOG_ERROR("OSINT-UI", "No scan results found for: " + username);
         return false;
     }
     
     try {
-        const auto snapshot = json::parse(response.structuredOutputJson);
+        const auto& snapshot = response.structuredOutput;
         if (snapshot.at("format") != "grim-osint-findings" || snapshot.at("version") != 1) return false;
         std::set<std::string> domains;
         

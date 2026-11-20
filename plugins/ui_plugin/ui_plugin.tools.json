@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1441792,
+  "api_version": 1507328,
   "required_permissions": ["ui"],
   "provider": "UI Plugin",
   "version": "1.0.0",
@@ -13,7 +13,7 @@
         "panels"
       ],
       "category": "ui",
-      "description": "Queue discovery of instantiated panels and their stable IDs; poll for completion",
+      "description": "List instantiated panels and their stable IDs",
       "is_informational": true,
       "needs_confirmation": false,
       "preconditions": [
@@ -41,7 +41,7 @@
         "panels"
       ],
       "category": "ui",
-      "description": "Queue a panel state snapshot by stable ID; poll for completion",
+      "description": "Read a panel state snapshot by stable ID",
       "is_informational": true,
       "needs_confirmation": false,
       "parameters": [
@@ -86,7 +86,7 @@
         "panels"
       ],
       "category": "ui",
-      "description": "Queue showing a panel and bringing it forward; poll to verify completion",
+      "description": "Show a panel and bring it forward",
       "is_informational": false,
       "needs_confirmation": true,
       "parameters": [
@@ -135,7 +135,7 @@
         "panels"
       ],
       "category": "ui",
-      "description": "Queue hiding a panel; poll to verify completion",
+      "description": "Hide a panel",
       "is_informational": false,
       "needs_confirmation": true,
       "parameters": [
@@ -184,7 +184,7 @@
         "panels"
       ],
       "category": "ui",
-      "description": "Queue bringing a panel forward without changing visibility; poll to verify completion",
+      "description": "Bring a panel forward without changing visibility",
       "is_informational": false,
       "needs_confirmation": true,
       "parameters": [
@@ -220,6 +220,7 @@
     },
     {
       "tool_id": "ui.poll",
+      "usage_type": 2,
       "argument_format": "json",
       "capability_tags": [
         "ui",

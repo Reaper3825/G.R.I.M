@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v22.0
+// G.R.I.M Plugin API v23.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 22
+#define GRIM_API_VERSION_MAJOR 23
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -47,7 +47,6 @@
 
 // Opaque handles (never dereference directly in plugins)
 typedef void* GrimHandle;
-typedef void* GrimEventHandle;
 typedef void* GrimMemoryHandle;
 
 // Result codes
@@ -93,6 +92,8 @@ struct GrimToolCall {
     uint32_t struct_size = sizeof(GrimToolCall);
     const char* arguments = nullptr;
     size_t arguments_size = 0;
+    // Optional request for a final result from providers with asynchronous operations.
+    uint32_t wait_for_completion = 0;
 };
 struct GrimToolResult {
     uint32_t struct_size = sizeof(GrimToolResult);
@@ -129,9 +130,6 @@ enum GrimUIPanelOperation : uint32_t {
 
 // Tool handlers and their results are defined above.
 
-// Event callback: (event_name, event_data, user_data)
-typedef void (*GrimEventCallback)(const char* event_name, const void* event_data, size_t data_size, void* user_data);
-
 // System tick callback
 typedef void (*GrimSystemTickCallback)(double delta_seconds, double offset_seconds, void* user_data);
 
@@ -158,19 +156,6 @@ typedef struct GrimPluginAPI {
     
     // Execute a command programmatically
     GrimResult (*execute_command)(GrimPluginHandle instance, const char* command_text, GrimToolResultWriter* result);
-    
-    // ========================================================================
-    // Event System
-    // ========================================================================
-    GrimEventHandle (*subscribe_event)(GrimPluginHandle instance, const char* event_name, GrimEventCallback callback, void* user_data);
-    GrimResult (*unsubscribe_event)(GrimPluginHandle instance, GrimEventHandle handle);
-    GrimResult (*emit_event)(GrimPluginHandle instance, const char* event_name, const void* data, size_t data_size);
-    
-    // Common events:
-    // - "command_executed" - fired after any command runs
-    // - "user_input" - raw user text input
-    // - "plugin_loaded" / "plugin_unloaded"
-    // - "system_shutdown" - clean up resources
     
     // ========================================================================
     // Notifications

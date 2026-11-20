@@ -26,7 +26,7 @@ bool ProviderRegistry::publish(const ProviderDescriptor& provider,
         for (const auto& registration : registrations) {
             const auto& desc = registration.descriptor;
             const char* error = nullptr;
-            if (desc.tool_id.empty() || !registration.handler)
+            if (desc.tool_id.empty() || (!registration.handler && !registration.completion_handler))
                 error = "Tool registration requires an ID and handler";
             else if (!validToolUsage(desc.usage_type))
                 error = "Invalid tool usage type";
@@ -36,7 +36,7 @@ bool ProviderRegistry::publish(const ProviderDescriptor& provider,
                 error = "Invalid short description";
             if (error) throw std::invalid_argument(error);
             if (nextTools.count(desc.tool_id)) return false;
-            auto entry = std::make_shared<Entry>(Entry{desc, registration.handler, record->descriptor});
+            auto entry = std::make_shared<Entry>(Entry{desc, registration.handler, registration.completion_handler, record->descriptor});
             nextTools.emplace(desc.tool_id, entry.get());
             record->tools.emplace(desc.tool_id, std::move(entry));
             published.push_back(desc.tool_id);

@@ -26,8 +26,8 @@ EnvironmentInferenceInput buildEnvironmentInferenceInput(
     const auto path=state.value("location_path",std::string{});
     const auto visible=[&](const char* field){return cleanEnvironmentObservation(state.value(field,std::string{}),path);};
     const auto description=visible("description"),inventory=visible("inventory");
-    auto feedback=visible("feedback");
-    if(feedback==description || feedback==inventory)feedback.clear();
+    auto feedback = state.contains("host_action") ? state.value("feedback", std::string{}) : visible("feedback");
+    if (!state.contains("host_action") && (feedback == description || feedback == inventory)) feedback.clear();
     std::string observation;
     const auto append = [&](const std::string& text, const char* label) {
         if (text.empty()) return;

@@ -20,12 +20,4 @@ void releaseInstance(LoadedProvider& provider);
 /** Dispatch the frame tick to published plugin generations. */
 void dispatchSystemTick(double deltaSeconds, double offsetSeconds);
 
-/**
- * Emit an event to all subscribers
- * @param event_name Name of the event
- * @param data Event data pointer
- * @param data_size Size of event data
- */
-void emitGlobalEvent(const char* event_name, const void* data, size_t data_size);
-
 } // namespace PluginAPI

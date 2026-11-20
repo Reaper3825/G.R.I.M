@@ -186,6 +186,17 @@ Phase2TextInferenceResult resumePhase2PayloadInference(TrainingContext& ctx, GRI
 // PRODUCTION_DISPATCH
 
 int main() try {
+    {
+        const std::string payload = R"({"panel":{"panel_id":"settings","visible":true}})";
+        auto toolResponse = response("active", payload);
+        auto& state = toolResponse["result"]["state"];
+        state["host_action"] = {{"status", "completed"}, {"action_id", 17}};
+        state["description"] = payload;
+        const auto input = GRIM::Environment::buildEnvironmentInferenceInput({}, toolResponse);
+        const auto observation = input.reasoning_state.at("environment_context").get<std::string>();
+        assert(observation.starts_with("Feedback:\n" + payload));
+        assert(observation.find("action_id") == std::string::npos);
+    }
     const auto directory = fs::temp_directory_path() / ("grim-environment-dispatch-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directory(directory);

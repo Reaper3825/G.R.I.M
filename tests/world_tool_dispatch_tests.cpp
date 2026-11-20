@@ -63,7 +63,7 @@ int main() try {
         const auto sandbox = registry.invoke(definition.tool_id, "sandbox", {.mode = ToolExecutionMode::Sandbox});
         check(!sandbox.success && sandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
               "Reserved Sandbox invoked Production or claimed success");
-        check(sandbox.structuredOutput.is_null(),
+        check(sandbox.structuredOutput == Json::object(),
               "Registry failure unexpectedly had a provider payload");
         const auto modelSandbox = registry.invoke(definition.tool_id, "sandbox",
             {.mode = ToolExecutionMode::Sandbox, .expected_registry_version = version, .require_canonical_model = true});
@@ -108,69 +108,57 @@ int main() try {
               registry.invoke(retained.tool_id, "").errorCode == "ERR_UNKNOWN_CMD",
               "Provider unload left tools discoverable or callable");
     }
-    uint64_t next = 0, runtime = 7;
-    bool visible = false, loseCompletion = false;
-    int mutations = 0, inspections = 0, cancels = 0;
-    std::map<uint64_t, Json> requests;
-    const ProviderDescriptor uiOwner{ToolProviderType::Plugin, "UI fixture", "fixture-1", {}};
-    std::vector<ToolRegistration> registrations;
-    for (const auto& id : {"ui.list", "ui.inspect", "ui.show", "ui.hide"}) {
-        registrations.push_back({tool(id), [&, id = std::string(id)](const std::string& text) {
-            const auto args = Json::parse(text);
-            check(id != "ui.list", "Object discovery queried the native UI instead of published resources");
-            check(args.at("panel_id") == "settings", "Incorrect UI key");
-            if (id == "ui.inspect") ++inspections;
-            else {
-                check(args.at("expected_runtime_id") == runtime, "Mutation omitted the generation guard");
-                visible = id == "ui.show";
-                ++mutations;
-            }
-            requests[++next] = {{"success", true}, {"panel", {{"panel_id", "settings"},
-                {"title", "Settings"}, {"runtime_id", runtime}, {"visible", visible}}}};
-            return response({{"format", "grim-ui-panel-response"}, {"version", 1},
-                {"request_id", next}, {"status", "pending"}});
-        }});
-    }
-    registrations.push_back({tool("ui.poll"), [&](const std::string& text) {
-        const auto args = Json::parse(text);
-        const auto id = args.at("request_id").get<uint64_t>();
-        if (loseCompletion && !args.value("cancel", false))
-            return response({{"format", "grim-ui-panel-response"}, {"version", 1},
-                {"request_id", id}, {"status", "error"}, {"error", "request_not_found"}});
-        const auto value = requests.at(id);
-        requests.erase(id);
-        if (args.value("cancel", false)) ++cancels;
-        return response({{"format", "grim-ui-panel-response"}, {"version", 1}, {"request_id", id},
-            {"status", "completed"}, {"result", value}});
-    }});
-    check(providers.publish(uiOwner, registrations), "UI fixture publication failed");
-    ResourceDescriptor panel{"panel:settings", "ui.panel", "Settings", {}, runtime, {{"visible", false}}};
-    check(providers.publishResource(uiOwner.instance, panel), "Panel resource publication failed");
+    const ProviderDescriptor owner{ToolProviderType::Plugin, "World fixture", "fixture-1", {}};
+    int listings = 0, calls = 0;
+    auto rawTool = tool("fixture.echo");
+    rawTool.argument_format = "raw_text";
+    rawTool.aliases = {"fixture.alias"};
+    auto systemTool = tool("fixture.system");
+    systemTool.usage_type = ToolUsage::System;
+    check(providers.publish(owner, {
+        {tool("ui.list"), [&](const std::string& args) {
+            check(Json::parse(args) == Json::object(), "Listing did not get empty JSON args");
+            ++listings;
+            return response({{"panels", {{{"panel_id", "provider-panel"}}}}});
+        }},
+        {rawTool, [&](const std::string& args) {
+            ++calls;
+            return response({{"echo", args}});
+        }},
+        {tool("fixture.empty"), [](const std::string&) {
+            CommandResult result;
+            result.message = "Hidden presentation text";
+            result.voice = "Hidden voice text";
+            return result;
+        }},
+        {systemTool, [&](const std::string&) {
+            ++calls;
+            return response(Json::object());
+        }}
+    }), "World fixture publication failed");
+    uint64_t revision = 0;
+    const auto roster = registry.getModelTools(&revision);
+    check(roster.size() == 3, "World registry roster included a system tool");
     uint64_t action = 0;
     auto run = [&](const std::string& command) {
-        return WorldToolDispatch::execute(command, ++action, [] { return false; });
+        return WorldToolDispatch::execute(command, ++action, revision);
     };
     const auto list = run("ui.list");
-    const auto ref = list.at("resources")[0].at("reference").get<std::string>();
-    check(list.at("resources")[0].at("kind") == "object", "Native panel leaked into the world");
-    check(run("ui.inspect " + ref).at("resource").at("state").at("visible") == false && inspections == 1,
-          "Inspection did not return object state");
-    const auto shown = run("ui.show " + ref);
-    check(shown.at("status") == "completed" && shown.at("action_id") == action &&
-          shown.at("resource").at("state").at("visible") == true && mutations == 1 && inspections == 1,
-          "Show did not execute exactly once and return object state");
-    check(run("ui.bring_to_front " + ref).at("status") == "failed", "Unapproved tool executed");
-    providers.removeResource(uiOwner.instance, panel);
-    panel.runtime_id = ++runtime;
-    check(providers.publishResource(uiOwner.instance, panel), "Replacement resource publication failed");
-    check(run("ui.hide " + ref).at("status") == "failed" && mutations == 1, "Stale object changed replacement");
-    const auto replacement = run("ui.list").at("resources")[0].at("reference").get<std::string>();
-    check(run("ui.hide " + replacement).at("resource").at("state").at("visible") == false && mutations == 2,
-          "Replacement object could not be targeted");
-    loseCompletion = true;
-    check(run("ui.inspect " + replacement).at("status") == "unknown" && cancels == 1 && requests.empty(),
-          "Lost completion did not cancel the outstanding request or report uncertainty");
-    providers.retire(uiOwner.name, uiOwner.instance);
-    std::cout << "World tool discovery, resolution, dispatch, generation and cancellation tests passed\n";
+    check(list.at("action_id") == action && list.at("status") == "completed" && listings == 1 &&
+          Json::parse(list.at("feedback").get<std::string>()).at("panels").at(0).at("panel_id") == "provider-panel",
+          "Listing did not pass the provider payload to feedback");
+    check(run("fixture.echo two words").at("feedback") == R"({"echo":"two words"})" && calls == 1,
+          "Non-UI tool did not dispatch through the registry");
+    check(run("fixture.empty").at("feedback") == "{}", "Missing payload exposed presentation text");
+    check(run("fixture.alias").at("status") == "failed" && run("fixture.system").at("status") == "failed" && calls == 1,
+          "World dispatched an alias or system tool");
+    providers.retire(owner.name, owner.instance);
+    check(providers.publish(owner, {{rawTool, [&](const std::string&) {
+        ++calls;
+        return response(Json::object());
+    }}}), "Replacement fixture publication failed");
+    check(run("fixture.echo").at("status") == "failed" && calls == 1, "Stale revision invoked replacement");
+    providers.retire(owner.name, owner.instance);
+    std::cout << "World registry dispatch and provider feedback tests passed\n";
     return 0;
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

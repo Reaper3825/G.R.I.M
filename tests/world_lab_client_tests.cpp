@@ -10,7 +10,6 @@ extern std::string renderedTestText;
 #include "resources/models/GRIM-text/Shared/ConceptBlock/SpanTextRenderer.hpp"
 #include <fstream>
 #include <chrono>
-#include <atomic>
 #include <thread>
 #include <iostream>
 #include <stdexcept>
@@ -94,85 +93,42 @@ void runTextWorldClientTests(){
     }
     Editor example;
     {
-        // Real mailbox/client/worker path; controlled handlers stand in for UI Plugin.
+        // Exercise registry dispatch through the mailbox, client and worker.
         auto& providers = GRIM::MMO::ProviderRegistry::instance();
-        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Client UI fixture", "fixture-1", {}};
-        std::vector<GRIM::MMO::ToolRegistration> registrations;
-        int shows = 0, hides = 0;
-        bool visible = false;
-        std::atomic<bool> stall{false}, submitted{false}, released{false};
-        for (const auto& id : {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.poll"}) {
-            GRIM::MMO::ToolDescriptor tool;
-            tool.tool_id = tool.display_name = id;
-            tool.argument_format = "json";
-            if (tool.tool_id == "ui.inspect" || tool.tool_id == "ui.show" || tool.tool_id == "ui.hide") {
-                tool.usage = tool.tool_id + " {t}"; tool.bindings = {{"t", "t"}};
-                tool.parameters = {{"panel_id", "string", "Panel key", true}};
-            }
-            registrations.push_back({tool, [&, id = std::string(id)](const std::string& text) {
-                const auto args = nlohmann::json::parse(text);
-                nlohmann::json result = {{"success", true}};
-                if (id == "ui.poll" && stall) {
-                    submitted = true;
-                    if (args.value("cancel", false)) released = true;
-                    else {
-                        CommandResult pending;
-                        pending.structuredOutputJson = nlohmann::json{{"format", "grim-ui-panel-response"}, {"version", 1},
-                            {"request_id", 1}, {"status", "pending"}}.dump();
-                        return pending;
-                    }
-                }
-                if (id != "ui.poll") {
-                    check(args.at("panel_id") == "settings", "Client adapter encoded incorrect key");
-                    if (id == "ui.show" || id == "ui.hide") {
-                        check(args.at("expected_runtime_id") == 42, "Client omitted generation guard");
-                        visible = id == "ui.show";
-                        if (visible) ++shows; else ++hides;
-                    }
-                    result["panel"] = {{"panel_id", "settings"}, {"title", "Settings panel"}, {"runtime_id", 42},
-                        {"visible", visible}, {"minimized", false}, {"maximized", false}};
-                }
-                if (id == "ui.inspect" && stall)
-                    result = nlohmann::json::object();
-                CommandResult output;
-                output.structuredOutputJson = nlohmann::json{{"format", "grim-ui-panel-response"}, {"version", 1},
-                    {"request_id", 1}, {"status", id == "ui.inspect" && stall ? "pending" : "completed"}, {"result", result}}.dump();
-                return output;
-            }});
-        }
-        check(providers.publish(owner, registrations), "Client UI fixture publication failed");
-        GRIM::MMO::ResourceDescriptor published{"panel:settings", "ui.panel", "Settings panel", {}, 42, {{"visible", false}}};
-        check(providers.publishResource(owner.instance, published), "Client object publication failed");
+        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Client fixture", "fixture-1", {}};
+        GRIM::MMO::ToolDescriptor listing;
+        listing.tool_id = listing.display_name = "ui.list";
+        listing.argument_format = "json";
+        GRIM::MMO::ToolDescriptor echo;
+        echo.tool_id = echo.display_name = "fixture.echo";
+        int listings = 0;
+        check(providers.publish(owner, {
+            {listing, [&](const std::string& args) {
+                check(nlohmann::json::parse(args) == nlohmann::json::object(), "Listing did not receive empty JSON args");
+                ++listings;
+                CommandResult result;
+                result.structuredOutputJson = R"({"panels":[{"panel_id":"provider-panel"}]})";
+                return result;
+            }},
+            {echo, [&](const std::string& args) {
+                CommandResult result;
+                result.structuredOutputJson = nlohmann::json{{"echo", args}}.dump();
+                return result;
+            }}
+        }), "Client fixture publication failed");
         TextWorldClient uiClient;
         const auto initial = request(uiClient, {{"op", "compile"}, {"document", Document::initial().gameJson()}}).at("state");
         auto state = request(uiClient, {{"op", "step"}, {"command", " ui.list "}}).at("state");
-        check(state.at("host_action").at("resources")[0].at("reference") == "panel:settings@42", "Client did not return the published object");
+        check(state.at("feedback") == R"({"panels":[{"panel_id":"provider-panel"}]})" && listings == 1,
+              "Client did not expose the provider panel list as feedback");
         check(!state.contains("host_action_request"), "Internal dispatch request leaked");
-        state = request(uiClient, {{"op", "step"}, {"command", "ui.inspect panel:settings@42"}}).at("state");
-        check(state.at("host_action").at("status") == "completed" && shows == 0, "Client inspection caused effects");
-        state = request(uiClient, {{"op", "step"}, {"command", "ui.show panel:settings@42"}}).at("state");
-        check(state.at("host_action").at("status") == "completed" && shows == 1, "Client did not execute one UI action");
-        state = request(uiClient, {{"op", "step"}, {"command", "ui.hide panel:settings@42"}}).at("state");
-        check(state.at("host_action").at("resource").at("state").at("visible") == false && hides == 1,
-              "Client did not execute hide and report completion");
+        state = request(uiClient, {{"op", "step"}, {"command", "fixture.echo two words"}}).at("state");
+        check(state.at("host_action").at("status") == "completed" &&
+              state.at("feedback") == R"({"echo":"two words"})", "Client did not route a non-UI registry tool");
         check(state.at("facts") == initial.at("facts") && state.at("moves") == initial.at("moves") &&
             state.at("episode") == initial.at("episode"), "Host effect altered native verification state");
-        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.show panel:settings@42"}}}), "Cannot submit replay");
-        check(!wait(uiClient).at("ok").get<bool>() && shows == 1, "Replay executed a host effect");
-        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.hide panel:settings@42"}}}), "Cannot submit hide replay");
-        check(!wait(uiClient).at("ok").get<bool>() && hides == 1, "Replay repeated hide");
-        request(uiClient, {{"op", "reset"}});
-        check(request(uiClient, {{"op", "step"}, {"command", "ui.list"}}).at("state").at("host_action")
-                  .at("resources").size() == 1, "Reset changed published objects");
-        stall = true;
-        check(uiClient.begin({{"op", "step"}, {"command", "ui.inspect panel:settings@42"}}), "Cannot start pending host request");
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (!submitted && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        check(submitted, "Host request did not reach submission");
-        uiClient.stop();
-        const auto cancelled = wait(uiClient);
-        check(!cancelled.at("ok").get<bool>() && cancelled.at("transport_error").get<bool>() && released,
-              "Stop during host dispatch did not cancel owned work and stop the worker");
+        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.list"}}}), "Cannot submit replay");
+        check(!wait(uiClient).at("ok").get<bool>() && listings == 1, "Replay executed a host tool");
         providers.retire(owner.name, owner.instance);
     }
     example.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"examples/world_lab/locked_door.grimworld.json");
@@ -192,7 +148,10 @@ void runTextWorldClientTests(){
     check(request(client,{{"op","reset"}}).at("state").at("room_id")==d.spawn,"Client reset failed");
     check(client.begin({{"op","validate"},{"document",d.gameJson()}}),"Cannot start validation");
     check(!client.begin({{"op","step"},{"command","look"}}),"Client allowed overlapping requests");
-    client.stop();auto cancelled=wait(client);check(!cancelled.value("ok",true),"Cancellation did not report an error");
+    client.stop();
+    const auto stopped = wait(client);
+    check(stopped.at("ok").get<bool>() && stopped.at("result").at("stopped").get<bool>(),
+          "Cancellation did not acknowledge the stopped session");
     check(request(client,{{"op","compile"},{"document",d.gameJson()}}).contains("state"),"Client did not restart after cancellation");
     client.stop();wait(client);
     // Drive the actual play controls with routed input and the installed worker.
@@ -215,7 +174,7 @@ void runTextWorldClientTests(){
     auto frame=[&](const InputState& input){auto& router=GRIM::UI::InputRouter::get();router.beginFrame();router.currentPanel=90;panel.update(input,0,{{0,0},{340,650}});router.endFrame();};
     auto click=[&](float x,float y){InputState input;input.mousePos={x,y+116};input.mousePressed[0]=input.mouseDown[0]=true;frame(input);input.mousePressed[0]=input.mouseDown[0]=false;input.mouseReleased[0]=true;frame(input);};
     auto ready=[&]{const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(135);while(panel.busy() && std::chrono::steady_clock::now()<deadline){frame({});std::this_thread::sleep_for(std::chrono::milliseconds(20));}check(!panel.busy(),"Play panel request timed out");};
-    frame({});click(50,48);ready();check(panel.status()=="Ready for a command.","Play panel did not compile the example");
+    frame({});click(50,48);ready();check(panel.status()=="Ready for a command.",("Play panel did not compile the example: " + panel.status()).c_str());
     check(panel.initialModelInput().has_value(),"Start did not publish model input");
     auto supplied=panel.initialModelInput()->reasoning_state;supplied["prompt"]=panel.initialModelInput()->prompt;
     check(panel.initialModelText()==GRIM::SpanText::renderInput(supplied,definitions),"World Lab preview differs from the configured inference renderer");

@@ -101,10 +101,6 @@ GrimResult dispatchBroken(const char*, const GrimToolCall* call, GrimToolResultW
     return brokenHandler(call, writer, nullptr);
 }
 
-void observe(const char*, const void*, size_t, void* data) {
-    const auto* api = static_cast<const LoadedProviderFixture*>(data);
-    (*api)->log(api->handle(), GRIM_LOG_INFO, "event");
-}
 void checkName(const LoadedProviderFixture* api, const char* expected) {
     const auto* name = (*api)->get_plugin_name(api->handle());
     check(std::string(name) == expected, "Plugin identity changed after another load");
@@ -250,10 +246,6 @@ int main(int argc, char** argv) try {
         {collisionTool, [](const std::string&) { return CommandResult{}; }}
     }), "Collision fixture publication failed");
 
-    auto event = alpha->subscribe_event(alpha.handle(), "test", observe, &alpha);
-    check(beta->unsubscribe_event(beta.handle(), event) == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's event");
-    beta->emit_event(beta.handle(), "test", nullptr, 0);
-    check(logs.back() == "[Plugin: alpha] event", "Event callback used wrong owner");
     bool duplicateRejected = false;
     try { LoadedProviderFixture duplicate({.name = "alpha", .path = "duplicate.dll", .version = "1.2.3", .required_permissions = 0}); duplicate.load(); }
     catch (const std::runtime_error&) { duplicateRejected = true; }

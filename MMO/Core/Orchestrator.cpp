@@ -326,7 +326,7 @@ std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
     }.dump());
     if (!result.success) return ctx.metadata_json;
 
-    auto retrieval = nlohmann::json::parse(result.structuredOutputJson, nullptr, false);
+    const auto& retrieval = result.structuredOutput;
     if (!retrieval.is_object() || !retrieval.contains("memories") ||
         !retrieval.contains("retrieval_breadcrumbs") ||
         !retrieval["memories"].is_array() || !retrieval["retrieval_breadcrumbs"].is_array())

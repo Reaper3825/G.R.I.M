@@ -23,6 +23,8 @@ inline void resolveHostObservation(nlohmann::json& response) {
         } else {
             auto parameters = nlohmann::json::array();
             text << tool->tool_id << '\n' << tool->description << "\n\nTool usage: " << tool->usage;
+            if (tool->argument_format == "json")
+                text << "\nCall format: " << tool->tool_id << " followed by a JSON arguments object.";
             if (!tool->parameters.empty()) text << "\n\nArguments:";
             for (const auto& parameter : tool->parameters) {
                 parameters.push_back({{"name", parameter.name}, {"type", parameter.type},

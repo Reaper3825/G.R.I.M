@@ -39,15 +39,6 @@ namespace PluginAPI {
 // Internal Data Structures
 // ============================================================================
 
-struct CallGate;
-struct EventSubscription {
-    std::string event_name;
-    GrimEventCallback callback;
-    void* user_data;
-    std::string plugin_name;
-    std::shared_ptr<CallGate> gate;
-};
-
 struct CallGate {
     std::mutex mutex;
     std::condition_variable idle;
@@ -76,8 +67,6 @@ struct LoadedProvider {
 };
 
 // Static storage
-static std::unordered_map<uint64_t, EventSubscription> s_event_subscriptions;
-static uint64_t s_next_event_id = 1;
 static std::unordered_map<std::string, SystemTickSubscription> s_systemTickSubscriptions;
 static std::unordered_map<void*, std::string> s_allocated_strings;
 static std::unordered_map<GrimPluginHandle, std::weak_ptr<LoadedProvider>> s_instances;
@@ -164,8 +153,9 @@ static GrimResult completeResult(GrimToolResultWriter* writer, const GrimToolRes
         result.voice = copyText(input->voice, false, 16 * 1024 * 1024);
         result.structuredOutputJson = copyText(input->structured_output_json);
         if (!result.structuredOutputJson.empty()) {
-            const auto parsed = nlohmann::json::parse(result.structuredOutputJson);
-            (void)parsed;
+            result.structuredOutput = nlohmann::json::parse(result.structuredOutputJson);
+            if (!result.structuredOutput.is_object())
+                throw std::invalid_argument("Expected an object tool payload");
         }
         const auto rgb = input->color_rgb;
         result.color = Color{static_cast<uint8_t>(rgb >> 16), static_cast<uint8_t>(rgb >> 8), static_cast<uint8_t>(rgb)};
@@ -249,18 +239,21 @@ static std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
     tools.reserve(entries.size());
     for (const auto& entry : entries) {
         auto descriptor = decodeManifestTool(entry, owner.identity.version.c_str(), owner.identity.required_permissions);
-        auto invoke = [gate = owner.gate, dispatch, id = descriptor.tool_id](const std::string& arguments) -> CommandResult {
+        auto invoke = [gate = owner.gate, dispatch, id = descriptor.tool_id](const std::string& arguments,
+                             bool waitForCompletion) -> CommandResult {
             ActiveCall active(gate, true);
             if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
             ResultCapture capture;
             GrimToolResultWriter writer{sizeof(GrimToolResultWriter), &capture, completeResult};
-            GrimToolCall call{sizeof(GrimToolCall), arguments.c_str(), arguments.size()};
+            constexpr auto baseCallSize = offsetof(GrimToolCall, wait_for_completion);
+            GrimToolCall call{static_cast<uint32_t>(waitForCompletion ? sizeof(GrimToolCall) : baseCallSize),
+                              arguments.c_str(), arguments.size(), waitForCompletion ? 1u : 0u};
             const auto delivered = dispatch(id.c_str(), &call, &writer);
             if (delivered != GRIM_OK || !capture.completed || capture.invalid)
                 return {false, "Plugin did not deliver a valid result", "ERR_PLUGIN_RESULT"};
             return std::move(capture.value);
         };
-        tools.push_back({std::move(descriptor), std::move(invoke)});
+        tools.push_back({std::move(descriptor), {}, std::move(invoke)});
     }
     return tools;
 }
@@ -319,75 +312,6 @@ static GrimResult api_execute_command(GrimPluginHandle self, const char* command
     auto [cmd, arg] = GRIMInput::parseInput(command_text);
     const auto value = GRIM::MMO::ToolRegistry::instance().invoke(cmd, arg);
     return grim::completeToolResult(writer, value);
-}
-
-// ============================================================================
-// Event System Implementation
-// ============================================================================
-
-static GrimEventHandle api_subscribe_event(GrimPluginHandle self, const char* event_name, GrimEventCallback callback, void* user_data) {
-    if (!event_name || !callback) {
-        return nullptr;
-    }
-    
-    const auto owner = providerFor(self);
-    if (!owner) return nullptr;
-    ActiveCall active(owner->gate);
-    if (!active.entered) return nullptr;
-    std::lock_guard lock(s_resourceMutex);
-    uint64_t handle = s_next_event_id++;
-    
-    EventSubscription sub;
-    sub.event_name = event_name;
-    sub.callback = callback;
-    sub.user_data = user_data;
-    sub.plugin_name = owner->identity.instance;
-    sub.gate = owner->gate;
-    
-    s_event_subscriptions[handle] = sub;
-    
-    LOG_DEBUG("PluginAPI", "Event subscription: " + std::string(event_name));
-    return reinterpret_cast<GrimEventHandle>(handle);
-}
-
-static GrimResult api_unsubscribe_event(GrimPluginHandle self, GrimEventHandle handle) {
-    if (!handle) {
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-    
-    uint64_t id = reinterpret_cast<uint64_t>(handle);
-    std::lock_guard lock(s_resourceMutex);
-    auto it = s_event_subscriptions.find(id);
-    
-    if (it == s_event_subscriptions.end()) {
-        return GRIM_ERROR_NOT_FOUND;
-    }
-    
-    const auto owner = providerFor(self);
-    if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    if (it->second.plugin_name != owner->identity.instance) {
-        return GRIM_ERROR_PERMISSION_DENIED;
-    }
-    s_event_subscriptions.erase(it);
-    return GRIM_OK;
-}
-
-static void dispatchEvent(const char* event_name, const void* data, size_t size) {
-    std::vector<EventSubscription> callbacks;
-    {
-        std::lock_guard lock(s_resourceMutex);
-        for (const auto& [id, sub] : s_event_subscriptions)
-            if (sub.event_name == event_name) callbacks.push_back(sub);
-    }
-    for (const auto& sub : callbacks) {
-        ActiveCall active(sub.gate, true);
-        if (active.entered) sub.callback(event_name, data, size, sub.user_data);
-    }
-}
-static GrimResult api_emit_event(GrimPluginHandle, const char* event_name, const void* data, size_t data_size) {
-    if (!event_name) return GRIM_ERROR_INVALID_PARAM;
-    dispatchEvent(event_name, data, data_size);
-    return GRIM_OK;
 }
 
 // ============================================================================
@@ -575,11 +499,6 @@ const GrimPluginAPI& hostAPI() {
         api.unregister_command = api_unregister_command;
         api.execute_command = api_execute_command;
 
-        // Events
-        api.subscribe_event = api_subscribe_event;
-        api.unsubscribe_event = api_unsubscribe_event;
-        api.emit_event = api_emit_event;
-
         // Notifications
         api.show_notification = api_show_notification;
 
@@ -655,7 +574,6 @@ void retireProvider(LoadedProvider& provider) {
     std::lock_guard lock(s_resourceMutex);
     const auto& instance = provider.identity.instance;
     s_systemTickSubscriptions.erase(instance);
-    std::erase_if(s_event_subscriptions, [&](const auto& entry) { return entry.second.plugin_name == instance; });
 }
 
 void releaseInstance(LoadedProvider& provider) {
@@ -679,10 +597,6 @@ void dispatchSystemTick(double deltaSeconds, double offsetSeconds) {
             LOG_ERROR("PluginAPI", "System tick callback raised an exception");
         }
     }
-}
-
-void emitGlobalEvent(const char* event_name, const void* data, size_t data_size) {
-    if (event_name) dispatchEvent(event_name, data, data_size);
 }
 
 } // namespace PluginAPI

@@ -1,6 +1,10 @@
-# G.R.I.M Plugin API v22.0
+# G.R.I.M Plugin API v23.0
 
-API version: **18.0.0**.
+API version: **23.0.0**.
+
+Version 23 removes the retired event slots from the function table. The loader
+rejects v22 binaries. Rebuild and deploy the host, plugin DLLs, and manifests
+together.
 
 Version 18 moves provider metadata to the required sidecar manifest. Build and
 deploy the host, plugin DLLs, and their matching manifests together.
@@ -87,8 +91,8 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 2`, the packed integer `api_version` (1441792
-for 22.0.0), the provider name and version in `provider` and `version`, a
+loader expects `schema_version: 2`, the packed integer `api_version` (1507328
+for 23.0.0), the provider name and version in `provider` and `version`, a
 `required_permissions` array of permission names, and a `tools` array. Use
 empty arrays when there are no permissions or tools. A tool can only declare
 permissions from the provider’s `required_permissions` array. A provider with tools exports `grim_plugin_dispatch_tool`.
@@ -167,9 +171,8 @@ and `{o}`, rather than subsystem-specific names such as `{panel_id}` or `{path}`
 `<value>` and `[optional]` continue to document ordinary values/options. Usage
 labels are not necessarily literal handler calls: `ui.show {t}` describes the
 semantic action, while its argument schema describes the actual JSON
-format. World Lab now supplies an explicit host adapter for `ui.list`, `ui.inspect`,
-`ui.show`, and `ui.hide`; binding labels alone still do not implement argument conversion.
-See [manual UI dispatch](WORLD_LAB.md#manual-ui-resource-discovery-and-dispatch).
+format. World Lab dispatches canonical model tools through the registry using their
+declared argument format. See [host tool actions](WORLD_LAB.md#host-tool-actions-in-play).
 
 Supported types are `t` (thing), `o` (object), `c` (container), `s` (supporter),
 `r` (room), `d` (door), `k` (key), and `f` (food). Reuse these types by semantic
@@ -262,7 +265,7 @@ during publication.
 
 The loader registers the provider and its manifest tools in one registry
 operation before invoking init. Init can publish resources and attach panels
-directly to that loaded instance. Tool, event, and tick dispatch starts after
+directly to that loaded instance. Tool and tick dispatch starts after
 init returns `GRIM_OK`. Failed init goes through the same teardown as unload.
 
 `unregister_command` removes a canonical tool owned by the calling instance.
@@ -277,12 +280,14 @@ Handlers have this signature:
 The host supplies a synchronous call with an argument string and byte length.
 The handler completes exactly once with writer->complete(writer, &result).
 The writer copies the result's message, error code, category, voice text, and
-optional JSON output immediately, while the handler's local storage is alive.
+optional JSON object immediately, while the handler's local storage is alive.
 The host owns those copies; neither side frees strings allocated by the other.
+World Lab uses the provider object as tool feedback. An omitted object becomes
+`{}`. Tool presentation fields remain available to their host consumers.
 
 GrimToolResult::success reports whether the operation succeeded.
 The handler's returned GrimResult reports whether it delivered a valid result.
-Missing completion, repeated completion, malformed JSON output, invalid result
+Missing completion, repeated completion, malformed or non-object JSON output, invalid result
 structures, or a non-OK handler return produce ERR_PLUGIN_RESULT. Writer
 validation failures are remembered even when a handler ignores the error.
 Exceptions from handlers become registry command failures.
@@ -315,14 +320,14 @@ remains valid for teardown logging through shutdown. The loader then
 invalidates the handle and unloads the DLL.
 
 Lifecycle operations run on the host frame thread outside plugin callbacks.
-Cached tool handlers and event or tick snapshots share the instance's call gate.
+Cached tool handlers and tick snapshots share the instance's call gate.
 
 The migrated OSINT plugin joins outstanding scans at shutdown. The network
 plugin joins its coordinator, which owns worker joins and network cleanup.
 
 ## Other API services and current limits
 
-The function table retains logging, events, notifications,
+The function table retains logging, notifications,
 manual memory services, and generation-scoped provider resource publication.
 
 Host-returned strings from other services retain their existing string_free
@@ -421,6 +426,10 @@ callers must honor the documented lifecycle/service serialization requirements.
 
 `ui_plugin` registers `ui.list`, `ui.inspect`, `ui.show`, `ui.hide`,
 `ui.bring_to_front`, and `ui.poll`, with JSON arguments and complete metadata.
+A caller that sets `wait_for_completion` in `GrimToolCall` can
+wait for a completed panel operation. The UI plugin polls the native service and
+returns its completed result object. Direct callers can still use the asynchronous
+request protocol and the system tool `ui.poll`.
 Mutations carry confirmation metadata; direct registry invocation does not
 enforce that policy. The old `console`, `toggle_settings`, `ui.show_surface`, and
 `ui.hide_surface` registrations are removed. Surface creation, destruction, and
@@ -693,7 +702,7 @@ Application catalog results return plain resource descriptors. The host assigns
 provider identity when publishing resources through `replace_resources`.
 API v21 removed the provider identity callback. API v22 removes the
 current-provider callback. The host gate blocks new dispatch during retirement
-and lets admitted calls drain before shutdown. Rebuild plugin DLLs against v22.
+and lets admitted calls drain before shutdown. Rebuild plugin DLLs against the current API.
 
 ### System information provider (v6)
 

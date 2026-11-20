@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1441792,
+  "api_version": 1507328,
   "required_permissions": ["voice", "filesystem", "process"],
   "provider": "Voice Plugin",
   "version": "2.0.0",

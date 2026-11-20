@@ -68,10 +68,9 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(resource("fixture_init") == "old-result", "Init did not publish under the live provider");
     install("legacy");
     check(registry.getTool("Declared-alpha")->provider.instance == firstInstance, "Incompatible ABI displaced working plugin");
-    PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
     PluginAPI::dispatchSystemTick(0, 0);
-    check(resource("fixture_event") == "old-result" && resource("fixture_tick") == "old-result",
-          "Live instance did not receive callbacks");
+    check(resource("fixture_tick") == "old-result",
+          "Live instance did not receive system ticks");
     install("failed");
     check(!provider() && registry.toolCount() == baseline && resource("fixture_init").empty(),
           "Failed init retained the provider, tools, or resources");
@@ -111,9 +110,8 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(replacement && replacement->provider.instance != firstInstance &&
           registry.invoke("Declared-alpha", "").message == "new-result", "Valid replacement was not committed");
     check(!registry.isRegistered("Declared-alpha-extra"), "Replacement retained a removed tool");
-    PluginAPI::emitGlobalEvent("fixture_event", nullptr, 0);
     PluginAPI::dispatchSystemTick(0, 0);
-    check(resource("fixture_event") == "new-result" && resource("fixture_tick") == "new-result",
+    check(resource("fixture_tick") == "new-result",
           "Retiring old generation removed replacement resources");
 
     const auto secondInstance = replacement->provider.instance;

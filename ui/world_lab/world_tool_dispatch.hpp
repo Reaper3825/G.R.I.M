@@ -1,32 +1,36 @@
 #pragma once
-#include "core/host_object_actions.hpp"
+#include "MMO/Core/Registries/ToolRegistry.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
+#include "commands/command_result.hpp"
 
 namespace GRIM::WorldLab {
-// Route an explicitly allowed object action and attach the world's action identity.
 class WorldToolDispatch {
 public:
-    static nlohmann::json tools() {
-        return GRIM::HostObjectActions::tools();
-    }
-
     static nlohmann::json execute(const std::string& command, uint64_t actionId,
-                                  const std::function<bool()>& cancelled) {
-        nlohmann::json output = {{"action_id", actionId}, {"status", "failed"}};
-        try {
-            if (command.empty() || command.size() > 512 ||
-                command.find_first_of("\r\n\0", 0, 3) != std::string::npos)
-                throw std::invalid_argument("Enter one object tool command");
-            const auto space = command.find(' ');
-            const auto id = command.substr(0, space);
-            const auto first = space == std::string::npos ? space : command.find_first_not_of(' ', space);
-            const auto target = first == std::string::npos ? std::string{} :
-                command.substr(first, command.find_last_not_of(' ') - first + 1);
-            output["tool_id"] = id;
-            output.update(GRIM::HostObjectActions::execute(id, target, cancelled));
-        } catch (const std::exception& error) {
-            output["error"] = error.what();
-            output["feedback"] = std::string("Object action failed: ") + error.what();
-        }
+                                  uint64_t revision) {
+        auto& registry = MMO::ToolRegistry::instance();
+        nlohmann::json output = {{"action_id", actionId}, {"status", "failed"},
+                                 {"feedback", MMO::formatToolResult(nullptr)}};
+        if (command.empty() || command.size() > 512 ||
+            command.find_first_of("\r\n\0", 0, 3) != std::string::npos)
+            return output;
+
+        const auto space = command.find(' ');
+        const auto id = command.substr(0, space);
+        output["tool_id"] = id;
+        const auto tool = registry.getTool(id);
+        if (!tool || tool->tool_id != id || tool->usage_type != MMO::ToolUsage::Model)
+            return output;
+
+        const auto start = space == std::string::npos ? space : command.find_first_not_of(' ', space);
+        auto arguments = start == std::string::npos ? std::string{} : command.substr(start);
+        if (arguments.empty() && tool->argument_format == "json") arguments = "{}";
+
+        const auto result = registry.invoke(id, arguments,
+            {.expected_registry_version = revision, .require_canonical_model = true, .wait_for_completion = true});
+        if (result.success) output["status"] = "completed";
+        else if (result.errorCode == "ERR_TOOL_COMPLETION_UNKNOWN") output["status"] = "unknown";
+        output["feedback"] = MMO::formatToolResult(result.structuredOutput);
         return output;
     }
 };

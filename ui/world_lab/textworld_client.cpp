@@ -157,7 +157,7 @@ pid_t launch(const fs::path& executable,const std::vector<std::string>& argument
 }
 #endif
 }
-struct TextWorldClient::Impl {
+1struct TextWorldClient::Impl {
     std::future<nlohmann::json> pending;
     std::atomic<bool> cancelled{false};
     bool stopping=false; // Caller-thread state, independent of future readiness.
@@ -283,7 +283,12 @@ struct TextWorldClient::Impl {
             start();
             const auto requestId=++sequence;
             request["id"]=requestId;request["protocol"]=2;
-            request["host_action_tools"]=WorldToolDispatch::tools();
+            uint64_t toolRevision = 0;
+            auto toolIds = nlohmann::json::array();
+            for (const auto& tool : MMO::ToolRegistry::instance().getModelTools(&toolRevision))
+                toolIds.push_back(tool.tool_id);
+            request["host_action_tools"] = toolIds;
+            request["catalog_tools"] = std::move(toolIds);
             if(request.value("op",std::string{})=="step" && request.contains("command") && request["command"].is_string()) {
                 auto command=request.at("command").get<std::string>();
                 const auto first=command.find_first_not_of(" \t");
@@ -291,9 +296,6 @@ struct TextWorldClient::Impl {
                 request["command"]=std::move(command);
             }
             request["observation_providers"]={"tool_catalog","tool_details"};
-            request["catalog_tools"]=nlohmann::json::array();
-            for(const auto& tool:MMO::ToolRegistry::instance().getModelTools())
-                request["catalog_tools"].push_back(tool.tool_id);
             const auto body=request.dump();if(body.size()>16*1024*1024)throw std::runtime_error("World request exceeds 16 MB");
             {std::ofstream out(directory/"request.tmp",std::ios::binary);out<<body;out.close();if(!out)throw std::runtime_error("Cannot write TextWorld request");}
             fs::rename(directory/"request.tmp",directory/"request.json");
@@ -314,9 +316,11 @@ struct TextWorldClient::Impl {
                             state.erase("host_action_request");
                             if(request.at("op")!="step" || request.at("command")!=command)
                                 throw std::runtime_error("Unsolicited host action request");
-                            state["host_action"]=WorldToolDispatch::execute(command,requestId,[this]{return cancelled.load();});
-                            state["feedback"]=state.at("host_action").at("feedback");
-                            if(cancelled)throw std::runtime_error("TextWorld request cancelled. "+state.at("feedback").get<std::string>());
+                            auto action = WorldToolDispatch::execute(command, requestId, toolRevision);
+                            state["feedback"] = std::move(action.at("feedback"));
+                            action.erase("feedback");
+                            state["host_action"] = std::move(action);
+                            if(cancelled)throw std::runtime_error("TextWorld request cancelled");
                         } else if(request.at("op")=="compile" || request.at("op")=="reset" || request.at("op")=="start_episode") {
                                             }
                     }

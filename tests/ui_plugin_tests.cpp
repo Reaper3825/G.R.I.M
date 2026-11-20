@@ -13,6 +13,7 @@
 namespace {
 std::vector<std::function<void()>> uiTasks;
 bool visible = false;
+bool completeOnSubmit = false;
 int effects = 0;
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void pump() { auto tasks = std::move(uiTasks); uiTasks.clear(); for (auto& task : tasks) task(); }
@@ -49,6 +50,7 @@ PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std
             promise->set_value({{"success", true}, {"panel", {{"panel_id", key}, {"visible", visible}}}});
         }
     });
+    if (completeOnSubmit) pump();
     return {std::move(future), cancel};
 }
 }
@@ -131,6 +133,14 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     pump();
     auto listed = invoke("ui.poll", nlohmann::json{{"request_id", listing.at("request_id")}}.dump());
     check(listed.at("result").at("panels")[0].at("panel_id") == "settings", "UI discovery result was lost");
+    completeOnSubmit = true;
+    const auto modelList = registry.invoke("ui.list", "{}",
+        {.require_canonical_model = true, .wait_for_completion = true});
+    completeOnSubmit = false;
+    check(modelList.success && modelList.structuredOutput.at("panels")[0].at("panel_id") == "settings" &&
+          !modelList.structuredOutput.contains("request_id"), "UI plugin did not return the completed panel list");
+    check(registry.invoke("ui.poll", "{}", {.require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL",
+          "UI polling was exposed as a model action");
     const auto effectsBefore = effects;
     auto stale = invoke("ui.show", R"({"panel_id":"settings","expected_runtime_id":41})");
     pump();
