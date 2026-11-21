@@ -1,5 +1,6 @@
 // Assert the compatibility contract through the real loader and result writer.
 #include "core/plugin_manager.hpp"
+#include "plugin_deployment_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include <chrono>
@@ -21,9 +22,11 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     struct Cleanup {
         fs::path folder;
         ~Cleanup() {
-            PluginManager::unloadAll();
+            PluginManager::shutdownBatch();
             std::error_code error;
+    PluginManager::shutdownBatch();
             fs::remove(folder / "utility_plugin/utility_plugin.dll", error);
+            fs::remove(folder / "utility_plugin/.deployment", error);
             fs::remove(folder / "utility_plugin/utility_plugin.tools.json", error);
             fs::remove(folder / "utility_plugin", error);
             fs::remove(folder, error);
@@ -32,6 +35,7 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     fs::create_directory(folder / "utility_plugin");
     fs::copy_file(pluginDirectory / "utility_plugin.dll", folder / "utility_plugin/utility_plugin.dll");
     fs::copy_file(pluginDirectory / "utility_plugin.tools.json", folder / "utility_plugin/utility_plugin.tools.json");
+    writePluginFixtureRevision(folder / "utility_plugin");
 
     // A collision must reject the whole batch and retain the existing provider.
     ToolDescriptor clean;
@@ -41,13 +45,13 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
         result.message = "existing provider";
         return result;
     }}}), "Cannot publish collision fixture");
-    PluginManager::initialize(folder.string());
+    PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 1 && !registry.isRegistered("help") &&
           registry.invoke("clean", "").at("message") == "existing provider", "Plugin collision changed the existing handler");
     providers.retire(owner.name, owner.instance);
     // Restart discovery to clear the rejected-file cache after retiring the fixture.
-    PluginManager::unloadAll();
-    PluginManager::initialize(folder.string());
+    PluginManager::shutdownBatch();
+    PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 2, "Utility DLL did not publish two tools");
     for (const auto* id : {"clean", "help"}) {
         const auto tool = registry.getTool(id);
@@ -78,9 +82,9 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
               "help result differs from static help with retired entries removed");
     }
     fs::remove(folder / "utility_plugin/utility_plugin.dll");
+    fs::remove(folder / "utility_plugin/.deployment");
     fs::remove(folder / "utility_plugin/utility_plugin.tools.json");
     fs::remove(folder / "utility_plugin");
-    PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && !registry.isRegistered("clean") && !registry.isRegistered("help"),
           "Removing utility DLL retained registrations");
     std::cout << "Utility plugin result compatibility, collision, and folder removal tests passed\n";

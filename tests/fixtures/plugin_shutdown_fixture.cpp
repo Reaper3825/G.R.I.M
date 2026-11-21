@@ -21,8 +21,7 @@ static GrimResult publish(const char* kind) {
     return api->replace_resources(api.instance(), kind, json.data(), json.size());
 }
 static void tick(double, double, void*) { publish("fixture_tick"); }
-static GrimResult run(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    if (std::string(call->arguments, call->arguments_size) == "reload") api->request_reload(api.instance());
+static GrimResult run(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
     GrimToolResult result;
     result.success = 1;
     result.message = FIXTURE_RESULT;

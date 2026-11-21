@@ -19,13 +19,13 @@ templates.
 
 ## Existing integration points
 
-- `core/plugin_api_impl.cpp`: `registerProvider` publishes manifest tools and
-  `retireProvider` closes callback entry and removes the exact instance.
-- `MMO/Core/Registries/ProviderRegistry.cpp`: `publish` registers the provider
-  and its tool and alias indexes under one mutex. `retire` removes those entries
-  with the provider's resources.
-- `core/plugin_api.hpp`: the v19 ABI uses a shared table and instance handle
-  for provider-scoped services, including `replace_resources`.
+- `core/plugin_api_impl.cpp`: the startup batch initializes DLLs and publishes
+  successful providers together. Shutdown closes callback entry before unloading
+  their modules.
+- `MMO/Core/Registries/ProviderRegistry.cpp`: the registry owns the provider
+  entries and publishes their tools, aliases, and resources under one mutex.
+- `core/plugin_api.hpp`: the ABI uses a shared table and instance handle for
+  provider-scoped services, including `replace_resources`.
 - `ui/world_lab/world_asset.*`: templates support metadata, independent insertion,
   fresh world IDs and preserved stable resource keys. No registration connection
   or automatic availability filtering currently exists.

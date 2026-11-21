@@ -67,6 +67,7 @@ public:
 
 private:
     friend class ProviderRegistry;
+    friend class ::PluginAPI::ProviderBatch;
     ToolRegistry() = default;
     CommandResult invokeRaw(const std::string& name, const std::string& arguments,
                             const ToolInvocationOptions& options);

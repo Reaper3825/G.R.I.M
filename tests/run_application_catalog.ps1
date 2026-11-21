@@ -7,7 +7,7 @@ $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer
 $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw 'An existing MSVC toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
-$common = @('/nologo','/std:c++20','/EHsc','/W4','/utf-8','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
+$common = @('/nologo','/std:c++20','/EHsc','/W4','/utf-8','/DNOMINMAX','/DGRIM_PROVIDER_REGISTRY_TESTS',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $arguments = $common + (@('tests/application_catalog_tests.cpp','plugins/application_plugin/application_catalog.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }) + '/Fe:application_catalog_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'catalog.rsp') -Value $arguments -Encoding ascii
 $smoke = $common + (@('tests/application_discovery_smoke.cpp','plugins/application_plugin/application_backend_windows.cpp','plugins/application_plugin/portable_applications.cpp','plugins/application_plugin/application_catalog.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }) + @('/Fe:application_discovery_smoke.exe','/link','shell32.lib','ole32.lib','uuid.lib')

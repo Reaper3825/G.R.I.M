@@ -89,8 +89,8 @@ This should become the **primary action path**. Commands and plugins are not sep
 The canonical metadata/callable store is already implemented:
 
 - `MMO/Core/ToolRegistry.*` owns descriptors and execution bindings together, model-filtered discovery, aliases, provider generations, prompt versioning, and invocation statistics.
-- `core/plugin_manager.*` already supports DLL discovery and hot reload by file change.
-- `core/plugin_api.hpp` already exposes command registration, permissions, and reload hooks for plugins.
+- `core/plugin_manager.*` discovers and loads deployed native plugins in a startup batch.
+- `core/plugin_api.hpp` exposes provider-scoped host services. Manifest tools are registered during startup.
 
 There is no remaining `CommandRegistry` metadata mirror or `commandMap` seeding
 contract. Future RL and policy adapters must use the sole ToolRegistry, not

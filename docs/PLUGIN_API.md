@@ -1,6 +1,6 @@
-# G.R.I.M Plugin API v25.0
+# G.R.I.M Plugin API v26.0
 
-API version: **25.0.0**.
+API version: **26.0.0**.
 
 Version 25 removes the color field from `GrimToolResult` and the registry's JSON
 result. Rebuild and deploy the host, plugin DLLs, and manifests together.
@@ -78,8 +78,8 @@ older DLLs must be rebuilt. Retired API fields are removed entirely; the current
 table does not preserve their former offsets. See [application ownership](APPLICATION_DISCOVERY.md)
 and [system information ownership](SYSTEM_INFO_RESOURCES.md).
 
-The host discovers native libraries (.dll, .so, or .dylib) in per-plugin
-folders under its watched root. A plugin exports `grim_plugin_init` and
+At startup, the host discovers native libraries (.dll, .so, or .dylib) in
+per-plugin folders under the deployment root. A plugin exports `grim_plugin_init` and
 `grim_plugin_shutdown`. The loader checks the manifest ABI before opening the library.
 The loader rejects incompatible major versions and newer unsupported versions.
 
@@ -97,8 +97,8 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 2`, the packed integer `api_version` (1638400
-for 25.0.0), the provider name and version in `provider` and `version`, and a
+loader expects `schema_version: 2`, the packed integer `api_version` (1703936
+for 26.0.0), the provider name and version in `provider` and `version`, and a
 `tools` array. A provider with tools exports `grim_plugin_dispatch_tool`.
 See [Application's manifest](../plugins/application_plugin/application_plugin.tools.json)
 for raw text and JSON tool declarations.
@@ -343,49 +343,33 @@ Host-returned strings from other services retain their existing string_free
 ownership contract; the new result writer applies specifically to tool results
 and command execution. The API does not sandbox native code.
 
-## Folder reconciliation and reloads
+## Startup and shutdown batches
 
-The application calls PluginManager::tick from the host frame loop. It polls the
-configured folder about once per second; explicit API reload requests are queued
-and serviced on a subsequent frame. There is no watcher thread executing lifecycle
-operations, and request_reload never unloads code from inside its callback.
+`PluginManager::loadBatch()` discovers native plugin bundles in sorted order at
+host startup. The DLL and manifest live in an immediate child folder named for
+the DLL stem. On Windows the loader also searches the bundle's `dependencies`
+directory for native imports. The host opens the deployed DLL directly. Stop
+the host before replacing a deployed DLL.
 
-The loader scans immediate child folders in the watched root. Each folder name
-must match the native library stem and the manifest sits beside the library.
-A missing root is treated as empty. A scan error preserves the loaded set.
-Missing or unreadable files in an existing folder defer replacement. Removing
-the folder retires its instance.
+Each bundle requires the `.deployment` marker written by the deployment
+publisher. Startup rejects a missing, unreadable, or pending marker and a
+revision that changes while the DLL is opened.
 
-Change detection uses the library and manifest timestamps, sizes, and content
-digests. CMake also publishes a .deployment revision covering the whole bundle,
-including private dependencies. The loader skips bundles marked pending and
-rechecks the revision after copying. It retries an unchanged rejected bundle
-when another plugin changes the registry, which can resolve collisions.
+Each discovered DLL is initialized in its provider entry. Init can register
+resources and subscribe to system ticks using that entry's handle. After
+discovery, the registry publishes the successful entries, tools, aliases, and
+resources together. Each rejected DLL has a typed outcome and is cleaned up
+without blocking the other bundles. ABI v26 removes the reload request field.
+Build and deploy all plugins with the updated ABI before restarting the host.
 
-The loader copies the library, manifest, and private dependencies into an
-instance-specific temporary directory and removes it on retirement. On Windows,
-native loading searches the copied dependencies directory. On Unix, dependency
-resolution follows the platform loader's normal search rules.
-
-For a changed file, the loader reads and validates the manifest before
-cutover. The replacement must retain the declared provider name. Once the
-preflight succeeds, the loader shuts down and unloads the outgoing instance
-before loading the incoming DLL. A failure after cutover leaves the provider
-absent. Other providers continue running.
-
-A successful load gets a fresh instance handle and fresh tool statistics.
-Provider initialization should allocate reversible local state and reserve
-external actions for explicitly invoked tools.
-
-The application frame loop pumps generic plugin callbacks after reconciliation.
-Schedule and Perception subscribe to system ticks and track their own poll deadlines. Unloading a provider removes
-its callbacks after active calls drain.
+`PluginManager::shutdownBatch()` disables new dispatch and withdraws the batch
+from the registry. It drains active calls, retires native panels, and invokes
+plugin shutdown before releasing each module in reverse load order.
 
 ## System tick subscriptions (v15.2)
 
 `subscribe_system_tick` registers one callback per plugin generation. The host
-calls it on the application frame thread after plugin reconciliation and timer
-dispatch. The callback receives elapsed seconds since the previous frame began
+calls it on the application frame thread. The callback receives elapsed seconds since the previous frame began
 and elapsed seconds since the first application frame began. Both values are zero
 on the first frame. Subscriptions registered during init start receiving ticks
 after publication. Keep the callback context alive through shutdown. The host
@@ -509,15 +493,15 @@ Nothing downloads or installs packages. Each plugin subdirectory can also be
 configured independently with its own build directory.
 
 Build outputs remain under the build directory's plugins folder by default.
-Deployment uses a separate watched root, deployed_plugins/ under the GRIM root.
+Deployment uses a separate root, deployed_plugins/ under the GRIM root.
 Host builds enable deployment by default. Standalone builds can opt in with
 -DGRIM_DEPLOY_PLUGINS=ON and build the default target or deploy_<plugin-target>.
 Set GRIM_PLUGIN_DEPLOY_DIR to publish to another root for tests or packaging.
 
-The published folder contains the library, manifest, and selected private
-runtime DLLs. Identical files keep their timestamps. For manual deployment,
-place a complete folder under the watched root and use the deployment script
-for live updates. Remove the folder to unload the plugin.
+The published folder contains the library, manifest, selected private runtime
+DLLs, and the required `.deployment` marker. Identical files keep their
+timestamps. Stop the host before updating a deployed bundle. Remove the folder
+before the next startup to disable the plugin.
 See [build instructions](../plugins/README.md).
 
 Logging passes through the plugin API using a private per-library bridge.

@@ -1,5 +1,6 @@
 // Real DLL -> PluginManager -> API -> ToolRegistry -> filesystem, in a private sandbox.
 #include "core/plugin_manager.hpp"
+#include "plugin_deployment_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/RegisteredResource.hpp"
 #include "commands/command_result.hpp"
@@ -32,11 +33,11 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
         fs::path path;
         fs::path originalDirectory;
         ~Cleanup() {
-            PluginManager::unloadAll();
+            PluginManager::shutdownBatch();
             std::error_code error;
             fs::current_path(originalDirectory, error);
             // Only known fixture paths are removed. No recursive cleanup.
-            for (const auto* name : {"plugins/filesystem_plugin/filesystem_plugin.dll", "plugins/filesystem_plugin/filesystem_plugin.tools.json", "sample.txt", "new folder", "nonempty/keep.txt", "nonempty", "plugins/filesystem_plugin", "plugins"})
+            for (const auto* name : {"plugins/filesystem_plugin/filesystem_plugin.dll", "plugins/filesystem_plugin/filesystem_plugin.tools.json", "plugins/filesystem_plugin/.deployment", "sample.txt", "new folder", "nonempty/keep.txt", "nonempty", "plugins/filesystem_plugin", "plugins"})
                 fs::remove(path / name, error);
             fs::remove(path, error);
         }
@@ -47,7 +48,8 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     const auto deployed = sandbox / "plugins/filesystem_plugin/filesystem_plugin.dll";
     fs::copy_file(pluginDirectory / "filesystem_plugin.dll", deployed);
     fs::copy_file(pluginDirectory / "filesystem_plugin.tools.json", deployed.parent_path() / "filesystem_plugin.tools.json");
-    PluginManager::initialize((sandbox / "plugins").string());
+    writePluginFixtureRevision(deployed.parent_path());
+    PluginManager::loadBatch((sandbox / "plugins").string());
     check(registry.toolCount() == baseline + 3, "Filesystem DLL did not register exactly three tools");
     check(!registry.isRegistered("cd") && !registry.isRegistered("pwd"), "Retired navigation tools registered");
     for (const auto* id : {"ls", "mkdir", "rm"}) {
@@ -83,23 +85,25 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     check(fs::current_path() == baseDirectory &&
           GRIM::MMO::ProviderRegistry::instance().resourceVersion() == initialRevision,
           "Filesystem tools changed the working directory or published resources");
-    // A native load failure after cutover leaves the provider absent.
+    PluginManager::shutdownBatch();
+    // A bad DLL leaves no entry during startup.
     { std::ofstream invalid(deployed, std::ios::binary | std::ios::trunc); invalid << "invalid native library"; }
-    PluginManager::checkForHotReload();
+    PluginManager::loadBatch(sandbox / "plugins");
     check(registry.toolCount() == baseline && directoryResource().resource_id.empty() &&
           invoke("ls").at("error_code") == "ERR_UNKNOWN_CMD",
           "Failed native load retained filesystem tools or resources");
+    PluginManager::shutdownBatch();
     // A fresh DLL instance publishes its own directory.
     fs::copy_file(pluginDirectory / "filesystem_plugin.dll", deployed, fs::copy_options::overwrite_existing);
-    fs::last_write_time(deployed, fs::last_write_time(deployed) + std::chrono::seconds(2));
-    PluginManager::checkForHotReload();
+    PluginManager::loadBatch(sandbox / "plugins");
     check(directoryResource().provider.instance != initialResource.provider.instance &&
           directoryResource().state.at("path") == utf8(baseDirectory) &&
           invoke("ls").at("status") == "completed", "Reload retained old generation or lost the replacement resource");
+    PluginManager::shutdownBatch();
     fs::remove(deployed);
+    fs::remove(deployed.parent_path() / ".deployment");
     fs::remove(deployed.parent_path() / "filesystem_plugin.tools.json");
     fs::remove(deployed.parent_path());
-    PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && directoryResource().resource_id.empty(), "Removing filesystem plugin folder retained tools/resources");
     check(invoke("ls").at("error_code") == "ERR_UNKNOWN_CMD", "Removed filesystem tool still executable");
     std::cout << "Filesystem plugin operations, directory resources, failed replacement, reload and removal tests passed\n";

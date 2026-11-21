@@ -59,18 +59,17 @@ Standalone builds default to **no deployment**. Opt in with
 Use `-DGRIM_PLUGIN_DEPLOY_DIR=<folder>` to publish to a separate destination.
 Disable deployment with `-DGRIM_DEPLOY_PLUGINS=OFF`.
 
-For manual deployment, place a complete folder under the watched root or use
-`deploy_plugin.cmake` with the completed library and its manifest. Remove the
-folder to unload the plugin. The loader reconciles the root about once a second.
-Replacements must retain the provider name. A failure after native cutover
-leaves that provider absent.
+Stop the host before deploying updates. Use the CMake deployment target or
+run `deploy_plugin.cmake` with the completed library and its manifest to publish
+the required `.deployment` marker. The host loads bundles at startup and
+releases them at shutdown. Remove a bundle before the next startup to disable it.
 
 Reconfiguring an existing build upgrades the former default deployment path.
 Old flat files can stay in place during cutover. If you have existing memory
 plugin data, stop the host before copying `plugins/memory_plugin_data/` into
 `deployed_plugins/memory_plugin/`. The plugin opens its data beside the library.
 
-See ../docs/PLUGIN_API.md for API ownership, reload behavior, limitations, and
+See ../docs/PLUGIN_API.md for API ownership, startup and shutdown, limitations, and
 focused verification.
 
 Deployment regression checks: `python -m unittest discover -s tests -p test_plugin_deployment.py -v`.
@@ -174,7 +173,7 @@ clearing operation. Neither tool requires access to host state.
 Deploy the completed library and manifest to `deployed_plugins/utility_plugin/`. The host must be rebuilt from the migrated source to remove
 its old `clean`/`help` registrations. An older host rejects the colliding batch
 without losing its working commands. The compatibility test checks exact results,
-policy metadata, old-host collisions, and removal through folder reconciliation.
+policy metadata, old-host collisions, and cleanup at shutdown.
 
 ## Tool inspection plugin
 

@@ -883,7 +883,7 @@ CommandRegistry import or separate command map remains.
 - `planner.evaluate(capability, request_id)` → `optional<ToolGapProposal>`
 - `ToolGapPlanner::parseProposedSpec(json)` → `ProposedToolSpec`
 - `ToolGapPlanner::formatRationale(proposal)` → user-visible string
-- On approval: caller takes `ProposedToolSpec` → scaffold → build → `PluginManager::loadPlugin()` → `ProviderRegistry::publish()`
+- On approval: scaffold and build the `ProposedToolSpec`, deploy the bundle, then load it in the next host startup batch.
 
 **Current consumers**
 - None yet — will be consumed by synthesize-step handling in Orchestrator when router returns a tool-gap signal

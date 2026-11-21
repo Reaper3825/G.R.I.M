@@ -1,6 +1,7 @@
 #ifndef GRIM_NATIVE_UI_TEST_HOST
-#include "loaded_provider_fixture.hpp"
+#include "plugin_batch_fixture.hpp"
 #include "core/plugin_manager.hpp"
+#include "plugin_deployment_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include "ui/ui_panel_service.hpp"
@@ -17,7 +18,7 @@ bool completeOnSubmit = false;
 int effects = 0;
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void pump() { auto tasks = std::move(uiTasks); uiTasks.clear(); for (auto& task : tasks) task(); }
-nlohmann::json take(const LoadedProviderFixture& provider, const char* value) {
+nlohmann::json take(const PluginBatchFixture& provider, const char* value) {
     check(value != nullptr, "UI API returned null unexpectedly");
     const auto release = [&](const char* text) { provider->string_free(provider.handle(), text); };
     std::unique_ptr<const char, decltype(release)> result(value, release);
@@ -57,9 +58,9 @@ PanelServiceRequest submitPanelRequest(GrimUIPanelOperation operation, const std
 
 void runUIPluginTests(const std::filesystem::path& directory) {
 
-    LoadedProviderFixture owner({.name = "ui-owner", .path = ""});
+    PluginBatchFixture owner({.name = "ui-owner", .path = ""});
     owner.load();
-    LoadedProviderFixture other({.name = "ui-other", .path = ""});
+    PluginBatchFixture other({.name = "ui-other", .path = ""});
     other.load();
     check(!owner->ui_panel_service(owner.handle(), GRIM_UI_SHOW, nullptr, 0) &&
           !owner->ui_panel_service(owner.handle(), static_cast<GrimUIPanelOperation>(99), nullptr, 0) &&
@@ -98,10 +99,11 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     struct DeploymentCleanup {
         fs::path bundle;
         ~DeploymentCleanup() {
-            PluginManager::unloadAll();
+            PluginManager::shutdownBatch();
             std::error_code error;
             fs::remove(bundle / "ui_plugin.dll", error);
             fs::remove(bundle / "ui_plugin.tools.json", error);
+            fs::remove(bundle / ".deployment", error);
             fs::remove(bundle, error);
             fs::remove(bundle.parent_path(), error);
         }
@@ -110,7 +112,8 @@ void runUIPluginTests(const std::filesystem::path& directory) {
         fs::copy_file(directory / name, bundle / name, fs::copy_options::overwrite_existing);
     auto& registry = GRIM::MMO::ToolRegistry::instance();
     const auto baseline = registry.toolCount();
-    PluginManager::initialize(folder.string());
+    writePluginFixtureRevision(bundle);
+    PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 6, "UI DLL did not publish six operations");
     for (const char* tool : {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front", "ui.poll"}) {
         const auto entry = registry.getTool(tool);
@@ -174,10 +177,10 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     auto failure = registry.invoke("ui.poll", nlohmann::json{{"request_id", missing.at("request_id")}}.dump());
     check(failure.at("status") == "failed" && failure.at("error_code") == "ERR_UI_OPERATION", "Host failure became tool success");
     const auto retired = invoke("ui.show", R"({"panel_id":"settings"})").at("request_id").get<uint64_t>();
-    PluginManager::unloadAll(); pump();
+    PluginManager::shutdownBatch(); pump();
     check(!visible && registry.toolCount() == baseline, "Unload retained UI operations or queued side effects");
 
-    PluginManager::initialize(folder.string());
+    PluginManager::loadBatch(folder.string());
     const auto current = invoke("ui.list", "{}").at("request_id").get<uint64_t>();
     for (const bool cancel : {false, true}) {
         const auto staleRequest = registry.invoke("ui.poll",
@@ -189,7 +192,7 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     pump();
     check(invoke("ui.poll", nlohmann::json{{"request_id", current}}.dump()).at("status") == "completed",
           "Retired request disturbed the replacement provider's request");
-    PluginManager::unloadAll();
+    PluginManager::shutdownBatch();
     std::cout << "UI plugin metadata, asynchronous completion, ownership and unload tests passed\n";
 }
 

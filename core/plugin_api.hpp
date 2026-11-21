@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 25
+#define GRIM_API_VERSION_MAJOR 26
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -152,9 +152,6 @@ typedef struct GrimPluginAPI {
     // ========================================================================
     const char* (*get_plugin_name)(GrimPluginHandle instance);
     const char* (*get_plugin_path)(GrimPluginHandle instance);
-    
-    // Request plugin reload (useful for development)
-    void (*request_reload)(GrimPluginHandle instance);
     
     // ========================================================================
     // Utility Functions

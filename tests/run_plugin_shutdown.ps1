@@ -42,7 +42,7 @@ if ($BuildUIFixture) {
     $uiFixtureArgs = $common + @('/LD', ('"' + (Join-Path $workspace 'plugins/ui_plugin/ui_plugin.cpp') + '"'), '/Fe:ui-fixture/ui_plugin.dll')
     Set-Content -LiteralPath (Join-Path $output 'ui-fixture.rsp') -Value $uiFixtureArgs -Encoding ascii
 }
-function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switch]$Extra, [switch]$Collision, [int]$ApiVersion = 1638400) {
+function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switch]$Extra, [switch]$Collision, [int]$ApiVersion = 1703936) {
     $entries = @()
     if ($Tools) {
         $entry = @{
@@ -60,6 +60,7 @@ function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switc
     }
     @{schema_version = 2; api_version = $ApiVersion; provider = $provider; version = '1.0'; tools = $entries} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output "$folder/$stem.tools.json") -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $output "$folder/.deployment") -Value fixture-revision -Encoding ascii
 }
 $fixtureSource = '"' + (Join-Path $workspace 'tests/fixtures/plugin_shutdown_fixture.cpp') + '"'
 foreach ($fixture in @('alpha', 'beta')) {
@@ -74,7 +75,7 @@ foreach ($fixture in @('failed', 'legacy')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output $bundle) | Out-Null
     $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $bundle + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
-    $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1638400 }
+    $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1703936 }
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
     Write-FixtureManifest $bundle $fixture ('Declared-' + $fixture) -ApiVersion $apiVersion
 }
@@ -87,7 +88,7 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output $folder) | Out-Null
     $argsForFixture = $common + @('/LD','/DFIXTURE_TOOLS',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $folder + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
-    $apiVersion = if ($fixture -eq 'legacy') { 393216 } else { 1638400 }
+    $apiVersion = if ($fixture -eq 'legacy') { 393216 } else { 1703936 }
     Set-Content -LiteralPath (Join-Path $output ('integration-' + $fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
     Write-FixtureManifest $folder $fixture ('Declared-' + $fixture) -Tools -ApiVersion $apiVersion
 }
@@ -102,15 +103,15 @@ foreach ($variant in $variants.Keys) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output ('replacement/' + $variant)) | Out-Null
     $variantArgs = $common + @('/LD','/DFIXTURE_TOOLS','/DFIXTURE_NAME=\"Declared-alpha\"',$fixtureSource,('/Fe:replacement/' + $variant + '/alpha.dll')) + $variants[$variant]
     Set-Content -LiteralPath (Join-Path $output ('replacement-' + $variant + '.rsp')) -Value $variantArgs -Encoding ascii
-    $apiVersion = if ($variant -eq 'legacy') { 1572864 } else { 1638400 }
+    $apiVersion = if ($variant -eq 'legacy') { 1572864 } else { 1703936 }
     Write-FixtureManifest ('replacement/' + $variant) 'alpha' 'Declared-alpha' -Tools -Extra:($variant -eq 'old') -Collision:($variant -eq 'collision') -ApiVersion $apiVersion
 }
 $testArgs = $common + '/DGRIM_BUILD_HOST'
 $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
-$apiArgs = $common + '/DGRIM_BUILD_HOST'
-$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_reconcile_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$apiArgs = $common + @('/DGRIM_BUILD_HOST', '/DGRIM_PLUGIN_BATCH_TESTS', '/DGRIM_PROVIDER_REGISTRY_TESTS')
+$apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_batch_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($BuildSchedulingFixtures -or $SchedulePluginDirectory) {
     $apiArgs += @('/DGRIM_NATIVE_UI_TEST_HOST', ('/I"' + $workspace + '/ui"'), ('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
     $apiArgs += @('tests/ui_native_host_stubs.cpp','ui/primitives/ui_button.cpp','ui/primitives/ui_inputbox.cpp','ui/primitives/ui_textarea.cpp','ui/primitives/ui_slider.cpp','ui/primitives/ui_scrollbox.cpp','ui/primitives/ui_dropdown.cpp','ui/primitives/ui_panel.cpp','helpers/widget.cpp','helpers/vector2.cpp','ui/ui_focus_manager.cpp','ui/ui_root_panels.cpp','ui/ui_panel_service.cpp','ui/dynamic_surface_panel.cpp','MMO/UI/UISurfaceRegistry.cpp','MMO/UI/UISurfaceSpec.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
@@ -123,7 +124,7 @@ if ($BuildInputFixture) {
     $syntaxArgs += '"' + (Join-Path $workspace 'plugins/input_plugin/input_service.cpp') + '"'
 }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
-$registryArgs = $common + '/DGRIM_BUILD_HOST'
+$registryArgs = $common + @('/DGRIM_BUILD_HOST', '/DGRIM_PROVIDER_REGISTRY_TESTS')
 $registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/ToolGapPlanner.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $registryArgs += '/Fe:tool_registry_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii

@@ -1,4 +1,5 @@
 #include "core/plugin_manager.hpp"
+#include "plugin_deployment_fixture.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "error_manager.hpp"
@@ -29,9 +30,10 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     struct Cleanup {
         fs::path folder;
         ~Cleanup() {
-            PluginManager::unloadAll();
+            PluginManager::shutdownBatch();
             std::error_code error;
             fs::remove(folder / "application_plugin/application_plugin.dll", error);
+            fs::remove(folder / "application_plugin/.deployment", error);
             fs::remove(folder / "application_plugin/application_plugin.tools.json", error);
             fs::remove(folder / "application_aliases.json", error);
             fs::remove(folder / "application_plugin", error);
@@ -41,7 +43,8 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     fs::create_directory(folder / "application_plugin");
     fs::copy_file(pluginDirectory / "application_plugin.dll", folder / "application_plugin/application_plugin.dll");
     fs::copy_file(pluginDirectory / "application_plugin.tools.json", folder / "application_plugin/application_plugin.tools.json");
-    PluginManager::initialize(folder.string());
+    writePluginFixtureRevision(folder / "application_plugin");
+    PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 6, "Application plugin did not publish six tools");
     auto catalogResult = registry.invoke("applications.list", "{}");
     check(catalogResult.at("status") == "completed", "Application list failed");
@@ -94,10 +97,9 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     matches(result("open", "missing"), false, "updated:ERR_APP_LAUNCH_FAILED: missing", "ERR_APP_LAUNCH_FAILED", "error");
     matches(result("search", "  query  "), false, "updated:ERR_WEB_OPEN_FAILED: query", "ERR_WEB_OPEN_FAILED", "error");
     errorPrefix = "configured:";
-    // Reload into a new DLL generation and launch using the matching application IDs.
-    fs::last_write_time(folder / "application_plugin/application_plugin.dll",
-        fs::last_write_time(folder / "application_plugin/application_plugin.dll") + std::chrono::seconds(2));
-    PluginManager::checkForHotReload();
+    PluginManager::shutdownBatch();
+    // Start a new host lifecycle and launch using the matching application IDs.
+    PluginManager::loadBatch(folder);
     const auto reloaded = registry.invoke("applications.list", "{}").at("payload")
         .at("value").at("applications").at(0);
     const auto reloadedTool = registry.getTool("applications.list");
@@ -105,10 +107,11 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     check(reloaded.at("resource_id") == applicationId && reloaded.at("runtime_id") == app.at("runtime_id"),
           "Reload fixture did not retain matching application IDs");
     check(registry.invoke("applications.launch", launchArgs.dump()).at("status") == "completed", "Matching application IDs failed after reload");
+    PluginManager::shutdownBatch();
     fs::remove(folder / "application_plugin/application_plugin.dll");
+    fs::remove(folder / "application_plugin/.deployment");
     fs::remove(folder / "application_plugin/application_plugin.tools.json");
     fs::remove(folder / "application_plugin");
-    PluginManager::checkForHotReload();
     for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
         check(group.provider.name != "Application Plugin", "DLL removal retained the application provider");
     check(registry.toolCount() == baseline && !registry.isRegistered("open") && !registry.isRegistered("search"), "DLL removal retained application tools");

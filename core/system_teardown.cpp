@@ -96,7 +96,7 @@ void shutdownApplication(
 
     // Plugins may stop workers and use host services during shutdown. Unload
     // them before destroying UI and orchestration services.
-    PluginManager::unloadAll();
+    PluginManager::shutdownBatch();
     if (!deviceCommServer)
         throw std::runtime_error("Storage panel teardown requires the host device server");
     UI::Storage::unbindServer(*deviceCommServer);

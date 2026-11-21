@@ -1,5 +1,4 @@
 #include "system_tick.hpp"
-#include "plugin_manager.hpp"
 #include "plugin_api_impl.hpp"
 
 #include "../helpers/key.hpp"
@@ -44,7 +43,6 @@ void tickApplicationFrame(const GRIMWindow& overlayWindow)
     WakeKey::update();
 
     UI::processPanelShortcuts();
-    PluginManager::tick();
     PluginAPI::dispatchSystemTick(deltaSeconds, offsetSeconds);
 
     // Global bindings above retain raw hardware input. UI gestures stop when

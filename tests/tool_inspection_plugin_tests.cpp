@@ -1,5 +1,6 @@
 #include "core/plugin_manager.hpp"
-#include "loaded_provider_fixture.hpp"
+#include "plugin_deployment_fixture.hpp"
+#include "plugin_batch_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "commands/command_result.hpp"
@@ -19,19 +20,21 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     check(fs::create_directory(folder), "Cannot create inspection test folder");
     struct Cleanup {
         fs::path folder;
-        std::unique_ptr<LoadedProviderFixture> api;
+        std::unique_ptr<PluginBatchFixture> api;
         ~Cleanup() {
-            PluginManager::unloadAll();
+            PluginManager::shutdownBatch();
             ProviderRegistry::instance().retire("inspection-fixtures", "fixture-generation");
             api.reset();
             std::error_code error;
+    PluginManager::shutdownBatch();
             fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll", error);
+            fs::remove(folder / "tool_inspection_plugin/.deployment", error);
             fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json", error);
             fs::remove(folder / "tool_inspection_plugin", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    cleanup.api = std::make_unique<LoadedProviderFixture>(GRIM::MMO::ProviderDescriptor{.name = "snapshot-reader", .path = ""});
+    cleanup.api = std::make_unique<PluginBatchFixture>(GRIM::MMO::ProviderDescriptor{.name = "snapshot-reader", .path = ""});
     cleanup.api->load();
     auto& api = *cleanup.api;
     const auto snapshot = [&](const char* id = nullptr) {
@@ -48,7 +51,8 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     fs::create_directory(folder / "tool_inspection_plugin");
     fs::copy_file(pluginDirectory / "tool_inspection_plugin.dll", folder / "tool_inspection_plugin/tool_inspection_plugin.dll");
     fs::copy_file(pluginDirectory / "tool_inspection_plugin.tools.json", folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json");
-    PluginManager::initialize(folder.string());
+    writePluginFixtureRevision(folder / "tool_inspection_plugin");
+    PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 3, "Inspection plugin did not register three tools");
     for (const auto* id : {"list_tools", "tool_info", "tool_stats"}) {
         const auto d = registry.getTool(id);
@@ -143,9 +147,9 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     ProviderRegistry::instance().retire(owner.name, owner.instance);
     check(snapshot("fixture_alias").empty(), "Removed alias retained stale snapshot");
     fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll");
+    fs::remove(folder / "tool_inspection_plugin/.deployment");
     fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json");
     fs::remove(folder / "tool_inspection_plugin");
-    PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && !registry.isRegistered("list_tools") && !registry.isRegistered("tool_info") &&
           !registry.isRegistered("tool_stats"), "Removing inspection DLL retained tools");
     std::cout << "Tool inspection plugin snapshot, compatibility, statistics, and removal tests passed\n";

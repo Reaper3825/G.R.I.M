@@ -1,5 +1,5 @@
 // Exercise the real API implementation and registry with host service sinks.
-#include "loaded_provider_fixture.hpp"
+#include "plugin_batch_fixture.hpp"
 #include "core/plugin_manager.hpp"
 #include <future>
 #include <filesystem>
@@ -39,7 +39,7 @@ std::pair<std::string, std::string> parseInput(const std::string& text) {
 namespace {
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 GrimResult identify(const GrimToolCall*, GrimToolResultWriter* writer, void* data) {
-    const auto* api = static_cast<const LoadedProviderFixture*>(data);
+    const auto* api = static_cast<const PluginBatchFixture*>(data);
     (*api)->log(api->handle(), GRIM_LOG_INFO, "callback");
     std::string message = "owned local message";
     GrimToolResult result;
@@ -58,13 +58,13 @@ Json definition(const char* id) {
         {"is_informational", false}, {"needs_confirmation", false}};
 }
 
-LoadedProviderFixture* alphaAPI = nullptr;
+PluginBatchFixture* alphaAPI = nullptr;
 GrimResult dispatchIdentify(const char*, const GrimToolCall* call, GrimToolResultWriter* writer) {
     return identify(call, writer, alphaAPI);
 }
 GrimResult dispatchEmpty(const char*, const GrimToolCall*, GrimToolResultWriter*) { return GRIM_OK; }
 
-void loadTools(LoadedProviderFixture& provider, std::initializer_list<Json> tools, GrimToolDispatch dispatch = dispatchEmpty) {
+void loadTools(PluginBatchFixture& provider, std::initializer_list<Json> tools, GrimToolDispatch dispatch = dispatchEmpty) {
     provider.load(Json(tools), dispatch);
 }
 
@@ -102,7 +102,7 @@ GrimResult dispatchBroken(const char*, const GrimToolCall* call, GrimToolResultW
     return brokenHandler(call, writer, nullptr);
 }
 
-void checkName(const LoadedProviderFixture* api, const char* expected) {
+void checkName(const PluginBatchFixture* api, const char* expected) {
     const auto* name = (*api)->get_plugin_name(api->handle());
     check(std::string(name) == expected, "Plugin identity changed after another load");
     (*api)->string_free(api->handle(), name);
@@ -111,7 +111,7 @@ void checkName(const LoadedProviderFixture* api, const char* expected) {
 
 }
 
-void runPluginReconcileTests(const std::filesystem::path&, const std::filesystem::path&);
+void runPluginBatchTests(const std::filesystem::path&, const std::filesystem::path&);
 void runFilesystemPluginTests(const std::filesystem::path&);
 void runUtilityPluginTests(const std::filesystem::path&);
 void runApplicationPluginTests(const std::filesystem::path&);
@@ -133,7 +133,7 @@ void runProviderResourceTests() {
     };
     const ProviderDescriptor descriptor{.name = "resource-provider", .path = "fixture",
         .version = "1.2.3"};
-    LoadedProviderFixture first(descriptor);
+    PluginBatchFixture first(descriptor);
     first.load(Json::array({definition("generation_tool")}), dispatchEmpty);
     const auto oldHandle = first.handle();
     auto copied = payload;
@@ -152,7 +152,7 @@ void runProviderResourceTests() {
     check(publish(oldHandle, duplicate.dump()) == GRIM_ERROR_INVALID_PARAM && registry.resourceVersion() == revision,
           "Duplicate update partially committed");
 
-    LoadedProviderFixture second(descriptor);
+    PluginBatchFixture second(descriptor);
     check(publish(second.handle(), payload) == GRIM_ERROR_PLUGIN_NOT_LOADED,
           "Incoming instance published resources while the old instance was live");
     first.unload();
@@ -185,7 +185,7 @@ static void runSystemTickTests() {
 
     const GRIM::MMO::ProviderDescriptor descriptor{.name = "tick-provider", .path = "tick.dll",
         .version = "1.2.3"};
-    LoadedProviderFixture first(descriptor);
+    PluginBatchFixture first(descriptor);
     first.load();
     check(first->subscribe_system_tick(first.handle(), callback, &firstTick) == GRIM_OK, "Tick subscription failed");
     check(first->subscribe_system_tick(first.handle(), callback, &firstTick) == GRIM_ERROR_ALREADY_EXISTS,
@@ -195,7 +195,7 @@ static void runSystemTickTests() {
           "Provider did not receive frame timing");
     first.unload();
 
-    LoadedProviderFixture replacement(descriptor);
+    PluginBatchFixture replacement(descriptor);
     replacement.load();
     check(replacement->subscribe_system_tick(replacement.handle(), callback, &replacementTick) == GRIM_OK,
           "Replacement tick subscription failed");
@@ -213,18 +213,18 @@ int main(int argc, char** argv) try {
     {
         auto& registry = GRIM::MMO::ProviderRegistry::instance();
         const auto count = registry.snapshot().providers.size();
-        LoadedProviderFixture empty({.name = "zero-tool-provider", .path = "empty.dll", .version = "1.2.3"});
+        PluginBatchFixture empty({.name = "zero-tool-provider", .path = "empty.dll", .version = "1.2.3"});
         empty.load();
         check(registry.snapshot().providers.size() == count + 1, "Zero-tool provider was not published");
         empty.unload();
         check(registry.snapshot().providers.size() == count, "Zero-tool provider survived unload");
     }
-    LoadedProviderFixture alpha({.name = "alpha", .path = "alpha.dll", .version = "1.2.3"});
+    PluginBatchFixture alpha({.name = "alpha", .path = "alpha.dll", .version = "1.2.3"});
     alphaAPI = &alpha;
     loadTools(alpha, {definition("alpha_tool"), definition("alpha_second")}, dispatchIdentify);
     Blocking blocked;
     blockedCall = &blocked;
-    LoadedProviderFixture beta({.name = "beta", .path = "beta.dll", .version = "1.2.3"});
+    PluginBatchFixture beta({.name = "beta", .path = "beta.dll", .version = "1.2.3"});
     loadTools(beta, {definition("blocking")}, dispatchBlocking);
     check(alpha.handle() != beta.handle() && alpha.operator->() == beta.operator->(),
           "Providers do not share one API table with distinct handles");
@@ -245,7 +245,7 @@ int main(int argc, char** argv) try {
     }), "Collision fixture publication failed");
 
     bool duplicateRejected = false;
-    try { LoadedProviderFixture duplicate({.name = "alpha", .path = "duplicate.dll", .version = "1.2.3"}); duplicate.load(); }
+    try { PluginBatchFixture duplicate({.name = "alpha", .path = "duplicate.dll", .version = "1.2.3"}); duplicate.load(); }
     catch (const std::runtime_error&) { duplicateRejected = true; }
     check(duplicateRejected, "Duplicate identity replaced a retained API");
 
@@ -272,12 +272,12 @@ int main(int argc, char** argv) try {
           copiedResult.at("payload") == nlohmann::json{{"answer", 42}}, "Host did not copy result data immediately");
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
         brokenHandler = handler;
-        LoadedProviderFixture brokenProvider({.name = "broken-fixture", .path = "", .version = "1.2.3"});
+        PluginBatchFixture brokenProvider({.name = "broken-fixture", .path = "", .version = "1.2.3"});
         loadTools(brokenProvider, {definition("broken")}, dispatchBroken);
         check(GRIM::MMO::ToolRegistry::instance().invoke("broken", "").at("error_code") == "ERR_PLUGIN_RESULT", "Invalid result accepted");
         brokenProvider.unload();
     }
-    LoadedProviderFixture metadata({.name = "metadata", .path = "metadata.dll", .version = "1.2.3"});
+    PluginBatchFixture metadata({.name = "metadata", .path = "metadata.dll", .version = "1.2.3"});
     auto complete = definition("metadata_tool");
     complete.update({
         {"description", "copied metadata"}, {"argument_format", "json"},
@@ -308,14 +308,14 @@ int main(int argc, char** argv) try {
     auto first = definition("batch_first");
     auto second = definition("batch_second");
     second["usage_type"] = 0;
-    LoadedProviderFixture batchProvider({.name = "batch-fixture", .path = "", .version = "1.2.3"});
+    PluginBatchFixture batchProvider({.name = "batch-fixture", .path = "", .version = "1.2.3"});
     loadTools(batchProvider, {first, second});
     check(ToolRegistry::instance().getTool("batch_first")->usage_type == ToolUsage::Model &&
           ToolRegistry::instance().getTool("batch_second")->usage_type == ToolUsage::Debug,
           "Manifest lost tool metadata");
     batchProvider.unload();
 
-    LoadedProviderFixture invalidProvider({.name = "invalid-fixture", .path = "", .version = "1.2.3"});
+    PluginBatchFixture invalidProvider({.name = "invalid-fixture", .path = "", .version = "1.2.3"});
     const auto rejects = [&](const auto& read, const char* reason) {
         try { read(); } catch (const std::exception&) { return; }
         throw std::runtime_error(reason);
@@ -344,7 +344,7 @@ int main(int argc, char** argv) try {
     check(!ToolRegistry::instance().isRegistered("batch_first"), "Invalid manifest partially published");
     invalidProvider.unload();
 
-    LoadedProviderFixture conflict({.name = "conflict", .path = "conflict.dll", .version = "1.2.3"});
+    PluginBatchFixture conflict({.name = "conflict", .path = "conflict.dll", .version = "1.2.3"});
     rejects([&] { loadTools(conflict, {definition("new_tool"), definition("reserved_fixture_tool")}); },
             "Tool collision accepted");
     check(!ToolRegistry::instance().isRegistered("new_tool"), "Failed load left a partial manifest");
@@ -361,22 +361,22 @@ int main(int argc, char** argv) try {
     stopping.get();
     alpha.unload();
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_tool") && !GRIM::MMO::ToolRegistry::instance().getTool("alpha_second"), "Owner cleanup retained tools");
-    LoadedProviderFixture replacement({.name = "alpha", .path = "new-alpha.dll", .version = "1.2.3"});
+    PluginBatchFixture replacement({.name = "alpha", .path = "new-alpha.dll", .version = "1.2.3"});
     replacement.load();
     checkName(&replacement, "alpha");
     replacement.unload();
 
     check(argc >= 4, "Expected valid/rejected/replacement DLL fixture folders");
     const auto count = GRIM::MMO::ToolRegistry::instance().toolCount();
-    PluginManager::initialize(argv[1]);
+    PluginManager::loadBatch(argv[1]);
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count + 2, "Folder load did not populate registry");
     check(GRIM::MMO::ToolRegistry::instance().invoke("Declared-alpha", "").at("message") == "fixture result", "Loaded DLL handler failed");
-    PluginManager::unloadAll();
+    PluginManager::shutdownBatch();
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count, "DLL unload left registry entries");
-    PluginManager::initialize(argv[2]);
+    PluginManager::loadBatch(argv[2]);
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count, "Rejected DLL left registrations");
-    PluginManager::unloadAll();
-    runPluginReconcileTests(argv[3], argc > 4 ? argv[4] : "");
+    PluginManager::shutdownBatch();
+    runPluginBatchTests(argv[3], argc > 4 ? argv[4] : "");
     if (argc > 5 && *argv[5]) runFilesystemPluginTests(argv[5]);
     if (argc > 6 && *argv[6]) runUtilityPluginTests(argv[6]);
     if (argc > 7 && *argv[7]) runApplicationPluginTests(argv[7]);

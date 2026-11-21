@@ -42,7 +42,7 @@ class PluginDeploymentTests(unittest.TestCase):
         self.publish(source, destination)
         deployed = destination / source.stem / source.name
         self.assertEqual(deployed.read_bytes(), source.read_bytes())
-        # An unchanged build must not trigger another hot reload.
+        # An unchanged build must leave the deployed binary untouched.
         os.utime(deployed, (946684800, 946684800))
         timestamp = deployed.stat().st_mtime_ns
         self.publish(source, destination)
@@ -64,14 +64,21 @@ class PluginDeploymentTests(unittest.TestCase):
         self.assertEqual(deployed.read_bytes(), b"working plugin")
         self.assertEqual(list(deployed.parent.iterdir()), [deployed])
 
-    def test_output_already_in_watched_folder(self):
+    def test_output_already_in_deployment_folder_gets_marker(self):
         source = self.folder / "fixture/fixture.dll"
         source.parent.mkdir()
         source.write_bytes(b"completed plugin")
         self.publish(source, self.folder)
         self.assertEqual(source.read_bytes(), b"completed plugin")
         self.assertEqual(list(self.folder.iterdir()), [source.parent])
-        self.assertFalse((source.parent / ".deployment").exists())
+        marker = source.parent / ".deployment"
+        self.assertRegex(marker.read_text(), r"^[0-9a-f]{32}\n$")
+        revision = marker.read_text()
+        self.publish(source, self.folder)
+        self.assertEqual(marker.read_text(), revision)
+        marker.unlink()
+        self.publish(source, self.folder)
+        self.assertRegex(marker.read_text(), r"^[0-9a-f]{32}\n$")
 
     def test_manifest_and_private_dependency_publish_as_one_revision(self):
         binary = self.folder / "fixture.dll"

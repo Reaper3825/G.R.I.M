@@ -10,7 +10,7 @@ $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Componen
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
 $sources = @('tests/ui_input_foundation_tests.cpp','ui/primitives/ui_inputbox.cpp','ui/primitives/ui_textarea.cpp','ui/primitives/ui_button.cpp','ui/primitives/ui_slider.cpp','ui/primitives/ui_scrollbox.cpp','ui/primitives/ui_dropdown.cpp','helpers/widget.cpp','helpers/vector2.cpp','ui/ui_focus_manager.cpp')
-$arguments = @('/nologo','/std:c++20','/EHsc','/MD','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
+$arguments = @('/nologo','/std:c++20','/EHsc','/MD','/W3','/wd4251','/DGRIM_BUILD_HOST','/DNOMINMAX','/DGRIM_PROVIDER_REGISTRY_TESTS',('/I"' + $workspace + '"'),('/I"' + $workspace + '/helpers"'),('/I"' + $workspace + '/core"'),('/I"' + $workspace + '/ui"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $sources += 'ui/primitives/ui_panel.cpp', 'ui/primitives/ui_split_pane.cpp', 'tests/ui_split_pane_tests.cpp'
 $sources += 'ui/ui_root_panels.cpp', 'ui/ui_panel_service.cpp', 'ui/dynamic_surface_panel.cpp', 'ui/ui_surface_renderer_bridge.cpp', 'MMO/UI/UISurfaceRegistry.cpp', 'MMO/UI/UISurfaceSpec.cpp', 'tests/ui_panel_operations_tests.cpp'
 $sources += 'tests/calendar_panel_tests.cpp', 'tests/schedule_plugin_tests.cpp'

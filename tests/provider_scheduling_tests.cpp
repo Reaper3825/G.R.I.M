@@ -1,4 +1,5 @@
 #include "core/plugin_manager.hpp"
+#include "plugin_deployment_fixture.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/RegisteredResource.hpp"
@@ -26,9 +27,9 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     struct Cleanup {
         fs::path root;std::wstring previous;
         ~Cleanup(){
-            PluginManager::unloadAll();SetEnvironmentVariableW(L"LOCALAPPDATA",previous.empty()?nullptr:previous.c_str());
+            PluginManager::shutdownBatch();SetEnvironmentVariableW(L"LOCALAPPDATA",previous.empty()?nullptr:previous.c_str());
             std::error_code e;
-            for(const auto* p:{"schedule_plugin/schedule_plugin.dll","schedule_plugin/schedule_plugin.tools.json","schedule_plugin","GRIM/calendar/events.json", "GRIM/calendar/events.json.lock", "GRIM/calendar/events.json.tmp", "GRIM/calendar", "GRIM"}) fs::remove(root/p,e);
+            for(const auto* p:{"schedule_plugin/schedule_plugin.dll","schedule_plugin/schedule_plugin.tools.json","schedule_plugin/.deployment","schedule_plugin","GRIM/calendar/events.json", "GRIM/calendar/events.json.lock", "GRIM/calendar/events.json.tmp", "GRIM/calendar", "GRIM"}) fs::remove(root/p,e);
             fs::remove(root,e);
         }
     } cleanup{root,previous};
@@ -36,13 +37,14 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     fs::create_directory(root / "schedule_plugin");
     fs::copy_file(scheduleDirectory/"schedule_plugin.dll",root/"schedule_plugin/schedule_plugin.dll");
     fs::copy_file(scheduleDirectory/"schedule_plugin.tools.json",root/"schedule_plugin/schedule_plugin.tools.json");
+    writePluginFixtureRevision(root / "schedule_plugin");
     auto& registry=GRIM::MMO::ToolRegistry::instance();const auto baseline=registry.toolCount();
     const auto resource=[&](const char* name,const char* id){
         for(const auto& group:GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
             if(group.provider.name==name) for(const auto& r:group.resources) if(r.resource_id==id) return GRIM::MMO::RegisteredResource{r,group.provider};
         return GRIM::MMO::RegisteredResource{};
     };
-    PluginManager::initialize(root.string());
+    PluginManager::loadBatch(root.string());
 #ifdef GRIM_NATIVE_UI_TEST_HOST
     UIRoot::get().processPendingTasks();
     check(UIRoot::get().getPanelByKey("calendar") != nullptr, "Native Calendar did not attach through loader");
@@ -76,14 +78,14 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     invoke("cancel",{{"id","cancel"},{"revision",cancelled.at("item").at("revision")}});
     invoke("create",{{"id","persist"},{"kind","timer"},{"title","Survives reload"},{"duration_seconds",1}});
     const auto old=resource("Schedule Plugin","items").provider.instance;
+    PluginManager::shutdownBatch();
     {std::ofstream broken(root/"schedule_plugin/schedule_plugin.dll",std::ios::binary|std::ios::trunc);broken<<"broken";}
-    PluginManager::checkForHotReload();
+    PluginManager::loadBatch(root);
     check(registry.toolCount() == baseline && resource("Schedule Plugin", "items").resource_id.empty(),
           "Failed native load retained schedule tools or resources");
+    PluginManager::shutdownBatch();
     fs::copy_file(scheduleDirectory/"schedule_plugin.dll",root/"schedule_plugin/schedule_plugin.dll",fs::copy_options::overwrite_existing);
-    const auto schedule = root/"schedule_plugin/schedule_plugin.dll";
-    fs::last_write_time(schedule,fs::last_write_time(schedule)+std::chrono::seconds(2));
-    PluginManager::checkForHotReload();
+    PluginManager::loadBatch(root);
 #ifdef GRIM_NATIVE_UI_TEST_HOST
     UIRoot::get().processPendingTasks();
     check(UIRoot::get().getPanelByKey("calendar") != nullptr, "Replacement native panel missing");
@@ -93,10 +95,11 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     std::this_thread::sleep_for(std::chrono::milliseconds(1150));pumpFrame();
     check(pluginNotifications.size()==before+2,"Reload duplicated delivery or cancelled timer fired");
     check(invoke("get",{{"id","persist"}}).at("item").at("delivery_status")=="dispatched","Reload dispatch not persisted");
+    PluginManager::shutdownBatch();
     fs::remove(root/"schedule_plugin/schedule_plugin.dll");
+    fs::remove(root/"schedule_plugin/.deployment");
     fs::remove(root/"schedule_plugin/schedule_plugin.tools.json");
     fs::remove(root/"schedule_plugin");
-    PluginManager::checkForHotReload();
     pumpFrame();
 #ifdef GRIM_NATIVE_UI_TEST_HOST
     check(!UIRoot::get().getPanelByKey("calendar"), "DLL unload left native Calendar attached");

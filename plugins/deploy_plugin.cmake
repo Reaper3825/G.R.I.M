@@ -70,14 +70,12 @@ foreach(dependency IN LISTS _deployed_dependencies)
     endif()
 endforeach()
 
-set(_recovering FALSE)
+set(_status "")
 if(EXISTS "${_marker}")
-    file(READ "${_marker}" _status)
-    if(_status STREQUAL "pending\n")
-        set(_recovering TRUE)
-    endif()
+    file(STRINGS "${_marker}" _status LIMIT_COUNT 1)
 endif()
-if("${_changed}" STREQUAL "" AND NOT _obsolete AND NOT _recovering)
+if("${_changed}" STREQUAL "" AND NOT _obsolete AND
+   NOT _status STREQUAL "" AND NOT _status STREQUAL "pending")
     return()
 endif()
 

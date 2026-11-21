@@ -7,7 +7,7 @@ $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer
 $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw 'An existing MSVC C++ toolchain is required.' }
 $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
-$arguments = @('/nologo','/std:c++20','/EHsc','/W3','/DNOMINMAX',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
+$arguments = @('/nologo','/std:c++20','/EHsc','/W3','/DNOMINMAX','/DGRIM_PROVIDER_REGISTRY_TESTS',('/I"' + $workspace + '"'),('/I"' + $workspace + '/vcpkg_installed/x64-windows/include"'))
 $arguments += @('tests/live_world_tests.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','ui/world_lab/world_document.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $arguments += '/Fe:live_world_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'compile.rsp') -Value $arguments -Encoding ascii

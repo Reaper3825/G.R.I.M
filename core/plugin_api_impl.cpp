@@ -7,8 +7,6 @@
 
 #include "core/plugin_tool_result.hpp"
 #include "plugin_api_impl.hpp"
-#include "plugin_manager.hpp"
-#include "plugin_manifest.hpp"
 #include "plugin_notifications.hpp"
 #include "logger.hpp"
 #include "error_manager.hpp"
@@ -39,51 +37,19 @@ namespace PluginAPI {
 // Internal Data Structures
 // ============================================================================
 
-struct CallGate {
-    std::mutex mutex;
-    std::condition_variable idle;
-    bool accepting = true;
-    bool dispatchEnabled = false;
-    size_t active = 0;
-};
+using GRIM::MMO::ProviderRegistry;
+using CallGate = ProviderRegistry::CallGate;
 
-struct SystemTickSubscription {
-    GrimSystemTickCallback callback;
-    void* userData;
-    std::shared_ptr<CallGate> gate;
-};
-
-struct LoadedProvider {
-    explicit LoadedProvider(GRIM::MMO::ProviderDescriptor descriptor)
-        : identity(std::move(descriptor)) {}
-
-    const GRIM::MMO::ProviderDescriptor identity;
-    GrimPluginHandle handle = 0;
-    std::shared_ptr<CallGate> gate = std::make_shared<CallGate>();
-    std::shared_ptr<GRIM::UI::ProviderPanelLease> panelLease =
-        std::make_shared<GRIM::UI::ProviderPanelLease>();
-    std::mutex panelRequestsMutex;
-    std::unordered_map<uint64_t, GRIM::UI::PanelServiceRequest> panelRequests;
-};
-
-// Static storage
-static std::unordered_map<std::string, SystemTickSubscription> s_systemTickSubscriptions;
 static std::unordered_map<void*, std::string> s_allocated_strings;
-static std::unordered_map<GrimPluginHandle, std::weak_ptr<LoadedProvider>> s_instances;
-static std::mutex s_instanceMutex;
-static uint64_t s_next_instance = 1;
 static std::atomic<uint64_t> s_next_panel_request = 1;
-static std::mutex s_resourceMutex;
 static std::mutex s_stringMutex;
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-static std::shared_ptr<LoadedProvider> providerFor(GrimPluginHandle handle) {
-    std::lock_guard lock(s_instanceMutex);
-    const auto found = s_instances.find(handle);
-    return found == s_instances.end() ? nullptr : found->second.lock();
+static auto providerFor(GrimPluginHandle handle) {
+    return ProviderRegistry::instance().nativeProvider(handle);
 }
 
 static const char* allocateString(const std::string& str) {
@@ -159,16 +125,21 @@ static GrimResult completeResult(GrimToolResultWriter* writer, const GrimToolRes
     }
 }
 struct ActiveCall {
-    std::shared_ptr<CallGate> gate;
+    enum class Kind { HostService, Dispatch };
+    CallGate& gate;
     bool entered = false;
-    explicit ActiveCall(std::shared_ptr<CallGate> value, bool requireDispatch = false) : gate(std::move(value)) {
-        std::lock_guard lock(gate->mutex);
-        if (gate->accepting && (!requireDispatch || gate->dispatchEnabled)) { ++gate->active; entered = true; }
+    explicit ActiveCall(CallGate& value, Kind kind = Kind::HostService) : gate(value) {
+        std::lock_guard lock(gate.mutex);
+        if (gate.state == CallGate::State::Ready ||
+            (kind == Kind::HostService && gate.state == CallGate::State::Initializing)) {
+            ++gate.active;
+            entered = true;
+        }
     }
     ~ActiveCall() {
         if (!entered) return;
-        std::lock_guard lock(gate->mutex);
-        if (--gate->active == 0) gate->idle.notify_all();
+        std::lock_guard lock(gate.mutex);
+        if (--gate.active == 0) gate.idle.notify_all();
     }
 };
 static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
@@ -219,16 +190,19 @@ static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
 }
 
 static std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
-    const nlohmann::json& entries, const LoadedProvider& owner, GrimToolDispatch dispatch) {
+    const nlohmann::json& entries, const GRIM::MMO::ProviderDescriptor& identity,
+    GrimPluginHandle handle, GrimToolDispatch dispatch) {
     if (!entries.is_array() || entries.size() > 256 || (!entries.empty() && !dispatch))
         throw std::invalid_argument("Invalid tool manifest entries or missing dispatcher");
     std::vector<GRIM::MMO::ToolRegistration> tools;
     tools.reserve(entries.size());
     for (const auto& entry : entries) {
-        auto descriptor = decodeManifestTool(entry, owner.identity.version.c_str());
-        auto invoke = [gate = owner.gate, dispatch, id = descriptor.tool_id](const std::string& arguments,
+        auto descriptor = decodeManifestTool(entry, identity.version.c_str());
+        auto invoke = [handle, dispatch, id = descriptor.tool_id](const std::string& arguments,
                              bool waitForCompletion) -> CommandResult {
-            ActiveCall active(gate, true);
+            const auto owner = providerFor(handle);
+            if (!owner) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
+            ActiveCall active(owner->gate, ActiveCall::Kind::Dispatch);
             if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
             ResultCapture capture;
             GrimToolResultWriter writer{sizeof(GrimToolResultWriter), &capture, completeResult};
@@ -353,10 +327,11 @@ static GrimResult api_subscribe_system_tick(GrimPluginHandle self,
         if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         ActiveCall active(owner->gate);
         if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-        std::lock_guard lock(s_resourceMutex);
-        const auto inserted = s_systemTickSubscriptions.try_emplace(
-            owner->identity.instance, SystemTickSubscription{callback, userData, owner->gate}).second;
-        return inserted ? GRIM_OK : GRIM_ERROR_ALREADY_EXISTS;
+        std::lock_guard lock(owner->gate.mutex);
+        if (owner->tick) return GRIM_ERROR_ALREADY_EXISTS;
+        owner->tick = callback;
+        owner->tickData = userData;
+        return GRIM_OK;
     } catch (const std::bad_alloc&) {
         return GRIM_ERROR_OUT_OF_MEMORY;
     } catch (...) {
@@ -376,15 +351,6 @@ static const char* api_get_plugin_name(GrimPluginHandle self) {
 static const char* api_get_plugin_path(GrimPluginHandle self) {
     const auto owner = providerFor(self);
     return owner ? allocateString(owner->identity.path) : nullptr;
-}
-
-static void api_request_reload(GrimPluginHandle self) {
-    const auto owner = providerFor(self);
-    if (!owner) return;
-    ActiveCall active(owner->gate);
-    if (!active.entered) return;
-    LOG_DEBUG("PluginAPI", "Plugin requested reload: " + owner->identity.name);
-    PluginManager::requestReload(self);
 }
 
 // ============================================================================
@@ -411,7 +377,7 @@ static const char* api_ui_panel_service(GrimPluginHandle self, GrimUIPanelOperat
     try {
         const auto owner = providerFor(self);
         if (!owner) return nullptr;
-        ActiveCall active(owner->gate, true);
+        ActiveCall active(owner->gate, ActiveCall::Kind::Dispatch);
         if (!active.entered) return nullptr;
         if (operation > GRIM_UI_HIDE_CURRENT) return nullptr;
         if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
@@ -485,7 +451,6 @@ const GrimPluginAPI& hostAPI() {
         // Plugin Lifecycle
         api.get_plugin_name = api_get_plugin_name;
         api.get_plugin_path = api_get_plugin_path;
-        api.request_reload = api_request_reload;
 
         // Utilities
         api.string_free = api_string_free;
@@ -500,79 +465,189 @@ const GrimPluginAPI& hostAPI() {
     return table;
 }
 
-std::shared_ptr<LoadedProvider> registerInstance(GRIM::MMO::ProviderDescriptor provider) {
-    std::lock_guard lock(s_instanceMutex);
-    const auto handle = s_next_instance++;
-    provider.instance = provider.name + "#" + std::to_string(handle);
-    auto owner = std::make_shared<LoadedProvider>(std::move(provider));
-    owner->handle = handle;
-    owner->panelLease->owner = owner->identity.instance;
-    s_instances.emplace(handle, owner);
-    return owner;
-}
-
-GrimPluginHandle instanceHandle(const LoadedProvider& provider) { return provider.handle; }
-
-void validateManifestTools(const nlohmann::json& entries, const GRIM::MMO::ProviderDescriptor& provider) {
-    if (!entries.is_array() || entries.size() > 256)
-        throw std::invalid_argument("Invalid tool manifest entries");
-    for (const auto& entry : entries)
-        (void)decodeManifestTool(entry, provider.version.c_str());
-}
-
-void registerProvider(LoadedProvider& provider, const nlohmann::json& entries, GrimToolDispatch dispatch) {
-    const auto tools = readManifestTools(entries, provider, dispatch);
-    if (!GRIM::MMO::ProviderRegistry::instance().publish(provider.identity, tools))
-        throw std::runtime_error("Provider registration rejected");
-    GRIM::UI::registerProviderPanelLease(provider.handle, provider.panelLease);
-}
-
-void enableDispatch(LoadedProvider& provider) {
-    std::lock_guard lock(provider.gate->mutex);
-    provider.gate->dispatchEnabled = true;
-}
-
-void retireProvider(LoadedProvider& provider) {
+ProviderBatch::Record ProviderBatch::stage(PluginModule plugin) {
+    auto& registry = Registry::instance();
+    auto record = std::make_shared<Registry::ProviderRecord>();
+    GrimPluginHandle handle;
     {
-        std::lock_guard lock(provider.gate->mutex);
-        provider.gate->accepting = false;
+        std::lock_guard lock(registry.tools_.mutex_);
+        handle = registry.nextHandle_++;
     }
-    GRIM::MMO::ProviderRegistry::instance().retire(provider.identity.name, provider.identity.instance);
-    GRIM::UI::retireProviderPanels(provider.panelLease);
+    plugin.descriptor.instance = plugin.descriptor.name + "#" + std::to_string(handle);
+    record->descriptor = std::make_shared<const GRIM::MMO::ProviderDescriptor>(std::move(plugin.descriptor));
+    auto& state = record->native.emplace(*record->descriptor);
+    state.handle = handle;
+    state.module = std::move(plugin.library);
+    state.panelLease->owner = record->descriptor->instance;
+    Registry::prepareTools(*record, readManifestTools(plugin.tools, *record->descriptor, handle, plugin.dispatch));
     {
-        std::unique_lock lock(provider.gate->mutex);
-        provider.gate->idle.wait(lock, [&] { return provider.gate->active == 0; });
+        std::lock_guard lock(registry.tools_.mutex_);
+        registry.validateNativeCandidateLocked(*record);
+        registry.records_.emplace(record->descriptor->name, record);
     }
-    {
-        std::lock_guard lock(provider.panelRequestsMutex);
-        for (auto& [id, request] : provider.panelRequests) request.cancelled->store(true);
-        provider.panelRequests.clear();
-    }
-    std::lock_guard lock(s_resourceMutex);
-    const auto& instance = provider.identity.instance;
-    s_systemTickSubscriptions.erase(instance);
+    return record;
 }
 
-void releaseInstance(LoadedProvider& provider) {
-    std::lock_guard lock(s_instanceMutex);
-    s_instances.erase(provider.handle);
+void ProviderBatch::initialize(const Record& record, decltype(&grim_plugin_init) init,
+                               decltype(&grim_plugin_shutdown) shutdown) {
+    auto& state = *record->native;
+    GRIM::UI::registerProviderPanelLease(state.handle, state.panelLease);
+    state.shutdown = shutdown;
+    const auto result = init ? init(&hostAPI(), state.handle) : GRIM_OK;
+    if (result != GRIM_OK)
+        throw std::runtime_error("Plugin initialization failed with result " + std::to_string(result));
 }
+
+std::vector<PluginLoadOutcome> ProviderBatch::load(const std::vector<std::filesystem::path>& libraries,
+                                                  OpenPlugin open) {
+    auto& registry = Registry::instance();
+    std::vector<PluginLoadOutcome> outcomes;
+    std::vector<Record> prepared;
+    std::vector<std::size_t> preparedOutcomes;
+    outcomes.reserve(libraries.size());
+    prepared.reserve(libraries.size());
+    preparedOutcomes.reserve(libraries.size());
+
+    try {
+        for (const auto& library : libraries) {
+            PluginLoadOutcome outcome{library, PluginLoadStatus::InvalidBundle, {}};
+            Record record;
+            try {
+                auto plugin = open(library, outcome.status);
+                const auto init = plugin.init;
+                const auto shutdown = plugin.shutdown;
+                outcome.status = PluginLoadStatus::RegistrationRejected;
+                record = stage(std::move(plugin));
+                outcome.status = PluginLoadStatus::InitializationFailed;
+                initialize(record, init, shutdown);
+                preparedOutcomes.push_back(outcomes.size());
+                prepared.push_back(std::move(record));
+            } catch (const std::exception& error) {
+                if (record) stop({record});
+                outcome.detail = error.what();
+            } catch (...) {
+                if (record) stop({record});
+                outcome.detail = "Plugin raised an unknown exception";
+            }
+            outcomes.push_back(std::move(outcome));
+        }
+
+        registry.publishPrepared(prepared);
+        for (std::size_t i = 0; i < prepared.size(); ++i) {
+            auto& outcome = outcomes[preparedOutcomes[i]];
+            if (prepared[i]->published) {
+                outcome.status = PluginLoadStatus::Loaded;
+            } else {
+                stop({prepared[i]});
+                outcome.status = PluginLoadStatus::RegistrationRejected;
+                outcome.detail = "Duplicate tool ID or alias";
+            }
+        }
+    } catch (...) {
+        stop(prepared);
+        throw;
+    }
+    return outcomes;
+}
+
+void ProviderBatch::stop(const std::vector<Record>& records) {
+    auto& registry = Registry::instance();
+    for (const auto& record : records) {
+        auto& gate = record->native->gate;
+        std::lock_guard lock(gate.mutex);
+        gate.state = CallGate::State::Stopping;
+    }
+    registry.unpublishPrepared(records);
+
+    for (auto it = records.rbegin(); it != records.rend(); ++it) {
+        const auto& record = *it;
+        auto& state = *record->native;
+        {
+            std::unique_lock lock(state.gate.mutex);
+            state.gate.idle.wait(lock, [&] { return state.gate.active == 0; });
+        }
+        GRIM::UI::retireProviderPanels(state.panelLease);
+        {
+            std::lock_guard lock(state.panelRequestsMutex);
+            for (auto& [id, request] : state.panelRequests) request.cancelled->store(true);
+            state.panelRequests.clear();
+        }
+        if (const auto shutdown = std::exchange(state.shutdown, nullptr)) {
+            try { shutdown(); }
+            catch (...) { LOG_ERROR("PluginAPI", "Plugin shutdown raised an exception: " + record->descriptor->name); }
+        }
+        {
+            std::lock_guard lock(registry.tools_.mutex_);
+            const auto found = registry.records_.find(record->descriptor->name);
+            if (found != registry.records_.end() && found->second == record)
+                registry.records_.erase(found);
+        }
+        state.module.reset();
+    }
+}
+
+std::size_t ProviderBatch::shutdown() {
+    auto& registry = Registry::instance();
+    std::vector<Record> records;
+    {
+        std::lock_guard lock(registry.tools_.mutex_);
+        for (const auto& [name, record] : registry.records_) {
+            if (record->native && record->native->module) records.push_back(record);
+        }
+    }
+    std::sort(records.begin(), records.end(), [](const Record& a, const Record& b) {
+        return a->native->handle < b->native->handle;
+    });
+    stop(records);
+    return records.size();
+}
+
+#ifdef GRIM_PLUGIN_BATCH_TESTS
+GrimPluginHandle ProviderBatch::loadFixture(const GRIM::MMO::ProviderDescriptor& descriptor,
+                                           const nlohmann::json& tools, GrimToolDispatch dispatch) {
+    auto record = stage(PluginModule{.descriptor = descriptor, .tools = tools, .dispatch = dispatch});
+    try {
+        initialize(record, nullptr, nullptr);
+        Registry::instance().publishPrepared({record});
+        if (!record->published) throw std::runtime_error("Fixture registration rejected");
+        return record->native->handle;
+    } catch (...) {
+        stop({record});
+        throw;
+    }
+}
+
+void ProviderBatch::stopFixture(GrimPluginHandle handle) {
+    auto& registry = Registry::instance();
+    Record fixture;
+    {
+        std::lock_guard lock(registry.tools_.mutex_);
+        for (const auto& [name, record] : registry.records_) {
+            if (record->native && !record->native->module && record->native->handle == handle) {
+                fixture = record;
+                break;
+            }
+        }
+    }
+    if (fixture) stop({fixture});
+}
+#endif
 
 void dispatchSystemTick(double deltaSeconds, double offsetSeconds) {
-    std::vector<SystemTickSubscription> subscribers;
-    {
-        std::lock_guard lock(s_resourceMutex);
-        subscribers.reserve(s_systemTickSubscriptions.size());
-        for (const auto& entry : s_systemTickSubscriptions) subscribers.push_back(entry.second);
-    }
-    for (const auto& subscriber : subscribers) {
-        ActiveCall active(subscriber.gate, true);
+    for (const auto& owner : ProviderRegistry::instance().readyNativeProviders()) {
+        auto& state = *owner;
+        ActiveCall active(state.gate, ActiveCall::Kind::Dispatch);
         if (!active.entered) continue;
-        try {
-            subscriber.callback(deltaSeconds, offsetSeconds, subscriber.userData);
-        } catch (...) {
-            LOG_ERROR("PluginAPI", "System tick callback raised an exception");
+        GrimSystemTickCallback callback;
+        void* data;
+        {
+            std::lock_guard lock(state.gate.mutex);
+            callback = state.tick;
+            data = state.tickData;
         }
+        if (!callback) continue;
+        try { callback(deltaSeconds, offsetSeconds, data); }
+        catch (...) { LOG_ERROR("PluginAPI", "System tick callback raised an exception"); }
     }
 }
 
