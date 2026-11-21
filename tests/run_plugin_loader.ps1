@@ -19,6 +19,8 @@ Set-Content -LiteralPath (Join-Path $output 'dependency.rsp') -Value $dependency
 $commands += @('cl @dependency.rsp', 'if errorlevel 1 exit /b %errorlevel%')
 foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     $folder = if ($fixture -in @('failed', 'legacy')) { 'rejected' } else { 'fixtures' }
+    $folder += '/' + $fixture
+    New-Item -ItemType Directory -Force -Path (Join-Path $output $folder) | Out-Null
     $argsForFixture = $common + @('/LD', ('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'), ('"' + (Join-Path $workspace 'tests\fixtures\plugin_shutdown_fixture.cpp') + '"'), ('/Fe:' + $folder + '\' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
     $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1638400 }
@@ -38,9 +40,11 @@ $cpuArgs = $common + '/DGRIM_BUILD_HOST'
 $cpuArgs += @('tests\plugin_shutdown_tests.cpp', 'core\plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $cpuArgs += '/Fe:plugin_shutdown_cpu_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'cpu-tests.rsp') -Value $cpuArgs -Encoding ascii
-$cpuFixture = $common + @('/LD', '/DFIXTURE_NAME=\"Declared-alpha\"', ('"' + (Join-Path $workspace 'tests\fixtures\plugin_shutdown_fixture.cpp') + '"'), '/Fe:fixtures\alpha.dll')
-Set-Content -LiteralPath (Join-Path $output 'cpu-alpha.rsp') -Value $cpuFixture -Encoding ascii
-$commands += @('cl @cpu-alpha.rsp', 'if errorlevel 1 exit /b %errorlevel%', 'cl @cpu-tests.rsp', 'if errorlevel 1 exit /b %errorlevel%', 'plugin_shutdown_cpu_tests.exe fixtures rejected', 'exit /b %errorlevel%')
+# Exercise the same native import with only the plugin-local dependency directory.
+$commands += @('mkdir "fixtures\alpha\dependencies"', 'if errorlevel 1 exit /b %errorlevel%',
+    'copy /y "hidden toolkit\grim_test_dependency.dll" "fixtures\alpha\dependencies\" >nul', 'if errorlevel 1 exit /b %errorlevel%',
+    'cl @cpu-tests.rsp', 'if errorlevel 1 exit /b %errorlevel%',
+    'plugin_shutdown_cpu_tests.exe fixtures rejected', 'exit /b %errorlevel%')
 Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
 Push-Location $output
 try {

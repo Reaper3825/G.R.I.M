@@ -71,8 +71,9 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
             g_hardwareInventory = startup;
             detectionMode = 0;
             std::error_code error;
-            fs::remove(folder / "system_info_plugin.dll", error);
-            fs::remove(folder / "system_info_plugin.tools.json", error);
+            fs::remove(folder / "system_info_plugin/system_info_plugin.dll", error);
+            fs::remove(folder / "system_info_plugin/system_info_plugin.tools.json", error);
+            fs::remove(folder / "system_info_plugin", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
@@ -102,8 +103,9 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     g_hardwareInventory.os_name = "startup cache";
     const auto hardware = hardwareInventoryJson(detectedInventory);
     check(hardwareInventoryJson(hardwareInventoryFromJson(hardware)) == hardware, "Hardware codec lost data");
-    fs::copy_file(pluginDirectory / "system_info_plugin.dll", folder / "system_info_plugin.dll");
-    fs::copy_file(pluginDirectory / "system_info_plugin.tools.json", folder / "system_info_plugin.tools.json");
+    fs::create_directory(folder / "system_info_plugin");
+    fs::copy_file(pluginDirectory / "system_info_plugin.dll", folder / "system_info_plugin/system_info_plugin.dll");
+    fs::copy_file(pluginDirectory / "system_info_plugin.tools.json", folder / "system_info_plugin/system_info_plugin.tools.json");
     const auto beforeLoad = detectionCalls();
     prepareDetection();
     PluginManager::initialize(folder.string());
@@ -216,8 +218,8 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     detectionMode = 1;
     prepareDetection();
     const auto oldInstance = resourceFor("System Information Plugin").provider.instance;
-    fs::last_write_time(folder / "system_info_plugin.dll",
-        fs::last_write_time(folder / "system_info_plugin.dll") + std::chrono::seconds(2));
+    fs::last_write_time(folder / "system_info_plugin/system_info_plugin.dll",
+        fs::last_write_time(folder / "system_info_plugin/system_info_plugin.dll") + std::chrono::seconds(2));
     PluginManager::checkForHotReload();
     const auto replacement = resourceFor("System Information Plugin");
     check(replacement.provider.instance != oldInstance && resourcesFor("System Information Plugin").size() == 3 &&
@@ -228,7 +230,9 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
           resourceFor("System Information Plugin", "gpu_1").state.at("data").at("name") == "Renamed GPU",
           "Replacement did not recover its own hardware state");
     const auto beforeRemoval = detectionCalls();
-    fs::remove(folder / "system_info_plugin.dll");
+    fs::remove(folder / "system_info_plugin/system_info_plugin.dll");
+    fs::remove(folder / "system_info_plugin/system_info_plugin.tools.json");
+    fs::remove(folder / "system_info_plugin");
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && !registry.isRegistered("system_info") && detectionCalls() == beforeRemoval &&
           g_hardwareInventory.os_name == "startup cache" && resourcesFor("System Information Plugin").empty(),

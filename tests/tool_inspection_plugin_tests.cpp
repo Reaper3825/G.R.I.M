@@ -25,8 +25,9 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
             ProviderRegistry::instance().retire("inspection-fixtures", "fixture-generation");
             api.reset();
             std::error_code error;
-            fs::remove(folder / "tool_inspection_plugin.dll", error);
-            fs::remove(folder / "tool_inspection_plugin.tools.json", error);
+            fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll", error);
+            fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json", error);
+            fs::remove(folder / "tool_inspection_plugin", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
@@ -44,8 +45,9 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     };
     check(snapshot().size() == baseline && snapshot("missing").empty(), "Empty/missing snapshot semantics incorrect");
     check(api->get_tool_snapshot(0, nullptr) == nullptr, "Invalid API identity accepted");
-    fs::copy_file(pluginDirectory / "tool_inspection_plugin.dll", folder / "tool_inspection_plugin.dll");
-    fs::copy_file(pluginDirectory / "tool_inspection_plugin.tools.json", folder / "tool_inspection_plugin.tools.json");
+    fs::create_directory(folder / "tool_inspection_plugin");
+    fs::copy_file(pluginDirectory / "tool_inspection_plugin.dll", folder / "tool_inspection_plugin/tool_inspection_plugin.dll");
+    fs::copy_file(pluginDirectory / "tool_inspection_plugin.tools.json", folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json");
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 3, "Inspection plugin did not register three tools");
     for (const auto* id : {"list_tools", "tool_info", "tool_stats"}) {
@@ -140,7 +142,9 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
           "Inspection result was truncated or rejected at the old 64-KiB message limit");
     ProviderRegistry::instance().retire(owner.name, owner.instance);
     check(snapshot("fixture_alias").empty(), "Removed alias retained stale snapshot");
-    fs::remove(folder / "tool_inspection_plugin.dll");
+    fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll");
+    fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json");
+    fs::remove(folder / "tool_inspection_plugin");
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && !registry.isRegistered("list_tools") && !registry.isRegistered("tool_info") &&
           !registry.isRegistered("tool_stats"), "Removing inspection DLL retained tools");

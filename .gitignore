@@ -470,3 +470,5 @@ cache/geospatial/*.sqlite-wal
 !/plugins/network_test_plugin/
 /plugins/network_test_plugin/*
 !/plugins/*_plugin/*_plugin.tools.json
+
+/deployed_plugins/

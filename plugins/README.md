@@ -12,8 +12,8 @@ tests use an isolated headless host import library.
 
 GeoSpatial Plugin owns the globe panel and streams Cesium content through the
 host viewport and bgfx context. On Windows, deployment places its runtime DLL
-dependencies under `plugins/dependencies/geospatial_plugin/`. The loader adds
-that directory for the duration of the plugin load.
+dependencies under `deployed_plugins/geospatial_plugin/dependencies/`. The
+loader copies them to the instance cache for native loading.
 
 API v3.14 adds guarded hide (`GRIM_UI_HIDE_CURRENT`). Like `ui.show`, `ui.hide`
 accepts optional `expected_runtime_id`; World Lab supplies it automatically when
@@ -36,7 +36,7 @@ GRIM_PLUGIN_OUTPUT_DIR can override it. Each plugin subdirectory is also a
 standalone CMake project.
 
 Normal host builds (including `cmake --build --preset release -j 100`) automatically
-deploy completed plugin libraries into the source tree's `plugins/` folder.
+deploy completed plugin bundles into `deployed_plugins/` under the GRIM root.
 Building just the `GRIM` target also builds and deploys its plugins. Deployment
 checks run even when linking is up to date, repairing missing/stale live files.
 Windows and macOS host builds use the same plugin catalog as the standalone
@@ -48,25 +48,27 @@ Mac build can use `cmake -S plugins -B build-plugins -DGRIM_DEPLOY_PLUGINS=ON`
 (plus the existing toolchain options), then `cmake --build build-plugins`.
 This does not build the host. Plugin visibility does not imply identical native
 device support: digital screen capture/automation still lacks a macOS backend.
-Identical DLLs are left untouched to avoid unnecessary hot reloads. Changed
-libraries are staged under a `.pending` filename and published by rename after
-linking completes; failure to publish fails the build.
+Each immediate child folder is named after its native library stem. On Windows,
+`deployed_plugins/voice_plugin/` contains `voice_plugin.dll` and
+`voice_plugin.tools.json`. Private runtime DLLs go in its `dependencies/` folder.
+Deployment leaves identical files untouched and marks the bundle pending while
+it publishes changes.
 
-Standalone builds default to **no deployment**, keeping test builds isolated.
-Opt in at configure time with `-DGRIM_DEPLOY_PLUGINS=ON`; set
-`-DGRIM_PLUGIN_DEPLOY_DIR=<folder>` to change the destination. Disable deployment
-for a host build with `-DGRIM_DEPLOY_PLUGINS=OFF`. A standalone targeted build
-uses `--target deploy_voice_plugin` (substitute the plugin target name) to build
-and deploy; its default all-target build also includes enabled deployment targets.
-Alternatively deploy a completed native library manually.
-The host reconciles this folder about once a second, including removals.
-A replacement that fails initialization or registry validation leaves the
-working plugin loaded. Replacements must retain the provider name.
+Standalone builds default to **no deployment**. Opt in with
+`-DGRIM_DEPLOY_PLUGINS=ON` and build `deploy_voice_plugin` or the default target.
+Use `-DGRIM_PLUGIN_DEPLOY_DIR=<folder>` to publish to a separate destination.
+Disable deployment with `-DGRIM_DEPLOY_PLUGINS=OFF`.
 
-The loader uses private copies, so Windows does not lock deployed source DLLs.
-Do not copy a library while its compiler/linker is still writing it. Publish a
-completed file by rename where possible. Keep non-plugin dependencies outside
-the scanned top-level folder.
+For manual deployment, place a complete folder under the watched root or use
+`deploy_plugin.cmake` with the completed library and its manifest. Remove the
+folder to unload the plugin. The loader reconciles the root about once a second.
+Replacements must retain the provider name. A failure after native cutover
+leaves that provider absent.
+
+Reconfiguring an existing build upgrades the former default deployment path.
+Old flat files can stay in place during cutover. If you have existing memory
+plugin data, stop the host before copying `plugins/memory_plugin_data/` into
+`deployed_plugins/memory_plugin/`. The plugin opens its data beside the library.
 
 See ../docs/PLUGIN_API.md for API ownership, reload behavior, limitations, and
 focused verification.
@@ -90,16 +92,15 @@ Validate the real DLL through the loader/API/registry in a temporary directory:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -FilesystemPluginDirectory .codex-build/filesystem-plugin/plugins
 
-Deploy `.codex-build/filesystem-plugin/plugins/filesystem_plugin.dll` into the
-GRIM root's `plugins/` folder only alongside a host and plugins rebuilt for API v8.
+Deploy the completed library and manifest to `deployed_plugins/filesystem_plugin/`
+with a host and plugins built for the same ABI.
 The loader discovers all five tools and the working-directory resource. Older
 API versions are rejected before initialization.
 
 The plugin starts in the process working directory each time it loads. `cd`
 changes only its private working directory, shared by its five tools, and reload
 resets that directory. Its `filesystem.directory` resource exposes a copied UTF-8
-path under resource ID `working_directory`. Failed reload preserves the current
-state; unload removes the resource. For isolated DLL lifecycle tests, run
+path under resource ID `working_directory`. Unload removes the resource. For isolated DLL lifecycle tests, run
 `tests/run_plugin_shutdown.ps1 -BuildFilesystemFixture`.
 
 Paths may be absolute or relative, may contain spaces,
@@ -123,8 +124,7 @@ The plugin imports no host C++ symbols. Non-Windows stubs remain unchanged.
     cmake --build .codex-build/application-plugin --config Release --target application_plugin --parallel 2
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -ApplicationPluginDirectory .codex-build/application-plugin/plugins
 
-Deploy `.codex-build/application-plugin/plugins/application_plugin.dll` into
-GRIM's `plugins/` folder after rebuilding the host for API v4.
+Deploy the completed library and manifest to `deployed_plugins/application_plugin/`.
 The compatibility test uses a controlled
 native launch sink and does not open applications or browsers.
 
@@ -156,7 +156,7 @@ The tests load the real DLL and exercise registration, Model invocation through
 ToolRegistry, arithmetic, structured errors, input limits, and provider removal.
 They do not start GRIM or a model. To publish the built DLL to the watched folder:
 
-    cmake -DPLUGIN_FILE=D:/G.R.I.M/.codex-build/calculator-plugin/plugins/calculator_plugin.dll -DDEPLOY_DIR=D:/G.R.I.M/plugins -P plugins/deploy_plugin.cmake
+    cmake -DPLUGIN_FILE=D:/G.R.I.M/.codex-build/calculator-plugin/plugins/calculator_plugin.dll -DPLUGIN_MANIFEST=D:/G.R.I.M/plugins/calculator_plugin/calculator_plugin.tools.json -DDEPLOY_DIR=D:/G.R.I.M/deployed_plugins -P plugins/deploy_plugin.cmake
 
 ## Utility plugin
 
@@ -171,8 +171,7 @@ clearing operation. Neither tool requires access to host state.
     cmake --build .codex-build/utility-plugin --config Release --target utility_plugin --parallel 2
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -FilesystemPluginDirectory .codex-build/filesystem-plugin/plugins -UtilityPluginDirectory .codex-build/utility-plugin/plugins
 
-Deploy `.codex-build/utility-plugin/plugins/utility_plugin.dll` into GRIM's
-`plugins/` folder. The host must be rebuilt from the migrated source to remove
+Deploy the completed library and manifest to `deployed_plugins/utility_plugin/`. The host must be rebuilt from the migrated source to remove
 its old `clean`/`help` registrations. An older host rejects the colliding batch
 without losing its working commands. The compatibility test checks exact results,
 policy metadata, old-host collisions, and removal through folder reconciliation.
@@ -189,8 +188,7 @@ usage, parameter, and example metadata and requires no confirmation.
     cmake --build .codex-build/tool-inspection-plugin --config Release --target tool_inspection_plugin --parallel 2
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -ToolInspectionPluginDirectory .codex-build/tool-inspection-plugin/plugins
 
-Deploy `.codex-build/tool-inspection-plugin/plugins/tool_inspection_plugin.dll`
-into GRIM's `plugins/` folder after rebuilding the host for API v4.
+Deploy the completed library and manifest to `deployed_plugins/tool_inspection_plugin/`.
 The plugin imports no host C++ symbols; snapshots contain metadata, not handlers.
 The snapshot codec is shared as `MMO/Core/Descriptors/ToolDescriptorJson.hpp`.
 
@@ -288,8 +286,8 @@ cmake --build .codex-build/ui-plugin --config Release --target ui_plugin --paral
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -UIPluginDirectory .codex-build/ui-plugin/plugins
 ```
 
-Deploy the completed `.codex-build/ui-plugin/plugins/ui_plugin.dll` into the
-application's `plugins/` folder only with a matching API v15 host and providers.
+Deploy the completed library and manifest to `deployed_plugins/ui_plugin/`
+with a matching host build.
 This plugin uses the panel operations introduced in v3.8. The new host no longer registers `console`, `toggle_settings`,
 `ui.show_surface`, or `ui.hide_surface`. Existing handler functions are retained.
 Surface lifecycle and OSINT findings panel handlers remain in the host.

@@ -31,14 +31,16 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
         ~Cleanup() {
             PluginManager::unloadAll();
             std::error_code error;
-            fs::remove(folder / "application_plugin.dll", error);
-            fs::remove(folder / "application_plugin.tools.json", error);
+            fs::remove(folder / "application_plugin/application_plugin.dll", error);
+            fs::remove(folder / "application_plugin/application_plugin.tools.json", error);
             fs::remove(folder / "application_aliases.json", error);
+            fs::remove(folder / "application_plugin", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    fs::copy_file(pluginDirectory / "application_plugin.dll", folder / "application_plugin.dll");
-    fs::copy_file(pluginDirectory / "application_plugin.tools.json", folder / "application_plugin.tools.json");
+    fs::create_directory(folder / "application_plugin");
+    fs::copy_file(pluginDirectory / "application_plugin.dll", folder / "application_plugin/application_plugin.dll");
+    fs::copy_file(pluginDirectory / "application_plugin.tools.json", folder / "application_plugin/application_plugin.tools.json");
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 6, "Application plugin did not publish six tools");
     auto catalogResult = registry.invoke("applications.list", "{}");
@@ -93,8 +95,8 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     matches(result("search", "  query  "), false, "updated:ERR_WEB_OPEN_FAILED: query", "ERR_WEB_OPEN_FAILED", "error");
     errorPrefix = "configured:";
     // Reload into a new DLL generation and launch using the matching application IDs.
-    fs::last_write_time(folder / "application_plugin.dll",
-        fs::last_write_time(folder / "application_plugin.dll") + std::chrono::seconds(2));
+    fs::last_write_time(folder / "application_plugin/application_plugin.dll",
+        fs::last_write_time(folder / "application_plugin/application_plugin.dll") + std::chrono::seconds(2));
     PluginManager::checkForHotReload();
     const auto reloaded = registry.invoke("applications.list", "{}").at("payload")
         .at("value").at("applications").at(0);
@@ -103,7 +105,9 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     check(reloaded.at("resource_id") == applicationId && reloaded.at("runtime_id") == app.at("runtime_id"),
           "Reload fixture did not retain matching application IDs");
     check(registry.invoke("applications.launch", launchArgs.dump()).at("status") == "completed", "Matching application IDs failed after reload");
-    fs::remove(folder / "application_plugin.dll");
+    fs::remove(folder / "application_plugin/application_plugin.dll");
+    fs::remove(folder / "application_plugin/application_plugin.tools.json");
+    fs::remove(folder / "application_plugin");
     PluginManager::checkForHotReload();
     for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
         check(group.provider.name != "Application Plugin", "DLL removal retained the application provider");

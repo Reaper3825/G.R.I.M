@@ -84,7 +84,8 @@ int main(int argc, char** argv) try {
     PluginManager::unloadAll();
     check(events.size() == 10, "Rejected plugin retained a loaded handle");
 
-    const auto invalid = std::filesystem::path(argv[2]) / "invalid.dll";
+    const auto invalid = std::filesystem::path(argv[2]) / "invalid" / "invalid.dll";
+    std::filesystem::create_directory(invalid.parent_path());
     {
         std::ofstream file(invalid, std::ios::binary);
         file << "not a native library";
@@ -98,6 +99,7 @@ int main(int argc, char** argv) try {
     PluginManager::unloadAll();
     std::filesystem::remove(invalid);
     std::filesystem::remove(invalidSidecar);
+    std::filesystem::remove(invalid.parent_path());
     const auto rejection = std::find_if(errors.begin(), errors.end(), [](const std::string& error) {
         return error.find("Rejected invalid.dll: Cannot load native library") != std::string::npos;
     });

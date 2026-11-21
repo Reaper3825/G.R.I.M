@@ -92,7 +92,22 @@ void runUIPluginTests(const std::filesystem::path& directory) {
     other.unload();
     if (directory.empty()) return;
     namespace fs = std::filesystem;
-    const auto folder = fs::absolute(directory);
+    const auto folder = fs::absolute(directory).parent_path() / "ui-plugin-test-deployment";
+    const auto bundle = folder / "ui_plugin";
+    fs::create_directories(bundle);
+    struct DeploymentCleanup {
+        fs::path bundle;
+        ~DeploymentCleanup() {
+            PluginManager::unloadAll();
+            std::error_code error;
+            fs::remove(bundle / "ui_plugin.dll", error);
+            fs::remove(bundle / "ui_plugin.tools.json", error);
+            fs::remove(bundle, error);
+            fs::remove(bundle.parent_path(), error);
+        }
+    } cleanup{bundle};
+    for (const auto* name : {"ui_plugin.dll", "ui_plugin.tools.json"})
+        fs::copy_file(directory / name, bundle / name, fs::copy_options::overwrite_existing);
     auto& registry = GRIM::MMO::ToolRegistry::instance();
     const auto baseline = registry.toolCount();
     PluginManager::initialize(folder.string());

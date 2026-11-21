@@ -8,9 +8,9 @@ void runInputPluginTests(const std::filesystem::path& directory) {
  auto check=[](bool ok,const char* message){ if(!ok) throw std::runtime_error(message); };
  namespace fs=std::filesystem;
  const auto folder=fs::absolute(directory).parent_path()/"input-plugin-test-deployment";
- fs::create_directories(folder);
- fs::copy_file(fs::absolute(directory)/"input_plugin.dll",folder/"input_plugin.dll",fs::copy_options::overwrite_existing);
- fs::copy_file(fs::absolute(directory)/"input_plugin.tools.json",folder/"input_plugin.tools.json",fs::copy_options::overwrite_existing);
+ fs::create_directories(folder / "input_plugin");
+ fs::copy_file(fs::absolute(directory)/"input_plugin.dll",folder/"input_plugin/input_plugin.dll",fs::copy_options::overwrite_existing);
+ fs::copy_file(fs::absolute(directory)/"input_plugin.tools.json",folder/"input_plugin/input_plugin.tools.json",fs::copy_options::overwrite_existing);
  auto& registry=GRIM::MMO::ToolRegistry::instance(); auto baseline=registry.toolCount();
  PluginManager::initialize(folder.string());
  check(registry.toolCount()==baseline+4,"Input DLL registration failed");
@@ -23,7 +23,9 @@ void runInputPluginTests(const std::filesystem::path& directory) {
  check(registry.invoke("move_mouse","bad").at("status") == "failed","Malformed move accepted");
  PluginManager::unloadAll(); check(registry.toolCount()==baseline,"Input tools survived unload");
  PluginManager::initialize(folder.string());
- fs::remove(folder/"input_plugin.dll"); PluginManager::checkForHotReload();
+ fs::remove(folder/"input_plugin/input_plugin.dll");
+ fs::remove(folder/"input_plugin/input_plugin.tools.json");
+ fs::remove(folder/"input_plugin");
+ PluginManager::checkForHotReload();
  check(registry.toolCount()==baseline,"Input tools survived removal"); PluginManager::unloadAll();
- fs::remove(folder/"input_plugin.tools.json");
 }

@@ -31,7 +31,7 @@ int main(int argc, char* argv[])
 
     auto ui = bootstrapUI(argc, argv);
 
-    PluginManager::initialize((std::filesystem::path(getGrimRootDir()) / "plugins").string());
+    PluginManager::initialize((std::filesystem::path(getGrimRootDir()) / "deployed_plugins").string());
     LOG_PHASE("Plugin manager initialized", true);
 
     WakeKey::start();

@@ -59,6 +59,33 @@ std::optional<PluginManager::Fingerprint> PluginManager::fingerprint(const std::
     }
 }
 
+std::optional<PluginManager::PluginFingerprint> PluginManager::fingerprintBundle(
+    const std::filesystem::path& library) {
+    const auto marker = library.parent_path() / ".deployment";
+    // Manual deployments may omit the marker. CMake replaces it atomically
+    // before and after publishing any changed files.
+    const auto readDeployment = [&]() -> std::optional<std::string> {
+        std::error_code error;
+        if (!std::filesystem::exists(marker, error))
+            return error ? std::nullopt : std::optional<std::string>{""};
+        std::ifstream input(marker);
+        std::string revision;
+        if (!std::getline(input, revision) || revision.empty() || revision == "pending")
+            return std::nullopt;
+        return revision;
+    };
+    const auto deployment = readDeployment();
+    if (!deployment) return std::nullopt;
+    const auto sidecar = toolManifestPath(library);
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(library, error) ||
+        !std::filesystem::is_regular_file(sidecar, error)) return std::nullopt;
+    const auto binary = fingerprint(library);
+    const auto manifest = fingerprint(sidecar);
+    if (!binary || !manifest || readDeployment() != deployment) return std::nullopt;
+    return PluginFingerprint{*binary, *manifest, *deployment};
+}
+
 namespace {
 std::filesystem::path createCacheDirectory() {
     std::random_device random;
@@ -107,7 +134,7 @@ void* loadLib(const std::filesystem::path& copy, const std::filesystem::path& so
 #ifdef _WIN32
     // Only register explicit directories for the duration of the native load.
     ScopedDllDirectory sourceDirectory(sourceFolder);
-    const auto dependencyPath = sourceFolder / "dependencies" / copy.stem();
+    const auto dependencyPath = copy.parent_path() / "dependencies";
     std::optional<ScopedDllDirectory> pluginDependencies;
     if (std::filesystem::is_directory(dependencyPath))
         pluginDependencies.emplace(dependencyPath);
@@ -179,15 +206,17 @@ void PluginManager::checkForHotReload() {
         if (error) throw std::filesystem::filesystem_error("Inspect plugins folder", pluginDir, error);
         if (exists) {
             for (const auto& entry : std::filesystem::directory_iterator(pluginDir)) {
-                if (entry.is_regular_file() && entry.path().extension() == pluginExtension &&
-                    entry.path().stem() != "core_plugin") files.push_back(entry.path());
+                const auto folder = entry.path();
+                const auto name = folder.filename();
+                if (name != "core_plugin" && entry.is_directory())
+                    files.push_back(folder / (name.string() + pluginExtension));
             }
         }
         // Complete the directory scan before removing anything. An access error
         // is not evidence that a loaded plugin was deleted.
         std::sort(files.begin(), files.end());
         std::unordered_set<std::string> present;
-        for (const auto& path : files) present.insert(path.filename().string());
+        for (const auto& path : files) present.insert(path.parent_path().filename().string());
         std::vector<std::string> deleted;
         for (const auto& [name, plugin] : loadedPlugins)
             if (!present.count(name)) deleted.push_back(name);
@@ -202,20 +231,18 @@ void PluginManager::checkForHotReload() {
             requests.swap(reloadRequests);
         }
         for (const auto& path : files) {
-            const auto name = path.filename().string();
-            const auto library = fingerprint(path);
-            const auto manifest = fingerprint(toolManifestPath(path));
-            if (!library || !manifest) continue; // Wait for a readable candidate pair.
-            const PluginFingerprint current{*library, *manifest};
+            const auto name = path.parent_path().filename().string();
+            const auto current = fingerprintBundle(path);
+            if (!current) continue; // Wait for a complete, readable deployment.
             const auto old = loadedPlugins.find(name);
             const bool requested = old != loadedPlugins.end() && requests.count(PluginAPI::instanceHandle(*old->second.provider));
-            if (!requested && old != loadedPlugins.end() && old->second.fingerprint == current) continue;
-            if (!requested && attempted.count(name) && attempted.at(name).fingerprint == current &&
+            if (!requested && old != loadedPlugins.end() && old->second.fingerprint == *current) continue;
+            if (!requested && attempted.count(name) && attempted.at(name).fingerprint == *current &&
                 attempted.at(name).surfaceRevision == surfaceRevision) continue;
             // Retry a rejection when another plugin changes the available surface:
             // its previous identity/alias collision may have disappeared.
-            attempted[name] = {current, surfaceRevision};
-            loadPlugin(path, current);
+            attempted[name] = {*current, surfaceRevision};
+            loadPlugin(path, *current);
         }
     } catch (const std::exception& error) {
         LOG_ERROR("PluginManager", std::string("Plugin reconciliation failed: ") + error.what());
@@ -229,7 +256,7 @@ void PluginManager::unloadAll() {
     reloadRequests.clear();
 }
 bool PluginManager::loadPlugin(const std::filesystem::path& path, const PluginFingerprint& stamp) {
-    const auto name = path.filename().string();
+    const auto name = path.parent_path().filename().string();
     LoadedPlugin candidate;
     try {
         candidate.cacheDirectory = createCacheDirectory();
@@ -240,7 +267,16 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const PluginFi
         std::filesystem::copy_file(manifest, manifestCopy);
         const auto copied = fingerprint(copy);
         const auto copiedManifest = fingerprint(manifestCopy);
-        if (fingerprint(path) != stamp.library || fingerprint(manifest) != stamp.manifest ||
+        const auto dependencies = path.parent_path() / "dependencies";
+        if (std::filesystem::is_directory(dependencies)) {
+            const auto cacheDependencies = candidate.cacheDirectory / "dependencies";
+            std::filesystem::create_directory(cacheDependencies);
+            for (const auto& dependency : std::filesystem::directory_iterator(dependencies)) {
+                if (dependency.is_regular_file() && dependency.path().extension() != ".pending")
+                    std::filesystem::copy_file(dependency.path(), cacheDependencies / dependency.path().filename());
+            }
+        }
+        if (fingerprintBundle(path) != stamp ||
             !copied || copied->hash != stamp.library.hash ||
             !copiedManifest || copiedManifest->hash != stamp.manifest.hash) {
             attempted.erase(name); // Retry once a complete write is visible.
@@ -281,7 +317,7 @@ bool PluginManager::loadPlugin(const std::filesystem::path& path, const PluginFi
         LOG_DEBUG("PluginManager", "Loaded plugin: " + name);
         return true;
     } catch (const std::exception& error) {
-        LOG_ERROR("PluginManager", "Rejected " + name + ": " + error.what());
+        LOG_ERROR("PluginManager", "Rejected " + path.filename().string() + ": " + error.what());
     } catch (...) {
         LOG_ERROR("PluginManager", "Exception initializing " + name);
     }

@@ -78,8 +78,8 @@ older DLLs must be rebuilt. Retired API fields are removed entirely; the current
 table does not preserve their former offsets. See [application ownership](APPLICATION_DISCOVERY.md)
 and [system information ownership](SYSTEM_INFO_RESOURCES.md).
 
-The host scans the immediate children of its plugins folder for native
-libraries (.dll, .so, or .dylib). A plugin exports `grim_plugin_init` and
+The host discovers native libraries (.dll, .so, or .dylib) in per-plugin
+folders under its watched root. A plugin exports `grim_plugin_init` and
 `grim_plugin_shutdown`. The loader checks the manifest ABI before opening the library.
 The loader rejects incompatible major versions and newer unsupported versions.
 
@@ -350,24 +350,22 @@ configured folder about once per second; explicit API reload requests are queued
 and serviced on a subsequent frame. There is no watcher thread executing lifecycle
 operations, and request_reload never unloads code from inside its callback.
 
-A complete directory scan reconciles additions, changed files, and deletions.
-A missing folder is treated as empty and can appear later. Directory access
-errors preserve the currently loaded set. Scanning is non-recursive and ignores
-directories and core_plugin libraries. Change detection includes modification
-time, size, and a content digest, so a replacement with a preserved timestamp is
-still detected. An unchanged rejected binary is not retried on every poll. It is reconsidered
-after another plugin changes the loaded surface, allowing a resolved identity or
-alias collision to recover without rewriting the rejected file.
+The loader scans immediate child folders in the watched root. Each folder name
+must match the native library stem and the manifest sits beside the library.
+A missing root is treated as empty. A scan error preserves the loaded set.
+Missing or unreadable files in an existing folder defer replacement. Removing
+the folder retires its instance.
 
-Each library is copied into an exclusively created temporary directory before
-loading. The source remains unlocked on Windows and can be replaced or deleted.
-A source/copy digest check rejects a file that changes during copying. Owned
-temporary directories are removed when their instance retires; a process crash
-can leave a temporary directory behind. Do not place companion libraries in the
-scanned top-level folder unless they are themselves GRIM plugins. Windows loads
-can resolve companion dependencies from the source folder; on Unix, dependencies
-must be resolvable through the normal loader paths (source-relative $ORIGIN
-dependencies are not relocated automatically).
+Change detection uses the library and manifest timestamps, sizes, and content
+digests. CMake also publishes a .deployment revision covering the whole bundle,
+including private dependencies. The loader skips bundles marked pending and
+rechecks the revision after copying. It retries an unchanged rejected bundle
+when another plugin changes the registry, which can resolve collisions.
+
+The loader copies the library, manifest, and private dependencies into an
+instance-specific temporary directory and removes it on retirement. On Windows,
+native loading searches the copied dependencies directory. On Unix, dependency
+resolution follows the platform loader's normal search rules.
 
 For a changed file, the loader reads and validates the manifest before
 cutover. The replacement must retain the declared provider name. Once the
@@ -502,29 +500,25 @@ The native plugins build without linking GRIM, importing host C++ symbols, or
 configuring the application. Use the standalone CMake entry point and existing
 installed dependencies:
 
-    cmake -S plugins -B .codex-build/plugins-standalone -G "Visual Studio 17 2022" -A x64
-    cmake --build .codex-build/plugins-standalone --config Release --target osint_plugin network_test_plugin --parallel 2
+    cmake -S plugins -B .codex-build/plugins-standalone -G "Visual Studio 17 2022" -A x64 -DGRIM_DEPLOY_PLUGINS=ON -DGRIM_PLUGIN_DEPLOY_DIR=.codex-build/plugins-standalone/deployed_plugins
+    cmake --build .codex-build/plugins-standalone --config Release --target deploy_osint_plugin deploy_network_test_plugin --parallel 2
 
 On Windows, nlohmann_json is discovered from the existing vcpkg_installed tree.
 Other platforms can supply its installed package through CMAKE_PREFIX_PATH.
 Nothing downloads or installs packages. Each plugin subdirectory can also be
 configured independently with its own build directory.
 
-Libraries are emitted under the build directory's plugins folder. Set
-GRIM_PLUGIN_OUTPUT_DIR to an explicit destination if needed. Host builds default
-`GRIM_DEPLOY_PLUGINS` to ON and publish completed outputs into
-`GRIM_PLUGIN_DEPLOY_DIR` (the source tree's `plugins/` folder by default).
-Deployment is a dependency of the GRIM target and is included in default builds.
-It checks content even without relinking, leaves identical files untouched, and
-uses a temporary `.pending` file plus rename so hot reload sees completed files.
-Publication failure fails the build. Only the plugin library is published;
-import libraries, PDBs, and dependency DLLs are not copied into the watched folder.
+Build outputs remain under the build directory's plugins folder by default.
+Deployment uses a separate watched root, deployed_plugins/ under the GRIM root.
+Host builds enable deployment by default. Standalone builds can opt in with
+-DGRIM_DEPLOY_PLUGINS=ON and build the default target or deploy_<plugin-target>.
+Set GRIM_PLUGIN_DEPLOY_DIR to publish to another root for tests or packaging.
 
-Standalone builds default to OFF. Opt in with `-DGRIM_DEPLOY_PLUGINS=ON` and build
-the default target or `deploy_<plugin-target>`; building only the library target
-does not deploy it. Set OFF explicitly to disable deployment for a host build.
-Manual installation remains possible by copying a completed library; remove the
-deployed file to unload it. See [build instructions](../plugins/README.md).
+The published folder contains the library, manifest, and selected private
+runtime DLLs. Identical files keep their timestamps. For manual deployment,
+place a complete folder under the watched root and use the deployment script
+for live updates. Remove the folder to unload the plugin.
+See [build instructions](../plugins/README.md).
 
 Logging passes through the plugin API using a private per-library bridge.
 ## Verification
@@ -544,7 +538,7 @@ application or training/runtime target.
 To inspect registrations from the independently built real plugins as well,
 without invoking scans or network tests:
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -PluginDirectory .codex-build/plugins-standalone/plugins
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_plugin_shutdown.ps1 -PluginDirectory .codex-build/plugins-standalone/deployed_plugins
 
 The Tools viewer uses the same descriptors, including argument format/schema
 and plugin source path. Its Usage type and Plugin dropdowns combine with search;
@@ -564,9 +558,9 @@ separate `utility_plugin`.
 On load, the plugin captures the process working directory as its base for
 relative paths. It publishes that path in the `working_directory` resource of
 kind `filesystem.directory`, with UTF-8 path and provider scope in its state.
-Tools and resources commit together. Reload captures the base directory for
-the new generation. Failed replacement keeps the current generation and
-directory. Removal withdraws the tools and resource.
+Reload captures the base directory for the new generation. A failure after
+cutover leaves the provider absent. Removing the deployed folder withdraws
+the tools and resource.
 
 The v7 API contains no host file-open/close/read/write/existence/deletion service
 or file-handle type. These tools operate directly through the plugin's C++
@@ -577,7 +571,7 @@ See [plugin build and deployment instructions](../plugins/README.md#filesystem-p
 The optional `-FilesystemPluginDirectory` argument to `tests/run_plugin_shutdown.ps1`
 exercises the built DLL in a private temporary folder, including metadata,
 absolute/relative navigation, paths with spaces, failed operations, nonrecursive
-removal, resource updates, failed replacement, reload, and DLL removal. Use
+removal, resource updates, failed replacement, reload, and plugin folder removal. Use
 `-BuildFilesystemFixture` to build an isolated fixture first. No application or model runs.
 
 ### Native calculator plugin
@@ -609,7 +603,7 @@ handlers and their possible host uses are documented in
 
 The optional `-UtilityPluginDirectory` argument to `tests/run_plugin_shutdown.ps1`
 tests exact result compatibility through the real DLL/API/registry, old-host
-registration collisions, and removal of the deployed DLL. See the
+registration collisions, and removal of the deployed plugin folder. See the
 [utility plugin instructions and remaining host boundaries](../plugins/README.md#utility-plugin).
 Tools requiring live host state remain built-in until the API can preserve their
 full behavior; stub or partial services are not used as migration substitutes.

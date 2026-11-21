@@ -31,16 +31,16 @@ class PluginDeploymentTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
 
-    def publish(self, source, destination, success=True):
+    def publish(self, source, destination, *options, success=True):
         return self.run_command("cmake", f"-DPLUGIN_FILE={source}",
-                                f"-DDEPLOY_DIR={destination}", "-P", str(SCRIPT), success=success)
+                                f"-DDEPLOY_DIR={destination}", *options, "-P", str(SCRIPT), success=success)
 
     def test_publish_repair_and_unchanged_timestamp(self):
         source = self.folder / "fixture.dll"
         source.write_bytes(b"completed plugin")
         destination = self.folder / "live plugins"
         self.publish(source, destination)
-        deployed = destination / source.name
+        deployed = destination / source.stem / source.name
         self.assertEqual(deployed.read_bytes(), source.read_bytes())
         # An unchanged build must not trigger another hot reload.
         os.utime(deployed, (946684800, 946684800))
@@ -53,23 +53,63 @@ class PluginDeploymentTests(unittest.TestCase):
         deployed.unlink()
         self.publish(source, destination)
         self.assertEqual(deployed.read_bytes(), source.read_bytes())
-        self.assertEqual(list(destination.glob("*.pending")), [])
+        self.assertEqual(list(destination.rglob("*.pending")), [])
 
     def test_missing_output_preserves_live_plugin(self):
         destination = self.folder / "live"
-        destination.mkdir()
-        deployed = destination / "fixture.dll"
+        deployed = destination / "fixture/fixture.dll"
+        deployed.parent.mkdir(parents=True)
         deployed.write_bytes(b"working plugin")
         self.publish(self.folder / "missing/fixture.dll", destination, success=False)
         self.assertEqual(deployed.read_bytes(), b"working plugin")
-        self.assertEqual(list(destination.iterdir()), [deployed])
+        self.assertEqual(list(deployed.parent.iterdir()), [deployed])
 
     def test_output_already_in_watched_folder(self):
-        source = self.folder / "fixture.dll"
+        source = self.folder / "fixture/fixture.dll"
+        source.parent.mkdir()
         source.write_bytes(b"completed plugin")
         self.publish(source, self.folder)
         self.assertEqual(source.read_bytes(), b"completed plugin")
-        self.assertEqual(list(self.folder.iterdir()), [source])
+        self.assertEqual(list(self.folder.iterdir()), [source.parent])
+        self.assertFalse((source.parent / ".deployment").exists())
+
+    def test_manifest_and_private_dependency_publish_as_one_revision(self):
+        binary = self.folder / "fixture.dll"
+        manifest = self.folder / "fixture.tools.json"
+        dependency = self.folder / "helper.dll"
+        destination = self.folder / "live"
+        bundle = destination / "fixture"
+        marker = bundle / ".deployment"
+        binary.write_bytes(b"completed plugin")
+        manifest.write_text("{}")
+        dependency.write_bytes(b"runtime library")
+        options = (f"-DPLUGIN_MANIFEST={manifest}", f"-DPLUGIN_RUNTIME_DLLS={dependency}")
+        self.publish(binary, destination, *options)
+        revision = marker.read_text()
+        self.assertNotEqual(revision, "pending\n")
+        self.assertEqual((bundle / binary.name).read_bytes(), binary.read_bytes())
+        self.assertEqual((bundle / manifest.name).read_bytes(), manifest.read_bytes())
+        deployed_dependency = bundle / "dependencies" / dependency.name
+        self.assertEqual(deployed_dependency.read_bytes(), dependency.read_bytes())
+
+        self.publish(binary, destination, *options)
+        self.assertEqual(marker.read_text(), revision)
+        dependency.write_bytes(b"updated runtime library")
+        self.publish(binary, destination, *options)
+        self.assertNotEqual(marker.read_text(), revision)
+        self.assertEqual(deployed_dependency.read_bytes(), dependency.read_bytes())
+
+        manifest.unlink()
+        revision = marker.read_text()
+        self.publish(binary, destination, *options, success=False)
+        self.assertEqual(marker.read_text(), revision)
+        self.assertEqual((bundle / manifest.name).read_text(), "{}")
+
+        manifest.write_text("{}")
+        marker.write_text("pending\n")
+        self.publish(binary, destination, f"-DPLUGIN_MANIFEST={manifest}")
+        self.assertNotEqual(marker.read_text(), "pending\n")
+        self.assertFalse(deployed_dependency.exists())
 
     def test_host_platforms_include_complete_standalone_catalog(self):
         # Evaluate the actual CMake platform conditions, intercepting target
@@ -126,7 +166,7 @@ class PluginDeploymentTests(unittest.TestCase):
         self.assertEqual((build / "deployment-enabled.txt").read_text(), "ON")
         command = ["cmake", "--build", str(build), "--config", "Release", "--target", "GRIM", "--parallel", "2"]
         self.run_command(*command)
-        libraries = [p for p in destination.iterdir() if p.suffix in (".dll", ".so", ".dylib")]
+        libraries = [p for p in destination.glob("*/*") if p.suffix in (".dll", ".so", ".dylib")]
         self.assertEqual(len(libraries), 1)
         deployed = libraries[0]
         output = build / "plugins" / deployed.name

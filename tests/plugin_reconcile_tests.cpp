@@ -32,19 +32,28 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     const auto baseline = registry.toolCount();
     const auto watched = fs::absolute(variants / "watched");
     fs::create_directories(watched);
+    const auto alpha = watched / "alpha";
+    const auto beta = watched / "beta";
     // Only remove the exact test fixture destinations owned by this test.
-    for (const auto* name : {"alpha.dll", "beta.dll", "alpha.tools.json", "beta.tools.json"}) fs::remove(watched / name);
+    for (const auto& directory : {alpha, beta}) {
+        const auto stem = directory.filename().string();
+        fs::remove(directory / (stem + ".dll"));
+        fs::remove(directory / (stem + ".tools.json"));
+        fs::remove(directory / ".deployment");
+        fs::remove(directory);
+    }
     PluginManager::initialize(watched.string());
     PluginManager::checkForHotReload(); // Empty folders are valid.
     const auto install = [&](const char* variant) {
-        fs::copy_file(variants / variant / "alpha.dll", watched / "alpha.dll", fs::copy_options::overwrite_existing);
-        fs::copy_file(variants / variant / "alpha.tools.json", watched / "alpha.tools.json", fs::copy_options::overwrite_existing);
+        fs::create_directory(alpha);
+        fs::copy_file(variants / variant / "alpha.dll", alpha / "alpha.dll", fs::copy_options::overwrite_existing);
+        fs::copy_file(variants / variant / "alpha.tools.json", alpha / "alpha.tools.json", fs::copy_options::overwrite_existing);
         PluginManager::checkForHotReload();
     };
     install("old");
     check(registry.toolCount() == baseline + 2, "Added file did not publish its complete batch");
     auto old = registry.getTool("Declared-alpha");
-    check(old && !old->provider.instance.empty() && old->provider.path == (watched / "alpha.dll").string(),
+    check(old && !old->provider.instance.empty() && old->provider.path == (alpha / "alpha.dll").string(),
           "Loaded generation/source identity missing");
     check(old->provider.version == "1.0" && old->provider.api_version == GRIM_API_VERSION, "Provider metadata did not come from the sidecar");
     const auto firstInstance = old->provider.instance;
@@ -81,7 +90,7 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(!provider() && registry.toolCount() == baseline, "Failed registration retained a provider");
     install("old");
     {
-        std::ofstream broken(watched / "alpha.dll", std::ios::binary | std::ios::trunc);
+        std::ofstream broken(alpha / "alpha.dll", std::ios::binary | std::ios::trunc);
         broken << "incomplete binary";
     }
     PluginManager::checkForHotReload();
@@ -90,10 +99,10 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     const auto beforeCutover = pluginTestLogSnapshot().size();
     ChangeObserver notification;
     registry.addListener(&notification);
-    const auto timestamp = fs::last_write_time(watched / "alpha.dll");
-    fs::copy_file(variants / "new" / "alpha.dll", watched / "alpha.dll", fs::copy_options::overwrite_existing);
-    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "alpha.tools.json", fs::copy_options::overwrite_existing);
-    fs::last_write_time(watched / "alpha.dll", timestamp);
+    const auto timestamp = fs::last_write_time(alpha / "alpha.dll");
+    fs::copy_file(variants / "new" / "alpha.dll", alpha / "alpha.dll", fs::copy_options::overwrite_existing);
+    fs::copy_file(variants / "new" / "alpha.tools.json", alpha / "alpha.tools.json", fs::copy_options::overwrite_existing);
+    fs::last_write_time(alpha / "alpha.dll", timestamp);
     PluginManager::checkForHotReload();
     registry.removeListener(&notification);
     check(!notification.callable, "Registry observer entered the provider before init");
@@ -120,8 +129,14 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(registry.getTool("Declared-alpha")->provider.instance != secondInstance, "Queued API reload request was not serviced");
 
     const auto beforeManifestEdit = registry.getTool("Declared-alpha")->provider.instance;
-    const auto sidecar = watched / "alpha.tools.json";
+    const auto sidecar = alpha / "alpha.tools.json";
+    const auto publication = alpha / ".deployment";
+    std::ofstream(publication) << "pending\n";
     std::ofstream(sidecar, std::ios::app) << ' ';
+    PluginManager::checkForHotReload();
+    check(registry.getTool("Declared-alpha")->provider.instance == beforeManifestEdit,
+          "In-progress deployment displaced the working provider");
+    std::ofstream(publication, std::ios::trunc) << "completed-revision\n";
     PluginManager::checkForHotReload();
     const auto afterManifestEdit = registry.getTool("Declared-alpha")->provider.instance;
     check(afterManifestEdit != beforeManifestEdit, "Manifest-only change did not reload the provider");
@@ -136,27 +151,33 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
 
     fs::create_directory(watched / "ignored.dll");
     PluginManager::checkForHotReload(); // A directory ending in .dll is not a plugin.
-    fs::copy_file(variants / "new" / "alpha.dll", watched / "beta.dll");
-    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "beta.tools.json");
+    fs::create_directory(beta);
+    fs::copy_file(variants / "new" / "alpha.dll", beta / "beta.dll");
+    fs::copy_file(variants / "new" / "alpha.tools.json", beta / "beta.tools.json");
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline + 1 &&
-          registry.getTool("Declared-alpha")->provider.path == (watched / "alpha.dll").string(),
+          registry.getTool("Declared-alpha")->provider.path == (alpha / "alpha.dll").string(),
           "Duplicate provider replaced its live owner");
-    fs::remove(watched / "alpha.dll"); // Source is unlocked while its private copy is loaded.
+    fs::remove(alpha / "alpha.dll"); // Source is unlocked while its private copy is loaded.
     PluginManager::checkForHotReload();
-    check(registry.getTool("Declared-alpha")->provider.path == (watched / "beta.dll").string(),
+    check(registry.getTool("Declared-alpha")->provider.path == (alpha / "alpha.dll").string(),
+          "Incomplete plugin folder displaced the working provider");
+    fs::remove(publication);
+    fs::remove(alpha);
+    PluginManager::checkForHotReload();
+    check(registry.getTool("Declared-alpha")->provider.path == (beta / "beta.dll").string(),
           "Unchanged rejected plugin was not retried after its provider collision disappeared");
-    fs::remove(watched / "beta.dll");
+    fs::remove(beta / "beta.dll");
+    fs::remove(beta / "beta.tools.json");
+    fs::remove(beta);
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline, "Deleted plugin retained tools");
     fs::remove(watched / "ignored.dll");
-    fs::remove(watched / "alpha.tools.json");
-    fs::remove(watched / "beta.tools.json");
     fs::remove(watched);
     PluginManager::checkForHotReload(); // Removal of the folder is a valid empty snapshot.
-    fs::create_directory(watched);
-    fs::copy_file(variants / "new" / "alpha.dll", watched / "alpha.dll");
-    fs::copy_file(variants / "new" / "alpha.tools.json", watched / "alpha.tools.json");
+    fs::create_directories(alpha);
+    fs::copy_file(variants / "new" / "alpha.dll", alpha / "alpha.dll");
+    fs::copy_file(variants / "new" / "alpha.tools.json", alpha / "alpha.tools.json");
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
     PluginManager::tick(); // Exercise the actual periodic frame path as well.
     check(registry.isRegistered("Declared-alpha"), "Plugin folder recreation was not discovered");
@@ -164,9 +185,9 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     PluginManager::tick();
     check(!provider(), "Provider identity survived plugin unload");
     check(registry.toolCount() == baseline, "Tick rediscovered plugins during teardown");
-    fs::remove(watched / "alpha.dll");
-    fs::remove(watched / "alpha.tools.json");
-    fs::remove(watched / "beta.tools.json");
+    fs::remove(alpha / "alpha.dll");
+    fs::remove(alpha / "alpha.tools.json");
+    fs::remove(alpha);
     fs::remove(watched);
 
     if (!actual.empty()) {

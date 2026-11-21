@@ -21,7 +21,8 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     const auto baseline = registry.toolCount();
     const auto folder = fs::temp_directory_path() / ("grim-runtime-plugins-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    const auto stateDirectory = folder / "memory_plugin_data";
+    const auto bundle = folder / "memory_plugin";
+    const auto stateDirectory = bundle / "memory_plugin_data";
     check(fs::create_directories(stateDirectory), "Cannot create runtime plugin fixture");
     struct Cleanup {
         fs::path folder;
@@ -40,9 +41,6 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     snapshot.close();
     check(!snapshot.fail(), "Cannot seed short-term memory");
 
-    const auto deploy = [&] {
-        fs::copy_file(memoryDirectory / "memory_plugin.dll", folder / "memory_plugin.dll");
-    };
     const auto recall = [&](const char* query) { return registry.invoke("recall", query); };
     const auto retrieve = [&](const char* prompt, const char* category) {
         const auto result = registry.invoke("memory.retrieve",
@@ -51,8 +49,8 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
         return result.at("payload");
     };
 
-    deploy();
-    fs::copy_file(memoryDirectory / "memory_plugin.tools.json", folder / "memory_plugin.tools.json");
+    fs::copy_file(memoryDirectory / "memory_plugin.dll", bundle / "memory_plugin.dll");
+    fs::copy_file(memoryDirectory / "memory_plugin.tools.json", bundle / "memory_plugin.tools.json");
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 3, "Memory provider registration count differs");
     for (const auto* id : {"remember", "recall"}) {
@@ -78,11 +76,9 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     check(recall("my color").at("status") == "failed", "Remembered record was committed before retrieval");
     check(recall("blue").at("message") == "[Memory] recent blue fact", "Short-term recall failed");
 
-    fs::remove(folder / "memory_plugin.dll");
-    PluginManager::checkForHotReload();
+    PluginManager::unloadAll();
     check(registry.toolCount() == baseline, "Unloaded memory provider retained tools");
-    deploy();
-    PluginManager::checkForHotReload();
+    PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 3, "Memory provider did not reload");
     check(recall("my color").at("status") == "failed", "Reload changed the pending record to long-term");
     check(recall("blue").at("message") == "[Memory] recent blue fact", "Reload lost short-term memory");

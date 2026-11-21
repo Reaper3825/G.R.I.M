@@ -23,13 +23,15 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
         ~Cleanup() {
             PluginManager::unloadAll();
             std::error_code error;
-            fs::remove(folder / "utility_plugin.dll", error);
-            fs::remove(folder / "utility_plugin.tools.json", error);
+            fs::remove(folder / "utility_plugin/utility_plugin.dll", error);
+            fs::remove(folder / "utility_plugin/utility_plugin.tools.json", error);
+            fs::remove(folder / "utility_plugin", error);
             fs::remove(folder, error);
         }
     } cleanup{folder};
-    fs::copy_file(pluginDirectory / "utility_plugin.dll", folder / "utility_plugin.dll");
-    fs::copy_file(pluginDirectory / "utility_plugin.tools.json", folder / "utility_plugin.tools.json");
+    fs::create_directory(folder / "utility_plugin");
+    fs::copy_file(pluginDirectory / "utility_plugin.dll", folder / "utility_plugin/utility_plugin.dll");
+    fs::copy_file(pluginDirectory / "utility_plugin.tools.json", folder / "utility_plugin/utility_plugin.tools.json");
 
     // A collision must reject the whole batch and retain the existing provider.
     ToolDescriptor clean;
@@ -52,7 +54,7 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
         const bool isHelp = std::string(id) == "help";
         check(tool && tool->provider.name == "Utility Plugin" &&
               tool->provider.type == GRIM::MMO::ToolProviderType::Plugin &&
-              fs::path(tool->provider.path) == folder / "utility_plugin.dll" &&
+              fs::path(tool->provider.path) == folder / "utility_plugin/utility_plugin.dll" &&
               tool->parameters.empty() &&
               tool->is_informational == isHelp && tool->needs_confirmation != isHelp &&
               tool->category == (isHelp ? "information" : "system"), "Utility metadata changed policy or provider");
@@ -75,7 +77,9 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
               help.at("payload").empty(),
               "help result differs from static help with retired entries removed");
     }
-    fs::remove(folder / "utility_plugin.dll");
+    fs::remove(folder / "utility_plugin/utility_plugin.dll");
+    fs::remove(folder / "utility_plugin/utility_plugin.tools.json");
+    fs::remove(folder / "utility_plugin");
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && !registry.isRegistered("clean") && !registry.isRegistered("help"),
           "Removing utility DLL retained registrations");

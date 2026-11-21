@@ -63,22 +63,28 @@ function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switc
 }
 $fixtureSource = '"' + (Join-Path $workspace 'tests/fixtures/plugin_shutdown_fixture.cpp') + '"'
 foreach ($fixture in @('alpha', 'beta')) {
-    $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:fixtures/' + $fixture + '.dll'))
+    $bundle = 'fixtures/' + $fixture
+    New-Item -ItemType Directory -Force -Path (Join-Path $output $bundle) | Out-Null
+    $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $bundle + '/' + $fixture + '.dll'))
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
-    Write-FixtureManifest 'fixtures' $fixture ('Declared-' + $fixture)
+    Write-FixtureManifest $bundle $fixture ('Declared-' + $fixture)
 }
 foreach ($fixture in @('failed', 'legacy')) {
-    $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:rejected/' + $fixture + '.dll'))
+    $bundle = 'rejected/' + $fixture
+    New-Item -ItemType Directory -Force -Path (Join-Path $output $bundle) | Out-Null
+    $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $bundle + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
     $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1638400 }
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
-    Write-FixtureManifest 'rejected' $fixture ('Declared-' + $fixture) -ApiVersion $apiVersion
+    Write-FixtureManifest $bundle $fixture ('Declared-' + $fixture) -ApiVersion $apiVersion
 }
 foreach ($folder in @('integration', 'integration-rejected')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output $folder) | Out-Null
 }
 foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     $folder = if ($fixture -in @('failed', 'legacy')) { 'integration-rejected' } else { 'integration' }
+    $folder += '/' + $fixture
+    New-Item -ItemType Directory -Force -Path (Join-Path $output $folder) | Out-Null
     $argsForFixture = $common + @('/LD','/DFIXTURE_TOOLS',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $folder + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
     $apiVersion = if ($fixture -eq 'legacy') { 393216 } else { 1638400 }

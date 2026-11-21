@@ -16,7 +16,7 @@ namespace PluginAPI { struct LoadedProvider; }
 // are queued so a plugin never unloads itself from inside its own callback.
 class PluginManager {
 public:
-    static void initialize(const std::string& folder = "plugins");
+    static void initialize(const std::string& folder = "deployed_plugins");
     static void checkForHotReload();
     static void tick();
     static void requestReload(GrimPluginHandle instance);
@@ -33,6 +33,7 @@ private:
     struct PluginFingerprint {
         Fingerprint library;
         Fingerprint manifest;
+        std::string deployment;
         bool operator==(const PluginFingerprint&) const = default;
     };
     struct LoadedPlugin {
@@ -52,6 +53,7 @@ private:
     static inline std::unordered_set<GrimPluginHandle> reloadRequests;
     static inline std::chrono::steady_clock::time_point nextPoll;
     static std::optional<Fingerprint> fingerprint(const std::filesystem::path& path);
+    static std::optional<PluginFingerprint> fingerprintBundle(const std::filesystem::path& library);
     static bool loadPlugin(const std::filesystem::path& path, const PluginFingerprint& fingerprint);
     static void retire(LoadedPlugin& plugin);
     static void unloadPlugin(const std::string& name);
