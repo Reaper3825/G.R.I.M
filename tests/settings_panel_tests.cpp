@@ -42,8 +42,8 @@ struct Module {
         return init(&api, instance);
     }
     void publish() {
-        require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "Settings provider publish failed");
+        require(GRIM::MMO::ProviderRegistry::instance().publishResourceFixture(
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}), "Settings provider publish failed");
     }
     void close() {
         if (!handle) return;

@@ -12,7 +12,7 @@ template<class F> void rejects(F fn) { bool threw = false; try { fn(); } catch (
 int main() try {
     auto& registry = ProviderRegistry::instance();
     ProviderDescriptor owner{ToolProviderType::Plugin, "Applications fixture", "one", ""};
-    check(registry.publish(owner, {}), "publish");
+    check(registry.publishResourceFixture(owner), "publish");
     const auto publisher = [&](const ProviderDescriptor& identity) {
         return [&, identity](const auto& resources) { return registry.replaceResources(identity, "application", resources); };
     };
@@ -56,13 +56,13 @@ int main() try {
     check(registry.resourceVersion() == before && registry.snapshot().resourceCount() == 1, "invalid batch partially published");
     auto replacement = owner; replacement.instance = "two";
     registry.retire(owner.name, owner.instance);
-    check(registry.publish(replacement, {}), "replacement");
+    check(registry.publishResourceFixture(replacement), "replacement");
     check(registry.snapshot().resourceCount() == 0, "replacement retained old resources");
     rejects([&] { catalog.request("refresh", Json::object()); });
     check(registry.snapshot().resourceCount() == 0, "retired catalog republished");
     registry.retire(replacement.name, replacement.instance);
     owner.instance = "three";
-    check(registry.publish(owner, {}), "pagination provider");
+    check(registry.publishResourceFixture(owner), "pagination provider");
     primary.clear();
     for (int i = 0; i < 180; ++i) primary.push_back({"fixture", std::to_string(i), "Application " + std::to_string(i), "fixture", "target", ""});
     Catalog paged({{"many", [&] { return primary; }}}, [](const auto&) {}, publisher(owner));
@@ -78,7 +78,7 @@ int main() try {
     check(observed.size() == 180 && registry.snapshot().resourceCount() == 180, "pagination hid registered resources");
     registry.retire(owner.name, owner.instance);
     owner.instance = "four";
-    check(registry.publish(owner, {}), "failed backend provider");
+    check(registry.publishResourceFixture(owner), "failed backend provider");
     Catalog unavailable({{"unavailable", []() -> std::vector<Application> { throw std::runtime_error("offline"); }}}, [](const auto&) {}, publisher(owner));
     for (int i = 0; i < 2; ++i) {
         const auto failed = unavailable.request("refresh", Json::object());

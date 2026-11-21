@@ -96,6 +96,7 @@ nlohmann::json ToolRegistry::invoke(const std::string& name, const std::string& 
         default:
             return makeToolResult(false, "Invalid tool execution mode", "ERR_TOOL_EXECUTION_MODE", "");
     }
+    ProviderRegistry::Record owner;
     std::shared_ptr<Entry> entry;
     std::string id;
     {
@@ -105,13 +106,14 @@ nlohmann::json ToolRegistry::invoke(const std::string& name, const std::string& 
         id = resolveLocked(name);
         if (id.empty()) return makeToolResult(false, "Unknown command: " + name, "ERR_UNKNOWN_CMD", "");
         const auto* indexed = tool_index_.at(id);
-        entry = providers_.records_.at(indexed->provider->name)->tools.at(id);
+        owner = providers_.records_.at(indexed->provider->name);
+        entry = owner->tools.at(id);
         if (options.require_canonical_model && (id != name || entry->descriptor.usage_type != ToolUsage::Model))
             return makeToolResult(false, "Canonical Model tool required", "ERR_TOOL_NOT_MODEL", "");
     }
     nlohmann::json result;
     try {
-        result = entry->handler(arguments, options.wait_for_completion);
+        result = owner->native->invokeTool(id, arguments, options.wait_for_completion);
     } catch (const std::exception& error) {
         result = makeToolResult(false, "[Error] Exception while running command: " + name + ": " + error.what(),
                                 "ERR_CMD_EXCEPTION", "");

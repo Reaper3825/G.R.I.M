@@ -538,7 +538,6 @@ in place.
 Focused checks:
 
 ```powershell
-./tests/run_world_tool_dispatch.ps1
 ./tests/run_ui_input_foundation.ps1 -TextWorld
 ./tests/run_plugin_shutdown.ps1 -BuildUIFixture
 ```

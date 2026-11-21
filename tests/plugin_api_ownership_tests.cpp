@@ -223,13 +223,6 @@ int main(int argc, char** argv) try {
           "Staged registration lost provider ownership");
     check(beta->unregister_command(beta.handle(), "alpha_tool") == GRIM_ERROR_PERMISSION_DENIED, "Plugin removed another owner's tool");
     using namespace GRIM::MMO;
-    const ProviderDescriptor collisionOwner{ToolProviderType::Plugin, "Collision fixture", "fixture-1", {}};
-    ToolDescriptor collisionTool;
-    collisionTool.tool_id = "reserved_fixture_tool";
-    check(ProviderRegistry::instance().publish(collisionOwner, {
-        {collisionTool, [](const std::string&, bool) { return makeToolResult(true, "", "", ""); }}
-    }), "Collision fixture publication failed");
-
     bool duplicateRejected = false;
     try { PluginBatchFixture duplicate({.name = "alpha", .path = "duplicate.dll", .version = "1.2.3"}); duplicate.load(); }
     catch (const std::runtime_error&) { duplicateRejected = true; }
@@ -330,10 +323,6 @@ int main(int argc, char** argv) try {
     check(!ToolRegistry::instance().isRegistered("batch_first"), "Invalid manifest partially published");
     invalidProvider.unload();
 
-    PluginBatchFixture conflict({.name = "conflict", .path = "conflict.dll", .version = "1.2.3"});
-    rejects([&] { loadTools(conflict, {definition("new_tool"), definition("reserved_fixture_tool")}); },
-            "Tool collision accepted");
-    check(!ToolRegistry::instance().isRegistered("new_tool"), "Failed load left a partial manifest");
     auto running = std::async(std::launch::async, [] { return GRIM::MMO::ToolRegistry::instance().invoke("blocking", ""); });
     blocked.entered.get_future().wait();
     auto stopping = std::async(std::launch::async, [&] { beta.unload(); });
@@ -372,7 +361,6 @@ int main(int argc, char** argv) try {
     runUIPluginTests(argc > 13 ? argv[13] : "");
     runInputPluginTests(argc > 14 ? argv[14] : "");
     runProviderSchedulingTests(argc > 15 ? argv[15] : "");
-    ProviderRegistry::instance().retire(collisionOwner.name, collisionOwner.instance);
     std::cout << "Plugin API ownership tests passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

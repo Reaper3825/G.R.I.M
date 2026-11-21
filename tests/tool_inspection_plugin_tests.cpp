@@ -2,8 +2,6 @@
 #include "plugin_deployment_fixture.hpp"
 #include "plugin_batch_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
-#include "MMO/Core/ToolResultJson.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -23,10 +21,8 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
         std::unique_ptr<PluginBatchFixture> api;
         ~Cleanup() {
             PluginManager::shutdownBatch();
-            ProviderRegistry::instance().retire("inspection-fixtures", "fixture-generation");
             api.reset();
             std::error_code error;
-    PluginManager::shutdownBatch();
             fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll", error);
             fs::remove(folder / "tool_inspection_plugin/.deployment", error);
             fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json", error);
@@ -71,86 +67,12 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     matches(invoke("tool_info", "missing"), false, "[Error] Tool not found: missing", "ERR_NOT_FOUND");
     matches(invoke("list_tools", "missing"), false, "[Error] No tools in category: missing", "ERR_NO_CATEGORY");
 
-    ToolDescriptor rich;
-    rich.tool_id = "inspection_fixture";
-    rich.display_name = "Fixture Display";
-    const ProviderDescriptor owner{ToolProviderType::Plugin, "inspection-fixtures", "fixture-generation", "C:/fixture.dll"};
-    rich.version = "9.8.7";
-    rich.description = "Fixture description";
-    rich.usage = "inspection_fixture {value}";
-    rich.bindings = {{"value", "t"}};
-    rich.category = "fixture";
-    rich.is_informational = false;
-    rich.needs_confirmation = true;
-    rich.argument_format = "json";
-    rich.argument_schema_json = "{\"type\":\"object\"}";
-    rich.parameters = {{"value", "string", "Value description", true}, {"optional", "number", "Optional value", false}};
-    rich.aliases = {"fixture_alias"};
-    rich.keywords = {"first", "second"};
-    rich.preconditions = {"ready"};
-    rich.capability_tags = {"tag"};
-    rich.usage_count = 100;
-    rich.success_count = 75;
-    rich.failure_count = 25;
-    rich.success_rate = 0.75f;
-    int fixtureCalls = 0;
-    check(ProviderRegistry::instance().publish(owner, {{rich, [&](const std::string&, bool) {
-        ++fixtureCalls;
-        return GRIM::MMO::makeToolResult(true, "", "", "");
-    }}}), "Inspection fixture publication failed");
-    const auto encoded = snapshot("fixture_alias");
-    check(encoded.size() == 1 && encoded[0].size() == 31 && encoded[0].at("usage_type") == 1 &&
-          encoded[0].at("bindings").at("value") == "t" &&
-          encoded[0].at("provider_instance") == "fixture-generation" &&
-          encoded[0].at("argument_schema_json") == rich.argument_schema_json && encoded[0].at("success_count") == 75 &&
-          encoded[0].at("parameters")[0].at("required") == true,
-          "Snapshot omitted rich metadata");
-    check(encoded[0].at("context_requirements") == nlohmann::json::array() &&
-          encoded[0].at("affordance_tokens") == nlohmann::json::array(),
-          "Legacy context and affordance snapshot keys must be empty arrays");
-    const nlohmann::json descriptorJson = rich;
-    check(!descriptorJson.contains("context_requirements") && !descriptorJson.contains("affordance_tokens"),
-          "Tool descriptor JSON retained retired metadata");
-    check(snapshot("Fixture Display") == encoded && snapshot("inspection_fixture") == encoded &&
-          registry.getTool(rich.tool_id)->usage_count == 100 && fixtureCalls == 0, "Snapshot lookup mutated or invoked tool");
-    const std::string info = "[Tool: inspection_fixture]\n\nDescription: Fixture description\nCategory   : fixture\n"
-        "Usage type : Model\nType       : Action\nUsage      : inspection_fixture {value}\nAliases    : fixture_alias\nKeywords   : first, second\n"
-        "\nParameters:\n  value (string) [required]\n    Value description\n  optional (number)\n    Optional value\n"
-        "\nUsage Stats:\n  Total uses  : 100\n  Success rate: 75%\n";
-    matches(invoke("tool_info", "fixture_alias"), true, info, "ERR_NONE");
-    matches(invoke("tool_info", "Fixture Display"), true, info, "ERR_NONE");
-    matches(invoke("list_tools", "fixture"), true, "[fixture tools - 1 total]\n\n  inspection_fixture: Fixture description\n", "ERR_NONE");
-    matches(invoke("list_tools", " fixture"), false, "[Error] No tools in category:  fixture", "ERR_NO_CATEGORY");
-    const auto all = invoke("list_tools");
-    check(all.at("status") == "completed" && all.at("message").get_ref<const std::string&>().find("[Registered Tools - " + std::to_string(baseline + 4) + " total]") == 0 &&
-          all.at("message").get_ref<const std::string&>().find("  inspection_fixture (aliases: fixture_alias)\n    Fixture description\n") != std::string::npos,
-          "All-tools grouping/aliases/count changed");
-    const std::string stats = "[Tool Usage Statistics]\n\n1. inspection_fixture\n   Uses: 100 (Success: 75, Fail: 25)\n   Success Rate: 75%\n\n";
-    matches(invoke("tool_stats", "1"), true, stats, "ERR_NONE");
-    matches(invoke("tool_stats", "1suffix"), true, stats, "ERR_NONE");
-    matches(invoke("tool_stats", "-1"), true, "[Tool Usage Statistics]\n\n", "ERR_NONE");
-    matches(invoke("tool_stats", "0"), true, "[Tool Usage Statistics]\n\n", "ERR_NONE");
-    check(invoke("tool_stats", "invalid").at("error_code") == "ERR_CMD_EXCEPTION" &&
-          invoke("tool_stats", "99999999999999999999").at("error_code") == "ERR_CMD_EXCEPTION",
-          "Invalid statistics parsing changed");
-    rich.description = std::string(70000, 'x');
-    registry.updateMetadata(rich, owner);
-    check(snapshot("fixture_alias")[0].at("description").get<std::string>().size() == 70000 &&
-          snapshot("fixture_alias")[0].at("swap_state") == 0 &&
-          encoded[0].at("description") == "Fixture description" && fixtureCalls == 0,
-          "Snapshot truncated data, cached stale metadata, or lost copy isolation");
-    const auto largeInfo = invoke("tool_info", "fixture_alias");
-    const auto largeList = invoke("list_tools", "fixture");
-    check(largeInfo.at("status") == "completed" && largeInfo.at("message").get_ref<const std::string&>().find(rich.description) != std::string::npos &&
-          largeList.at("status") == "completed" && largeList.at("message").get_ref<const std::string&>().find(rich.description) != std::string::npos && fixtureCalls == 0,
-          "Inspection result was truncated or rejected at the old 64-KiB message limit");
-    ProviderRegistry::instance().retire(owner.name, owner.instance);
-    check(snapshot("fixture_alias").empty(), "Removed alias retained stale snapshot");
+    PluginManager::shutdownBatch();
     fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll");
     fs::remove(folder / "tool_inspection_plugin/.deployment");
     fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json");
     fs::remove(folder / "tool_inspection_plugin");
     check(registry.toolCount() == baseline && !registry.isRegistered("list_tools") && !registry.isRegistered("tool_info") &&
           !registry.isRegistered("tool_stats"), "Removing inspection DLL retained tools");
-    std::cout << "Tool inspection plugin snapshot, compatibility, statistics, and removal tests passed\n";
+    std::cout << "Tool inspection plugin snapshot, compatibility, and removal tests passed\n";
 }

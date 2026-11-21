@@ -46,8 +46,8 @@ struct Fixture {
         calendar->attachToProvider(instance);
     }
     void publish() {
-        require(MMO::ProviderRegistry::instance().publish(
-            {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "Owner publication failed");
+        require(MMO::ProviderRegistry::instance().publishResourceFixture(
+            {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}), "Owner publication failed");
     }
     ~Fixture() {
         MMO::ProviderRegistry::instance().retire(providerName, lease->owner);
@@ -168,8 +168,8 @@ void runNativeCalendarDllTests(const char* dllPath) {
             return callback(&api, instance);
         }
         void publish() {
-            require(MMO::ProviderRegistry::instance().publish(
-                {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}), "DLL provider publish failed");
+            require(MMO::ProviderRegistry::instance().publishResourceFixture(
+                {MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}), "DLL provider publish failed");
         }
         void close() {
             if (!handle) return;

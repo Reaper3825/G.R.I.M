@@ -8,18 +8,15 @@ target_link_libraries(calculator_plugin PRIVATE nlohmann_json::nlohmann_json)
 grim_configure_plugin(calculator_plugin
     TOOL_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/calculator_plugin.tools.json")
 
-option(GRIM_CALCULATOR_TESTS "Build focused calculator plugin/registry tests" OFF)
+option(GRIM_CALCULATOR_TESTS "Build calculator plugin ABI and manifest tests" OFF)
 if(GRIM_CALCULATOR_TESTS)
     enable_testing()
     add_executable(calculator_plugin_tests
-        "${GRIM_PLUGIN_ROOT}/tests/calculator_plugin_tests.cpp"
-        "${GRIM_PLUGIN_ROOT}/MMO/Core/Registries/ProviderRegistry.cpp"
-        "${GRIM_PLUGIN_ROOT}/MMO/Core/ToolResultJson.cpp"
-        "${GRIM_PLUGIN_ROOT}/MMO/Core/Registries/ToolRegistry.cpp")
+        "${GRIM_PLUGIN_ROOT}/tests/calculator_plugin_tests.cpp")
     target_compile_features(calculator_plugin_tests PRIVATE cxx_std_20)
     target_include_directories(calculator_plugin_tests PRIVATE "${GRIM_PLUGIN_ROOT}"
         "${GRIM_PLUGIN_ROOT}/vcpkg_installed/x64-windows/include")
-    target_compile_definitions(calculator_plugin_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN GRIM_PROVIDER_REGISTRY_TESTS)
+    target_compile_definitions(calculator_plugin_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(calculator_plugin_tests PRIVATE nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
     add_dependencies(calculator_plugin_tests calculator_plugin)
     add_test(NAME calculator_plugin_tests COMMAND calculator_plugin_tests $<TARGET_FILE:calculator_plugin>)

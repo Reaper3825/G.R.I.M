@@ -32,7 +32,7 @@ void runLiveWorldUITests() {
     };
     frame({});
     check(view.session().world().document().entities.size() == initialRooms, "Live UI startup projection mismatch");
-    check(registry.publish(provider, {}), "UI fixture registration failed");
+    check(registry.publishResourceFixture(provider), "UI fixture registration failed");
     frame({});
     check(view.session().world().document().entities.size() == initialRooms + 1, "Published provider room did not appear automatically");
     check(renderedTestText.find("Live UI fixture") != std::string::npos, "Automatic provider room not drawn");

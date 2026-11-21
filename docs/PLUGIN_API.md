@@ -318,7 +318,8 @@ remains valid for teardown logging through shutdown. The loader then
 invalidates the handle and unloads the DLL.
 
 Lifecycle operations run on the host frame thread outside plugin callbacks.
-Cached tool handlers and tick snapshots share the instance's call gate.
+Tool calls retain the selected provider instance and use its shared dispatcher.
+Tool dispatch, reply release, and tick callbacks use the instance's call gate.
 
 The migrated OSINT plugin joins outstanding scans at shutdown. The network
 plugin joins its coordinator, which owns worker joins and network cleanup.
@@ -513,10 +514,8 @@ without invoking scans or network tests:
 
 The Tools viewer uses the same descriptors, including argument format/schema
 and plugin source path. Its Usage type and Plugin dropdowns combine with search;
-plugin choices are derived from current registry providers, including built-ins,
-and refresh on plugin registration/removal. Its focused host UI regression is:
-
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -Tools
+plugin choices are derived from current registry providers and refresh when
+plugins register or unload.
 
 ### Filesystem migration
 
@@ -558,7 +557,7 @@ byte offset). The plugin bounds input length and recursive parsing, rejects
 non-finite results, and keeps C++ parser exceptions within the plugin boundary.
 
 See the [calculator plugin instructions](../plugins/README.md#calculator-plugin)
-for the standalone build and DLL/ToolRegistry tests.
+for the standalone build and DLL ABI and manifest tests.
 
 ### Utility migration and compatibility boundary
 
@@ -573,8 +572,8 @@ handlers and their possible host uses are documented in
 [Retired agent tools](RETIRED_AGENT_TOOLS.md); they are not pending plugin migrations.
 
 The optional `-UtilityPluginDirectory` argument to `tests/run_plugin_shutdown.ps1`
-tests exact result compatibility through the real DLL/API/registry, old-host
-registration collisions, and removal of the deployed plugin folder. See the
+tests exact result compatibility through the real DLL/API/registry and removal
+of the deployed plugin folder. See the
 [utility plugin instructions and remaining host boundaries](../plugins/README.md#utility-plugin).
 Tools requiring live host state remain built-in until the API can preserve their
 full behavior; stub or partial services are not used as migration substitutes.

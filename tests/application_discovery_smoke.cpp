@@ -13,7 +13,7 @@ int main() try {
     }
     auto& registry = GRIM::MMO::ProviderRegistry::instance();
     const GRIM::MMO::ProviderDescriptor provider{GRIM::MMO::ToolProviderType::Plugin, "Discovery smoke", "fixture", ""};
-    if (!registry.publish(provider, {})) throw std::runtime_error("Cannot publish smoke provider");
+    if (!registry.publishResourceFixture(provider)) throw std::runtime_error("Cannot publish smoke provider");
     GRIM::Applications::Catalog catalog({{backend.name, [&] { return apps; }}},
         [](const auto&) { throw std::runtime_error("Smoke test must never launch applications"); },
         [&](const auto& resources) { return registry.replaceResources(provider, "application", resources); });

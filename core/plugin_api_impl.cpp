@@ -5,7 +5,6 @@
 // function table. These are the actual implementations that plugins call.
 // ============================================================================
 
-#include "MMO/Core/ToolResultJson.hpp"
 #include "plugin_api_impl.hpp"
 #include "plugin_notifications.hpp"
 #include "logger.hpp"
@@ -26,7 +25,6 @@
 #include <sstream>
 #include <cstdlib>
 #include <chrono>
-#include <condition_variable>
 #include <mutex>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
@@ -39,6 +37,7 @@ namespace PluginAPI {
 
 using GRIM::MMO::ProviderRegistry;
 using CallGate = ProviderRegistry::CallGate;
+using ActiveCall = CallGate::ActiveCall;
 
 static std::unordered_map<void*, std::string> s_allocated_strings;
 static std::atomic<uint64_t> s_next_panel_request = 1;
@@ -95,24 +94,6 @@ static std::string copyText(const char* text, bool required = false, size_t maxB
     if (size > maxBytes || (required && size == 0)) throw std::invalid_argument("Invalid text size");
     return {text, size};
 }
-struct ActiveCall {
-    enum class Kind { HostService, Dispatch };
-    CallGate& gate;
-    bool entered = false;
-    explicit ActiveCall(CallGate& value, Kind kind = Kind::HostService) : gate(value) {
-        std::lock_guard lock(gate.mutex);
-        if (gate.state == CallGate::State::Ready ||
-            (kind == Kind::HostService && gate.state == CallGate::State::Initializing)) {
-            ++gate.active;
-            entered = true;
-        }
-    }
-    ~ActiveCall() {
-        if (!entered) return;
-        std::lock_guard lock(gate.mutex);
-        if (--gate.active == 0) gate.idle.notify_all();
-    }
-};
 static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
                                                      const char* version) {
     using namespace GRIM::MMO;
@@ -160,35 +141,15 @@ static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
     return out;
 }
 
-static std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
+static std::vector<GRIM::MMO::ToolDescriptor> readManifestTools(
     const nlohmann::json& entries, const GRIM::MMO::ProviderDescriptor& identity,
-    GrimPluginHandle handle, GrimToolDispatch dispatch) {
+    GrimToolDispatch dispatch) {
     if (!entries.is_array() || entries.size() > 256 || (!entries.empty() && !dispatch))
         throw std::invalid_argument("Invalid tool manifest entries or missing dispatcher");
-    std::vector<GRIM::MMO::ToolRegistration> tools;
+    std::vector<GRIM::MMO::ToolDescriptor> tools;
     tools.reserve(entries.size());
     for (const auto& entry : entries) {
-        auto descriptor = decodeManifestTool(entry, identity.version.c_str());
-        auto invoke = [handle, dispatch, id = descriptor.tool_id](const std::string& arguments,
-                             bool waitForCompletion) -> nlohmann::json {
-            using GRIM::MMO::makeToolResult;
-            const auto owner = providerFor(handle);
-            if (!owner) return makeToolResult(false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE", "");
-            ActiveCall active(owner->gate, ActiveCall::Kind::Dispatch);
-            if (!active.entered)
-                return makeToolResult(false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE", "");
-            const GrimToolCall call{.arguments = arguments.c_str(), .arguments_size = arguments.size(),
-                                    .wait_for_completion = waitForCompletion ? 1u : 0u};
-            const auto reply = dispatch(id.c_str(), &call);
-            const std::unique_ptr<const char, decltype(reply.release)> bytes(reply.release ? reply.json : nullptr,
-                                                                            reply.release);
-            if (reply.delivery == GRIM_OK && bytes && reply.size) {
-                auto result = nlohmann::json::parse(bytes.get(), bytes.get() + reply.size, nullptr, false);
-                if (!result.is_discarded()) return result;
-            }
-            return makeToolResult(false, "Plugin did not return a JSON result", "ERR_PLUGIN_RESULT", "");
-        };
-        tools.push_back({std::move(descriptor), std::move(invoke)});
+        tools.push_back(decodeManifestTool(entry, identity.version.c_str()));
     }
     return tools;
 }
@@ -200,7 +161,7 @@ static GrimResult api_replace_resources(GrimPluginHandle self, const char* kind,
         const auto owner = providerFor(self);
         if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         ActiveCall active(owner->gate);
-        if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!active) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         if (!json || !size || size > 64 * 1024 * 1024) throw std::invalid_argument("Invalid resource payload");
         const auto resourceKind = copyText(kind, true, 256);
         const auto values = nlohmann::json::parse(json, json + size);
@@ -243,7 +204,7 @@ static const char* api_execute_command(GrimPluginHandle self, const char* comman
         const auto owner = providerFor(self);
         if (!owner) return nullptr;
         ActiveCall active(owner->gate);
-        if (!active.entered) return nullptr;
+        if (!active) return nullptr;
         auto [cmd, arg] = GRIMInput::parseInput(command_text);
         return allocateString(GRIM::MMO::ToolRegistry::instance().invoke(cmd, arg).dump());
     } catch (...) {
@@ -298,7 +259,7 @@ static GrimResult api_subscribe_system_tick(GrimPluginHandle self,
         const auto owner = providerFor(self);
         if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         ActiveCall active(owner->gate);
-        if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+        if (!active) return GRIM_ERROR_PLUGIN_NOT_LOADED;
         std::lock_guard lock(owner->gate.mutex);
         if (owner->tick) return GRIM_ERROR_ALREADY_EXISTS;
         owner->tick = callback;
@@ -350,7 +311,7 @@ static const char* api_ui_panel_service(GrimPluginHandle self, GrimUIPanelOperat
         const auto owner = providerFor(self);
         if (!owner) return nullptr;
         ActiveCall active(owner->gate, ActiveCall::Kind::Dispatch);
-        if (!active.entered) return nullptr;
+        if (!active) return nullptr;
         if (operation > GRIM_UI_HIDE_CURRENT) return nullptr;
         if (operation == GRIM_UI_POLL || operation == GRIM_UI_CANCEL) {
             if (panel_key || !request_id) return nullptr;
@@ -450,8 +411,9 @@ ProviderBatch::Record ProviderBatch::stage(PluginModule plugin) {
     auto& state = record->native.emplace(*record->descriptor);
     state.handle = handle;
     state.module = std::move(plugin.library);
+    state.dispatch = plugin.dispatch;
     state.panelLease->owner = record->descriptor->instance;
-    Registry::prepareTools(*record, readManifestTools(plugin.tools, *record->descriptor, handle, plugin.dispatch));
+    Registry::prepareTools(*record, readManifestTools(plugin.tools, *record->descriptor, state.dispatch));
     {
         std::lock_guard lock(registry.tools_.mutex_);
         registry.validateNativeCandidateLocked(*record);
@@ -609,7 +571,7 @@ void dispatchSystemTick(double deltaSeconds, double offsetSeconds) {
     for (const auto& owner : ProviderRegistry::instance().readyNativeProviders()) {
         auto& state = *owner;
         ActiveCall active(state.gate, ActiveCall::Kind::Dispatch);
-        if (!active.entered) continue;
+        if (!active) continue;
         GrimSystemTickCallback callback;
         void* data;
         {

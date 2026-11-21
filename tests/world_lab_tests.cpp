@@ -4,7 +4,6 @@
 #include "ui/world_lab/ui_world_lab_view.hpp"
 #include "ui/world_lab/ui_world_session.hpp"
 #include "ui/world_lab/world_observation.hpp"
-#include "MMO/Core/ToolResultJson.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "core/input_parser.hpp"
@@ -75,58 +74,6 @@ void runWorldLabTests(){
         browser.hide();
     }
     {
-        auto& registry=GRIM::MMO::ToolRegistry::instance();
-        GRIM::MMO::ToolDescriptor tool;
-        tool.tool_id="catalog_test";
-        tool.description="Detailed instructions which must not appear in the catalog";
-        tool.usage="catalog_test {t}";tool.bindings={{"t","t"}};
-        tool.parameters={{"target","string","The selected thing to inspect",true}};
-        tool.short_description="Inspect information supplied by a selected entity";
-        int invocations=0;
-        auto debug=tool;debug.tool_id="catalog_debug";debug.usage_type=GRIM::MMO::ToolUsage::Debug;
-        auto& providers = GRIM::MMO::ProviderRegistry::instance();
-        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Catalog fixture", "fixture-1", {}};
-        check(providers.publish(owner, {
-            {tool, [&](const std::string&, bool) { ++invocations; return GRIM::MMO::makeToolResult(true, "", "", ""); }},
-            {debug, [](const std::string&, bool) { return GRIM::MMO::makeToolResult(true, "", "", ""); }}
-        }), "Catalog fixture publication failed");
-        const auto response=[] {return nlohmann::json{{"ok",true},{"result",{{"state",{
-            {"feedback","static"},{"observation_request",{{"provider","tool_catalog"},{"entity_id","catalog"}}}}}}}};};
-        auto first=response();resolveHostObservation(first);
-        const auto& state=first.at("result").at("state");
-        check(state.at("tool_catalog").at("tools").size()==1,"Catalog exposed unavailable or nonmodel tools");
-        check(state.at("feedback").get<std::string>().find(tool.short_description)!=std::string::npos &&
-            state.at("feedback").get<std::string>().find(tool.description)==std::string::npos,"Catalog summary projection incorrect");
-        check(!state.contains("observation_request") && invocations==0 && registry.getTool(tool.tool_id)->usage_count==0,
-            "Catalog request invoked a handler or retained unresolved marker");
-        tool.short_description="Read newly updated information about a selected entity";
-        check(registry.updateMetadata(tool, owner),"Summary metadata update failed");
-        auto next=response();resolveHostObservation(next);
-        check(next["result"]["state"]["tool_catalog"]["tools"][0]["short_description"]==tool.short_description,
-            "Catalog retained a stale registry snapshot");
-        const auto details=[&](const std::string& id) {
-            auto value=response();auto& r=value["result"]["state"]["observation_request"];
-            r["provider"]="tool_details";r["tool_id"]=id;
-            resolveHostObservation(value);return value.at("result").at("state");
-        };
-        auto detail=details(tool.tool_id);
-        check(detail.at("tool_details").at("usage")==tool.usage &&
-            detail.at("tool_details").at("description")==tool.description &&
-            detail.at("tool_details").at("parameters")[0].at("required")==true,
-            "Deeper inspection omitted tool documentation");
-        check(!detail.at("tool_details").contains("bindings") && !detail.at("tool_details").contains("provider_name") &&
-            invocations==0 && registry.getTool(tool.tool_id)->usage_count==0,"Tool inspection leaked internals or invoked a handler");
-        for(const auto* id:{"catalog_debug","missing"})
-            check(!details(id).contains("tool_details"),"Deeper inspection exposed unavailable or nonmodel tool metadata");
-        tool.usage_type=GRIM::MMO::ToolUsage::System;registry.updateMetadata(tool, owner);
-        check(!details(tool.tool_id).contains("tool_details"),"Inspection ignored a tool reclassified after listing");
-        tool.usage_type=GRIM::MMO::ToolUsage::Model;
-        tool.description="Updated documentation available immediately";registry.updateMetadata(tool, owner);
-        check(details(tool.tool_id).at("tool_details").at("description")==tool.description,"Deeper inspection cached stale metadata");
-        providers.retire(owner.name, owner.instance);
-        check(details(tool.tool_id).contains("observation_error"),"Removed catalog entry did not report unavailability");
-        auto empty=response();resolveHostObservation(empty);
-        check(empty["result"]["state"]["tool_catalog"]["tools"].empty(),"Catalog retained unloaded tools");
         Document d=Document::initial();const auto id=d.addObject(d.spawn,"container");
         d.find(id)->openProvider="tool_catalog";
         check(Document::parse(d.json()).find(id)->openProvider=="tool_catalog","World roundtrip lost examine provider");

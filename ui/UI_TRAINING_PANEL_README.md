@@ -81,12 +81,6 @@ discovery, inspection, visibility, and bring-to-front operations. See
 [UI panel operations](../docs/ui/PANEL_OPERATIONS.md) for the keys, completion
 semantics, and remaining plugin migration boundary.
 
-Focused host-only validation:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/run_ui_input_foundation.ps1 -Tools
-```
-
 ## Tokenizer diagnostics
 
 `core/grim_text_server_api.hpp` defines the shared public and worker endpoint

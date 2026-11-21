@@ -1,6 +1,6 @@
-param([switch]$WorldLab, [switch]$TextWorld, [switch]$Tools, [switch]$ModelWorkspace, [switch]$DataHub)
+param([switch]$WorldLab, [switch]$TextWorld, [switch]$ModelWorkspace, [switch]$DataHub)
 $ErrorActionPreference = 'Stop'
-if ($ModelWorkspace) { $WorldLab = $true; $Tools = $true }
+if ($ModelWorkspace) { $WorldLab = $true }
 $workspace = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $workspace '.codex-build/ui-input-tests'
 New-Item -ItemType Directory -Force -Path $output | Out-Null
@@ -33,10 +33,6 @@ if ($DataHub) {
     $sources += 'DataCollection/dataset_stream.cpp', 'DataCollection/dataset_catalog.cpp', 'DataCollection/dataset_target.cpp', 'DataCollection/dataset_creation_service.cpp', 'DataCollection/concept_generator.cpp', 'DataCollection/io/dataset_io_json.cpp', 'DataCollection/io/concept_block_io_flatbuffer.cpp'
     if (-not $ModelWorkspace) { $sources += 'MMO/Core/Registries/ModelRegistry.cpp', 'ui/primitives/ui_progress_bar.cpp' }
     if (-not ($WorldLab -or $TextWorld)) { $sources += 'ui/world_lab/world_document.cpp' }
-}
-if ($Tools) {
-    $sources += 'ui/training_panel/ui_training_tools_view.cpp', 'tests/ui_training_tools_tests.cpp'
-    $arguments += '/DGRIM_TOOLS_VIEW_TESTS'
 }
 if ($WorldLab -or $TextWorld) {
     $sources += 'ui/world_lab/world_actions.cpp', 'ui/world_lab/ui_world_actions.cpp'

@@ -123,8 +123,7 @@ Minimum useful descriptor fields:
 - `aliases`, `keywords`, `capability_tags`
 - `success_stats` / reward stats
 
-Current `ToolDescriptor` plus `ToolRegistration` is the canonical publication
-contract. Metadata alone does not register an executable tool.
+Executable tools require a manifest descriptor and a native provider dispatcher.
 
 ### Hot-swappable tool rules
 

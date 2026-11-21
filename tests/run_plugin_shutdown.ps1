@@ -110,7 +110,7 @@ $testArgs = $common + '/DGRIM_BUILD_HOST'
 $testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
-$apiArgs = $common + @('/DGRIM_BUILD_HOST', '/DGRIM_PLUGIN_BATCH_TESTS', '/DGRIM_PROVIDER_REGISTRY_TESTS')
+$apiArgs = $common + @('/DGRIM_BUILD_HOST', '/DGRIM_PLUGIN_BATCH_TESTS')
 $apiArgs += @('tests/plugin_api_ownership_tests.cpp','tests/plugin_batch_tests.cpp','tests/filesystem_plugin_tests.cpp','tests/utility_plugin_tests.cpp','tests/application_plugin_tests.cpp','tests/tool_inspection_plugin_tests.cpp','tests/system_info_plugin_tests.cpp','ui/world_lab/world_document.cpp','tests/runtime_plugin_tests.cpp','tests/provider_scheduling_tests.cpp','tests/ui_plugin_tests.cpp','tests/input_plugin_tests.cpp','core/plugin_api_impl.cpp','core/plugin_manager.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/SessionContextManager.cpp','console_history.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 if ($BuildSchedulingFixtures -or $SchedulePluginDirectory) {
     $apiArgs += @('/DGRIM_NATIVE_UI_TEST_HOST', ('/I"' + $workspace + '/ui"'), ('/I"' + $workspace + '/external/bgfx.cmake/bgfx/include"'))
@@ -124,10 +124,6 @@ if ($BuildInputFixture) {
     $syntaxArgs += '"' + (Join-Path $workspace 'plugins/input_plugin/input_service.cpp') + '"'
 }
 Set-Content -LiteralPath (Join-Path $output 'plugin-syntax.rsp') -Value $syntaxArgs -Encoding ascii
-$registryArgs = $common + @('/DGRIM_BUILD_HOST', '/DGRIM_PROVIDER_REGISTRY_TESTS')
-$registryArgs += @('tests/tool_registry_tests.cpp','MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp','MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/ToolGapPlanner.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
-$registryArgs += '/Fe:tool_registry_tests.exe'
-Set-Content -LiteralPath (Join-Path $output 'registry.rsp') -Value $registryArgs -Encoding ascii
 if ($BuildApplicationFixture) {
     $applicationFixture = Join-Path $output 'application-fixture'
     New-Item -ItemType Directory -Force -Path $applicationFixture | Out-Null
@@ -170,9 +166,7 @@ $commands = @('@echo off',('call "' + $devcmd + '" -arch=x64 -host_arch=x64 >nul
     'cl @replacement-legacy.rsp','if errorlevel 1 exit /b %errorlevel%',
     'cl @api.rsp','if errorlevel 1 exit /b %errorlevel%',
     $pluginTestCommand,'if errorlevel 1 exit /b %errorlevel%',
-    'cl @plugin-syntax.rsp','if errorlevel 1 exit /b %errorlevel%',
-    'cl @registry.rsp','if errorlevel 1 exit /b %errorlevel%',
-    'tool_registry_tests.exe','if errorlevel 1 exit /b %errorlevel%')
+    'cl @plugin-syntax.rsp','if errorlevel 1 exit /b %errorlevel%')
 Set-Content -LiteralPath (Join-Path $output 'test.cmd') -Value $commands -Encoding ascii
 if ($BuildInputFixture) {
     $commands = $commands[0..2] + @('cl @input-fixture.rsp','if errorlevel 1 exit /b %errorlevel%') + $commands[3..($commands.Length - 1)]

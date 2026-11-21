@@ -151,9 +151,8 @@ Build and test only this plugin using the existing toolchain:
     cmake --build .codex-build/calculator-plugin --config Release --target calculator_plugin_tests --parallel 2
     ctest --test-dir .codex-build/calculator-plugin -C Release --output-on-failure
 
-The tests load the real DLL and exercise registration, Model invocation through
-ToolRegistry, arithmetic, structured errors, input limits, and provider removal.
-They do not start GRIM or a model. To publish the built DLL to the watched folder:
+The tests load the DLL and check its manifest, ABI version checks, and dispatch
+error handling. To publish the built DLL:
 
     cmake -DPLUGIN_FILE=D:/G.R.I.M/.codex-build/calculator-plugin/plugins/calculator_plugin.dll -DPLUGIN_MANIFEST=D:/G.R.I.M/plugins/calculator_plugin/calculator_plugin.tools.json -DDEPLOY_DIR=D:/G.R.I.M/deployed_plugins -P plugins/deploy_plugin.cmake
 

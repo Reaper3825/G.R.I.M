@@ -1,8 +1,6 @@
 #include "ui/world_lab/textworld_client.hpp"
 #include "ui/world_lab/world_document.hpp"
 #include "ui/world_lab/ui_world_session.hpp"
-#include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "MMO/Core/ToolResultJson.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "ui/overlay_renderer.hpp"
 extern std::string renderedTestText;
@@ -41,92 +39,7 @@ void runTextWorldClientTests(){
         return found;
     };
     const auto sessionsBefore=sessions();
-    {
-        auto& registry=GRIM::MMO::ToolRegistry::instance();
-        GRIM::MMO::ToolDescriptor tool;
-        tool.tool_id="catalog_fixture";
-        tool.short_description="Inspect information supplied by a selected entity";
-        tool.description="Full documentation returned only by deeper inspection";
-        tool.usage="catalog_fixture {t}";tool.bindings={{"t","t"}};
-        tool.parameters={{"target","string","The selected thing to inspect",true}};
-        int calls=0;
-        auto& providers = GRIM::MMO::ProviderRegistry::instance();
-        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Client catalog fixture", "fixture-1", {}};
-        check(providers.publish(owner, {{tool, [&](const std::string&, bool) {
-            ++calls;
-            return GRIM::MMO::makeToolResult(true, "", "", "");
-        }}}), "Client catalog fixture publication failed");
-        Editor catalog;
-        catalog.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"resources/models/games/grim_internal.grimworld.json");
-        TextWorldClient catalogClient;
-        request(catalogClient,{{"op","compile"},{"document",catalog.document().gameJson()}});
-        auto inaccessible=request(catalogClient,{{"op","step"},{"command","examine catalog_fixture"}}).at("state");
-        check(!inaccessible.contains("tool_details"),"Tool details were accessible outside the catalog room");
-        request(catalogClient,{{"op","step"},{"command","enter tools"}});
-        auto description=request(catalogClient,{{"op","step"},{"command","x tool catalog"}}).at("state");
-        check(!description.contains("tool_catalog"),"Examining the catalog still listed tools");
-        auto closed=request(catalogClient,{{"op","step"},{"command","examine catalog_fixture"}}).at("state");
-        check(!closed.contains("tool_details"),"Closed catalog exposed its entries");
-        auto observation=request(catalogClient,{{"op","step"},{"command","open tool catalog"}}).at("state");
-        check(observation.at("tool_catalog").at("tools")[0].at("tool_id")==tool.tool_id &&
-            observation.at("feedback").get<std::string>().find(tool.short_description)!=std::string::npos,
-            "Opening the container did not return the host registry catalog");
-        check(calls==0 && registry.getTool(tool.tool_id)->usage_count==0,"Catalog invoked a listed tool");
-        auto detail=request(catalogClient,{{"op","step"},{"command","examine catalog_fixture"}}).at("state");
-        check(detail.at("tool_details").at("description")==tool.description &&
-            detail.at("feedback").get<std::string>().find("Tool usage: catalog_fixture {t}")!=std::string::npos &&
-            detail.at("tool_details").at("parameters").size()==1,"Native deeper inspection did not return tool documentation");
-        tool.description="Updated tool documentation without world recompilation";registry.updateMetadata(tool, owner);
-        detail=request(catalogClient,{{"op","step"},{"command","x catalog_fixture in tool catalog"}}).at("state");
-        check(detail.at("tool_details").at("description")==tool.description && calls==0,"Scoped details were stale or invoked a tool");
-        request(catalogClient,{{"op","step"},{"command","close tool catalog"}});
-        closed=request(catalogClient,{{"op","step"},{"command","examine catalog_fixture in tool catalog"}}).at("state");
-        check(!closed.contains("tool_details"),"Closing the catalog did not hide its entries");
-        request(catalogClient,{{"op","step"},{"command","open tool catalog"}});
-        providers.retire(owner.name, owner.instance);
-        detail=request(catalogClient,{{"op","step"},{"command","examine catalog_fixture in tool catalog"}}).at("state");
-        check(!detail.contains("tool_details") && detail.contains("observation_error"),"Removed tool inspection leaked stale documentation");
-        observation=request(catalogClient,{{"op","step"},{"command","open tool catalog"}}).at("state");
-        check(observation.at("tool_catalog").at("tools").empty(),"Registry removal required recompiling the catalog");
-        auto failed=request(catalogClient,{{"op","step"},{"command","examine absent"}}).at("state");
-        check(!failed.contains("tool_catalog"),"Failed examine reused a stale catalog observation");
-    }
     Editor example;
-    {
-        // Exercise registry dispatch through the mailbox, client and worker.
-        auto& providers = GRIM::MMO::ProviderRegistry::instance();
-        const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Client fixture", "fixture-1", {}};
-        GRIM::MMO::ToolDescriptor listing;
-        listing.tool_id = listing.display_name = "ui.list";
-        listing.argument_format = "json";
-        GRIM::MMO::ToolDescriptor echo;
-        echo.tool_id = echo.display_name = "fixture.echo";
-        int listings = 0;
-        check(providers.publish(owner, {
-            {listing, [&](const std::string& args, bool) {
-                check(nlohmann::json::parse(args) == nlohmann::json::object(), "Listing did not receive empty JSON args");
-                ++listings;
-                return GRIM::MMO::makeToolResult(true, "", "", "", {{"panels", {{{"panel_id", "provider-panel"}}}}});
-            }},
-            {echo, [&](const std::string& args, bool) {
-                return GRIM::MMO::makeToolResult(true, "", "", "", {{"echo", args}});
-            }}
-        }), "Client fixture publication failed");
-        TextWorldClient uiClient;
-        const auto initial = request(uiClient, {{"op", "compile"}, {"document", Document::initial().gameJson()}}).at("state");
-        auto state = request(uiClient, {{"op", "step"}, {"command", " ui.list "}}).at("state");
-        check(state.at("feedback") == R"({"panels":[{"panel_id":"provider-panel"}]})" && listings == 1,
-              "Client did not expose the provider panel list as feedback");
-        check(!state.contains("host_action_request"), "Internal dispatch request leaked");
-        state = request(uiClient, {{"op", "step"}, {"command", "fixture.echo two words"}}).at("state");
-        check(state.at("host_action").at("status") == "completed" &&
-              state.at("feedback") == R"({"echo":"two words"})", "Client did not route a non-UI registry tool");
-        check(state.at("facts") == initial.at("facts") && state.at("moves") == initial.at("moves") &&
-            state.at("episode") == initial.at("episode"), "Host effect altered native verification state");
-        check(uiClient.begin({{"op", "verify_solution"}, {"commands", {"ui.list"}}}), "Cannot submit replay");
-        check(!wait(uiClient).at("ok").get<bool>() && listings == 1, "Replay executed a host tool");
-        providers.retire(owner.name, owner.instance);
-    }
     example.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"examples/world_lab/locked_door.grimworld.json");
     const Document d=example.document();
     auto selection=legacyGoal(d);

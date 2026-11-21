@@ -85,10 +85,7 @@ is owned by the live session, not by editor gestures or undo history.
 ## Validation
 
 `tests/run_live_world.ps1` builds and runs a focused host-only test executable.
-It covers hub-only empty-registry startup, existing and newly loaded provider population,
-zero-tool providers, adjacency,
-Model filtering, inspection without handler invocation, replacement rollback,
-stable room identity, stale revision rejection, unload/relocation, automatic reconnection, persistent history, and concurrent atomic snapshot reads.
+It covers navigation, stable provider paths, resource inspection, and persistent history.
 Plugin lifecycle fixtures additionally cover provider load, reload, and unload.
 `tests/run_ui_input_foundation.ps1 -WorldLab` exercises automatic room population and navigation
 controls, reconciliation after hiding, and repeated client stop, alongside the

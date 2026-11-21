@@ -85,9 +85,6 @@ void runNativeDataHubDllTests(const char*);
 void runNativeModelWorkspaceDllTests(const char*);
 #endif
 void runSchedulePluginTests();
-#ifdef GRIM_TOOLS_VIEW_TESTS
-void runTrainingToolsTests();
-#endif
 void runSplitPaneTests();
 #ifdef GRIM_WORLD_LAB_TESTS
 void runWorldLabTests();
@@ -111,9 +108,6 @@ int main(int argc, char** argv) try {
     if (argc > 6) runNativeModelWorkspaceDllTests(argv[6]);
 #endif
     runSchedulePluginTests();
-#ifdef GRIM_TOOLS_VIEW_TESTS
-    runTrainingToolsTests();
-#endif
 #ifdef GRIM_TEXTWORLD_INTEGRATION
     runTextWorldClientTests();
 #endif

@@ -1,10 +1,45 @@
 #include "ProviderRegistry.hpp"
 #include "ToolRegistry.hpp"
+#include "../ToolResultJson.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
 
 namespace GRIM::MMO {
+
+ProviderRegistry::CallGate::ActiveCall::ActiveCall(CallGate& gate, Kind kind) : gate_(gate) {
+    std::lock_guard lock(gate_.mutex);
+    if (gate_.state == State::Ready ||
+        (kind == Kind::HostService && gate_.state == State::Initializing)) {
+        ++gate_.active;
+        entered_ = true;
+    }
+}
+
+ProviderRegistry::CallGate::ActiveCall::~ActiveCall() {
+    if (!entered_) return;
+    std::lock_guard lock(gate_.mutex);
+    if (--gate_.active == 0) gate_.idle.notify_all();
+}
+
+nlohmann::json ProviderRegistry::NativeState::invokeTool(const std::string& id,
+                                                        const std::string& arguments,
+                                                        bool waitForCompletion) {
+    CallGate::ActiveCall active(gate, CallGate::ActiveCall::Kind::Dispatch);
+    if (!active) return makeToolResult(false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE", "");
+
+    const GrimToolCall call{.arguments = arguments.c_str(), .arguments_size = arguments.size(),
+                            .wait_for_completion = waitForCompletion ? 1u : 0u};
+    const auto reply = dispatch(id.c_str(), &call);
+    // Release the buffer through the DLL before the active call ends.
+    const std::unique_ptr<const char, decltype(reply.release)> bytes(reply.release ? reply.json : nullptr,
+                                                                     reply.release);
+    if (reply.delivery == GRIM_OK && bytes && reply.size) {
+        auto result = nlohmann::json::parse(bytes.get(), bytes.get() + reply.size, nullptr, false);
+        if (!result.is_discarded()) return result;
+    }
+    return makeToolResult(false, "Plugin did not return a JSON result", "ERR_PLUGIN_RESULT", "");
+}
 
 ProviderRegistry& ProviderRegistry::instance() {
     return ToolRegistry::instance().providers_;
@@ -29,18 +64,17 @@ std::vector<std::shared_ptr<ProviderRegistry::NativeState>> ProviderRegistry::re
     return providers;
 }
 
-void ProviderRegistry::prepareTools(ProviderRecord& record, const std::vector<ToolRegistration>& registrations) {
-    for (const auto& registration : registrations) {
-        const auto& desc = registration.descriptor;
-        if (desc.tool_id.empty() || !registration.handler)
-            throw std::invalid_argument("Tool registration requires an ID and handler");
+void ProviderRegistry::prepareTools(ProviderRecord& record, std::vector<ToolDescriptor> descriptors) {
+    for (auto& desc : descriptors) {
+        if (desc.tool_id.empty())
+            throw std::invalid_argument("Tool registration requires an ID");
         if (!validToolUsage(desc.usage_type) || !validToolBindings(desc) ||
             !validToolShortDescription(desc.short_description))
             throw std::invalid_argument("Invalid tool metadata");
-        auto entry = std::make_shared<Entry>(Entry{desc, registration.handler,
-            record.descriptor});
-        if (!record.tools.emplace(desc.tool_id, std::move(entry)).second)
-            throw std::invalid_argument("Duplicate tool ID: " + desc.tool_id);
+        auto entry = std::make_shared<Entry>(Entry{std::move(desc), record.descriptor});
+        const auto& id = entry->descriptor.tool_id;
+        if (!record.tools.try_emplace(id, entry).second)
+            throw std::invalid_argument("Duplicate tool ID: " + id);
     }
 }
 
@@ -63,13 +97,11 @@ void ProviderRegistry::validateNativeCandidateLocked(const ProviderRecord& candi
 }
 
 #ifdef GRIM_PROVIDER_REGISTRY_TESTS
-bool ProviderRegistry::publish(const ProviderDescriptor& provider,
-                               const std::vector<ToolRegistration>& registrations) {
+bool ProviderRegistry::publishResourceFixture(const ProviderDescriptor& provider) {
     if (provider.type != ToolProviderType::Plugin || provider.name.empty() ||
         provider.instance.empty()) return false;
     auto record = std::make_shared<ProviderRecord>();
     record->descriptor = std::make_shared<const ProviderDescriptor>(provider);
-    prepareTools(*record, registrations);
     {
         std::lock_guard lock(tools_.mutex_);
         if (!records_.emplace(provider.name, record).second) return false;

@@ -119,8 +119,8 @@ struct Module {
         return initialize(&api, instance);
     }
     void publish() {
-        require(GRIM::MMO::ProviderRegistry::instance().publish(
-            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}, {}),
+        require(GRIM::MMO::ProviderRegistry::instance().publishResourceFixture(
+            {GRIM::MMO::ToolProviderType::Plugin, providerName, lease->owner, {}}),
             "Storage provider publication failed");
     }
     void close() {
