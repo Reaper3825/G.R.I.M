@@ -111,7 +111,7 @@ GrimResult retrieveTool(const GrimToolCall& request, GrimToolResultWriter* write
 
     const auto payload = retrieve(args["prompt"].get<std::string>(),
         args["nlp_category"].get<std::string>(), args["limit"].get<int>()).dump();
-    return grim::completeToolResult(writer, true, nullptr, "ERR_NONE", nullptr, 0, nullptr, payload.c_str());
+    return grim::completeToolResult(writer, true, nullptr, "ERR_NONE", nullptr, nullptr, payload.c_str());
 }
 }  // namespace
 

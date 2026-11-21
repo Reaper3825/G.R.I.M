@@ -107,12 +107,12 @@ void runTextWorldClientTests(){
                 check(nlohmann::json::parse(args) == nlohmann::json::object(), "Listing did not receive empty JSON args");
                 ++listings;
                 CommandResult result;
-                result.structuredOutputJson = R"({"panels":[{"panel_id":"provider-panel"}]})";
+                result.structuredOutput = {{"panels", {{{"panel_id", "provider-panel"}}}}};
                 return result;
             }},
             {echo, [&](const std::string& args) {
                 CommandResult result;
-                result.structuredOutputJson = nlohmann::json{{"echo", args}}.dump();
+                result.structuredOutput = {{"echo", args}};
                 return result;
             }}
         }), "Client fixture publication failed");

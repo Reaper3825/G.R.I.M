@@ -24,7 +24,7 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
     const std::string message=success?"Scheduling operation completed":value.value("message",std::string("Scheduling operation failed"));
     const std::string code=success?"ERR_NONE":value.value("error",std::string("service_error"));
     return grim::completeToolResult(writer, success, message.c_str(), code.c_str(),
-                                    success ? "schedule" : "error", success ? 0x66CC99 : 0xFF6464,
+                                    success ? "schedule" : "error",
                                     nullptr, output.c_str());
 }
 }

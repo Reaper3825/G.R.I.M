@@ -52,8 +52,8 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     check(resource("Schedule Plugin","items").state.at("ready")==false,"Schedule ready before first poll");
     const auto invoke=[&](const char* op,Json args){
         const auto result=registry.invoke("schedule."+std::string(op),args.dump());
-        check(result.success,result.message.c_str());
-        return Json::parse(result.structuredOutputJson);
+        check(result.at("status") == "completed",result.at("message").get_ref<const std::string&>().c_str());
+        return result.at("payload");
     };
     auto created=invoke("create",{{"id","due"},{"kind","timer"},{"title","Due notification"},{"duration_seconds",1}});
     check(created.at("success")==true,"Saved timer creation failed");

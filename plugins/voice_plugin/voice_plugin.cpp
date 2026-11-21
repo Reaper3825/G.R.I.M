@@ -100,7 +100,7 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
   success=true; errorCode="ERR_NONE";
  } catch(const std::exception& error) { message=error.what(); errorCode="ERR_VOICE"; }
  catch(...) { message="Unknown voice failure"; errorCode="ERR_VOICE"; }
- return grim::completeToolResult(writer, success, message.c_str(), errorCode, "voice", 0,
+ return grim::completeToolResult(writer, success, message.c_str(), errorCode, "voice",
                                  nullptr, output.empty() ? nullptr : output.c_str());
 }
 }

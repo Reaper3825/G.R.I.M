@@ -41,7 +41,7 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     }}}), "Cannot publish collision fixture");
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 1 && !registry.isRegistered("help") &&
-          registry.invoke("clean", "").message == "existing provider", "Plugin collision changed the existing handler");
+          registry.invoke("clean", "").at("message") == "existing provider", "Plugin collision changed the existing handler");
     providers.retire(owner.name, owner.instance);
     // Restart discovery to clear the rejected-file cache after retiring the fixture.
     PluginManager::unloadAll();
@@ -65,14 +65,14 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     // including voice/category/color, rather than only visible message text.
     for (const auto* args : {"", "ignored arguments"}) {
         const auto clean = registry.invoke("clean", args);
-        check(clean.success && clean.message == "[Utility] Console cleared." && clean.errorCode == "ERR_NONE" &&
-              clean.category == "routine" && clean.voice == "Console cleared" &&
-              clean.color.toUInt() == Colors::Green.toUInt() && clean.structuredOutputJson.empty(),
+        check(clean.at("status") == "completed" && clean.at("message") == "[Utility] Console cleared." && clean.at("error_code") == "ERR_NONE" &&
+              clean.at("category") == "routine" &&
+              clean.at("payload").empty(),
               "clean result differs from original host handler");
         const auto help = registry.invoke("help", args);
-        check(help.success && help.message == expectedHelp && help.errorCode == "ERR_NONE" &&
-              help.category == "summary" && help.voice == "Help shown" &&
-              help.color.toUInt() == Colors::Cyan.toUInt() && help.structuredOutputJson.empty(),
+        check(help.at("status") == "completed" && help.at("message") == expectedHelp && help.at("error_code") == "ERR_NONE" &&
+              help.at("category") == "summary" &&
+              help.at("payload").empty(),
               "help result differs from static help with retired entries removed");
     }
     fs::remove(folder / "utility_plugin.dll");

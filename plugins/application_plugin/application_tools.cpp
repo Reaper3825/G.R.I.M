@@ -35,6 +35,6 @@ GrimResult dispatchApplicationTool(std::string_view id, const GrimToolCall* call
     }
     return grim::completeToolResult(writer, success, message.c_str(),
                                     success ? "ERR_NONE" : "ERR_APPLICATION_SERVICE",
-                                    success ? "application" : "error", 0, nullptr,
+                                    success ? "application" : "error", nullptr,
                                     output.empty() ? nullptr : output.c_str());
 }

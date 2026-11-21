@@ -42,12 +42,12 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     PluginManager::initialize(folder.string());
     check(registry.toolCount() == baseline + 6, "Application plugin did not publish six tools");
     auto catalogResult = registry.invoke("applications.list", "{}");
-    check(catalogResult.success, "Application list failed");
-    auto apps = nlohmann::json::parse(catalogResult.structuredOutputJson).at("value").at("applications");
+    check(catalogResult.at("status") == "completed", "Application list failed");
+    auto apps = catalogResult.at("payload").at("value").at("applications");
     check(apps.size() == 1 && GRIM::MMO::ProviderRegistry::instance().snapshot().resourceCount() >= 1, "Application resources not published at plugin commit");
     { std::ofstream config(folder/"application_aliases.json"); config << R"({"version":1,"aliases":{"editor":"  C:/test folder/app.exe  "}})"; }
-    check(registry.invoke("applications.refresh","{}").success,"User alias refresh failed");
-    check(registry.invoke("open","EDITOR").success,"Plugin did not resolve a user alias before native launch");
+    check(registry.invoke("applications.refresh","{}").at("status") == "completed","User alias refresh failed");
+    check(registry.invoke("open","EDITOR").at("status") == "completed","Plugin did not resolve a user alias before native launch");
     const auto app = apps.at(0);
     const auto applicationId = app.at("resource_id");
     const auto originalTool = registry.getTool("applications.list");
@@ -61,12 +61,12 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     }
     check(foundPublishedDescriptor, "Catalog list did not return the plain published descriptor");
     const auto inspect = registry.invoke("applications.inspect", nlohmann::json{{"resource_id", applicationId}}.dump());
-    check(inspect.success && nlohmann::json::parse(inspect.structuredOutputJson).at("value").at("application") == app,
+    check(inspect.at("status") == "completed" && inspect.at("payload").at("value").at("application") == app,
           "Application inspection did not return the plain descriptor");
     const auto launchArgs = nlohmann::json{{"resource_id", applicationId}, {"runtime_id", app.at("runtime_id")}};
-    check(registry.invoke("applications.launch", launchArgs.dump()).success, "Plugin application launch failed");
-    check(registry.invoke("applications.refresh", "{}").success, "Application refresh failed");
-    check(!registry.invoke("applications.inspect", "{}").success, "Malformed inspect accepted");
+    check(registry.invoke("applications.launch", launchArgs.dump()).at("status") == "completed", "Plugin application launch failed");
+    check(registry.invoke("applications.refresh", "{}").at("status") == "completed", "Application refresh failed");
+    check(registry.invoke("applications.inspect", "{}").at("status") == "failed", "Malformed inspect accepted");
     for (const auto* id : {"open", "search"}) {
         const auto tool = registry.getTool(id);
         const bool search = std::string(id) == "search";
@@ -76,33 +76,33 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
               "Application registration metadata changed policy or lacks documentation");
     }
     const auto result = [&](const char* id, const std::string& args) { return registry.invoke(id, args); };
-    const auto matches = [&](const CommandResult& r, bool ok, const std::string& message, const char* code,
-                             const char* category, const std::string& voice, Color color) {
-        check(r.success == ok && r.message == message && r.errorCode == code && r.category == category &&
-              r.voice == voice && r.color.toUInt() == color.toUInt() && r.structuredOutputJson.empty(),
+    const auto matches = [&](const nlohmann::json& r, bool ok, const std::string& message, const char* code,
+                             const char* category) {
+        check((r.at("status") == "completed") == ok && r.at("message") == message && r.at("error_code") == code && r.at("category") == category &&
+              r.at("payload").empty(),
               "Application result differs from former built-in behavior");
     };
-    matches(result("open", ""), false, "configured:ERR_APP_NO_ARGUMENT", "ERR_APP_NO_ARGUMENT", "error", "Missing application name", Colors::Red);
-    matches(result("search", " \t\r\n"), false, "configured:ERR_WEB_NO_ARGUMENT", "ERR_WEB_NO_ARGUMENT", "error", "No search query", Colors::Red);
+    matches(result("open", ""), false, "configured:ERR_APP_NO_ARGUMENT", "ERR_APP_NO_ARGUMENT", "error");
+    matches(result("search", " \t\r\n"), false, "configured:ERR_WEB_NO_ARGUMENT", "ERR_WEB_NO_ARGUMENT", "error");
     matches(result("open", "  C:/test folder/app.exe  "), true, "[App] Launched:   C:/test folder/app.exe  ",
-        "ERR_NONE", "routine", "Opening   C:/test folder/app.exe  ", Colors::Green);
+        "ERR_NONE", "routine");
     matches(result("search", "  Mixed Case & stuff\t"), true, "[Web] Searching: Mixed Case & stuff",
-        "ERR_NONE", "routine", "Searching web for Mixed Case & stuff", Colors::Cyan);
+        "ERR_NONE", "routine");
     errorPrefix = "updated:";
-    matches(result("open", "missing"), false, "updated:ERR_APP_LAUNCH_FAILED: missing", "ERR_APP_LAUNCH_FAILED", "error", "Failed to open missing", Colors::Red);
-    matches(result("search", "  query  "), false, "updated:ERR_WEB_OPEN_FAILED: query", "ERR_WEB_OPEN_FAILED", "error", "Web search failed", Colors::Red);
+    matches(result("open", "missing"), false, "updated:ERR_APP_LAUNCH_FAILED: missing", "ERR_APP_LAUNCH_FAILED", "error");
+    matches(result("search", "  query  "), false, "updated:ERR_WEB_OPEN_FAILED: query", "ERR_WEB_OPEN_FAILED", "error");
     errorPrefix = "configured:";
     // Reload into a new DLL generation and launch using the matching application IDs.
     fs::last_write_time(folder / "application_plugin.dll",
         fs::last_write_time(folder / "application_plugin.dll") + std::chrono::seconds(2));
     PluginManager::checkForHotReload();
-    const auto reloaded = nlohmann::json::parse(registry.invoke("applications.list", "{}").structuredOutputJson)
+    const auto reloaded = registry.invoke("applications.list", "{}").at("payload")
         .at("value").at("applications").at(0);
     const auto reloadedTool = registry.getTool("applications.list");
     check(reloadedTool && reloadedTool->provider.instance != originalTool->provider.instance, "Application DLL did not reload");
     check(reloaded.at("resource_id") == applicationId && reloaded.at("runtime_id") == app.at("runtime_id"),
           "Reload fixture did not retain matching application IDs");
-    check(registry.invoke("applications.launch", launchArgs.dump()).success, "Matching application IDs failed after reload");
+    check(registry.invoke("applications.launch", launchArgs.dump()).at("status") == "completed", "Matching application IDs failed after reload");
     fs::remove(folder / "application_plugin.dll");
     PluginManager::checkForHotReload();
     for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)

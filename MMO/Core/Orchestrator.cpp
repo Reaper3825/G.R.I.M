@@ -324,9 +324,9 @@ std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
     const auto result = ToolRegistry::instance().invoke("memory.retrieve", nlohmann::json{
         {"prompt", ctx.prompt}, {"nlp_category", context.lastNlpCategory}, {"limit", 10}
     }.dump());
-    if (!result.success) return ctx.metadata_json;
+    if (result.at("status") != "completed") return ctx.metadata_json;
 
-    const auto& retrieval = result.structuredOutput;
+    const auto& retrieval = result.at("payload");
     if (!retrieval.is_object() || !retrieval.contains("memories") ||
         !retrieval.contains("retrieval_breadcrumbs") ||
         !retrieval["memories"].is_array() || !retrieval["retrieval_breadcrumbs"].is_array())

@@ -14,9 +14,8 @@ struct CommandResult {
     std::string category;
     std::string voice;
     Color color = Colors::Default;
-    std::string structuredOutputJson;
-    // Provider-authored data. The registry supplies an empty object when omitted.
-    nlohmann::json structuredOutput;
+    // Provider-authored data.
+    nlohmann::json structuredOutput = nlohmann::json::object();
 };
 
 // ====================================================

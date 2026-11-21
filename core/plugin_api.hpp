@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v24.0
+// G.R.I.M Plugin API v25.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 24
+#define GRIM_API_VERSION_MAJOR 25
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -89,7 +89,6 @@ struct GrimToolResult {
     const char* category = nullptr;
     const char* voice = nullptr;
     const char* structured_output_json = nullptr;
-    uint32_t color_rgb = 0;
 };
 // Complete exactly once, synchronously. complete() copies every field immediately.
 // The writer and call cannot be retained or used by background threads.

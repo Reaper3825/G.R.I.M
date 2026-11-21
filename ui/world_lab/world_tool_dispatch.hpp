@@ -28,9 +28,8 @@ public:
 
         const auto result = registry.invoke(id, arguments,
             {.expected_registry_version = revision, .require_canonical_model = true, .wait_for_completion = true});
-        if (result.success) output["status"] = "completed";
-        else if (result.errorCode == "ERR_TOOL_COMPLETION_UNKNOWN") output["status"] = "unknown";
-        output["feedback"] = MMO::formatToolResult(result.structuredOutput);
+        output["status"] = result.at("status");
+        output["feedback"] = MMO::formatToolResult(result.at("payload"));
         return output;
     }
 };

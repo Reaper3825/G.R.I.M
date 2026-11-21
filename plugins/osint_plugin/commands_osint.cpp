@@ -637,7 +637,7 @@ CommandResult cmdOsintShowSecrets(const std::string& args) {
         return CommandResult{true, oss.str(), "", "osint", 
                             "Displayed " + std::to_string(totalShown) + " findings",
                             totalShown > 0 ? Colors::Yellow : Colors::Green,
-                            json{{"format","grim-osint-findings"},{"version",1},{"username",username},{"entries",copiedEntries}}.dump()};
+                            json{{"format","grim-osint-findings"},{"version",1},{"username",username},{"entries",copiedEntries}}};
                             
     } catch (const std::exception& e) {
         oss << "⚠ Failed to read log: " << e.what() << "\n";

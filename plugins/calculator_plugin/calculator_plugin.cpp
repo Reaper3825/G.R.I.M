@@ -366,7 +366,6 @@ GrimResult calculate(const GrimToolCall* call, GrimToolResultWriter* writer, voi
     const std::string_view equation(call->arguments ? call->arguments : "", call->arguments_size);
     bool success = false;
     const char* errorCodeText = nullptr;
-    uint32_t color = 0;
     std::string message;
     std::string output;
     try {
@@ -384,20 +383,18 @@ GrimResult calculate(const GrimToolCall* call, GrimToolResultWriter* writer, voi
                  ",\"answer\":" + jsonString(message) + "}";
         success = true;
         errorCodeText = "ERR_NONE";
-        color = 0x64FF64;
     } catch (const ParseFailure& failure) {
         errorCodeText = errorCode(failure.error);
         message = failure.what();
         output = "{\"success\":false,\"error\":" + jsonString(errorCodeText) +
                  ",\"error_message\":" + jsonString(message) +
                  ",\"error_offset\":" + std::to_string(failure.offset) + "}";
-        color = 0xFF6464;
     } catch (...) {
         // Never let C++ exceptions cross the plugin ABI.
         return GRIM_ERROR_UNKNOWN;
     }
     return grim::completeToolResult(writer, success, message.c_str(), errorCodeText, "math",
-                                    color, nullptr, output.c_str());
+                                    nullptr, output.c_str());
 }
 
 } // namespace

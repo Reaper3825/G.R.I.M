@@ -66,20 +66,20 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     check(initialResource.kind == "filesystem.directory" && initialResource.runtime_id == 1 &&
           initialResource.state.at("path") == utf8(baseDirectory), "Initial working directory resource missing");
     const auto initialRevision = GRIM::MMO::ProviderRegistry::instance().resourceVersion();
-    check(invoke("mkdir", "\"new folder\"").success && fs::is_directory(sandbox / "new folder"), "Quoted mkdir failed");
-    check(!invoke("mkdir", "new folder").success, "Duplicate mkdir succeeded");
-    check(!invoke("mkdir", "missing/child").success, "mkdir created missing parents");
+    check(invoke("mkdir", "\"new folder\"").at("status") == "completed" && fs::is_directory(sandbox / "new folder"), "Quoted mkdir failed");
+    check(invoke("mkdir", "new folder").at("status") == "failed", "Duplicate mkdir succeeded");
+    check(invoke("mkdir", "missing/child").at("status") == "failed", "mkdir created missing parents");
     { std::ofstream file(sandbox / "sample.txt"); file << "fixture"; }
-    check(invoke("ls").message.find("sample.txt") != std::string::npos, "ls omitted file");
+    check(invoke("ls").at("message").get_ref<const std::string&>().find("sample.txt") != std::string::npos, "ls omitted file");
     for (const auto* id : {"mkdir", "rm"})
-        check(invoke(id).errorCode == "ERR_FS_NO_ARGUMENT", "Missing argument not rejected");
-    check(invoke("rm", std::string("bad\0path", 8)).errorCode == "ERR_FS_INVALID_PATH", "NUL path accepted");
+        check(invoke(id).at("error_code") == "ERR_FS_NO_ARGUMENT", "Missing argument not rejected");
+    check(invoke("rm", std::string("bad\0path", 8)).at("error_code") == "ERR_FS_INVALID_PATH", "NUL path accepted");
     fs::create_directory(sandbox / "nonempty");
     { std::ofstream file(sandbox / "nonempty/keep.txt"); file << "keep"; }
-    check(!invoke("rm", "nonempty").success && fs::exists(sandbox / "nonempty/keep.txt"), "rm removed nonempty directory");
-    check(invoke("rm", "sample.txt").success && !fs::exists(sandbox / "sample.txt"), "rm file failed");
-    check(invoke("rm", "new folder").success && !fs::exists(sandbox / "new folder"), "rm empty directory failed");
-    check(invoke("rm", "missing").errorCode == "ERR_FS_NOT_FOUND", "Missing rm path not reported");
+    check(invoke("rm", "nonempty").at("status") == "failed" && fs::exists(sandbox / "nonempty/keep.txt"), "rm removed nonempty directory");
+    check(invoke("rm", "sample.txt").at("status") == "completed" && !fs::exists(sandbox / "sample.txt"), "rm file failed");
+    check(invoke("rm", "new folder").at("status") == "completed" && !fs::exists(sandbox / "new folder"), "rm empty directory failed");
+    check(invoke("rm", "missing").at("error_code") == "ERR_FS_NOT_FOUND", "Missing rm path not reported");
     check(fs::current_path() == baseDirectory &&
           GRIM::MMO::ProviderRegistry::instance().resourceVersion() == initialRevision,
           "Filesystem tools changed the working directory or published resources");
@@ -87,7 +87,7 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     { std::ofstream invalid(deployed, std::ios::binary | std::ios::trunc); invalid << "invalid native library"; }
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && directoryResource().resource_id.empty() &&
-          invoke("ls").errorCode == "ERR_UNKNOWN_CMD",
+          invoke("ls").at("error_code") == "ERR_UNKNOWN_CMD",
           "Failed native load retained filesystem tools or resources");
     // A fresh DLL instance publishes its own directory.
     fs::copy_file(pluginDirectory / "filesystem_plugin.dll", deployed, fs::copy_options::overwrite_existing);
@@ -95,10 +95,10 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     PluginManager::checkForHotReload();
     check(directoryResource().provider.instance != initialResource.provider.instance &&
           directoryResource().state.at("path") == utf8(baseDirectory) &&
-          invoke("ls").success, "Reload retained old generation or lost the replacement resource");
+          invoke("ls").at("status") == "completed", "Reload retained old generation or lost the replacement resource");
     fs::remove(deployed);
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline && directoryResource().resource_id.empty(), "Removing filesystem DLL retained tools/resources");
-    check(invoke("ls").errorCode == "ERR_UNKNOWN_CMD", "Removed filesystem tool still executable");
+    check(invoke("ls").at("error_code") == "ERR_UNKNOWN_CMD", "Removed filesystem tool still executable");
     std::cout << "Filesystem plugin operations, directory resources, failed replacement, reload and removal tests passed\n";
 }

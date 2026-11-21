@@ -47,8 +47,8 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     const auto retrieve = [&](const char* prompt, const char* category) {
         const auto result = registry.invoke("memory.retrieve",
             json{{"prompt", prompt}, {"nlp_category", category}, {"limit", 10}}.dump());
-        check(result.success, "Provider retrieval failed");
-        return json::parse(result.structuredOutputJson);
+        check(result.at("status") == "completed", "Provider retrieval failed");
+        return result.at("payload");
     };
 
     deploy();
@@ -68,15 +68,15 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     check(std::none_of(modelTools.begin(), modelTools.end(),
         [](const auto& tool) { return tool.tool_id == "memory.retrieve"; }), "Retrieval leaked into model discovery");
     check(!registry.isRegistered("forget"), "Retired forget tool was registered");
-    check(registry.invoke("remember", "").errorCode == "ERR_MEMORY_MISSING_INPUT", "Empty remember was accepted");
-    check(recall("").errorCode == "ERR_MEMORY_MISSING_KEY", "Empty recall was accepted");
-    check(!registry.invoke("memory.retrieve", R"({"prompt":"blue","nlp_category":"","limit":0})").success,
+    check(registry.invoke("remember", "").at("error_code") == "ERR_MEMORY_MISSING_INPUT", "Empty remember was accepted");
+    check(recall("").at("error_code") == "ERR_MEMORY_MISSING_KEY", "Empty recall was accepted");
+    check(registry.invoke("memory.retrieve", R"({"prompt":"blue","nlp_category":"","limit":0})").at("status") == "failed",
           "Invalid retrieval limit was accepted");
 
     const auto remembered = registry.invoke("remember", "my color is blue");
-    check(remembered.success && remembered.message == "[Memory] Remembered: my color is blue", "Remember failed");
-    check(!recall("my color").success, "Remembered record was committed before retrieval");
-    check(recall("blue").message == "[Memory] recent blue fact", "Short-term recall failed");
+    check(remembered.at("status") == "completed" && remembered.at("message") == "[Memory] Remembered: my color is blue", "Remember failed");
+    check(recall("my color").at("status") == "failed", "Remembered record was committed before retrieval");
+    check(recall("blue").at("message") == "[Memory] recent blue fact", "Short-term recall failed");
 
     fs::remove(folder / "memory_plugin.dll");
     PluginManager::checkForHotReload();
@@ -84,8 +84,8 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
     deploy();
     PluginManager::checkForHotReload();
     check(registry.toolCount() == baseline + 3, "Memory provider did not reload");
-    check(!recall("my color").success, "Reload changed the pending record to long-term");
-    check(recall("blue").message == "[Memory] recent blue fact", "Reload lost short-term memory");
+    check(recall("my color").at("status") == "failed", "Reload changed the pending record to long-term");
+    check(recall("blue").at("message") == "[Memory] recent blue fact", "Reload lost short-term memory");
 
     const auto copied = retrieve("blue", "manual");
     const auto& hits = copied.at("memories");
@@ -98,8 +98,8 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
         {{"query", "blue"}, {"results_found", 2}},
         {{"query", "tag:manual"}, {"results_found", 1}}
     }), "Retrieval breadcrumbs or tag deduplication differ");
-    check(recall("my color").message == "[Memory] my color is blue", "Pending memory was not promoted");
-    check(recall("BLUE").errorCode == "ERR_MEMORY_KEY_NOT_FOUND", "Recall case sensitivity changed");
+    check(recall("my color").at("message") == "[Memory] my color is blue", "Pending memory was not promoted");
+    check(recall("BLUE").at("error_code") == "ERR_MEMORY_KEY_NOT_FOUND", "Recall case sensitivity changed");
 
     PluginManager::unloadAll();
     check(hits[0].at("raw") == "recent blue fact", "Copied results were invalidated by unload");

@@ -19,7 +19,7 @@ void check(bool value, const char* message) { if (!value) throw std::runtime_err
 struct ChangeObserver : GRIM::MMO::ToolRegistryListener {
     bool callable = false;
     void onToolRegistered(const std::string& id) override {
-        callable = GRIM::MMO::ToolRegistry::instance().invoke(id, "").success;
+        callable = GRIM::MMO::ToolRegistry::instance().invoke(id, "").at("status") == "completed";
         throw std::runtime_error("observer failure");
     }
     void onToolUnregistered(const std::string&) override { throw std::runtime_error("observer failure"); }
@@ -107,14 +107,14 @@ void runPluginReconcileTests(const std::filesystem::path& variants, const std::f
     check(provider() && replacement && provider()->instance == replacement->provider.instance,
           "Replacement provider and tools have different generations");
     check(replacement && replacement->provider.instance != firstInstance &&
-          registry.invoke("Declared-alpha", "").message == "new-result", "Valid replacement was not committed");
+          registry.invoke("Declared-alpha", "").at("message") == "new-result", "Valid replacement was not committed");
     check(!registry.isRegistered("Declared-alpha-extra"), "Replacement retained a removed tool");
     PluginAPI::dispatchSystemTick(0, 0);
     check(resource("fixture_tick") == "new-result",
           "Retiring old generation removed replacement resources");
 
     const auto secondInstance = replacement->provider.instance;
-    check(registry.invoke("Declared-alpha", "reload").message == "new-result", "Reload request did not return normally");
+    check(registry.invoke("Declared-alpha", "reload").at("message") == "new-result", "Reload request did not return normally");
     check(registry.getTool("Declared-alpha")->provider.instance == secondInstance, "Plugin reloaded from inside its callback");
     PluginManager::tick();
     check(registry.getTool("Declared-alpha")->provider.instance != secondInstance, "Queued API reload request was not serviced");

@@ -41,8 +41,9 @@ public:
     // Production uses the registered handler. Sandbox is reserved and returns
     // an explicit not-implemented result without invoking the handler.
     // Optional selection checks run under the same lock as handler selection.
-    CommandResult invoke(const std::string& name, const std::string& arguments,
-                         const ToolInvocationOptions& options = {});
+    // Returns the canonical JSON result with an object-valued payload.
+    nlohmann::json invoke(const std::string& name, const std::string& arguments,
+                          const ToolInvocationOptions& options = {});
     bool isExecutable(const std::string& tool_id) const;
     std::vector<std::string> getExecutableNames(bool include_aliases = false) const;
 

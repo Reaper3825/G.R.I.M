@@ -45,6 +45,7 @@ GrimResult identify(const GrimToolCall*, GrimToolResultWriter* writer, void* dat
     GrimToolResult result;
     result.success = true;
     result.message = message.c_str();
+    result.voice = "legacy voice text";
     result.structured_output_json = "{\"answer\":42}";
     auto status = writer->complete(writer, &result);
     message.assign(200, 'x');
@@ -229,7 +230,7 @@ int main(int argc, char** argv) try {
           "Providers do not share one API table with distinct handles");
     checkName(&alpha, "alpha");
     checkName(&beta, "beta");
-    check(GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "").success, "Command callback used wrong owner");
+    check(GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "").at("status") == "completed", "Command callback used wrong owner");
     check(logs.back() == "[Plugin: alpha] callback", "Callback logging used wrong owner");
     auto tool = GRIM::MMO::ToolRegistry::instance().getTool("alpha_second");
     check(tool && tool->provider.name == "alpha",
@@ -249,25 +250,31 @@ int main(int argc, char** argv) try {
     check(duplicateRejected, "Duplicate identity replaced a retained API");
 
 
-    std::string executionMessage;
+    std::pair<std::string, std::string> executionResult;
     GrimToolResultWriter recipient;
-    recipient.host_context = &executionMessage;
+    recipient.host_context = &executionResult;
     recipient.complete = [](GrimToolResultWriter* writer, const GrimToolResult* result) {
-        *static_cast<std::string*>(writer->host_context) = result->message;
+        if (result->voice) return GRIM_ERROR_INVALID_PARAM;
+        *static_cast<std::pair<std::string, std::string>*>(writer->host_context) =
+            {result->message, result->structured_output_json};
         return GRIM_OK;
     };
     check(alpha->execute_command(alpha.handle(), "alpha_tool", &recipient) == GRIM_OK &&
-          executionMessage == "owned local message", "Command execution writer failed");
+          executionResult.first == "owned local message" &&
+          nlohmann::json::parse(executionResult.second) == nlohmann::json{{"answer", 42}},
+          "Command execution writer failed to forward the result");
     check(alpha->execute_command(alpha.handle(), nullptr, &recipient) == GRIM_ERROR_INVALID_PARAM,
           "Null execution input accepted");
+    check(alpha->execute_command(alpha.handle(), "missing_fixture_tool", &recipient) == GRIM_OK &&
+          executionResult.second == "{}", "Empty payload was not forwarded as a JSON object");
     auto copiedResult = GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "");
-    check(copiedResult.message == "owned local message" &&
-          copiedResult.structuredOutputJson == R"({"answer":42})", "Host did not copy result data immediately");
+    check(!copiedResult.contains("voice") && copiedResult.at("message") == "owned local message" &&
+          copiedResult.at("payload") == nlohmann::json{{"answer", 42}}, "Host did not copy result data immediately");
     for (auto handler : {missingResult, doubleResult, invalidResult}) {
         brokenHandler = handler;
         LoadedProviderFixture brokenProvider({.name = "broken-fixture", .path = "", .version = "1.2.3"});
         loadTools(brokenProvider, {definition("broken")}, dispatchBroken);
-        check(GRIM::MMO::ToolRegistry::instance().invoke("broken", "").errorCode == "ERR_PLUGIN_RESULT", "Invalid result accepted");
+        check(GRIM::MMO::ToolRegistry::instance().invoke("broken", "").at("error_code") == "ERR_PLUGIN_RESULT", "Invalid result accepted");
         brokenProvider.unload();
     }
     LoadedProviderFixture metadata({.name = "metadata", .path = "metadata.dll", .version = "1.2.3"});
@@ -348,9 +355,9 @@ int main(int argc, char** argv) try {
     while (GRIM::MMO::ToolRegistry::instance().isRegistered("blocking")) std::this_thread::yield();
     check(stopping.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout,
           "Shutdown did not wait for an active call");
-    check(!GRIM::MMO::ToolRegistry::instance().invoke("blocking", "").success, "Stopping provider accepted a new call");
+    check(GRIM::MMO::ToolRegistry::instance().invoke("blocking", "").at("status") == "failed", "Stopping provider accepted a new call");
     blocked.release.set_value();
-    check(running.get().success, "Active call was interrupted");
+    check(running.get().at("status") == "completed", "Active call was interrupted");
     stopping.get();
     alpha.unload();
     check(!GRIM::MMO::ToolRegistry::instance().isRegistered("alpha_tool") && !GRIM::MMO::ToolRegistry::instance().getTool("alpha_second"), "Owner cleanup retained tools");
@@ -363,7 +370,7 @@ int main(int argc, char** argv) try {
     const auto count = GRIM::MMO::ToolRegistry::instance().toolCount();
     PluginManager::initialize(argv[1]);
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count + 2, "Folder load did not populate registry");
-    check(GRIM::MMO::ToolRegistry::instance().invoke("Declared-alpha", "").message == "fixture result", "Loaded DLL handler failed");
+    check(GRIM::MMO::ToolRegistry::instance().invoke("Declared-alpha", "").at("message") == "fixture result", "Loaded DLL handler failed");
     PluginManager::unloadAll();
     check(GRIM::MMO::ToolRegistry::instance().toolCount() == count, "DLL unload left registry entries");
     PluginManager::initialize(argv[2]);

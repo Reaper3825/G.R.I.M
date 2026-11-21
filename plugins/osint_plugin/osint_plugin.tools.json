@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "api_version": 1572864,
+  "api_version": 1638400,
   "provider": "OSINT Self-Audit Plugin",
   "version": "2.1.0",
   "tools": [

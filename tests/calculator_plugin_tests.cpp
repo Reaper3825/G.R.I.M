@@ -45,7 +45,7 @@ static bool publishCalculator(const std::filesystem::path& path) {
                 c.result.success = r->success;
                 c.result.message = r->message;
                 c.result.errorCode = r->error_code;
-                c.result.structuredOutputJson = r->structured_output_json;
+                c.result.structuredOutput = Json::parse(r->structured_output_json);
                 return GRIM_OK;
             };
             GrimToolCall call;
@@ -60,12 +60,12 @@ static bool publishCalculator(const std::filesystem::path& path) {
 static Json invoke(const std::string& expression, bool success) {
     auto& registry = ToolRegistry::instance();
     const auto result = registry.invoke("calculate", expression, {.expected_registry_version = registry.version(), .require_canonical_model = true});
-    check(result.success == success, expression.c_str());
-    auto output = Json::parse(result.structuredOutputJson);
+    check((result.at("status") == "completed") == success, expression.c_str());
+    auto output = result.at("payload");
     check(output.at("success") == success, "Structured success mismatch");
-    if (success) check(output.at("answer") == result.message, "Answer mismatch");
-    else check(output.at("error") == result.errorCode &&
-               output.at("error_message") == result.message, "Error mismatch");
+    if (success) check(output.at("answer") == result.at("message"), "Answer mismatch");
+    else check(output.at("error") == result.at("error_code") &&
+               output.at("error_message") == result.at("message"), "Error mismatch");
     return output;
 }
 

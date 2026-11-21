@@ -268,7 +268,7 @@ int main() try {
     check(session.world().location() == room && session.world().roomId(providerKey(alpha)) == room, "replacement changed room/location");
     check(session.world().toolsHere().at(0).tool_id == "alpha.new", "replacement catalog stale");
     check(session.observation().at("tool_catalog").at("tools").dump().find("alpha.read") == std::string::npos, "inventory retained replaced tool");
-    check(ToolRegistry::instance().invoke("alpha.new", "", {.expected_registry_version = revision, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE", "stale revision accepted");
+    check(ToolRegistry::instance().invoke("alpha.new", "", {.expected_registry_version = revision, .require_canonical_model = true}).at("error_code") == "ERR_TOOL_STALE", "stale revision accepted");
     providers.retire(alpha.name, alpha.instance);
     check(ToolRegistry::instance().getTool("alpha.new").has_value(), "old-generation cleanup removed replacement");
     session.command("inspect alpha.read");

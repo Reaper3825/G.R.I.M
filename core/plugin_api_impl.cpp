@@ -144,16 +144,12 @@ static GrimResult completeResult(GrimToolResultWriter* writer, const GrimToolRes
         result.message = copyText(input->message, false, 16 * 1024 * 1024);
         result.errorCode = copyText(input->error_code);
         result.category = copyText(input->category);
-        // Existing perception commands use the complete observation as voice.
-        result.voice = copyText(input->voice, false, 16 * 1024 * 1024);
-        result.structuredOutputJson = copyText(input->structured_output_json);
-        if (!result.structuredOutputJson.empty()) {
-            result.structuredOutput = nlohmann::json::parse(result.structuredOutputJson);
+        const auto payloadText = copyText(input->structured_output_json);
+        if (!payloadText.empty()) {
+            result.structuredOutput = nlohmann::json::parse(payloadText);
             if (!result.structuredOutput.is_object())
                 throw std::invalid_argument("Expected an object tool payload");
         }
-        const auto rgb = input->color_rgb;
-        result.color = Color{static_cast<uint8_t>(rgb >> 16), static_cast<uint8_t>(rgb >> 8), static_cast<uint8_t>(rgb)};
         capture.value = std::move(result);
         capture.completed = true;
         return GRIM_OK;
@@ -301,7 +297,12 @@ static GrimResult api_execute_command(GrimPluginHandle self, const char* command
     if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
     auto [cmd, arg] = GRIMInput::parseInput(command_text);
     const auto value = GRIM::MMO::ToolRegistry::instance().invoke(cmd, arg);
-    return grim::completeToolResult(writer, value);
+    const auto payloadText = value.at("payload").dump();
+    return grim::completeToolResult(writer, value.at("status") == "completed",
+        value.at("message").get_ref<const std::string&>().c_str(),
+        value.at("error_code").get_ref<const std::string&>().c_str(),
+        value.at("category").get_ref<const std::string&>().c_str(),
+        nullptr, payloadText.c_str());
 }
 
 // ============================================================================

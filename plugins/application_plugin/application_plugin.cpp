@@ -13,8 +13,8 @@ std::unique_ptr<GRIM::Applications::Catalog> catalog;
 std::shared_ptr<GRIM::Applications::UserAliases> userAliases;
 
 GrimResult finish(GrimToolResultWriter* writer, bool success, const std::string& message,
-                  const char* error, const char* category, const std::string& voice, uint32_t color) {
-    return grim::completeToolResult(writer, success, message.c_str(), error, category, color, voice.c_str());
+                  const char* error, const char* category, const std::string& voice) {
+    return grim::completeToolResult(writer, success, message.c_str(), error, category, voice.c_str());
 }
 std::string errorMessage(const char* code) {
     const auto* text = host->get_user_error_message(host.instance(), code);
@@ -30,16 +30,16 @@ GrimResult openApplication(const GrimToolCall* call, GrimToolResultWriter* write
     // Preserve open's original untrimmed argument semantics.
     const auto target = argument(call);
     if (target.empty()) return finish(writer, false, errorMessage("ERR_APP_NO_ARGUMENT"),
-        "ERR_APP_NO_ARGUMENT", "error", "Missing application name", 0xFF5050);
+        "ERR_APP_NO_ARGUMENT", "error", "Missing application name");
 #ifdef _WIN32
     if (shellOpenTarget(userAliases->resolve(target)) <= 32)
         return finish(writer, false, errorMessage("ERR_APP_LAUNCH_FAILED") + ": " + target,
-            "ERR_APP_LAUNCH_FAILED", "error", "Failed to open " + target, 0xFF5050);
+            "ERR_APP_LAUNCH_FAILED", "error", "Failed to open " + target);
     return finish(writer, true, "[App] Launched: " + target,
-        "ERR_NONE", "routine", "Opening " + target, 0x64FF64);
+        "ERR_NONE", "routine", "Opening " + target);
 #else
     return finish(writer, true, "[App] (Stub) Would open: " + target,
-        "ERR_NONE", "routine", "Opening " + target, 0x64FF64);
+        "ERR_NONE", "routine", "Opening " + target);
 #endif
 }
 GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
@@ -48,18 +48,18 @@ GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, voi
     const auto query = start == std::string::npos ? std::string{} :
         raw.substr(start, raw.find_last_not_of(" \t\n\r") - start + 1);
     if (query.empty()) return finish(writer, false, errorMessage("ERR_WEB_NO_ARGUMENT"),
-        "ERR_WEB_NO_ARGUMENT", "error", "No search query", 0xFF5050);
+        "ERR_WEB_NO_ARGUMENT", "error", "No search query");
 #ifdef _WIN32
     // Preserve the original URL construction; no new encoding or query rewriting.
     const auto url = "https://www.google.com/search?q=" + query;
     if (shellOpenTarget(url) <= 32)
         return finish(writer, false, errorMessage("ERR_WEB_OPEN_FAILED") + ": " + query,
-            "ERR_WEB_OPEN_FAILED", "error", "Web search failed", 0xFF5050);
+            "ERR_WEB_OPEN_FAILED", "error", "Web search failed");
     return finish(writer, true, "[Web] Searching: " + query,
-        "ERR_NONE", "routine", "Searching web for " + query, 0x64FFFF);
+        "ERR_NONE", "routine", "Searching web for " + query);
 #else
     return finish(writer, true, "[Web] (Stub) Would search for: " + query,
-        "ERR_NONE", "routine", "Searching web for " + query, 0x64FFFF);
+        "ERR_NONE", "routine", "Searching web for " + query);
 #endif
 }
 }

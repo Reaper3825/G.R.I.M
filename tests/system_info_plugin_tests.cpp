@@ -151,9 +151,9 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
           descriptor->category == "information" && descriptor->parameters.empty(),
           "System information metadata/policy incorrect");
     const auto invoke = [&](const std::string& args = "") { prepareDetection(); return registry.invoke("system_info", args); };
-    const auto matches = [&](const CommandResult& r, const std::string& text) {
-        check(r.success && r.message == text && r.errorCode == "ERR_NONE" && r.category == "summary" &&
-              r.voice == "System information shown" && r.color.toUInt() == Colors::Cyan.toUInt() && r.structuredOutputJson.empty(),
+    const auto matches = [&](const nlohmann::json& r, const std::string& text) {
+        check(r.at("status") == "completed" && r.at("message") == text && r.at("error_code") == "ERR_NONE" && r.at("category") == "summary" &&
+              r.at("payload").empty(),
               "System information result differs from original command");
     };
     const std::string header = "[System Info]\nOS         : Fixture OS (fixture-arch)\nCPU Cores  : 12\nRAM        : 32768 MB\n";
@@ -178,9 +178,9 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     check(live.observation().at("resources").size() == 5, "Live world retained removed device objects");
     detectionMode = 1;
     const auto failed = invoke();
-    check(!failed.success && failed.errorCode == "ERR_CMD_EXCEPTION" &&
-          failed.message == "[Error] Exception while running command: system_info: fixture detection failure" &&
-          failed.voice.empty() && failed.category.empty() && failed.color.toUInt() == Colors::Red.toUInt(),
+    check(failed.at("status") == "failed" && failed.at("error_code") == "ERR_CMD_EXCEPTION" &&
+          failed.at("message") == "[Error] Exception while running command: system_info: fixture detection failure" &&
+          failed.at("category") == "",
           "Standard detection exception behavior changed");
     const auto staleResource = resourceFor("System Information Plugin");
     check(staleResource.state.at("data") == refreshedResource.state.at("data") &&
@@ -196,8 +196,8 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     }
     detectionMode = 2;
     const auto unknown = invoke();
-    check(!unknown.success && unknown.errorCode == "ERR_CMD_EXCEPTION" &&
-          unknown.message == "[Error] Exception while running command: system_info", "Unknown detection exception behavior changed");
+    check(unknown.at("status") == "failed" && unknown.at("error_code") == "ERR_CMD_EXCEPTION" &&
+          unknown.at("message") == "[Error] Exception while running command: system_info", "Unknown detection exception behavior changed");
     detectionMode = 0;
     detectedInventory.monitors.clear();
     detectedInventory.monitor_count = 0;
@@ -224,7 +224,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
           replacement.state.at("stale") == true && replacement.state.at("data").is_null() &&
           replacement.state.at("capture_time_ns").is_null(), "Reload reused old hardware state or hid initial failure");
     detectionMode = 0;
-    check(invoke().success && !resourceFor("System Information Plugin").state.at("stale").get<bool>() &&
+    check(invoke().at("status") == "completed" && !resourceFor("System Information Plugin").state.at("stale").get<bool>() &&
           resourceFor("System Information Plugin", "gpu_1").state.at("data").at("name") == "Renamed GPU",
           "Replacement did not recover its own hardware state");
     const auto beforeRemoval = detectionCalls();

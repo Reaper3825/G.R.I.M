@@ -104,7 +104,7 @@ int main() try {
             check(rejected, "Invalid binding snapshot accepted");
         }
         publishTool(labeled, echo);
-        check(registry.invoke(labeled.tool_id, "an unresolved entity").message == "an unresolved entity",
+        check(registry.invoke(labeled.tool_id, "an unresolved entity").at("message") == "an unresolved entity",
               "Binding labels changed handler arguments");
         labeled.bindings = {{"target", "new_type"}};
         check(!registry.updateMetadata(labeled, ownerFor(labeled.tool_id)), "Invalid metadata binding accepted");
@@ -120,7 +120,7 @@ int main() try {
     first.aliases = {"alias"};
     check(publishTool(first, echo), "Registration failed");
     check(registry.toolCount() == 1 && registry.resolveAlias("alias") == "first", "Metadata and callable not published together");
-    check(registry.invoke("alias", "argument").message == "argument", "Alias used a different execution store");
+    check(registry.invoke("alias", "argument").at("message") == "argument", "Alias used a different execution store");
     check(registry.getTool("first")->usage_count == 1 && registry.getTool("alias")->success_count == 1, "Dispatch did not count exactly once on canonical tool");
     const auto version = registry.version();
     check(!publishTool(first, echo), "Duplicate replaced tool implicitly");
@@ -143,7 +143,7 @@ int main() try {
     check(registry.updateMetadata(first, ownerFor(first.tool_id)), "Metadata update failed");
     check(!registry.isRegistered("alias") && registry.isRegistered("new_alias"), "Metadata update retained stale alias");
     check(registry.getTool("first")->usage_count == 1, "Metadata update reset stats");
-    check(registry.invoke("new_alias", "still callable").message == "still callable", "Metadata update lost handler");
+    check(registry.invoke("new_alias", "still callable").at("message") == "still callable", "Metadata update lost handler");
     const ProviderDescriptor batchProvider{ToolProviderType::Plugin, "batch", "batch-1", {}};
     auto batchGood = descriptor("batch_good");
     auto batchBad = descriptor("batch_bad");
@@ -156,11 +156,14 @@ int main() try {
     providers.retire(batchProvider.name, batchProvider.instance);
     auto throwing = descriptor("throwing");
     publishTool(throwing, [](const std::string&) -> CommandResult { throw std::runtime_error("test"); });
-    check(registry.invoke("throwing", "").errorCode == "ERR_CMD_EXCEPTION", "Handler exception escaped dispatch");
+    check(registry.invoke("throwing", "").at("error_code") == "ERR_CMD_EXCEPTION", "Handler exception escaped dispatch");
     check(registry.getTool("throwing")->failure_count == 1, "Failure counted incorrectly");
     auto nested = descriptor("nested");
-    publishTool(nested, [&registry](const std::string& args) { return registry.invoke("first", args); });
-    check(registry.invoke("nested", "nested result").message == "nested result", "Nested registry dispatch failed");
+    publishTool(nested, [&registry](const std::string& args) {
+        const auto inner = registry.invoke("first", args);
+        return echo(inner.at("message").get<std::string>());
+    });
+    check(registry.invoke("nested", "nested result").at("message") == "nested result", "Nested registry dispatch failed");
 
     auto replaced = descriptor("replaced");
     const auto oldOwner = ownerFor(replaced.tool_id);
@@ -177,7 +180,7 @@ int main() try {
     for (const auto* id : {"first", "throwing", "nested"}) retireToolProvider(id);
     providers.retire(replacement.name, replacement.instance);
     check(registry.toolCount() == 0 && !registry.isRegistered("new_alias"), "Provider cleanup left execution or aliases");
-    check(registry.invoke("new_alias", "").errorCode == "ERR_UNKNOWN_CMD", "Removed handler remained executable");
+    check(registry.invoke("new_alias", "").at("error_code") == "ERR_UNKNOWN_CMD", "Removed handler remained executable");
 
     check(observer.changes > 0, "No registry notifications");
     registry.removeListener(&observer);
@@ -191,7 +194,7 @@ int main() try {
         tool.capability_tags = {tool.tool_id + "_capability"};
         tool.keywords = {tool.tool_id};
         publishTool(tool, echo);
-        check(registry.invoke(tool.tool_id, "host").message == "host", "Usage blocked host execution");
+        check(registry.invoke(tool.tool_id, "host").at("message") == "host", "Usage blocked host execution");
         const auto json = nlohmann::json(tool);
         check(json.get<ToolDescriptor>().usage_type == usage, "Usage JSON roundtrip failed");
         check(json.at("examples") == nlohmann::json::array(), "Legacy examples key must be an empty array");

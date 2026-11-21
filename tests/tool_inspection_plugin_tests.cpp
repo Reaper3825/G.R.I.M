@@ -55,16 +55,15 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
               "Inspection tool metadata/provider/policy incorrect");
     }
     const auto invoke = [&](const char* id, const std::string& args = "") { return registry.invoke(id, args); };
-    const auto matches = [&](const CommandResult& r, bool ok, const std::string& text,
-                              const char* code, const char* voice) {
-        check(r.success == ok && r.message == text && r.errorCode == code && r.voice == voice &&
-              r.category == (ok ? "information" : "error") && r.structuredOutputJson.empty() &&
-              r.color.toUInt() == (ok ? Colors::Cyan : Colors::Red).toUInt(), "Inspection result compatibility failed");
+    const auto matches = [&](const nlohmann::json& r, bool ok, const std::string& text,
+                              const char* code) {
+        check((r.at("status") == "completed") == ok && r.at("message") == text && r.at("error_code") == code &&
+              r.at("category") == (ok ? "information" : "error") && r.at("payload").empty(), "Inspection result compatibility failed");
     };
-    matches(invoke("tool_stats"), false, "[Error] No usage statistics available", "ERR_NO_STATS", "No statistics");
-    matches(invoke("tool_info"), false, "[Error] Usage: tool_info <command_name>", "ERR_NO_ARGUMENT", "Please specify a tool name");
-    matches(invoke("tool_info", "missing"), false, "[Error] Tool not found: missing", "ERR_NOT_FOUND", "Tool not registered");
-    matches(invoke("list_tools", "missing"), false, "[Error] No tools in category: missing", "ERR_NO_CATEGORY", "Category not found");
+    matches(invoke("tool_stats"), false, "[Error] No usage statistics available", "ERR_NO_STATS");
+    matches(invoke("tool_info"), false, "[Error] Usage: tool_info <command_name>", "ERR_NO_ARGUMENT");
+    matches(invoke("tool_info", "missing"), false, "[Error] Tool not found: missing", "ERR_NOT_FOUND");
+    matches(invoke("list_tools", "missing"), false, "[Error] No tools in category: missing", "ERR_NO_CATEGORY");
 
     ToolDescriptor rich;
     rich.tool_id = "inspection_fixture";
@@ -112,21 +111,22 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
         "Usage type : Model\nType       : Action\nUsage      : inspection_fixture {value}\nAliases    : fixture_alias\nKeywords   : first, second\n"
         "\nParameters:\n  value (string) [required]\n    Value description\n  optional (number)\n    Optional value\n"
         "\nUsage Stats:\n  Total uses  : 100\n  Success rate: 75%\n";
-    matches(invoke("tool_info", "fixture_alias"), true, info, "ERR_NONE", "Tool information displayed");
-    matches(invoke("tool_info", "Fixture Display"), true, info, "ERR_NONE", "Tool information displayed");
-    matches(invoke("list_tools", "fixture"), true, "[fixture tools - 1 total]\n\n  inspection_fixture: Fixture description\n", "ERR_NONE", "Tool list displayed");
-    matches(invoke("list_tools", " fixture"), false, "[Error] No tools in category:  fixture", "ERR_NO_CATEGORY", "Category not found");
+    matches(invoke("tool_info", "fixture_alias"), true, info, "ERR_NONE");
+    matches(invoke("tool_info", "Fixture Display"), true, info, "ERR_NONE");
+    matches(invoke("list_tools", "fixture"), true, "[fixture tools - 1 total]\n\n  inspection_fixture: Fixture description\n", "ERR_NONE");
+    matches(invoke("list_tools", " fixture"), false, "[Error] No tools in category:  fixture", "ERR_NO_CATEGORY");
     const auto all = invoke("list_tools");
-    check(all.success && all.message.find("[Registered Tools - " + std::to_string(baseline + 4) + " total]") == 0 &&
-          all.message.find("  inspection_fixture (aliases: fixture_alias)\n    Fixture description\n") != std::string::npos,
+    check(all.at("status") == "completed" && all.at("message").get_ref<const std::string&>().find("[Registered Tools - " + std::to_string(baseline + 4) + " total]") == 0 &&
+          all.at("message").get_ref<const std::string&>().find("  inspection_fixture (aliases: fixture_alias)\n    Fixture description\n") != std::string::npos,
           "All-tools grouping/aliases/count changed");
     const std::string stats = "[Tool Usage Statistics]\n\n1. inspection_fixture\n   Uses: 100 (Success: 75, Fail: 25)\n   Success Rate: 75%\n\n";
-    matches(invoke("tool_stats", "1"), true, stats, "ERR_NONE", "Statistics displayed");
-    matches(invoke("tool_stats", "1suffix"), true, stats, "ERR_NONE", "Statistics displayed");
-    matches(invoke("tool_stats", "-1"), true, "[Tool Usage Statistics]\n\n", "ERR_NONE", "Statistics displayed");
-    matches(invoke("tool_stats", "0"), true, "[Tool Usage Statistics]\n\n", "ERR_NONE", "Statistics displayed");
-    check(invoke("tool_stats", "invalid").errorCode == "ERR_CMD_EXCEPTION" &&
-          invoke("tool_stats", "99999999999999999999").errorCode == "ERR_CMD_EXCEPTION", "Invalid statistics parsing changed");
+    matches(invoke("tool_stats", "1"), true, stats, "ERR_NONE");
+    matches(invoke("tool_stats", "1suffix"), true, stats, "ERR_NONE");
+    matches(invoke("tool_stats", "-1"), true, "[Tool Usage Statistics]\n\n", "ERR_NONE");
+    matches(invoke("tool_stats", "0"), true, "[Tool Usage Statistics]\n\n", "ERR_NONE");
+    check(invoke("tool_stats", "invalid").at("error_code") == "ERR_CMD_EXCEPTION" &&
+          invoke("tool_stats", "99999999999999999999").at("error_code") == "ERR_CMD_EXCEPTION",
+          "Invalid statistics parsing changed");
     rich.description = std::string(70000, 'x');
     registry.updateMetadata(rich, owner);
     check(snapshot("fixture_alias")[0].at("description").get<std::string>().size() == 70000 &&
@@ -135,8 +135,8 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
           "Snapshot truncated data, cached stale metadata, or lost copy isolation");
     const auto largeInfo = invoke("tool_info", "fixture_alias");
     const auto largeList = invoke("list_tools", "fixture");
-    check(largeInfo.success && largeInfo.message.find(rich.description) != std::string::npos &&
-          largeList.success && largeList.message.find(rich.description) != std::string::npos && fixtureCalls == 0,
+    check(largeInfo.at("status") == "completed" && largeInfo.at("message").get_ref<const std::string&>().find(rich.description) != std::string::npos &&
+          largeList.at("status") == "completed" && largeList.at("message").get_ref<const std::string&>().find(rich.description) != std::string::npos && fixtureCalls == 0,
           "Inspection result was truncated or rejected at the old 64-KiB message limit");
     ProviderRegistry::instance().retire(owner.name, owner.instance);
     check(snapshot("fixture_alias").empty(), "Removed alias retained stale snapshot");

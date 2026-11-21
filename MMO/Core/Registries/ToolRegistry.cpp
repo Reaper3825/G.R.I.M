@@ -1,6 +1,7 @@
 #include "ToolRegistry.hpp"
 #include "../../../commands/command_result.hpp"
 #include <algorithm>
+#include <stdexcept>
 
 namespace GRIM::MMO {
 
@@ -83,14 +84,16 @@ bool ToolRegistry::unregisterTool(const std::string& id, const std::string& prov
     return true;
 }
 
-CommandResult ToolRegistry::invoke(const std::string& name, const std::string& arguments,
-                                   const ToolInvocationOptions& options) {
+nlohmann::json ToolRegistry::invoke(const std::string& name, const std::string& arguments,
+                                    const ToolInvocationOptions& options) {
     auto result = invokeRaw(name, arguments, options);
-    if (result.structuredOutput.is_null() && !result.structuredOutputJson.empty())
-        result.structuredOutput = nlohmann::json::parse(result.structuredOutputJson, nullptr, false);
-    if (!result.structuredOutput.is_object())
-        result.structuredOutput = nlohmann::json::object();
-    return result;
+    const char* status = "failed";
+    if (result.success) status = "completed";
+    else if (result.errorCode == "ERR_TOOL_COMPLETION_UNKNOWN") status = "unknown";
+
+    return {{"status", status}, {"error_code", std::move(result.errorCode)},
+            {"message", std::move(result.message)}, {"category", std::move(result.category)},
+            {"payload", std::move(result.structuredOutput)}};
 }
 
 CommandResult ToolRegistry::invokeRaw(const std::string& name, const std::string& arguments,
@@ -123,6 +126,8 @@ CommandResult ToolRegistry::invokeRaw(const std::string& name, const std::string
         result = entry->completion_handler
             ? entry->completion_handler(arguments, options.wait_for_completion)
             : entry->handler(arguments);
+        if (!result.structuredOutput.is_object())
+            throw std::invalid_argument("Expected an object tool payload");
     }
     catch (const std::exception& error) {
         result = {false, "[Error] Exception while running command: " + name + ": " + error.what(), "ERR_CMD_EXCEPTION", "", "", Colors::Red};

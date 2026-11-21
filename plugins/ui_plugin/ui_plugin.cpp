@@ -12,7 +12,7 @@ grim::PluginHost host = {};
 GrimResult deliver(GrimToolResultWriter* writer, bool success, const std::string& message,
                    const char* error, const std::string& json = {}) {
     return grim::completeToolResult(writer, success, message.c_str(), error, "ui",
-                                    success ? 0x64FFFF : 0xFF6464, nullptr,
+                                    nullptr,
                                     json.empty() ? nullptr : json.c_str());
 }
 nlohmann::json panelRequest(GrimUIPanelOperation operation, const char* key, uint64_t id) {

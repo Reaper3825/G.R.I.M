@@ -18,7 +18,9 @@ ToolDescriptor tool(const std::string& id) {
     return d;
 }
 CommandResult response(const Json& value) {
-    CommandResult result; result.structuredOutputJson = value.dump(); return result;
+    CommandResult result;
+    result.structuredOutput = value;
+    return result;
 }
 }
 int main() try {
@@ -36,41 +38,40 @@ int main() try {
             result.success = args != "fail";
             result.message = args;
             result.errorCode = result.success ? "ERR_NONE" : "FIXTURE_FAILURE";
-            result.structuredOutputJson = Json{{"actual", args}}.dump();
+            result.structuredOutput = {{"actual", args}};
             return result;
         }}}), "Execution fixture publication failed");
         const auto version = registry.version();
         const auto implicit = registry.invoke("execution_mode_alias", "implicit", {.expected_registry_version = version});
-        check(implicit.success && implicit.message == "implicit" &&
-              Json::parse(implicit.structuredOutputJson).at("actual") == "implicit" && calls == 1,
+        check(implicit.at("status") == "completed" && implicit.at("message") == "implicit" &&
+              implicit.at("payload").at("actual") == "implicit" && calls == 1 &&
+              !implicit.contains("color_rgb"),
               "Revision check alone blocked an alias or changed the Production result");
-        check(implicit.structuredOutput == Json{{"actual", "implicit"}},
-              "Successful invocation did not attach the parsed provider payload");
-        check(registry.invoke("execution_mode_alias", "", {.require_canonical_model = true}).errorCode == "ERR_TOOL_NOT_MODEL",
+        check(registry.invoke("execution_mode_alias", "", {.require_canonical_model = true}).at("error_code") == "ERR_TOOL_NOT_MODEL",
               "Canonical Model check depended on a registry revision");
-        check(registry.invoke(definition.tool_id, "explicit", {.mode = ToolExecutionMode::Production}).success && calls == 2,
+        check(registry.invoke(definition.tool_id, "explicit", {.mode = ToolExecutionMode::Production}).at("status") == "completed" && calls == 2,
               "Explicit Production did not invoke the handler");
-        check(registry.invoke(definition.tool_id, "model", {.expected_registry_version = version, .require_canonical_model = true}).success && calls == 3,
+        check(registry.invoke(definition.tool_id, "model", {.expected_registry_version = version, .require_canonical_model = true}).at("status") == "completed" && calls == 3,
               "Model invocation did not default to Production");
         check(registry.invoke(definition.tool_id, "model",
                               {.mode = ToolExecutionMode::Production, .expected_registry_version = version,
-                               .require_canonical_model = true}).success && calls == 4,
+                               .require_canonical_model = true}).at("status") == "completed" && calls == 4,
               "Explicit Model Production did not invoke the handler");
         const auto failed = registry.invoke(definition.tool_id, "fail");
-        check(!failed.success && failed.errorCode == "FIXTURE_FAILURE" && calls == 5,
+        check(failed.at("status") == "failed" && failed.at("error_code") == "FIXTURE_FAILURE" && calls == 5,
               "Production failure result was replaced");
         const auto stats = *registry.getTool(definition.tool_id);
         const auto sandbox = registry.invoke(definition.tool_id, "sandbox", {.mode = ToolExecutionMode::Sandbox});
-        check(!sandbox.success && sandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
+        check(sandbox.at("status") == "failed" && sandbox.at("error_code") == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
               "Reserved Sandbox invoked Production or claimed success");
-        check(sandbox.structuredOutput == Json::object(),
+        check(sandbox.at("payload") == Json::object(),
               "Registry failure unexpectedly had a provider payload");
         const auto modelSandbox = registry.invoke(definition.tool_id, "sandbox",
             {.mode = ToolExecutionMode::Sandbox, .expected_registry_version = version, .require_canonical_model = true});
-        check(!modelSandbox.success && modelSandbox.errorCode == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
+        check(modelSandbox.at("status") == "failed" && modelSandbox.at("error_code") == "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED" && calls == 5,
               "Reserved Model Sandbox invoked Production or claimed success");
         const auto invalid = registry.invoke(definition.tool_id, "invalid", {.mode = static_cast<ToolExecutionMode>(255)});
-        check(!invalid.success && invalid.errorCode == "ERR_TOOL_EXECUTION_MODE" && calls == 5,
+        check(invalid.at("status") == "failed" && invalid.at("error_code") == "ERR_TOOL_EXECUTION_MODE" && calls == 5,
               "Invalid mode invoked Production");
         const auto after = *registry.getTool(definition.tool_id);
         check(after.usage_count == stats.usage_count && after.success_count == stats.success_count &&
@@ -101,11 +102,11 @@ int main() try {
               registry.getTool(retained.tool_id)->provider == provider &&
               oldTool.provider.instance == oldInstance && !registry.updateMetadata(oldTool) &&
               !Json(registry.getModelTools().front()).contains("provider_instance") &&
-              registry.invoke(retained.tool_id, "", {.expected_registry_version = oldRevision, .require_canonical_model = true}).errorCode == "ERR_TOOL_STALE",
+              registry.invoke(retained.tool_id, "", {.expected_registry_version = oldRevision, .require_canonical_model = true}).at("error_code") == "ERR_TOOL_STALE",
               "Replacement exposed retired tools or lost the new generation");
         providers.retire(provider.name, provider.instance);
         check(registry.getModelTools().empty() && registry.getExecutableNames().empty() &&
-              registry.invoke(retained.tool_id, "").errorCode == "ERR_UNKNOWN_CMD",
+              registry.invoke(retained.tool_id, "").at("error_code") == "ERR_UNKNOWN_CMD",
               "Provider unload left tools discoverable or callable");
     }
     const ProviderDescriptor owner{ToolProviderType::Plugin, "World fixture", "fixture-1", {}};
@@ -125,8 +126,12 @@ int main() try {
             ++calls;
             return response({{"echo", args}});
         }},
-        {tool("fixture.empty"), [](const std::string&) {
+        {tool("fixture.empty"), [](const std::string& args) {
             CommandResult result;
+            if (args == R"({"unknown":true})") {
+                result.success = false;
+                result.errorCode = "ERR_TOOL_COMPLETION_UNKNOWN";
+            }
             result.message = "Hidden presentation text";
             result.voice = "Hidden voice text";
             return result;
@@ -150,6 +155,8 @@ int main() try {
     check(run("fixture.echo two words").at("feedback") == R"({"echo":"two words"})" && calls == 1,
           "Non-UI tool did not dispatch through the registry");
     check(run("fixture.empty").at("feedback") == "{}", "Missing payload exposed presentation text");
+    check(run(R"(fixture.empty {"unknown":true})").at("status") == "unknown",
+          "World lost the registry's unknown completion status");
     check(run("fixture.alias").at("status") == "failed" && run("fixture.system").at("status") == "failed" && calls == 1,
           "World dispatched an alias or system tool");
     providers.retire(owner.name, owner.instance);

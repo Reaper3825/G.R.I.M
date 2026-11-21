@@ -1,6 +1,9 @@
-# G.R.I.M Plugin API v24.0
+# G.R.I.M Plugin API v25.0
 
-API version: **24.0.0**.
+API version: **25.0.0**.
+
+Version 25 removes the color field from `GrimToolResult` and the registry's JSON
+result. Rebuild and deploy the host, plugin DLLs, and manifests together.
 
 Version 24 removes the plugin permission bitmask and its API entries. Rebuild
 and deploy the host, plugin DLLs, and manifests together.
@@ -94,8 +97,8 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 2`, the packed integer `api_version` (1572864
-for 24.0.0), the provider name and version in `provider` and `version`, and a
+loader expects `schema_version: 2`, the packed integer `api_version` (1638400
+for 25.0.0), the provider name and version in `provider` and `version`, and a
 `tools` array. A provider with tools exports `grim_plugin_dispatch_tool`.
 See [Application's manifest](../plugins/application_plugin/application_plugin.tools.json)
 for raw text and JSON tool declarations.
@@ -277,7 +280,7 @@ Handlers have this signature:
 
 The host supplies a synchronous call with an argument string and byte length.
 The handler completes exactly once with writer->complete(writer, &result).
-The writer copies the result's message, error code, category, voice text, and
+The writer copies the result's message, error code, category, and
 optional JSON object immediately, while the handler's local storage is alive.
 The host owns those copies; neither side frees strings allocated by the other.
 World Lab uses the provider object as tool feedback. An omitted object becomes
@@ -291,19 +294,27 @@ validation failures are remembered even when a handler ignores the error.
 Exceptions from handlers become registry command failures.
 
 Result messages support up to 16 MiB as of v3.2 so complete catalog listings can
-cross the plugin boundary. As of v3.6 voice text also supports 16 MiB to preserve
-complete perception observations. Other result strings retain the 65,536-byte limit.
-Optional JSON output must
-be valid JSON and is preserved as CommandResult::structuredOutputJson.
+cross the plugin boundary. Other copied result strings retain the 65,536-byte limit.
+Optional JSON output must be a valid object. `ToolRegistry::invoke` returns a
+JSON object with `status`, `error_code`, `message`, `category`,
+and the provider-authored `payload` object. Status is `completed`
+for a successful invocation, `failed` for failure, and `unknown` when the
+provider cannot determine completion. A successful submission can still carry
+a pending service status in its payload. World Lab renders the payload as
+feedback and records the invocation status on its action receipt.
 
 The call, writer, and their pointers must not escape the callback or be used
 from background threads. A background operation can return a job identifier;
 it must expose later status through a separate tool. There is no asynchronous
 completion API in v3.
 
-execute_command(instance, command_text, writer) also delivers through a synchronous
-writer. The receiving plugin copies any strings it needs before its completion
-callback returns. There are no returned result strings to free.
+execute_command(instance, command_text, writer) adapts the registry result back
+to the synchronous ABI writer. The payload object is serialized directly,
+including an empty object.
+The ABI retains its voice slot. The host ignores
+incoming voice text and forwards a null voice pointer.
+The receiving plugin copies any strings it needs before its completion callback
+returns. There are no returned result strings to free.
 
 ## Shutdown and native lifetime
 
@@ -751,9 +762,9 @@ the original `ERR_PERCEPTION_NOT_INITIALIZED` result. Available observations
 retain their exact text in both message and voice, with `success:true`,
 `ERR_NONE`, routine category, and Cyan color, even if text is empty or looks like
 an error. The migration does not reinterpret returned prose as readiness or
-completion evidence. To preserve large observations, the result writer now
-accepts voice text up to 16 MiB, matching its message limit; other bounds remain
-unchanged. No output is silently truncated.
+completion evidence. The plugin still fills the ABI voice slot, which the host
+ignores. The host copies the observation in the message field, subject to its
+16 MiB limit.
 
 The optional `-PerceptionPluginDirectory` test argument exercises the real DLL,
 API, registry, and result writer against controlled host observation services.

@@ -6,7 +6,7 @@
 namespace {
 GrimResult clean(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
     return grim::completeToolResult(writer, true, "[Utility] Console cleared.",
-                                    "ERR_NONE", "routine", 0x64FF64, "Console cleared");
+                                    "ERR_NONE", "routine", "Console cleared");
 }
 
 GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
@@ -27,7 +27,7 @@ GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
         "- voice\n"
         "- voice_stream\n";
     return grim::completeToolResult(writer, true, message, "ERR_NONE", "summary",
-                                    0x64FFFF, "Help shown");
+                                    "Help shown");
 }
 }
 

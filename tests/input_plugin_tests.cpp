@@ -19,8 +19,8 @@ void runInputPluginTests(const std::filesystem::path& directory) {
   check(tool && tool->provider.name=="Input Plugin","Input ownership changed");
  }
  // Invalid requests never inject native input. Device effects are tested with a provider-local fixture.
- check(!registry.invoke("type","").success,"Empty typing accepted");
- check(!registry.invoke("move_mouse","bad").success,"Malformed move accepted");
+ check(registry.invoke("type","").at("status") == "failed","Empty typing accepted");
+ check(registry.invoke("move_mouse","bad").at("status") == "failed","Malformed move accepted");
  PluginManager::unloadAll(); check(registry.toolCount()==baseline,"Input tools survived unload");
  PluginManager::initialize(folder.string());
  fs::remove(folder/"input_plugin.dll"); PluginManager::checkForHotReload();

@@ -24,7 +24,7 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, const
         message = "Unknown perception failure"; errorCode = "ERR_PERCEPTION"; category = "error";
     }
     return grim::completeToolResult(writer, success, message.c_str(), errorCode, category,
-                                    0, nullptr, structured.c_str());
+                                    nullptr, structured.c_str());
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
