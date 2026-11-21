@@ -4,7 +4,7 @@
 #include "ui/world_lab/ui_world_lab_view.hpp"
 #include "ui/world_lab/ui_world_session.hpp"
 #include "ui/world_lab/world_observation.hpp"
-#include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "core/input_parser.hpp"
@@ -87,8 +87,8 @@ void runWorldLabTests(){
         auto& providers = GRIM::MMO::ProviderRegistry::instance();
         const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Catalog fixture", "fixture-1", {}};
         check(providers.publish(owner, {
-            {tool, [&](const std::string&) { ++invocations; return CommandResult{}; }},
-            {debug, [](const std::string&) { return CommandResult{}; }}
+            {tool, [&](const std::string&, bool) { ++invocations; return GRIM::MMO::makeToolResult(true, "", "", ""); }},
+            {debug, [](const std::string&, bool) { return GRIM::MMO::makeToolResult(true, "", "", ""); }}
         }), "Catalog fixture publication failed");
         const auto response=[] {return nlohmann::json{{"ok",true},{"result",{{"state",{
             {"feedback","static"},{"observation_request",{{"provider","tool_catalog"},{"entity_id","catalog"}}}}}}}};};

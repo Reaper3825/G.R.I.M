@@ -8,14 +8,15 @@ namespace {
 std::unique_ptr<perceptionPlugin::Runtime> runtime;
 const char* ids[] = {"perception.observe", "perception.digital.start", "perception.digital.stop",
     "perception.physical.open", "perception.physical.close", "perception.configure", "perception.calibrate"};
-GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, const char* toolId) {
-    std::string message, structured;
+GrimToolReply call(const GrimToolCall* request, const char* toolId) {
+    std::string message;
+    auto payload = nlohmann::json::object();
     bool success = false;
     const char* errorCode;
     const char* category;
     try {
         const auto args = request->arguments_size ? nlohmann::json::parse(request->arguments,request->arguments+request->arguments_size) : nlohmann::json::object();
-        structured = runtime->request(toolId,args).dump();
+        payload = runtime->request(toolId,args);
         success = true; errorCode = "ERR_NONE"; category = "information";
         message = "Perception snapshot";
     } catch (const std::exception& e) {
@@ -23,8 +24,8 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, const
     } catch (...) {
         message = "Unknown perception failure"; errorCode = "ERR_PERCEPTION"; category = "error";
     }
-    return grim::completeToolResult(writer, success, message.c_str(), errorCode, category,
-                                    nullptr, structured.c_str());
+    return grim::toolReply(success, message.c_str(), errorCode, category,
+                                    std::move(payload));
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
@@ -38,13 +39,13 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
         return GRIM_OK;
     } catch (...) { runtime.reset(); grim::plugin::setLoggingAPI({}); return GRIM_ERROR_UNKNOWN; }
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
     for (const auto* supported : ids)
-        if (id == supported) return call(request, writer, supported);
-    return GRIM_ERROR_NOT_FOUND;
+        if (id == supported) return call(request, supported);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { runtime.reset(); grim::plugin::setLoggingAPI({}); }

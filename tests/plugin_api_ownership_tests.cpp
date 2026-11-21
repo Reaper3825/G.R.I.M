@@ -8,7 +8,7 @@
 #include <chrono>
 #include <atomic>
 #include <thread>
-#include "commands/command_result.hpp"
+#include "core/plugin_tool_result.hpp"
 #include "MMO/Core/HardwareInventory.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <iostream>
@@ -38,19 +38,7 @@ std::pair<std::string, std::string> parseInput(const std::string& text) {
 
 namespace {
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-GrimResult identify(const GrimToolCall*, GrimToolResultWriter* writer, void* data) {
-    const auto* api = static_cast<const PluginBatchFixture*>(data);
-    (*api)->log(api->handle(), GRIM_LOG_INFO, "callback");
-    std::string message = "owned local message";
-    GrimToolResult result;
-    result.success = true;
-    result.message = message.c_str();
-    result.voice = "legacy voice text";
-    result.structured_output_json = "{\"answer\":42}";
-    auto status = writer->complete(writer, &result);
-    message.assign(200, 'x');
-    return status;
-}
+std::atomic<int> releasedReplies{0};
 using Json = nlohmann::json;
 Json definition(const char* id) {
     return {{"tool_id", id}, {"description", "A complete test tool"}, {"usage", "test [arguments]"},
@@ -59,47 +47,45 @@ Json definition(const char* id) {
 }
 
 PluginBatchFixture* alphaAPI = nullptr;
-GrimResult dispatchIdentify(const char*, const GrimToolCall* call, GrimToolResultWriter* writer) {
-    return identify(call, writer, alphaAPI);
+GrimToolReply dispatchIdentify(const char*, const GrimToolCall* call) {
+    (*alphaAPI)->log(alphaAPI->handle(), GRIM_LOG_INFO, "callback");
+    const bool success = std::string_view(call->arguments, call->arguments_size) != "unknown";
+    auto result = GRIM::MMO::makeToolResult(success, "owned local message",
+        success ? "" : "ERR_TOOL_COMPLETION_UNKNOWN", "", {{"answer", 42}});
+    result["provider_field"] = "preserved";
+    auto reply = grim::toolReply(result);
+    if (reply.delivery == GRIM_OK) {
+        reply.release = [](const char* bytes) noexcept {
+            delete[] bytes;
+            ++releasedReplies;
+        };
+    }
+    return reply;
 }
-GrimResult dispatchEmpty(const char*, const GrimToolCall*, GrimToolResultWriter*) { return GRIM_OK; }
+
+GrimToolReply dispatchEmpty(const char*, const GrimToolCall*) { return {GRIM_OK}; }
 
 void loadTools(PluginBatchFixture& provider, std::initializer_list<Json> tools, GrimToolDispatch dispatch = dispatchEmpty) {
     provider.load(Json(tools), dispatch);
 }
 
-GrimResult missingResult(const GrimToolCall*, GrimToolResultWriter*, void*) { return GRIM_OK; }
-GrimResult doubleResult(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
-    GrimToolResult result;
-    writer->complete(writer, &result);
-    writer->complete(writer, &result);
-    return GRIM_OK;
+GrimToolReply dispatchMalformed(const char*, const GrimToolCall*) {
+    auto* bytes = new char[1]{'{'};
+    return {GRIM_OK, bytes, 1, [](const char* data) noexcept {
+        delete[] data;
+        ++releasedReplies;
+    }};
 }
-GrimResult invalidResult(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
-    GrimToolResult result;
-    result.structured_output_json = "bad json";
-    writer->complete(writer, &result); // Even ignored writer errors must fail the call.
-    return GRIM_OK;
-}
+
 struct Blocking {
     std::promise<void> entered, release;
     std::shared_future<void> released = release.get_future().share();
 };
-GrimResult blocking(const GrimToolCall*, GrimToolResultWriter* writer, void* data) {
-    auto& state = *static_cast<Blocking*>(data);
-    state.entered.set_value();
-    state.released.wait();
-    GrimToolResult result;
-    result.success = 1;
-    return writer->complete(writer, &result);
-}
 Blocking* blockedCall = nullptr;
-GrimResult dispatchBlocking(const char*, const GrimToolCall* call, GrimToolResultWriter* writer) {
-    return blocking(call, writer, blockedCall);
-}
-GrimResult (*brokenHandler)(const GrimToolCall*, GrimToolResultWriter*, void*) = nullptr;
-GrimResult dispatchBroken(const char*, const GrimToolCall* call, GrimToolResultWriter* writer) {
-    return brokenHandler(call, writer, nullptr);
+GrimToolReply dispatchBlocking(const char*, const GrimToolCall*) {
+    blockedCall->entered.set_value();
+    blockedCall->released.wait();
+    return grim::toolReply(true, "", "", "");
 }
 
 void checkName(const PluginBatchFixture* api, const char* expected) {
@@ -241,7 +227,7 @@ int main(int argc, char** argv) try {
     ToolDescriptor collisionTool;
     collisionTool.tool_id = "reserved_fixture_tool";
     check(ProviderRegistry::instance().publish(collisionOwner, {
-        {collisionTool, [](const std::string&) { return CommandResult{}; }}
+        {collisionTool, [](const std::string&, bool) { return makeToolResult(true, "", "", ""); }}
     }), "Collision fixture publication failed");
 
     bool duplicateRejected = false;
@@ -250,33 +236,33 @@ int main(int argc, char** argv) try {
     check(duplicateRejected, "Duplicate identity replaced a retained API");
 
 
-    std::pair<std::string, std::string> executionResult;
-    GrimToolResultWriter recipient;
-    recipient.host_context = &executionResult;
-    recipient.complete = [](GrimToolResultWriter* writer, const GrimToolResult* result) {
-        if (result->voice) return GRIM_ERROR_INVALID_PARAM;
-        *static_cast<std::pair<std::string, std::string>*>(writer->host_context) =
-            {result->message, result->structured_output_json};
-        return GRIM_OK;
+    const auto execute = [&](const char* command) {
+        const auto* text = alpha->execute_command(alpha.handle(), command);
+        check(text != nullptr, "Command execution returned no JSON");
+        const auto release = [&alpha](const char* bytes) { alpha->string_free(alpha.handle(), bytes); };
+        const std::unique_ptr<const char, decltype(release)> result(text, release);
+        return Json::parse(result.get());
     };
-    check(alpha->execute_command(alpha.handle(), "alpha_tool", &recipient) == GRIM_OK &&
-          executionResult.first == "owned local message" &&
-          nlohmann::json::parse(executionResult.second) == nlohmann::json{{"answer", 42}},
-          "Command execution writer failed to forward the result");
-    check(alpha->execute_command(alpha.handle(), nullptr, &recipient) == GRIM_ERROR_INVALID_PARAM,
-          "Null execution input accepted");
-    check(alpha->execute_command(alpha.handle(), "missing_fixture_tool", &recipient) == GRIM_OK &&
-          executionResult.second == "{}", "Empty payload was not forwarded as a JSON object");
-    auto copiedResult = GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "");
-    check(!copiedResult.contains("voice") && copiedResult.at("message") == "owned local message" &&
-          copiedResult.at("payload") == nlohmann::json{{"answer", 42}}, "Host did not copy result data immediately");
-    for (auto handler : {missingResult, doubleResult, invalidResult}) {
-        brokenHandler = handler;
+    const auto beforeReply = releasedReplies.load();
+    const auto copiedResult = GRIM::MMO::ToolRegistry::instance().invoke("alpha_tool", "");
+    check(copiedResult.at("message") == "owned local message" &&
+          copiedResult.at("payload") == Json{{"answer", 42}} &&
+          copiedResult.at("provider_field") == "preserved" && releasedReplies == beforeReply + 1,
+          "Registry altered the direct result or failed to release its buffer");
+    check(execute("alpha_tool") == copiedResult, "Command execution changed the registry result");
+    check(execute("alpha_tool unknown").at("status") == "unknown", "Command execution lost provider status");
+    check(alpha->execute_command(alpha.handle(), nullptr) == nullptr, "Null execution input accepted");
+    check(execute("missing_fixture_tool").at("payload") == Json::object(),
+          "Missing-tool result lost its empty object payload");
+    const auto beforeMalformed = releasedReplies.load();
+    for (auto dispatch : {dispatchEmpty, dispatchMalformed}) {
         PluginBatchFixture brokenProvider({.name = "broken-fixture", .path = "", .version = "1.2.3"});
-        loadTools(brokenProvider, {definition("broken")}, dispatchBroken);
-        check(GRIM::MMO::ToolRegistry::instance().invoke("broken", "").at("error_code") == "ERR_PLUGIN_RESULT", "Invalid result accepted");
+        loadTools(brokenProvider, {definition("broken")}, dispatch);
+        check(GRIM::MMO::ToolRegistry::instance().invoke("broken", "").at("error_code") == "ERR_PLUGIN_RESULT",
+              "Undecodable reply accepted");
         brokenProvider.unload();
     }
+    check(releasedReplies == beforeMalformed + 1, "Malformed JSON buffer was not released");
     PluginBatchFixture metadata({.name = "metadata", .path = "metadata.dll", .version = "1.2.3"});
     auto complete = definition("metadata_tool");
     complete.update({

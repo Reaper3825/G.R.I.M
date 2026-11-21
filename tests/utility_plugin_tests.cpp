@@ -2,7 +2,7 @@
 #include "core/plugin_manager.hpp"
 #include "plugin_deployment_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -40,10 +40,8 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     // A collision must reject the whole batch and retain the existing provider.
     ToolDescriptor clean;
     clean.tool_id = "clean";
-    check(providers.publish(owner, {{clean, [](const std::string&) {
-        CommandResult result;
-        result.message = "existing provider";
-        return result;
+    check(providers.publish(owner, {{clean, [](const std::string&, bool) {
+        return GRIM::MMO::makeToolResult(true, "existing provider", "", "");
     }}}), "Cannot publish collision fixture");
     PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 1 && !registry.isRegistered("help") &&

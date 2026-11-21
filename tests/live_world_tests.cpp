@@ -1,6 +1,6 @@
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "ui/world_lab/live_world_session.hpp"
-#include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include <atomic>
 #include <thread>
 #include <iostream>
@@ -12,7 +12,7 @@ ToolRegistration tool(const std::string& id, ToolUsage usage = ToolUsage::Model)
     ToolDescriptor d;
     d.tool_id = d.display_name = id; d.usage_type = usage;
     d.description = "Fixture tool";
-    return {d, [](const std::string&) -> CommandResult { throw std::runtime_error("Discovery must never execute tools"); }};
+    return {d, [](const std::string&, bool) -> nlohmann::json { throw std::runtime_error("Discovery must never execute tools"); }};
 }
 int main() try {
     {

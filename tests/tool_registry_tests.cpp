@@ -1,7 +1,7 @@
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include "MMO/Core/ToolGapPlanner.hpp"
-#include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -16,10 +16,8 @@ ToolDescriptor descriptor(const std::string& id) {
     tool.category = "test";
     return tool;
 }
-CommandResult echo(const std::string& argument) {
-    CommandResult result;
-    result.message = argument;
-    return result;
+nlohmann::json echo(const std::string& argument, bool) {
+    return makeToolResult(true, argument, "", "");
 }
 struct Observer : ToolRegistryListener {
     int changes = 0;
@@ -155,13 +153,13 @@ int main() try {
     check(registry.getExecutableNames().size() == 3, "Callable listing lost batch tools");
     providers.retire(batchProvider.name, batchProvider.instance);
     auto throwing = descriptor("throwing");
-    publishTool(throwing, [](const std::string&) -> CommandResult { throw std::runtime_error("test"); });
+    publishTool(throwing, [](const std::string&, bool) -> nlohmann::json { throw std::runtime_error("test"); });
     check(registry.invoke("throwing", "").at("error_code") == "ERR_CMD_EXCEPTION", "Handler exception escaped dispatch");
     check(registry.getTool("throwing")->failure_count == 1, "Failure counted incorrectly");
     auto nested = descriptor("nested");
-    publishTool(nested, [&registry](const std::string& args) {
+    publishTool(nested, [&registry](const std::string& args, bool waitForCompletion) {
         const auto inner = registry.invoke("first", args);
-        return echo(inner.at("message").get<std::string>());
+        return echo(inner.at("message").get<std::string>(), waitForCompletion);
     });
     check(registry.invoke("nested", "nested result").at("message") == "nested result", "Nested registry dispatch failed");
 
@@ -169,11 +167,11 @@ int main() try {
     const auto oldOwner = ownerFor(replaced.tool_id);
     auto replacement = oldOwner;
     replacement.instance += "-replacement";
-    publishTool(replaced, [&](const std::string&) {
+    publishTool(replaced, [&](const std::string&, bool) {
         providers.retire(oldOwner.name, oldOwner.instance);
         check(providers.publish(replacement, {{replaced, echo}}),
               "In-flight provider replacement failed");
-        return CommandResult{};
+        return GRIM::MMO::makeToolResult(true, "", "", "");
     });
     registry.invoke("replaced", "");
     check(registry.getTool("replaced")->usage_count == 0, "Old execution updated replacement's stats");

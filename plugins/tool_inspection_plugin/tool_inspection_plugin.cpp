@@ -6,9 +6,9 @@
 
 namespace {
 template<CommandResult (*Handler)(const std::string&)>
-GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
+GrimToolReply call(const GrimToolCall* request, void*) {
     const auto value = Handler(std::string(request->arguments, request->arguments_size));
-    return grim::completeToolResult(writer, value);
+    return grim::toolReply(value);
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
@@ -19,14 +19,14 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     grim::plugin::setLoggingAPI(api);
     return GRIM_OK;
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "list_tools") return call<cmdListTools>(request, writer, nullptr);
-    if (id == "tool_info") return call<cmdToolInfo>(request, writer, nullptr);
-    if (id == "tool_stats") return call<cmdToolStats>(request, writer, nullptr);
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "list_tools") return call<cmdListTools>(request, nullptr);
+    if (id == "tool_info") return call<cmdToolInfo>(request, nullptr);
+    if (id == "tool_stats") return call<cmdToolStats>(request, nullptr);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {

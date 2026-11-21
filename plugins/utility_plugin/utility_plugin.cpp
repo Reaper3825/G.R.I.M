@@ -4,12 +4,12 @@
 #include "core/plugin_tool_result.hpp"
 
 namespace {
-GrimResult clean(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
-    return grim::completeToolResult(writer, true, "[Utility] Console cleared.",
-                                    "ERR_NONE", "routine", "Console cleared");
+GrimToolReply clean(const GrimToolCall*, void*) {
+    return grim::toolReply(true, "[Utility] Console cleared.",
+                                    "ERR_NONE", "routine");
 }
 
-GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
+GrimToolReply help(const GrimToolCall*, void*) {
     // Static legacy help excludes retired agent/admin commands.
     // Dynamic registry help is available separately through list_tools/tool_info.
     const char* message =
@@ -26,8 +26,7 @@ GrimResult help(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
         "- help\n"
         "- voice\n"
         "- voice_stream\n";
-    return grim::completeToolResult(writer, true, message, "ERR_NONE", "summary",
-                                    "Help shown");
+    return grim::toolReply(true, message, "ERR_NONE", "summary");
 }
 }
 
@@ -38,13 +37,13 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     return GRIM_OK;
 }
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "clean") return clean(request, writer, nullptr);
-    if (id == "help") return help(request, writer, nullptr);
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "clean") return clean(request, nullptr);
+    if (id == "help") return help(request, nullptr);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}

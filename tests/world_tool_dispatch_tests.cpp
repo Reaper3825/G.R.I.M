@@ -1,3 +1,4 @@
+#include "MMO/Core/ToolResultJson.hpp"
 #include "ui/world_lab/world_tool_dispatch.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
 #include <iostream>
@@ -17,10 +18,8 @@ ToolDescriptor tool(const std::string& id) {
     }
     return d;
 }
-CommandResult response(const Json& value) {
-    CommandResult result;
-    result.structuredOutput = value;
-    return result;
+Json response(Json value) {
+    return makeToolResult(true, "", "", "", std::move(value));
 }
 }
 int main() try {
@@ -32,14 +31,11 @@ int main() try {
         definition.aliases = {"execution_mode_alias"};
         int calls = 0;
         const ProviderDescriptor executionOwner{ToolProviderType::Plugin, "Execution fixture", "fixture-1", {}};
-        check(providers.publish(executionOwner, {{definition, [&](const std::string& args) {
+        check(providers.publish(executionOwner, {{definition, [&](const std::string& args, bool) {
             ++calls;
-            CommandResult result;
-            result.success = args != "fail";
-            result.message = args;
-            result.errorCode = result.success ? "ERR_NONE" : "FIXTURE_FAILURE";
-            result.structuredOutput = {{"actual", args}};
-            return result;
+            const bool success = args != "fail";
+            return makeToolResult(success, args, success ? "ERR_NONE" : "FIXTURE_FAILURE", "",
+                                  {{"actual", args}});
         }}}), "Execution fixture publication failed");
         const auto version = registry.version();
         const auto implicit = registry.invoke("execution_mode_alias", "implicit", {.expected_registry_version = version});
@@ -84,7 +80,7 @@ int main() try {
         auto retained = tool("retained_tool");
         auto retired = tool("retired_tool");
         retired.aliases = {"retired_alias"};
-        const auto handler = [](const std::string&) { return response(Json::object()); };
+        const auto handler = [](const std::string&, bool) { return response(Json::object()); };
         check(!registry.isExecutable(retained.tool_id), "Tool exposed before provider publication");
         check(providers.publish(provider, {{retained, handler}, {retired, handler}}) &&
               registry.getModelTools().size() == 2 && registry.isExecutable("retired_alias"),
@@ -117,26 +113,21 @@ int main() try {
     auto systemTool = tool("fixture.system");
     systemTool.usage_type = ToolUsage::System;
     check(providers.publish(owner, {
-        {tool("ui.list"), [&](const std::string& args) {
+        {tool("ui.list"), [&](const std::string& args, bool) {
             check(Json::parse(args) == Json::object(), "Listing did not get empty JSON args");
             ++listings;
             return response({{"panels", {{{"panel_id", "provider-panel"}}}}});
         }},
-        {rawTool, [&](const std::string& args) {
+        {rawTool, [&](const std::string& args, bool) {
             ++calls;
             return response({{"echo", args}});
         }},
-        {tool("fixture.empty"), [](const std::string& args) {
-            CommandResult result;
-            if (args == R"({"unknown":true})") {
-                result.success = false;
-                result.errorCode = "ERR_TOOL_COMPLETION_UNKNOWN";
-            }
-            result.message = "Hidden presentation text";
-            result.voice = "Hidden voice text";
-            return result;
+        {tool("fixture.empty"), [](const std::string& args, bool) {
+            const bool success = args != R"({"unknown":true})";
+            return makeToolResult(success, "Hidden presentation text",
+                                  success ? "" : "ERR_TOOL_COMPLETION_UNKNOWN", "");
         }},
-        {systemTool, [&](const std::string&) {
+        {systemTool, [&](const std::string&, bool) {
             ++calls;
             return response(Json::object());
         }}
@@ -160,7 +151,7 @@ int main() try {
     check(run("fixture.alias").at("status") == "failed" && run("fixture.system").at("status") == "failed" && calls == 1,
           "World dispatched an alias or system tool");
     providers.retire(owner.name, owner.instance);
-    check(providers.publish(owner, {{rawTool, [&](const std::string&) {
+    check(providers.publish(owner, {{rawTool, [&](const std::string&, bool) {
         ++calls;
         return response(Json::object());
     }}}), "Replacement fixture publication failed");

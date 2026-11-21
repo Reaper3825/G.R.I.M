@@ -1,5 +1,5 @@
 #include "ui/training_panel/ui_training_tools_view.hpp"
-#include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "ui/overlay_renderer.hpp"
 #include "core/input_parser.hpp"
@@ -16,7 +16,7 @@ void runTrainingToolsTests() {
         return ProviderDescriptor{ToolProviderType::Plugin, name, "fixture-" + name, {}};
     };
     const auto retire = [&](const std::string& name) { providers.retire(name, owner(name).instance); };
-    const auto handler = [](const std::string&) { return CommandResult{}; };
+    const auto handler = [](const std::string&, bool) { return GRIM::MMO::makeToolResult(true, "", "", ""); };
     ToolDescriptor tool;
     tool.tool_id = "viewer_test";
     tool.description = "Inspect metadata";

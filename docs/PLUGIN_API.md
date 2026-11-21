@@ -1,6 +1,10 @@
-# G.R.I.M Plugin API v26.0
+# G.R.I.M Plugin API v27.0
 
-API version: **26.0.0**.
+API version: **27.0.0**.
+
+Version 27 makes plugin dispatch return the provider's JSON result directly.
+`execute_command` returns the registry result as a host-owned JSON string.
+Rebuild the host and plugins together. The loader rejects version 26 manifests.
 
 Version 25 removes the color field from `GrimToolResult` and the registry's JSON
 result. Rebuild and deploy the host, plugin DLLs, and manifests together.
@@ -97,8 +101,8 @@ existing service offsets at the time.
 See [generic UI operations](#generic-ui-operations-v38).
 
 Place a UTF-8 `<library-stem>.tools.json` beside each provider library. The
-loader expects `schema_version: 2`, the packed integer `api_version` (1703936
-for 26.0.0), the provider name and version in `provider` and `version`, and a
+loader expects `schema_version: 2`, the packed integer `api_version` (1769472
+for 27.0.0), the provider name and version in `provider` and `version`, and a
 `tools` array. A provider with tools exports `grim_plugin_dispatch_tool`.
 See [Application's manifest](../plugins/application_plugin/application_plugin.tools.json)
 for raw text and JSON tool declarations.
@@ -264,57 +268,42 @@ during publication.
 
 ### Provider initialization
 
-The loader registers the provider and its manifest tools in one registry
-operation before invoking init. Init can publish resources and attach panels
-directly to that loaded instance. Tool and tick dispatch starts after
-init returns `GRIM_OK`. Failed init goes through the same teardown as unload.
+The loader stages the provider and its manifest tools before invoking init.
+Init can publish resources and attach panels to that staged instance. Tool and
+tick dispatch starts once the successfully initialized provider is published.
+Failed init goes through the same teardown as unload.
 
 `unregister_command` removes a canonical tool owned by the calling instance.
 
 ## Result ownership
 
-Handlers have this signature:
+A plugin with tools exports:
 
-    extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-        const char* tool_id, const GrimToolCall* call, GrimToolResultWriter* writer);
+    extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+        const char* tool_id, const GrimToolCall* call);
 
-The host supplies a synchronous call with an argument string and byte length.
-The handler completes exactly once with writer->complete(writer, &result).
-The writer copies the result's message, error code, category, and
-optional JSON object immediately, while the handler's local storage is alive.
-The host owns those copies; neither side frees strings allocated by the other.
-World Lab uses the provider object as tool feedback. An omitted object becomes
-`{}`. Tool presentation fields remain available to their host consumers.
+The call and its argument bytes are borrowed during dispatch. The provider builds
+and validates its result, then returns UTF-8 JSON bytes, their size, and a release
+function in `GrimToolReply`. `grim::toolReply` builds a result using the common
+fields and allocates the buffer in the provider. The host parses the bytes and
+calls the provider's release function before allowing the DLL to unload. The
+returned buffer need not be NUL-terminated.
 
-GrimToolResult::success reports whether the operation succeeded.
-The handler's returned GrimResult reports whether it delivered a valid result.
-Missing completion, repeated completion, malformed or non-object JSON output, invalid result
-structures, or a non-OK handler return produce ERR_PLUGIN_RESULT. Writer
-validation failures are remembered even when a handler ignores the error.
-Exceptions from handlers become registry command failures.
+A delivered result has `status`, `error_code`, `message`, `category`, and an
+object-valued `payload`. Providers can add fields. A provider reports
+`completed`, `failed`, or `unknown` for the invocation. A successful submission
+can carry a pending service status and a job ID in its payload. Later status
+is available through the provider's status tool where supported.
 
-Result messages support up to 16 MiB as of v3.2 so complete catalog listings can
-cross the plugin boundary. Other copied result strings retain the 65,536-byte limit.
-Optional JSON output must be a valid object. `ToolRegistry::invoke` returns a
-JSON object with `status`, `error_code`, `message`, `category`,
-and the provider-authored `payload` object. Status is `completed`
-for a successful invocation, `failed` for failure, and `unknown` when the
-provider cannot determine completion. A successful submission can still carry
-a pending service status in its payload. World Lab renders the payload as
-feedback and records the invocation status on its action receipt.
+`GrimToolReply::delivery` describes whether the dispatcher returned a buffer.
+A non-OK delivery code, missing buffer, or unreadable JSON produces
+`ERR_PLUGIN_RESULT`. `ToolRegistry::invoke` returns the decoded provider result
+and generates its own errors for dispatch failures. World Lab renders the
+payload as feedback and records the invocation status on its action receipt.
 
-The call, writer, and their pointers must not escape the callback or be used
-from background threads. A background operation can return a job identifier;
-it must expose later status through a separate tool. There is no asynchronous
-completion API in v3.
-
-execute_command(instance, command_text, writer) adapts the registry result back
-to the synchronous ABI writer. The payload object is serialized directly,
-including an empty object.
-The ABI retains its voice slot. The host ignores
-incoming voice text and forwards a null voice pointer.
-The receiving plugin copies any strings it needs before its completion callback
-returns. There are no returned result strings to free.
+`execute_command(instance, command_text)` returns the registry result serialized
+as a host-owned JSON string. The caller releases it with `string_free`. A null
+pointer indicates an API failure.
 
 ## Shutdown and native lifetime
 
@@ -339,9 +328,7 @@ plugin joins its coordinator, which owns worker joins and network cleanup.
 The function table retains logging, notifications,
 manual memory services, and generation-scoped provider resource publication.
 
-Host-returned strings from other services retain their existing string_free
-ownership contract; the new result writer applies specifically to tool results
-and command execution. The API does not sandbox native code.
+Host-returned strings use the `string_free` ownership contract. The API does not sandbox native code.
 
 ## Startup and shutdown batches
 
@@ -564,7 +551,7 @@ removal, resource updates, failed replacement, reload, and plugin folder removal
 informational Model tool `calculate` in its sidecar manifest. It has no confirmation or host-service dependency. The raw expression parameter
 is documented as `calculate {t}` with the text binding `t`.
 
-The synchronous result writer receives a human-readable answer and JSON containing
+The result includes a human-readable message and a payload containing
 `success`, `value`, and `answer`. Evaluation errors use an `ERR_CALC_` code and JSON
 fields `success: false`, `error`, `error_message`, and `error_offset` (a zero-based
 byte offset). The plugin bounds input length and recursive parsing, rejects
@@ -705,7 +692,7 @@ failure handling, native detection and lifecycle validation.
 `remember` queues a record and `recall` returns the first stored match. The next
 `memory.retrieve` request promotes pending records before performing text and
 tag lookup. The orchestrator dispatches this System tool and receives copied
-hits and retrieval diagnostics in `structured_output_json`.
+hits and retrieval diagnostics in the result payload.
 
 The provider opens `memory_plugin_data/records.fb` beside the deployed DLL.
 It writes pending and short-term records to an atomic transient snapshot at
@@ -745,7 +732,7 @@ ignores. The host copies the observation in the message field, subject to its
 16 MiB limit.
 
 The optional `-PerceptionPluginDirectory` test argument exercises the real DLL,
-API, registry, and result writer against controlled host observation services.
+API, registry, and JSON results against controlled host observation services.
 It checks initialization/availability transitions, exact routing and
 OCR defaults, ignored arguments, literal/empty/error results, 70-KB text and voice,
 exception paths, and DLL removal without changing host state. No screen capture,
@@ -809,7 +796,7 @@ Metadata identifies these placeholders. DLL load/unload performs no capture,
 playback, stream stop, model startup, or cache shutdown.
 
 The optional `-VoicePluginDirectory` test argument uses the real DLL, host service
-dispatcher, session context/history, registry, and result writer with controlled
+dispatcher, session context/history, registry, and JSON results with controlled
 capture/audio/cache/native-query endpoints. Cache and embedding file operations
 run only in a private temporary directory. Tests cover all eleven tools, exact
 results, shared stream references, live configuration, SAPI status branches,

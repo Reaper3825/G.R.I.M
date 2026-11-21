@@ -1,4 +1,4 @@
-#include "core/plugin_api.hpp"
+#include "core/plugin_tool_result.hpp"
 #include <string>
 #include <string_view>
 
@@ -21,12 +21,6 @@ static GrimResult publish(const char* kind) {
     return api->replace_resources(api.instance(), kind, json.data(), json.size());
 }
 static void tick(double, double, void*) { publish("fixture_tick"); }
-static GrimResult run(const GrimToolCall*, GrimToolResultWriter* writer, void*) {
-    GrimToolResult result;
-    result.success = 1;
-    result.message = FIXTURE_RESULT;
-    return writer->complete(writer, &result);
-}
 #endif
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value, GrimPluginHandle instance) {
     if (!value || value->api_version != GRIM_API_VERSION) return GRIM_ERROR_API_VERSION_MISMATCH;
@@ -46,14 +40,14 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* value,
     return GRIM_OK;
 }
 #ifdef FIXTURE_TOOLS
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* call, GrimToolResultWriter* writer) {
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall*) {
     const std::string_view id(tool_id);
-    if (id == FIXTURE_NAME) return run(call, writer, nullptr);
+    if (id == FIXTURE_NAME) return grim::toolReply(true, FIXTURE_RESULT, "", "");
 #ifdef FIXTURE_EXTRA
-    if (id == FIXTURE_NAME "-extra") return run(call, writer, nullptr);
+    if (id == FIXTURE_NAME "-extra") return grim::toolReply(true, FIXTURE_RESULT, "", "");
 #endif
-    return GRIM_ERROR_NOT_FOUND;
+    return {GRIM_ERROR_NOT_FOUND};
 }
 #endif
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {

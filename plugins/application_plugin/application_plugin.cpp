@@ -12,10 +12,6 @@ grim::PluginHost host = {};
 std::unique_ptr<GRIM::Applications::Catalog> catalog;
 std::shared_ptr<GRIM::Applications::UserAliases> userAliases;
 
-GrimResult finish(GrimToolResultWriter* writer, bool success, const std::string& message,
-                  const char* error, const char* category, const std::string& voice) {
-    return grim::completeToolResult(writer, success, message.c_str(), error, category, voice.c_str());
-}
 std::string errorMessage(const char* code) {
     const auto* text = host->get_user_error_message(host.instance(), code);
     if (!text) throw std::runtime_error("Host error-message lookup failed");
@@ -26,40 +22,40 @@ std::string errorMessage(const char* code) {
 std::string argument(const GrimToolCall* call) {
     return std::string(call->arguments, call->arguments_size);
 }
-GrimResult openApplication(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+GrimToolReply openApplication(const GrimToolCall* call, void*) {
     // Preserve open's original untrimmed argument semantics.
     const auto target = argument(call);
-    if (target.empty()) return finish(writer, false, errorMessage("ERR_APP_NO_ARGUMENT"),
-        "ERR_APP_NO_ARGUMENT", "error", "Missing application name");
+    if (target.empty()) return grim::toolReply(false, errorMessage("ERR_APP_NO_ARGUMENT"),
+        "ERR_APP_NO_ARGUMENT", "error");
 #ifdef _WIN32
     if (shellOpenTarget(userAliases->resolve(target)) <= 32)
-        return finish(writer, false, errorMessage("ERR_APP_LAUNCH_FAILED") + ": " + target,
-            "ERR_APP_LAUNCH_FAILED", "error", "Failed to open " + target);
-    return finish(writer, true, "[App] Launched: " + target,
-        "ERR_NONE", "routine", "Opening " + target);
+        return grim::toolReply(false, errorMessage("ERR_APP_LAUNCH_FAILED") + ": " + target,
+            "ERR_APP_LAUNCH_FAILED", "error");
+    return grim::toolReply(true, "[App] Launched: " + target,
+        "ERR_NONE", "routine");
 #else
-    return finish(writer, true, "[App] (Stub) Would open: " + target,
-        "ERR_NONE", "routine", "Opening " + target);
+    return grim::toolReply(true, "[App] (Stub) Would open: " + target,
+        "ERR_NONE", "routine");
 #endif
 }
-GrimResult searchWeb(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+GrimToolReply searchWeb(const GrimToolCall* call, void*) {
     const auto raw = argument(call);
     const auto start = raw.find_first_not_of(" \t\n\r");
     const auto query = start == std::string::npos ? std::string{} :
         raw.substr(start, raw.find_last_not_of(" \t\n\r") - start + 1);
-    if (query.empty()) return finish(writer, false, errorMessage("ERR_WEB_NO_ARGUMENT"),
-        "ERR_WEB_NO_ARGUMENT", "error", "No search query");
+    if (query.empty()) return grim::toolReply(false, errorMessage("ERR_WEB_NO_ARGUMENT"),
+        "ERR_WEB_NO_ARGUMENT", "error");
 #ifdef _WIN32
     // Preserve the original URL construction; no new encoding or query rewriting.
     const auto url = "https://www.google.com/search?q=" + query;
     if (shellOpenTarget(url) <= 32)
-        return finish(writer, false, errorMessage("ERR_WEB_OPEN_FAILED") + ": " + query,
-            "ERR_WEB_OPEN_FAILED", "error", "Web search failed");
-    return finish(writer, true, "[Web] Searching: " + query,
-        "ERR_NONE", "routine", "Searching web for " + query);
+        return grim::toolReply(false, errorMessage("ERR_WEB_OPEN_FAILED") + ": " + query,
+            "ERR_WEB_OPEN_FAILED", "error");
+    return grim::toolReply(true, "[Web] Searching: " + query,
+        "ERR_NONE", "routine");
 #else
-    return finish(writer, true, "[Web] (Stub) Would search for: " + query,
-        "ERR_NONE", "routine", "Searching web for " + query);
+    return grim::toolReply(true, "[Web] (Stub) Would search for: " + query,
+        "ERR_NONE", "routine");
 #endif
 }
 }
@@ -85,13 +81,13 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     return GRIM_OK;
 }
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* call, GrimToolResultWriter* writer) {
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* call) {
     const std::string_view id(tool_id);
-    if (id == "open") return openApplication(call, writer, nullptr);
-    if (id == "search") return searchWeb(call, writer, nullptr);
-    if (!catalog) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return dispatchApplicationTool(id, call, writer, *catalog);
+    if (id == "open") return openApplication(call, nullptr);
+    if (id == "search") return searchWeb(call, nullptr);
+    if (!catalog) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return dispatchApplicationTool(id, call, *catalog);
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { catalog.reset(); userAliases.reset(); host = {}; }

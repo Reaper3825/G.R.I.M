@@ -342,32 +342,14 @@ const char* errorCode(CalculatorError error) {
     return "ERR_CALC_UNKNOWN";
 }
 
-std::string jsonString(std::string_view text) {
-    constexpr char hex[] = "0123456789abcdef";
-    std::string result = "\"";
-    for (unsigned char c : text) {
-        if (c == '"' || c == '\\') {
-            result += '\\';
-            result += static_cast<char>(c);
-        } else if (c < 0x20 || c >= 0x7f) {
-            result += "\\u00";
-            result += hex[c >> 4];
-            result += hex[c & 15];
-        } else {
-            result += static_cast<char>(c);
-        }
-    }
-    return result + '"';
-}
-
-GrimResult calculate(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    if (!call || !writer || !writer->complete || (!call->arguments && call->arguments_size))
-        return GRIM_ERROR_INVALID_PARAM;
+GrimToolReply calculate(const GrimToolCall* call, void*) {
+    if (!call || (!call->arguments && call->arguments_size))
+        return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view equation(call->arguments ? call->arguments : "", call->arguments_size);
     bool success = false;
     const char* errorCodeText = nullptr;
     std::string message;
-    std::string output;
+    nlohmann::json payload;
     try {
         if (equation.size() > kMaximumExpressionLength)
             throw ParseFailure(CalculatorError::ExpressionTooLong, kMaximumExpressionLength,
@@ -376,25 +358,24 @@ GrimResult calculate(const GrimToolCall* call, GrimToolResultWriter* writer, voi
             throw ParseFailure(CalculatorError::EmptyExpression, 0, "expression is empty");
         const double value = Parser(equation).parse();
         message = formatAnswer(value);
+        // Retain the existing numeric representation in the public payload.
         std::ostringstream numeric;
         numeric.imbue(std::locale::classic());
         numeric << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
-        output = "{\"success\":true,\"value\":" + numeric.str() +
-                 ",\"answer\":" + jsonString(message) + "}";
+        payload = {{"success", true}, {"value", nlohmann::json::parse(numeric.str())}, {"answer", message}};
         success = true;
         errorCodeText = "ERR_NONE";
     } catch (const ParseFailure& failure) {
         errorCodeText = errorCode(failure.error);
         message = failure.what();
-        output = "{\"success\":false,\"error\":" + jsonString(errorCodeText) +
-                 ",\"error_message\":" + jsonString(message) +
-                 ",\"error_offset\":" + std::to_string(failure.offset) + "}";
+        payload = {{"success", false}, {"error", errorCodeText}, {"error_message", message},
+                   {"error_offset", failure.offset}};
     } catch (...) {
         // Never let C++ exceptions cross the plugin ABI.
-        return GRIM_ERROR_UNKNOWN;
+        return {GRIM_ERROR_UNKNOWN};
     }
-    return grim::completeToolResult(writer, success, message.c_str(), errorCodeText, "math",
-                                    nullptr, output.c_str());
+    return grim::toolReply(success, message.c_str(), errorCodeText, "math",
+                                    std::move(payload));
 }
 
 } // namespace
@@ -406,12 +387,12 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     return GRIM_OK;
 }
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "calculate") return calculate(request, writer, nullptr);
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "calculate") return calculate(request, nullptr);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {}

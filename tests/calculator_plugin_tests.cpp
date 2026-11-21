@@ -1,6 +1,6 @@
 #include "core/plugin_api.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "commands/command_result.hpp"
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <filesystem>
@@ -35,25 +35,13 @@ static bool publishCalculator(const std::filesystem::path& path) {
     descriptor.usage = entry.at("usage").get<std::string>();
     descriptor.bindings = entry.at("bindings").get<decltype(descriptor.bindings)>();
     return ProviderRegistry::instance().publish({ToolProviderType::Plugin, "Calculator Plugin", "calculator-test", {}}, {{descriptor,
-        [](const std::string& arguments) {
-            struct Capture { CommandResult result; int completions = 0; } capture;
-            GrimToolResultWriter writer;
-            writer.host_context = &capture;
-            writer.complete = [](GrimToolResultWriter* w, const GrimToolResult* r) {
-                auto& c = *static_cast<Capture*>(w->host_context);
-                ++c.completions;
-                c.result.success = r->success;
-                c.result.message = r->message;
-                c.result.errorCode = r->error_code;
-                c.result.structuredOutput = Json::parse(r->structured_output_json);
-                return GRIM_OK;
-            };
-            GrimToolCall call;
-            call.arguments = arguments.data();
-            call.arguments_size = arguments.size();
-            check(dispatch("calculate", &call, &writer) == GRIM_OK, "Handler failed at ABI boundary");
-            check(capture.completions == 1, "Handler must complete exactly once");
-            return capture.result;
+        [](const std::string& arguments, bool waitForCompletion) {
+            const GrimToolCall call{.arguments = arguments.data(), .arguments_size = arguments.size(),
+                                    .wait_for_completion = waitForCompletion ? 1u : 0u};
+            const auto reply = dispatch("calculate", &call);
+            check(reply.delivery == GRIM_OK && reply.json && reply.release, "Handler failed at ABI boundary");
+            const std::unique_ptr<const char, decltype(reply.release)> bytes(reply.json, reply.release);
+            return Json::parse(bytes.get(), bytes.get() + reply.size);
         }}});
 }
 
@@ -121,16 +109,16 @@ int main(int argc, char** argv) {
                   entry.first.c_str());
         }
         check(invoke("12 / 0", false).at("error_offset") == 3, "Incorrect error offset");
+        check(invoke("12 - 2", true).at("value").is_number_integer(), "Integral payload encoding changed");
         std::string powers = "1";
         for (int i = 0; i < 100; ++i) powers += "^1";
         check(invoke(powers, false).at("error") == "ERR_CALC_NESTING_LIMIT_EXCEEDED",
               "Exponent recursion must be bounded");
         check(invoke(std::string(4095, ' ') + "1", true).at("value") == 1, "Input boundary failed");
-        GrimToolCall bad;
-        GrimToolResultWriter writer;
-        check(dispatch("calculate", nullptr, &writer) == GRIM_ERROR_INVALID_PARAM, "Null call accepted");
-        check(dispatch("calculate", &bad, nullptr) == GRIM_ERROR_INVALID_PARAM, "Null writer accepted");
-        check(dispatch("calculate", &bad, &writer) == GRIM_ERROR_INVALID_PARAM, "Null completion accepted");
+        const GrimToolCall bad{.arguments_size = 1};
+        check(dispatch("calculate", nullptr).delivery == GRIM_ERROR_INVALID_PARAM, "Null call accepted");
+        check(dispatch("calculate", &bad).delivery == GRIM_ERROR_INVALID_PARAM, "Missing arguments accepted");
+        check(dispatch("missing", &bad).delivery == GRIM_ERROR_NOT_FOUND, "Unknown tool accepted");
         pluginShutdown();
         ProviderRegistry::instance().retire("Calculator Plugin", "calculator-test");
         check(!ToolRegistry::instance().isRegistered("calculate"), "Provider removal failed");

@@ -2,28 +2,38 @@
 
 #include "plugin_api.hpp"
 #include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
+#include <algorithm>
+#include <new>
 
 namespace grim {
 
-inline GrimResult completeToolResult(GrimToolResultWriter* writer, bool success,
-                                     const char* message, const char* errorCode, const char* category,
-                                     const char* voice = nullptr,
-                                     const char* structuredJson = nullptr) {
-    GrimToolResult result;
-    result.success = success;
-    result.message = message;
-    result.error_code = errorCode;
-    result.category = category;
-    result.voice = voice;
-    result.structured_output_json = structuredJson;
-    return writer->complete(writer, &result);
+// Called in the provider so allocation and release use the same runtime.
+inline GrimToolReply toolReply(const nlohmann::json& result) noexcept {
+    try {
+        if (!result.is_object() || !result.at("payload").is_object())
+            return {GRIM_ERROR_INVALID_PARAM};
+        const auto text = result.dump();
+        auto* bytes = new char[text.size()];
+        std::copy(text.begin(), text.end(), bytes);
+        return {GRIM_OK, bytes, text.size(), [](const char* data) noexcept { delete[] data; }};
+    } catch (const std::bad_alloc&) {
+        return {GRIM_ERROR_OUT_OF_MEMORY};
+    } catch (...) {
+        return {GRIM_ERROR_INVALID_PARAM};
+    }
 }
 
-inline GrimResult completeToolResult(GrimToolResultWriter* writer, const CommandResult& value) {
-    const auto payloadText = value.structuredOutput.dump();
-    return completeToolResult(writer, value.success, value.message.c_str(), value.errorCode.c_str(),
-                              value.category.c_str(), value.voice.c_str(),
-                              payloadText.c_str());
+inline GrimToolReply toolReply(bool success, std::string_view message,
+                               std::string_view errorCode, std::string_view category,
+                               nlohmann::json payload = nlohmann::json::object()) {
+    return toolReply(GRIM::MMO::makeToolResult(success, message, errorCode, category,
+                                             std::move(payload)));
+}
+
+inline GrimToolReply toolReply(const CommandResult& value) {
+    return toolReply(value.success, value.message, value.errorCode, value.category,
+                     value.structuredOutput);
 }
 
 }

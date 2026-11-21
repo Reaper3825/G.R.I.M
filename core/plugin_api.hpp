@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// G.R.I.M Plugin API v25.0
+// G.R.I.M Plugin API v27.0
 // ============================================================================
 // This header defines the stable API interface for hot-reloadable plugins.
 // Service plugins use this C table. Native UI plugins additionally import the
@@ -20,7 +20,7 @@
 // ============================================================================
 // API Versioning
 // ============================================================================
-#define GRIM_API_VERSION_MAJOR 26
+#define GRIM_API_VERSION_MAJOR 27
 #define GRIM_API_VERSION_MINOR 0
 #define GRIM_API_VERSION_PATCH 0
 
@@ -72,8 +72,7 @@ typedef enum {
     GRIM_LOG_CRITICAL = 4
 } GrimLogLevel;
 
-// All pointers are borrowed for the duration of the API call. The host copies
-// result data before returning. No STL crosses the ABI.
+// Arguments are borrowed for the duration of the dispatch call.
 struct GrimToolCall {
     uint32_t struct_size = sizeof(GrimToolCall);
     const char* arguments = nullptr;
@@ -81,23 +80,16 @@ struct GrimToolCall {
     // Optional request for a final result from providers with asynchronous operations.
     uint32_t wait_for_completion = 0;
 };
-struct GrimToolResult {
-    uint32_t struct_size = sizeof(GrimToolResult);
-    uint32_t success = 0;
-    const char* message = nullptr;
-    const char* error_code = nullptr;
-    const char* category = nullptr;
-    const char* voice = nullptr;
-    const char* structured_output_json = nullptr;
+// A successful dispatch returns one provider-owned, UTF-8 JSON result.
+// The receiver calls release(json) once while the provider is pinned.
+// A dispatch failure returns a non-OK code and no buffer.
+struct GrimToolReply {
+    GrimResult delivery = GRIM_ERROR_UNKNOWN;
+    const char* json = nullptr;
+    size_t size = 0;
+    void (*release)(const char*) noexcept = nullptr;
 };
-// Complete exactly once, synchronously. complete() copies every field immediately.
-// The writer and call cannot be retained or used by background threads.
-struct GrimToolResultWriter {
-    uint32_t struct_size = sizeof(GrimToolResultWriter);
-    void* host_context = nullptr;
-    GrimResult (*complete)(GrimToolResultWriter*, const GrimToolResult*) = nullptr;
-};
-using GrimToolDispatch = GrimResult (*)(const char* tool_id, const GrimToolCall*, GrimToolResultWriter*);
+using GrimToolDispatch = GrimToolReply (*)(const char* tool_id, const GrimToolCall*);
 
 enum GrimUIPanelOperation : uint32_t {
     GRIM_UI_LIST = 0, GRIM_UI_INSPECT = 1, GRIM_UI_SHOW = 2,
@@ -139,8 +131,9 @@ typedef struct GrimPluginAPI {
     // Remove a tool owned by the current provider.
     GrimResult (*unregister_command)(GrimPluginHandle instance, const char* command_name);
     
-    // Execute a command programmatically
-    GrimResult (*execute_command)(GrimPluginHandle instance, const char* command_text, GrimToolResultWriter* result);
+    // Return the registry result as host-owned JSON. Release with string_free.
+    // Null indicates an API failure.
+    const char* (*execute_command)(GrimPluginHandle instance, const char* command_text);
     
     // ========================================================================
     // Notifications

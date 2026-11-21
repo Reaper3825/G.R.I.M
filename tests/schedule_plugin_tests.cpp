@@ -9,16 +9,10 @@ static Json invoke(const std::string& operation, Json args) {
     const auto id = "schedule." + operation;
     const auto payload = args.dump();
     GrimToolCall request{sizeof(GrimToolCall), payload.data(), payload.size()};
-    Json result;
-    GrimToolResultWriter writer;
-    writer.host_context = &result;
-    writer.complete = [](GrimToolResultWriter* current, const GrimToolResult* value) {
-        *static_cast<Json*>(current->host_context) = value->structured_output_json
-            ? Json::parse(value->structured_output_json) : Json();
-        return GRIM_OK;
-    };
-    assert(grim_plugin_dispatch_tool(id.c_str(), &request, &writer) == GRIM_OK);
-    return result;
+    const auto reply = grim_plugin_dispatch_tool(id.c_str(), &request);
+    assert(reply.delivery == GRIM_OK && reply.json && reply.release);
+    const std::unique_ptr<const char, decltype(reply.release)> bytes(reply.json, reply.release);
+    return Json::parse(bytes.get(), bytes.get() + reply.size).at("payload");
 }
 void runSchedulePluginTests() {
     const auto now = grim::scheduling::scheduleNow();

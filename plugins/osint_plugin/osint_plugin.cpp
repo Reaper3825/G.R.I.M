@@ -22,40 +22,40 @@ static std::string arguments(const GrimToolCall* call, bool target = true) {
 // Store the API pointer globally for use in command handlers
 static grim::PluginHost g_api = {};
 
-static GrimResult handleProfilePerson(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+static GrimToolReply handleProfilePerson(const GrimToolCall* call, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return grim::completeToolResult(writer, cmdProfilePerson(arguments(call)));
+    if (!g_api) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return grim::toolReply(cmdProfilePerson(arguments(call)));
 }
-static GrimResult handleSherlockSweep(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+static GrimToolReply handleSherlockSweep(const GrimToolCall* call, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return grim::completeToolResult(writer, cmdSherlockSweep(arguments(call)));
+    if (!g_api) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return grim::toolReply(cmdSherlockSweep(arguments(call)));
 }
-static GrimResult handleOsintReport(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+static GrimToolReply handleOsintReport(const GrimToolCall* call, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return grim::completeToolResult(writer, cmdOsintReport(arguments(call)));
+    if (!g_api) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return grim::toolReply(cmdOsintReport(arguments(call)));
 }
-static GrimResult handleOsintStatus(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+static GrimToolReply handleOsintStatus(const GrimToolCall* call, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return grim::completeToolResult(writer, cmdOsintStatus(arguments(call)));
+    if (!g_api) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return grim::toolReply(cmdOsintStatus(arguments(call)));
 }
-static GrimResult handleOsintClearCache(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+static GrimToolReply handleOsintClearCache(const GrimToolCall* call, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return grim::completeToolResult(writer, cmdOsintClearCache(arguments(call, false)));
+    if (!g_api) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return grim::toolReply(cmdOsintClearCache(arguments(call, false)));
 }
-static GrimResult handleOsintScanSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+static GrimToolReply handleOsintScanSecrets(const GrimToolCall* call, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return grim::completeToolResult(writer, cmdOsintScanSecrets(arguments(call)));
+    if (!g_api) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return grim::toolReply(cmdOsintScanSecrets(arguments(call)));
 }
-static GrimResult handleOsintShowSecrets(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
+static GrimToolReply handleOsintShowSecrets(const GrimToolCall* call, void*) {
     std::lock_guard<std::mutex> lock(commandsMutex);
-    if (!g_api) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    return grim::completeToolResult(writer, cmdOsintShowSecrets(arguments(call)));
+    if (!g_api) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
+    return grim::toolReply(cmdOsintShowSecrets(arguments(call)));
 }
 // ============================================================================
 // NEW PLUGIN API IMPLEMENTATION
@@ -79,18 +79,18 @@ PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPlugin
     return GRIM_OK;
 }
 
-PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "profile_person") return handleProfilePerson(request, writer, nullptr);
-    if (id == "sherlock_sweep") return handleSherlockSweep(request, writer, nullptr);
-    if (id == "osint_report") return handleOsintReport(request, writer, nullptr);
-    if (id == "osint_status") return handleOsintStatus(request, writer, nullptr);
-    if (id == "osint_clear_cache") return handleOsintClearCache(request, writer, nullptr);
-    if (id == "osint_scan_secrets") return handleOsintScanSecrets(request, writer, nullptr);
-    if (id == "osint_show_secrets") return handleOsintShowSecrets(request, writer, nullptr);
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "profile_person") return handleProfilePerson(request, nullptr);
+    if (id == "sherlock_sweep") return handleSherlockSweep(request, nullptr);
+    if (id == "osint_report") return handleOsintReport(request, nullptr);
+    if (id == "osint_status") return handleOsintStatus(request, nullptr);
+    if (id == "osint_clear_cache") return handleOsintClearCache(request, nullptr);
+    if (id == "osint_scan_secrets") return handleOsintScanSecrets(request, nullptr);
+    if (id == "osint_show_secrets") return handleOsintShowSecrets(request, nullptr);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 PLUGIN_EXPORT void grim_plugin_shutdown() {

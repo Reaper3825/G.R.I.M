@@ -32,13 +32,13 @@ std::vector<std::shared_ptr<ProviderRegistry::NativeState>> ProviderRegistry::re
 void ProviderRegistry::prepareTools(ProviderRecord& record, const std::vector<ToolRegistration>& registrations) {
     for (const auto& registration : registrations) {
         const auto& desc = registration.descriptor;
-        if (desc.tool_id.empty() || (!registration.handler && !registration.completion_handler))
+        if (desc.tool_id.empty() || !registration.handler)
             throw std::invalid_argument("Tool registration requires an ID and handler");
         if (!validToolUsage(desc.usage_type) || !validToolBindings(desc) ||
             !validToolShortDescription(desc.short_description))
             throw std::invalid_argument("Invalid tool metadata");
         auto entry = std::make_shared<Entry>(Entry{desc, registration.handler,
-            registration.completion_handler, record.descriptor});
+            record.descriptor});
         if (!record.tools.emplace(desc.tool_id, std::move(entry)).second)
             throw std::invalid_argument("Duplicate tool ID: " + desc.tool_id);
     }

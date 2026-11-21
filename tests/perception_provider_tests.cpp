@@ -1,4 +1,5 @@
 #include "core/plugin_api.hpp"
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <iostream>
@@ -32,14 +33,15 @@ GrimResult subscribe(GrimPluginHandle, GrimSystemTickCallback callback, void* co
     return GRIM_OK;
 }
 void log(GrimPluginHandle,GrimLogLevel,const char*) {}
-GrimResult complete(GrimToolResultWriter*,const GrimToolResult* result) {
-    success=result->success;output=result->structured_output_json ? result->structured_output_json : "";return GRIM_OK;
-}
 void invoke(const char* id,const std::string& args) {
     check(declared.count(id) == 1, "Tool missing from manifest");
     GrimToolCall call;call.arguments=args.data();call.arguments_size=args.size();
-    GrimToolResultWriter writer;writer.complete=complete;
-    check(dispatch(id, &call, &writer)==GRIM_OK,"Handler failed transport");
+    const auto reply = dispatch(id, &call);
+    check(reply.delivery == GRIM_OK && reply.json && reply.release, "Handler failed transport");
+    const std::unique_ptr<const char, decltype(reply.release)> bytes(reply.json, reply.release);
+    const auto result = nlohmann::json::parse(bytes.get(), bytes.get() + reply.size);
+    success = result.at("status") == "completed";
+    output = result.at("payload").dump();
 }
 }
 int main(int argc,char** argv) try {

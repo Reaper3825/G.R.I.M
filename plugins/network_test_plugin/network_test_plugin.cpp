@@ -628,11 +628,11 @@ namespace NetworkTest {
 static grim::PluginHost g_api = {};
 
 // Deliver copied results before the local CommandResult is destroyed.
-static GrimResult networkTestHandler(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return grim::completeToolResult(writer, GRIM::NetworkTest::cmdNetworkTest(std::string(call->arguments, call->arguments_size)));
+static GrimToolReply networkTestHandler(const GrimToolCall* call, void*) {
+    return grim::toolReply(GRIM::NetworkTest::cmdNetworkTest(std::string(call->arguments, call->arguments_size)));
 }
-static GrimResult networkTestStopHandler(const GrimToolCall* call, GrimToolResultWriter* writer, void*) {
-    return grim::completeToolResult(writer, GRIM::NetworkTest::cmdNetworkTestStop(std::string(call->arguments, call->arguments_size)));
+static GrimToolReply networkTestStopHandler(const GrimToolCall* call, void*) {
+    return grim::toolReply(GRIM::NetworkTest::cmdNetworkTestStop(std::string(call->arguments, call->arguments_size)));
 }
 
 // Plugin metadata
@@ -655,13 +655,13 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
 }
 
 // Shutdown plugin
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "networktest") return networkTestHandler(request, writer, nullptr);
-    if (id == "networktest_stop") return networkTestStopHandler(request, writer, nullptr);
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "networktest") return networkTestHandler(request, nullptr);
+    if (id == "networktest_stop") return networkTestStopHandler(request, nullptr);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {

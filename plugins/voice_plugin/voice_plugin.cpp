@@ -35,11 +35,13 @@ void stop() {
  Audio::stopAll(); Voice::shutdownQueue(); Voice::shutdownTTS(); Voice::shutdown(); Audio::shutdown();
  tts=false; VoiceRuntime::cancel=false;
 }
-GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const char* toolId) {
+GrimToolReply call(const GrimToolCall* request, const char* toolId) {
  std::lock_guard<std::mutex> lock(operationMutex);
  bool success = false;
  const char* errorCode;
- std::string message,output; nlohmann::json detail;
+ std::string message;
+ auto output = nlohmann::json::object();
+ nlohmann::json detail;
  try {
   auto args=request->arguments_size ? nlohmann::json::parse(request->arguments,request->arguments+request->arguments_size) : nlohmann::json::object();
   if(!args.is_object()) throw std::invalid_argument("Expected JSON object");
@@ -96,12 +98,12 @@ GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const c
     WakeVoice::start(); if(!WakeVoice::isRunning()) throw std::runtime_error("Wake detector unavailable");
    }
   }
-  publish(); auto response=status(); if(!detail.is_null()) response["result"]=detail; output=response.dump(); message="Voice operation completed";
+  publish(); auto response=status(); if(!detail.is_null()) response["result"]=detail; output=std::move(response); message="Voice operation completed";
   success=true; errorCode="ERR_NONE";
  } catch(const std::exception& error) { message=error.what(); errorCode="ERR_VOICE"; }
  catch(...) { message="Unknown voice failure"; errorCode="ERR_VOICE"; }
- return grim::completeToolResult(writer, success, message.c_str(), errorCode, "voice",
-                                 nullptr, output.empty() ? nullptr : output.c_str());
+ return grim::toolReply(success, message.c_str(), errorCode, "voice",
+                                 std::move(output));
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
@@ -114,13 +116,13 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
   return GRIM_OK;
  } catch(...) { host={}; grim::plugin::setLoggingAPI({}); return GRIM_ERROR_UNKNOWN; }
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
     for (const auto* supported : ids)
-        if (id == supported) return call(request, writer, supported);
-    return GRIM_ERROR_NOT_FOUND;
+        if (id == supported) return call(request, supported);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {

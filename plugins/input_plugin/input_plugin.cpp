@@ -12,10 +12,10 @@ enum GrimInputOperation { GRIM_INPUT_MOVE_MOUSE, GRIM_INPUT_CLICK, GRIM_INPUT_TY
 std::mutex operationMutex;
 grim::PluginHost host = {};
 template<GrimInputOperation Operation>
-GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
+GrimToolReply call(const GrimToolCall* request, void*) {
     std::lock_guard<std::mutex> lock(operationMutex);
     CommandResult value;
-    if (!host) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+    if (!host) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
     if (request->arguments_size > 65536 || (request->arguments_size && !request->arguments)) {
         value = {false, "Input request unavailable or invalid", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
     } else try {
@@ -27,7 +27,7 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
     } catch (const inputCommands::ServiceUnavailable&) {
         value = {false, "Input request unavailable or invalid", "ERR_INPUT_SERVICE", "error", "", {255,100,100}};
     }
-    return grim::completeToolResult(writer, value);
+    return grim::toolReply(value);
 }
 }
 
@@ -37,15 +37,15 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     host = api;
     return GRIM_OK;
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "move_mouse") return call<GRIM_INPUT_MOVE_MOUSE>(request, writer, nullptr);
-    if (id == "click") return call<GRIM_INPUT_CLICK>(request, writer, nullptr);
-    if (id == "type") return call<GRIM_INPUT_TYPE>(request, writer, nullptr);
-    if (id == "key") return call<GRIM_INPUT_KEY>(request, writer, nullptr);
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "move_mouse") return call<GRIM_INPUT_MOVE_MOUSE>(request, nullptr);
+    if (id == "click") return call<GRIM_INPUT_CLICK>(request, nullptr);
+    if (id == "type") return call<GRIM_INPUT_TYPE>(request, nullptr);
+    if (id == "key") return call<GRIM_INPUT_KEY>(request, nullptr);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = {}; }

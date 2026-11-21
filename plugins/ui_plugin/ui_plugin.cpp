@@ -9,11 +9,9 @@
 
 namespace {
 grim::PluginHost host = {};
-GrimResult deliver(GrimToolResultWriter* writer, bool success, const std::string& message,
-                   const char* error, const std::string& json = {}) {
-    return grim::completeToolResult(writer, success, message.c_str(), error, "ui",
-                                    nullptr,
-                                    json.empty() ? nullptr : json.c_str());
+GrimToolReply deliver(bool success, const std::string& message,
+                   const char* error, nlohmann::json payload = nlohmann::json::object()) {
+    return grim::toolReply(success, message.c_str(), error, "ui", std::move(payload));
 }
 nlohmann::json panelRequest(GrimUIPanelOperation operation, const char* key, uint64_t id) {
     const char* raw = host->ui_panel_service(host.instance(), operation, key, id);
@@ -28,7 +26,7 @@ nlohmann::json panelRequest(GrimUIPanelOperation operation, const char* key, uin
     return response;
 }
 
-GrimResult completePanelRequest(GrimToolResultWriter* writer, nlohmann::json response) {
+GrimToolReply completePanelRequest(nlohmann::json response) {
     if (response.at("status") == "pending") {
         const auto id = response.at("request_id").get<uint64_t>();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -45,19 +43,18 @@ GrimResult completePanelRequest(GrimToolResultWriter* writer, nlohmann::json res
                 throw std::runtime_error(response.value("error", "UI request failed"));
         } catch (const std::exception& error) {
             try { panelRequest(GRIM_UI_CANCEL, nullptr, id); } catch (...) {}
-            return deliver(writer, false, error.what(), "ERR_TOOL_COMPLETION_UNKNOWN");
+            return deliver(false, error.what(), "ERR_TOOL_COMPLETION_UNKNOWN");
         }
     }
     if (response.at("status") != "completed")
-        return deliver(writer, false, response.value("error", "UI request failed"), "ERR_UI_REQUEST");
+        return deliver(false, response.value("error", "UI request failed"), "ERR_UI_REQUEST");
     const auto& result = response.at("result");
     const bool success = result.at("success").get<bool>();
-    const auto payload = result.dump();
-    return deliver(writer, success, payload, success ? "ERR_NONE" : "ERR_UI_OPERATION", payload);
+    return deliver(success, result.dump(), success ? "ERR_NONE" : "ERR_UI_OPERATION", result);
 }
 
 template<GrimUIPanelOperation Operation>
-GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*) {
+GrimToolReply call(const GrimToolCall* request, void*) {
     try {
         const std::string textArgs = request->arguments_size
             ? std::string(request->arguments, request->arguments_size) : std::string{};
@@ -93,23 +90,22 @@ GrimResult call(const GrimToolCall* request, GrimToolResultWriter* writer, void*
                 (Operation == GRIM_UI_HIDE && id ? GRIM_UI_HIDE_CURRENT : Operation)),
             Operation == GRIM_UI_LIST || Operation == GRIM_UI_POLL ? nullptr : key.c_str(), id);
         if (request->struct_size >= sizeof(GrimToolCall) && request->wait_for_completion)
-            return completePanelRequest(writer, response);
-        const auto text = response.dump();
+            return completePanelRequest(response);
         const auto status = response.at("status").get<std::string>();
         if (status == "pending")
-            return deliver(writer, true, "UI request " + std::to_string(response.at("request_id").get<uint64_t>()) +
-                " is pending; use ui.poll after UI processing. The operation is not yet complete.", "ERR_NONE", text);
+            return deliver(true, "UI request " + std::to_string(response.at("request_id").get<uint64_t>()) +
+                " is pending; use ui.poll after UI processing. The operation is not yet complete.", "ERR_NONE", response);
         if (status == "completed") {
             const bool success = response.at("result").at("success").get<bool>();
-            return deliver(writer, success, response.at("result").dump(), success ? "ERR_NONE" : "ERR_UI_OPERATION", text);
+            return deliver(success, response.at("result").dump(), success ? "ERR_NONE" : "ERR_UI_OPERATION", response);
         }
-        return deliver(writer, false, response.value("error", "Unknown UI request error"), "ERR_UI_REQUEST", text);
+        return deliver(false, response.value("error", "Unknown UI request error"), "ERR_UI_REQUEST", response);
     } catch (const nlohmann::json::exception& error) {
-        return deliver(writer, false, error.what(), "ERR_INVALID_ARGS");
+        return deliver(false, error.what(), "ERR_INVALID_ARGS");
     } catch (const std::invalid_argument& error) {
-        return deliver(writer, false, error.what(), "ERR_INVALID_ARGS");
+        return deliver(false, error.what(), "ERR_INVALID_ARGS");
     } catch (const std::exception& error) {
-        return deliver(writer, false, error.what(), "ERR_UI_SERVICE");
+        return deliver(false, error.what(), "ERR_UI_SERVICE");
     }
 }
 }
@@ -121,17 +117,17 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     host = api;
     return GRIM_OK;
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "ui.list") return call<GRIM_UI_LIST>(request, writer, nullptr);
-    if (id == "ui.inspect") return call<GRIM_UI_INSPECT>(request, writer, nullptr);
-    if (id == "ui.show") return call<GRIM_UI_SHOW>(request, writer, nullptr);
-    if (id == "ui.hide") return call<GRIM_UI_HIDE>(request, writer, nullptr);
-    if (id == "ui.bring_to_front") return call<GRIM_UI_BRING_TO_FRONT>(request, writer, nullptr);
-    if (id == "ui.poll") return call<GRIM_UI_POLL>(request, writer, nullptr);
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "ui.list") return call<GRIM_UI_LIST>(request, nullptr);
+    if (id == "ui.inspect") return call<GRIM_UI_INSPECT>(request, nullptr);
+    if (id == "ui.show") return call<GRIM_UI_SHOW>(request, nullptr);
+    if (id == "ui.hide") return call<GRIM_UI_HIDE>(request, nullptr);
+    if (id == "ui.bring_to_front") return call<GRIM_UI_BRING_TO_FRONT>(request, nullptr);
+    if (id == "ui.poll") return call<GRIM_UI_POLL>(request, nullptr);
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() { host = {}; }

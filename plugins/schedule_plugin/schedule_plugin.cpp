@@ -11,21 +11,18 @@ namespace {
 std::unique_ptr<grim::scheduling::Provider> provider;
 std::unique_ptr<grim::scheduling::CalendarPanel> calendarPanel;
 const char* operations[]={"create","get","list","update","cancel","status"};
-GrimResult call(const GrimToolCall* request,GrimToolResultWriter* writer,const char* operation) {
-    if(!writer || !writer->complete) return GRIM_ERROR_INVALID_PARAM;
+GrimToolReply call(const GrimToolCall* request,const char* operation) {
     nlohmann::json value;
     try {
         if(!provider || !request || !request->arguments || request->arguments_size>65536) throw std::runtime_error("Invalid scheduling request");
         value=provider->execute(operation,
             nlohmann::json::parse(request->arguments,request->arguments+request->arguments_size));
     } catch(const std::exception& error) {value={{"success",false},{"error","service_error"},{"message",error.what()}};}
-    const std::string output=value.dump();
     const bool success=value.value("success",false);
     const std::string message=success?"Scheduling operation completed":value.value("message",std::string("Scheduling operation failed"));
     const std::string code=success?"ERR_NONE":value.value("error",std::string("service_error"));
-    return grim::completeToolResult(writer, success, message.c_str(), code.c_str(),
-                                    success ? "schedule" : "error",
-                                    nullptr, output.c_str());
+    return grim::toolReply(success, message.c_str(), code.c_str(),
+                                    success ? "schedule" : "error", std::move(value));
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
@@ -44,17 +41,17 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
         return GRIM_ERROR_UNKNOWN;
     }
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
     constexpr std::string_view prefix = "schedule.";
     if (id.substr(0, prefix.size()) == prefix) {
         const auto operation = id.substr(prefix.size());
         for (const auto* supported : operations)
-            if (operation == supported) return call(request, writer, supported);
+            if (operation == supported) return call(request, supported);
     }
-    return GRIM_ERROR_NOT_FOUND;
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown(){calendarPanel.reset();provider.reset();}

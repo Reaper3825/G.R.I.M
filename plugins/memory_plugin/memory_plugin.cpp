@@ -102,16 +102,16 @@ json retrieve(const std::string& prompt, const std::string& category, int limit)
     return {{"memories", std::move(memories)}, {"retrieval_breadcrumbs", std::move(breadcrumbs)}};
 }
 
-GrimResult retrieveTool(const GrimToolCall& request, GrimToolResultWriter* writer) {
+GrimToolReply retrieveTool(const GrimToolCall& request) {
     const auto args = json::parse(request.arguments, request.arguments + request.arguments_size, nullptr, false);
     if (!args.is_object() || !args.contains("prompt") || !args["prompt"].is_string() ||
         !args.contains("nlp_category") || !args["nlp_category"].is_string() ||
         !args.contains("limit") || !args["limit"].is_number_integer() ||
-        args["limit"] < 1 || args["limit"] > 100) return GRIM_ERROR_INVALID_PARAM;
+        args["limit"] < 1 || args["limit"] > 100) return {GRIM_ERROR_INVALID_PARAM};
 
-    const auto payload = retrieve(args["prompt"].get<std::string>(),
-        args["nlp_category"].get<std::string>(), args["limit"].get<int>()).dump();
-    return grim::completeToolResult(writer, true, nullptr, "ERR_NONE", nullptr, nullptr, payload.c_str());
+    auto payload = retrieve(args["prompt"].get<std::string>(),
+        args["nlp_category"].get<std::string>(), args["limit"].get<int>());
+    return grim::toolReply(true, "", "ERR_NONE", "", std::move(payload));
 }
 }  // namespace
 
@@ -150,21 +150,21 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     }
 }
 
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id || !request || !request->arguments || !writer || !writer->complete)
-        return GRIM_ERROR_INVALID_PARAM;
-    if (!state) return GRIM_ERROR_PLUGIN_NOT_LOADED;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id || !request || !request->arguments)
+        return {GRIM_ERROR_INVALID_PARAM};
+    if (!state) return {GRIM_ERROR_PLUGIN_NOT_LOADED};
     const std::string_view id(tool_id);
     try {
-        if (id == "memory.retrieve") return retrieveTool(*request, writer);
+        if (id == "memory.retrieve") return retrieveTool(*request);
         const std::string arguments(request->arguments, request->arguments_size);
-        if (id == "remember") return grim::completeToolResult(writer, cmdRemember(arguments));
-        if (id == "recall") return grim::completeToolResult(writer, cmdRecall(arguments));
-        return GRIM_ERROR_NOT_FOUND;
+        if (id == "remember") return grim::toolReply(cmdRemember(arguments));
+        if (id == "recall") return grim::toolReply(cmdRecall(arguments));
+        return {GRIM_ERROR_NOT_FOUND};
     } catch (const std::exception& error) {
         LOG_ERROR("Memory", error.what());
-        return GRIM_ERROR_UNKNOWN;
+        return {GRIM_ERROR_UNKNOWN};
     }
 }
 

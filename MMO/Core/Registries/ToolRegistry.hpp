@@ -69,8 +69,6 @@ private:
     friend class ProviderRegistry;
     friend class ::PluginAPI::ProviderBatch;
     ToolRegistry() = default;
-    CommandResult invokeRaw(const std::string& name, const std::string& arguments,
-                            const ToolInvocationOptions& options);
     using Entry = ProviderRegistry::Entry;
     using ToolIndex = std::unordered_map<std::string, Entry*>;
     using Aliases = std::unordered_map<std::string, std::string>;

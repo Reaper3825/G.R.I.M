@@ -5,7 +5,7 @@
 // function table. These are the actual implementations that plugins call.
 // ============================================================================
 
-#include "core/plugin_tool_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include "plugin_api_impl.hpp"
 #include "plugin_notifications.hpp"
 #include "logger.hpp"
@@ -95,35 +95,6 @@ static std::string copyText(const char* text, bool required = false, size_t maxB
     if (size > maxBytes || (required && size == 0)) throw std::invalid_argument("Invalid text size");
     return {text, size};
 }
-struct ResultCapture {
-    CommandResult value;
-    bool completed = false, invalid = false;
-};
-static GrimResult completeResult(GrimToolResultWriter* writer, const GrimToolResult* input) noexcept {
-    auto& capture = *static_cast<ResultCapture*>(writer->host_context);
-    try {
-        if (!input || input->struct_size != sizeof(GrimToolResult) || input->success > 1 || capture.completed)
-            throw std::invalid_argument("Invalid or repeated result");
-        CommandResult result;
-        result.success = input->success != 0;
-        // Catalog listings can legitimately exceed an individual metadata field.
-        result.message = copyText(input->message, false, 16 * 1024 * 1024);
-        result.errorCode = copyText(input->error_code);
-        result.category = copyText(input->category);
-        const auto payloadText = copyText(input->structured_output_json);
-        if (!payloadText.empty()) {
-            result.structuredOutput = nlohmann::json::parse(payloadText);
-            if (!result.structuredOutput.is_object())
-                throw std::invalid_argument("Expected an object tool payload");
-        }
-        capture.value = std::move(result);
-        capture.completed = true;
-        return GRIM_OK;
-    } catch (...) {
-        capture.invalid = true;
-        return GRIM_ERROR_INVALID_PARAM;
-    }
-}
 struct ActiveCall {
     enum class Kind { HostService, Dispatch };
     CallGate& gate;
@@ -199,21 +170,25 @@ static std::vector<GRIM::MMO::ToolRegistration> readManifestTools(
     for (const auto& entry : entries) {
         auto descriptor = decodeManifestTool(entry, identity.version.c_str());
         auto invoke = [handle, dispatch, id = descriptor.tool_id](const std::string& arguments,
-                             bool waitForCompletion) -> CommandResult {
+                             bool waitForCompletion) -> nlohmann::json {
+            using GRIM::MMO::makeToolResult;
             const auto owner = providerFor(handle);
-            if (!owner) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
+            if (!owner) return makeToolResult(false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE", "");
             ActiveCall active(owner->gate, ActiveCall::Kind::Dispatch);
-            if (!active.entered) return {false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE"};
-            ResultCapture capture;
-            GrimToolResultWriter writer{sizeof(GrimToolResultWriter), &capture, completeResult};
-            GrimToolCall call{.arguments = arguments.c_str(), .arguments_size = arguments.size(),
-                              .wait_for_completion = waitForCompletion ? 1u : 0u};
-            const auto delivered = dispatch(id.c_str(), &call, &writer);
-            if (delivered != GRIM_OK || !capture.completed || capture.invalid)
-                return {false, "Plugin did not deliver a valid result", "ERR_PLUGIN_RESULT"};
-            return std::move(capture.value);
+            if (!active.entered)
+                return makeToolResult(false, "Plugin is stopping", "ERR_TOOL_UNAVAILABLE", "");
+            const GrimToolCall call{.arguments = arguments.c_str(), .arguments_size = arguments.size(),
+                                    .wait_for_completion = waitForCompletion ? 1u : 0u};
+            const auto reply = dispatch(id.c_str(), &call);
+            const std::unique_ptr<const char, decltype(reply.release)> bytes(reply.release ? reply.json : nullptr,
+                                                                            reply.release);
+            if (reply.delivery == GRIM_OK && bytes && reply.size) {
+                auto result = nlohmann::json::parse(bytes.get(), bytes.get() + reply.size, nullptr, false);
+                if (!result.is_discarded()) return result;
+            }
+            return makeToolResult(false, "Plugin did not return a JSON result", "ERR_PLUGIN_RESULT", "");
         };
-        tools.push_back({std::move(descriptor), {}, std::move(invoke)});
+        tools.push_back({std::move(descriptor), std::move(invoke)});
     }
     return tools;
 }
@@ -262,21 +237,18 @@ static GrimResult api_unregister_command(GrimPluginHandle self, const char* comm
     return registry.unregisterTool(command_name, owner->identity.name, owner->identity.instance) ? GRIM_OK : GRIM_ERROR_NOT_FOUND;
 }
 
-static GrimResult api_execute_command(GrimPluginHandle self, const char* command_text, GrimToolResultWriter* writer) {
-    if (!command_text || !writer || writer->struct_size != sizeof(*writer) || !writer->complete)
-        return GRIM_ERROR_INVALID_PARAM;
-    const auto owner = providerFor(self);
-    if (!owner) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    ActiveCall active(owner->gate);
-    if (!active.entered) return GRIM_ERROR_PLUGIN_NOT_LOADED;
-    auto [cmd, arg] = GRIMInput::parseInput(command_text);
-    const auto value = GRIM::MMO::ToolRegistry::instance().invoke(cmd, arg);
-    const auto payloadText = value.at("payload").dump();
-    return grim::completeToolResult(writer, value.at("status") == "completed",
-        value.at("message").get_ref<const std::string&>().c_str(),
-        value.at("error_code").get_ref<const std::string&>().c_str(),
-        value.at("category").get_ref<const std::string&>().c_str(),
-        nullptr, payloadText.c_str());
+static const char* api_execute_command(GrimPluginHandle self, const char* command_text) noexcept {
+    if (!command_text) return nullptr;
+    try {
+        const auto owner = providerFor(self);
+        if (!owner) return nullptr;
+        ActiveCall active(owner->gate);
+        if (!active.entered) return nullptr;
+        auto [cmd, arg] = GRIMInput::parseInput(command_text);
+        return allocateString(GRIM::MMO::ToolRegistry::instance().invoke(cmd, arg).dump());
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 // ============================================================================

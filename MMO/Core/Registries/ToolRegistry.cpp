@@ -1,5 +1,5 @@
 #include "ToolRegistry.hpp"
-#include "../../../commands/command_result.hpp"
+#include "../ToolResultJson.hpp"
 #include <algorithm>
 #include <stdexcept>
 
@@ -86,61 +86,48 @@ bool ToolRegistry::unregisterTool(const std::string& id, const std::string& prov
 
 nlohmann::json ToolRegistry::invoke(const std::string& name, const std::string& arguments,
                                     const ToolInvocationOptions& options) {
-    auto result = invokeRaw(name, arguments, options);
-    const char* status = "failed";
-    if (result.success) status = "completed";
-    else if (result.errorCode == "ERR_TOOL_COMPLETION_UNKNOWN") status = "unknown";
-
-    return {{"status", status}, {"error_code", std::move(result.errorCode)},
-            {"message", std::move(result.message)}, {"category", std::move(result.category)},
-            {"payload", std::move(result.structuredOutput)}};
-}
-
-CommandResult ToolRegistry::invokeRaw(const std::string& name, const std::string& arguments,
-                                      const ToolInvocationOptions& options) {
     // Route at the shared boundary; a reserved mode must never fall through
     // to a real handler or affect its production execution statistics.
     switch (options.mode) {
         case ToolExecutionMode::Production:
             break;
         case ToolExecutionMode::Sandbox:
-            return {false, "Sandbox tool execution is not implemented", "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED", "", "", Colors::Red};
+            return makeToolResult(false, "Sandbox tool execution is not implemented", "ERR_TOOL_SANDBOX_NOT_IMPLEMENTED", "");
         default:
-            return {false, "Invalid tool execution mode", "ERR_TOOL_EXECUTION_MODE", "", "", Colors::Red};
+            return makeToolResult(false, "Invalid tool execution mode", "ERR_TOOL_EXECUTION_MODE", "");
     }
     std::shared_ptr<Entry> entry;
     std::string id;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (options.expected_registry_version && *options.expected_registry_version != version_)
-            return {false, "Tool registry changed; inspect and retry", "ERR_TOOL_STALE", "", "", Colors::Red};
+            return makeToolResult(false, "Tool registry changed; inspect and retry", "ERR_TOOL_STALE", "");
         id = resolveLocked(name);
-        if (id.empty()) return {false, "Unknown command: " + name, "ERR_UNKNOWN_CMD", "", "", Colors::Red};
+        if (id.empty()) return makeToolResult(false, "Unknown command: " + name, "ERR_UNKNOWN_CMD", "");
         const auto* indexed = tool_index_.at(id);
         entry = providers_.records_.at(indexed->provider->name)->tools.at(id);
         if (options.require_canonical_model && (id != name || entry->descriptor.usage_type != ToolUsage::Model))
-            return {false, "Canonical Model tool required", "ERR_TOOL_NOT_MODEL", "", "", Colors::Red};
+            return makeToolResult(false, "Canonical Model tool required", "ERR_TOOL_NOT_MODEL", "");
     }
-    CommandResult result;
+    nlohmann::json result;
     try {
-        result = entry->completion_handler
-            ? entry->completion_handler(arguments, options.wait_for_completion)
-            : entry->handler(arguments);
-        if (!result.structuredOutput.is_object())
-            throw std::invalid_argument("Expected an object tool payload");
-    }
-    catch (const std::exception& error) {
-        result = {false, "[Error] Exception while running command: " + name + ": " + error.what(), "ERR_CMD_EXCEPTION", "", "", Colors::Red};
+        result = entry->handler(arguments, options.wait_for_completion);
+    } catch (const std::exception& error) {
+        result = makeToolResult(false, "[Error] Exception while running command: " + name + ": " + error.what(),
+                                "ERR_CMD_EXCEPTION", "");
     } catch (...) {
-        result = {false, "[Error] Exception while running command: " + name, "ERR_CMD_EXCEPTION", "", "", Colors::Red};
+        result = makeToolResult(false, "[Error] Exception while running command: " + name,
+                                "ERR_CMD_EXCEPTION", "");
     }
+    const auto status = result.find("status");
+    const bool succeeded = status != result.end() && *status == "completed";
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto it = tool_index_.find(id);
         if (it != tool_index_.end() && it->second == entry.get()) {
             auto& stats = entry->descriptor;
             ++stats.usage_count;
-            if (result.success) ++stats.success_count;
+            if (succeeded) ++stats.success_count;
             else ++stats.failure_count;
             stats.success_rate = static_cast<float>(stats.success_count) / (stats.success_count + stats.failure_count);
         }

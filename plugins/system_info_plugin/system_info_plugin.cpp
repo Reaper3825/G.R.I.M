@@ -8,9 +8,9 @@
 
 namespace {
 std::unique_ptr<GRIM::SystemInfo::Provider> provider;
-GrimResult call(const GrimToolCall*, GrimToolResultWriter* writer, void* context) {
+GrimToolReply call(const GrimToolCall*, void* context) {
     const auto value = formatSystemInfo(static_cast<GRIM::SystemInfo::Provider*>(context)->detectHardware());
-    return grim::completeToolResult(writer, value);
+    return grim::toolReply(value);
 }
 }
 extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table, GrimPluginHandle instance) {
@@ -23,12 +23,12 @@ extern "C" PLUGIN_EXPORT GrimResult grim_plugin_init(const GrimPluginAPI* table,
     catch (...) { return GRIM_ERROR_UNKNOWN; }
     return GRIM_OK;
 }
-extern "C" PLUGIN_EXPORT GrimResult grim_plugin_dispatch_tool(
-    const char* tool_id, const GrimToolCall* request, GrimToolResultWriter* writer) {
-    if (!tool_id) return GRIM_ERROR_INVALID_PARAM;
+extern "C" PLUGIN_EXPORT GrimToolReply grim_plugin_dispatch_tool(
+    const char* tool_id, const GrimToolCall* request) {
+    if (!tool_id) return {GRIM_ERROR_INVALID_PARAM};
     const std::string_view id(tool_id);
-    if (id == "system_info") return call(request, writer, provider.get());
-    return GRIM_ERROR_NOT_FOUND;
+    if (id == "system_info") return call(request, provider.get());
+    return {GRIM_ERROR_NOT_FOUND};
 }
 
 extern "C" PLUGIN_EXPORT void grim_plugin_shutdown() {

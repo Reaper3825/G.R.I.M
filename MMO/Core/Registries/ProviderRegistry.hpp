@@ -13,20 +13,15 @@
 
 namespace PluginAPI { class ProviderBatch; }
 
-struct CommandResult;
-
 namespace GRIM::MMO {
 
 class ToolRegistry;
 
-using ToolHandler = std::function<CommandResult(const std::string&)>;
-
-using CompletionToolHandler = std::function<CommandResult(const std::string&, bool wait_for_completion)>;
+using ToolHandler = std::function<nlohmann::json(const std::string&, bool wait_for_completion)>;
 
 struct ToolRegistration {
     ToolDescriptor descriptor;
     ToolHandler handler;
-    CompletionToolHandler completion_handler;
 };
 
 class ProviderRegistry {
@@ -78,7 +73,7 @@ private:
     explicit ProviderRegistry(ToolRegistry& tools) : tools_(tools) {}
 
     using Provider = std::shared_ptr<const ProviderDescriptor>;
-    struct Entry { ToolDescriptor descriptor; ToolHandler handler; CompletionToolHandler completion_handler; Provider provider; };
+    struct Entry { ToolDescriptor descriptor; ToolHandler handler; Provider provider; };
     using Resources = std::map<std::string, ResourceDescriptor>;
     struct ProviderRecord {
         Provider descriptor;

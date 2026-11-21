@@ -1,7 +1,6 @@
 #pragma once
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/ToolResultJson.hpp"
-#include "commands/command_result.hpp"
 
 namespace GRIM::WorldLab {
 class WorldToolDispatch {

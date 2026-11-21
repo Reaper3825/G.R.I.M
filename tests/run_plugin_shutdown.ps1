@@ -42,7 +42,7 @@ if ($BuildUIFixture) {
     $uiFixtureArgs = $common + @('/LD', ('"' + (Join-Path $workspace 'plugins/ui_plugin/ui_plugin.cpp') + '"'), '/Fe:ui-fixture/ui_plugin.dll')
     Set-Content -LiteralPath (Join-Path $output 'ui-fixture.rsp') -Value $uiFixtureArgs -Encoding ascii
 }
-function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switch]$Extra, [switch]$Collision, [int]$ApiVersion = 1703936) {
+function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switch]$Extra, [switch]$Collision, [int]$ApiVersion = 1769472) {
     $entries = @()
     if ($Tools) {
         $entry = @{
@@ -75,7 +75,7 @@ foreach ($fixture in @('failed', 'legacy')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output $bundle) | Out-Null
     $argsForFixture = $common + @('/LD',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $bundle + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
-    $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1703936 }
+    $apiVersion = if ($fixture -eq 'legacy') { 65536 } else { 1769472 }
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
     Write-FixtureManifest $bundle $fixture ('Declared-' + $fixture) -ApiVersion $apiVersion
 }
@@ -88,7 +88,7 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output $folder) | Out-Null
     $argsForFixture = $common + @('/LD','/DFIXTURE_TOOLS',('/DFIXTURE_NAME=\"Declared-' + $fixture + '\"'),$fixtureSource,('/Fe:' + $folder + '/' + $fixture + '.dll'))
     if ($fixture -eq 'failed') { $argsForFixture += '/DFIXTURE_FAIL_INIT' }
-    $apiVersion = if ($fixture -eq 'legacy') { 393216 } else { 1703936 }
+    $apiVersion = if ($fixture -eq 'legacy') { 393216 } else { 1769472 }
     Set-Content -LiteralPath (Join-Path $output ('integration-' + $fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
     Write-FixtureManifest $folder $fixture ('Declared-' + $fixture) -Tools -ApiVersion $apiVersion
 }
@@ -103,7 +103,7 @@ foreach ($variant in $variants.Keys) {
     New-Item -ItemType Directory -Force -Path (Join-Path $output ('replacement/' + $variant)) | Out-Null
     $variantArgs = $common + @('/LD','/DFIXTURE_TOOLS','/DFIXTURE_NAME=\"Declared-alpha\"',$fixtureSource,('/Fe:replacement/' + $variant + '/alpha.dll')) + $variants[$variant]
     Set-Content -LiteralPath (Join-Path $output ('replacement-' + $variant + '.rsp')) -Value $variantArgs -Encoding ascii
-    $apiVersion = if ($variant -eq 'legacy') { 1572864 } else { 1703936 }
+    $apiVersion = if ($variant -eq 'legacy') { 1703936 } else { 1769472 }
     Write-FixtureManifest ('replacement/' + $variant) 'alpha' 'Declared-alpha' -Tools -Extra:($variant -eq 'old') -Collision:($variant -eq 'collision') -ApiVersion $apiVersion
 }
 $testArgs = $common + '/DGRIM_BUILD_HOST'

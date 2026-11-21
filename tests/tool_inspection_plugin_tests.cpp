@@ -3,7 +3,7 @@
 #include "plugin_batch_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/ToolDescriptorJson.hpp"
-#include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -94,9 +94,9 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     rich.failure_count = 25;
     rich.success_rate = 0.75f;
     int fixtureCalls = 0;
-    check(ProviderRegistry::instance().publish(owner, {{rich, [&](const std::string&) {
+    check(ProviderRegistry::instance().publish(owner, {{rich, [&](const std::string&, bool) {
         ++fixtureCalls;
-        return CommandResult{};
+        return GRIM::MMO::makeToolResult(true, "", "", "");
     }}}), "Inspection fixture publication failed");
     const auto encoded = snapshot("fixture_alias");
     check(encoded.size() == 1 && encoded[0].size() == 31 && encoded[0].at("usage_type") == 1 &&

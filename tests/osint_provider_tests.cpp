@@ -1,4 +1,5 @@
 #include "core/plugin_api.hpp"
+#include <memory>
 #include "plugins/osint_plugin/provider_paths.hpp"
 #include "plugins/osint_plugin/process.hpp"
 #include <nlohmann/json.hpp>
@@ -8,16 +9,21 @@
 #include <stdexcept>
 extern "C" GrimResult grim_plugin_init(const GrimPluginAPI*, GrimPluginHandle);
 extern "C" void grim_plugin_shutdown();
-extern "C" GrimResult grim_plugin_dispatch_tool(const char*, const GrimToolCall*, GrimToolResultWriter*);
+extern "C" GrimToolReply grim_plugin_dispatch_tool(const char*, const GrimToolCall*);
 namespace {
 constexpr const char* tools[] = {"profile_person", "sherlock_sweep", "osint_report", "osint_status", "osint_clear_cache", "osint_scan_secrets", "osint_show_secrets"};
  std::atomic<int> runs{0};
 std::atomic<bool> block{false},entered{false}; bool success;std::string output,message;
 void check(bool value,const char* text){if(!value)throw std::runtime_error(text);}
-GrimResult invoke(size_t index,const std::string& args){
- GrimToolCall call{};call.arguments=args.data();call.arguments_size=args.size();GrimToolResultWriter writer{};
- writer.complete=[](GrimToolResultWriter*,const GrimToolResult* result){success=result->success;output=result->structured_output_json?result->structured_output_json:"";message=result->message?result->message:"";return GRIM_OK;};
- return grim_plugin_dispatch_tool(tools[index], &call, &writer);
+void invoke(size_t index, const std::string& args) {
+    const GrimToolCall call{sizeof(GrimToolCall), args.data(), args.size()};
+    const auto reply = grim_plugin_dispatch_tool(tools[index], &call);
+    check(reply.delivery == GRIM_OK && reply.json && reply.release, "Handler failed transport");
+    const std::unique_ptr<const char, decltype(reply.release)> bytes(reply.json, reply.release);
+    const auto result = nlohmann::json::parse(bytes.get(), bytes.get() + reply.size);
+    success = result.at("status") == "completed";
+    output = result.at("payload").dump();
+    message = result.at("message").get<std::string>();
 }
 }
 int osintProvider::runProcess(const std::vector<std::string>& args,int){

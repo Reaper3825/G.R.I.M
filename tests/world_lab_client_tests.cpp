@@ -2,7 +2,7 @@
 #include "ui/world_lab/world_document.hpp"
 #include "ui/world_lab/ui_world_session.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
-#include "commands/command_result.hpp"
+#include "MMO/Core/ToolResultJson.hpp"
 #include "ui/input/ui_input_router.hpp"
 #include "ui/overlay_renderer.hpp"
 extern std::string renderedTestText;
@@ -52,9 +52,9 @@ void runTextWorldClientTests(){
         int calls=0;
         auto& providers = GRIM::MMO::ProviderRegistry::instance();
         const GRIM::MMO::ProviderDescriptor owner{GRIM::MMO::ToolProviderType::Plugin, "Client catalog fixture", "fixture-1", {}};
-        check(providers.publish(owner, {{tool, [&](const std::string&) {
+        check(providers.publish(owner, {{tool, [&](const std::string&, bool) {
             ++calls;
-            return CommandResult{};
+            return GRIM::MMO::makeToolResult(true, "", "", "");
         }}}), "Client catalog fixture publication failed");
         Editor catalog;
         catalog.load(std::filesystem::path(__FILE__).parent_path().parent_path()/"resources/models/games/grim_internal.grimworld.json");
@@ -103,17 +103,13 @@ void runTextWorldClientTests(){
         echo.tool_id = echo.display_name = "fixture.echo";
         int listings = 0;
         check(providers.publish(owner, {
-            {listing, [&](const std::string& args) {
+            {listing, [&](const std::string& args, bool) {
                 check(nlohmann::json::parse(args) == nlohmann::json::object(), "Listing did not receive empty JSON args");
                 ++listings;
-                CommandResult result;
-                result.structuredOutput = {{"panels", {{{"panel_id", "provider-panel"}}}}};
-                return result;
+                return GRIM::MMO::makeToolResult(true, "", "", "", {{"panels", {{{"panel_id", "provider-panel"}}}}});
             }},
-            {echo, [&](const std::string& args) {
-                CommandResult result;
-                result.structuredOutput = {{"echo", args}};
-                return result;
+            {echo, [&](const std::string& args, bool) {
+                return GRIM::MMO::makeToolResult(true, "", "", "", {{"echo", args}});
             }}
         }), "Client fixture publication failed");
         TextWorldClient uiClient;
