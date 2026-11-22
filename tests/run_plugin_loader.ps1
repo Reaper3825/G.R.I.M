@@ -28,7 +28,6 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     Set-Content -LiteralPath (Join-Path $output ($fixture + '.rsp')) -Value $argsForFixture -Encoding ascii
     @{schema_version = 2; api_version = $apiVersion; provider = "Declared-$fixture"; version = '1.0'; tools = @()} |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output "$folder/$fixture.tools.json") -Encoding ascii
-    Set-Content -LiteralPath (Join-Path $output "$folder/.deployment") -Value fixture-revision -Encoding ascii
     $commands += @("cl @$fixture.rsp", 'if errorlevel 1 exit /b %errorlevel%')
 }
 $testArgs = $common + @('/DGRIM_BUILD_HOST', ('/D"GRIM_PLUGIN_CUDA_BIN_DIR=\"' + $toolkit.Replace('\', '/') + '\""'))

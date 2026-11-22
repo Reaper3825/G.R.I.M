@@ -1,7 +1,6 @@
 #ifndef GRIM_NATIVE_UI_TEST_HOST
 #include "plugin_batch_fixture.hpp"
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "commands/command_result.hpp"
 #include "ui/ui_panel_service.hpp"
@@ -103,7 +102,6 @@ void runUIPluginTests(const std::filesystem::path& directory) {
             std::error_code error;
             fs::remove(bundle / "ui_plugin.dll", error);
             fs::remove(bundle / "ui_plugin.tools.json", error);
-            fs::remove(bundle / ".deployment", error);
             fs::remove(bundle, error);
             fs::remove(bundle.parent_path(), error);
         }
@@ -112,7 +110,6 @@ void runUIPluginTests(const std::filesystem::path& directory) {
         fs::copy_file(directory / name, bundle / name, fs::copy_options::overwrite_existing);
     auto& registry = GRIM::MMO::ToolRegistry::instance();
     const auto baseline = registry.toolCount();
-    writePluginFixtureRevision(bundle);
     PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 6, "UI DLL did not publish six operations");
     for (const char* tool : {"ui.list", "ui.inspect", "ui.show", "ui.hide", "ui.bring_to_front", "ui.poll"}) {

@@ -61,8 +61,8 @@ Disable deployment with `-DGRIM_DEPLOY_PLUGINS=OFF`.
 
 Stop the host before deploying updates. Use the CMake deployment target or
 run `deploy_plugin.cmake` with the completed library and its manifest to publish
-the required `.deployment` marker. The host loads bundles at startup and
-releases them at shutdown. Remove a bundle before the next startup to disable it.
+the bundle. The host loads bundles at startup and releases them at shutdown.
+Remove a bundle before the next startup to disable it.
 
 Reconfiguring an existing build upgrades the former default deployment path.
 Old flat files can stay in place during cutover. If you have existing memory

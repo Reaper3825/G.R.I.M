@@ -339,10 +339,6 @@ the DLL stem. On Windows the loader also searches the bundle's `dependencies`
 directory for native imports. The host opens the deployed DLL directly. Stop
 the host before replacing a deployed DLL.
 
-Each bundle requires the `.deployment` marker written by the deployment
-publisher. Startup rejects a missing, unreadable, or pending marker and a
-revision that changes while the DLL is opened.
-
 Each discovered DLL is initialized in its provider entry. Init can register
 resources and subscribe to system ticks using that entry's handle. After
 discovery, the registry publishes the successful entries, tools, aliases, and
@@ -486,9 +482,9 @@ Host builds enable deployment by default. Standalone builds can opt in with
 -DGRIM_DEPLOY_PLUGINS=ON and build the default target or deploy_<plugin-target>.
 Set GRIM_PLUGIN_DEPLOY_DIR to publish to another root for tests or packaging.
 
-The published folder contains the library, manifest, selected private runtime
-DLLs, and the required `.deployment` marker. Identical files keep their
-timestamps. Stop the host before updating a deployed bundle. Remove the folder
+The published folder contains the library, manifest, and selected private runtime
+DLLs. Identical files keep their timestamps. Stop the host before updating a
+deployed bundle. Remove the folder
 before the next startup to disable the plugin.
 See [build instructions](../plugins/README.md).
 

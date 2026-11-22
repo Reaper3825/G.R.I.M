@@ -1,6 +1,5 @@
 // Exercise discovery, initialization, publication, and shutdown with native fixture DLLs.
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <filesystem>
@@ -41,17 +40,14 @@ void runPluginBatchTests(const std::filesystem::path& variants, const std::files
             if (!keepTools) manifest["tools"] = nlohmann::json::array();
         }
         std::ofstream(folder / (stem + ".tools.json")) << manifest;
-        writePluginFixtureRevision(folder);
     };
     install("old", "alpha");
     install("new", "beta", "Batch beta");
     install("new", "collision", "Batch collision", true);
     install("failed", "failed", "Batch failed");
     install("legacy", "legacy", "Batch legacy");
-    install("new", "missing", "Batch missing marker");
-    fs::remove(root / "missing" / ".deployment");
-    install("new", "pending", "Batch pending");
-    std::ofstream(root / "pending" / ".deployment") << "pending\n";
+    install("new", "missing", "Batch missing manifest");
+    fs::remove(root / "missing" / "missing.tools.json");
     install("new", "zduplicate");
     constexpr const char* invalidName = "invalid";
     install("new", invalidName, "Batch invalid");
@@ -62,14 +58,14 @@ void runPluginBatchTests(const std::filesystem::path& variants, const std::files
     const auto before = registry.version();
     const auto result = PluginManager::loadBatch(root);
     registry.removeListener(&observer);
-    check(result.status == Status::Completed && result.plugins.size() == 9, "Discovery omitted batch outcomes");
+    check(result.status == Status::Completed && result.plugins.size() == 8, "Discovery omitted batch outcomes");
     using Outcome = PluginLoadStatus;
     const Outcome expected[]{Outcome::Loaded, Outcome::Loaded, Outcome::RegistrationRejected, Outcome::InitializationFailed,
-        Outcome::NativeLoadFailed, Outcome::InvalidBundle, Outcome::InvalidBundle, Outcome::InvalidBundle,
+        Outcome::NativeLoadFailed, Outcome::InvalidBundle, Outcome::InvalidBundle,
         Outcome::RegistrationRejected};
     for (std::size_t i = 0; i < result.plugins.size(); ++i)
         check(result.plugins[i].status == expected[i], "Plugin load returned the wrong outcome");
-    check(result.plugins[6].detail.find(".deployment") != std::string::npos, "Missing marker rejection lacked context");
+    check(result.plugins[6].detail.find("missing.tools.json") != std::string::npos, "Missing manifest rejection lacked context");
     check(observer.complete && registry.version() == before + 1, "Publication exposed an incomplete batch");
     check(registry.toolCount() == baseline + 2, "Rejected plugin published tools");
     const auto instance = registry.getTool("Declared-alpha")->provider.instance;
@@ -95,7 +91,6 @@ void runPluginBatchTests(const std::filesystem::path& variants, const std::files
         const auto stem = folder.filename().string();
         fs::remove(folder / (stem + ".dll"));
         fs::remove(folder / (stem + ".tools.json"));
-        fs::remove(folder / ".deployment");
         fs::remove(folder);
     }
     fs::remove(root);

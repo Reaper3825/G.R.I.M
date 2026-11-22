@@ -1,5 +1,4 @@
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "error_manager.hpp"
@@ -33,7 +32,6 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
             PluginManager::shutdownBatch();
             std::error_code error;
             fs::remove(folder / "application_plugin/application_plugin.dll", error);
-            fs::remove(folder / "application_plugin/.deployment", error);
             fs::remove(folder / "application_plugin/application_plugin.tools.json", error);
             fs::remove(folder / "application_aliases.json", error);
             fs::remove(folder / "application_plugin", error);
@@ -43,7 +41,6 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     fs::create_directory(folder / "application_plugin");
     fs::copy_file(pluginDirectory / "application_plugin.dll", folder / "application_plugin/application_plugin.dll");
     fs::copy_file(pluginDirectory / "application_plugin.tools.json", folder / "application_plugin/application_plugin.tools.json");
-    writePluginFixtureRevision(folder / "application_plugin");
     PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 6, "Application plugin did not publish six tools");
     auto catalogResult = registry.invoke("applications.list", "{}");
@@ -109,7 +106,6 @@ void runApplicationPluginTests(const std::filesystem::path& pluginDirectory) {
     check(registry.invoke("applications.launch", launchArgs.dump()).at("status") == "completed", "Matching application IDs failed after reload");
     PluginManager::shutdownBatch();
     fs::remove(folder / "application_plugin/application_plugin.dll");
-    fs::remove(folder / "application_plugin/.deployment");
     fs::remove(folder / "application_plugin/application_plugin.tools.json");
     fs::remove(folder / "application_plugin");
     for (const auto& group : GRIM::MMO::ProviderRegistry::instance().snapshot().providers)

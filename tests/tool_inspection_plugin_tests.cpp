@@ -1,5 +1,4 @@
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "plugin_batch_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <chrono>
@@ -24,7 +23,6 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
             api.reset();
             std::error_code error;
             fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll", error);
-            fs::remove(folder / "tool_inspection_plugin/.deployment", error);
             fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json", error);
             fs::remove(folder / "tool_inspection_plugin", error);
             fs::remove(folder, error);
@@ -47,7 +45,6 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
     fs::create_directory(folder / "tool_inspection_plugin");
     fs::copy_file(pluginDirectory / "tool_inspection_plugin.dll", folder / "tool_inspection_plugin/tool_inspection_plugin.dll");
     fs::copy_file(pluginDirectory / "tool_inspection_plugin.tools.json", folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json");
-    writePluginFixtureRevision(folder / "tool_inspection_plugin");
     PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 3, "Inspection plugin did not register three tools");
     for (const auto* id : {"list_tools", "tool_info", "tool_stats"}) {
@@ -69,7 +66,6 @@ void runToolInspectionPluginTests(const std::filesystem::path& pluginDirectory) 
 
     PluginManager::shutdownBatch();
     fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.dll");
-    fs::remove(folder / "tool_inspection_plugin/.deployment");
     fs::remove(folder / "tool_inspection_plugin/tool_inspection_plugin.tools.json");
     fs::remove(folder / "tool_inspection_plugin");
     check(registry.toolCount() == baseline && !registry.isRegistered("list_tools") && !registry.isRegistered("tool_info") &&

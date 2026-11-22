@@ -1,6 +1,5 @@
 // Real memory provider with a private persistence directory.
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "commands/command_result.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <nlohmann/json.hpp>
@@ -52,7 +51,6 @@ void runRuntimePluginTests(const std::filesystem::path& memoryDirectory) {
 
     fs::copy_file(memoryDirectory / "memory_plugin.dll", bundle / "memory_plugin.dll");
     fs::copy_file(memoryDirectory / "memory_plugin.tools.json", bundle / "memory_plugin.tools.json");
-    writePluginFixtureRevision(bundle);
     PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 3, "Memory provider registration count differs");
     for (const auto* id : {"remember", "recall"}) {

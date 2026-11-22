@@ -97,19 +97,7 @@ void* getSymbol(void* handle, const char* name) {
 #endif
 }
 
-// The deployment publisher marks incomplete bundles before replacing files.
-std::string deploymentRevision(const std::filesystem::path& directory) {
-    const auto marker = directory / ".deployment";
-    std::ifstream input(marker);
-    if (!input) throw std::runtime_error("Cannot read plugin deployment marker: " + marker.string());
-    std::string revision;
-    if (!std::getline(input, revision) || revision.empty() || revision == "pending")
-        throw std::runtime_error("Plugin deployment is incomplete");
-    return revision;
-}
-
 PluginAPI::PluginModule openPlugin(const std::filesystem::path& library, PluginLoadStatus& failure) {
-    const auto revision = deploymentRevision(library.parent_path());
     auto manifest = std::ifstream(toolManifestPath(library), std::ios::binary);
     if (!manifest) throw std::runtime_error("Cannot open tool manifest: " + toolManifestPath(library).string());
     const auto data = nlohmann::json::parse(manifest);
@@ -123,10 +111,6 @@ PluginAPI::PluginModule openPlugin(const std::filesystem::path& library, PluginL
     plugin.shutdown = reinterpret_cast<decltype(plugin.shutdown)>(getSymbol(plugin.library.get(), "grim_plugin_shutdown"));
     if (!plugin.init || !plugin.shutdown) throw std::runtime_error("Missing plugin entry points");
     plugin.dispatch = reinterpret_cast<GrimToolDispatch>(getSymbol(plugin.library.get(), "grim_plugin_dispatch_tool"));
-
-    failure = PluginLoadStatus::InvalidBundle;
-    if (deploymentRevision(library.parent_path()) != revision)
-        throw std::runtime_error("Plugin deployment changed during startup");
     return plugin;
 }
 

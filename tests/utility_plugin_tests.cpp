@@ -1,6 +1,5 @@
 // Assert the compatibility contract through the real loader and result writer.
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include <chrono>
 #include <filesystem>
@@ -22,7 +21,6 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
             PluginManager::shutdownBatch();
             std::error_code error;
             fs::remove(folder / "utility_plugin/utility_plugin.dll", error);
-            fs::remove(folder / "utility_plugin/.deployment", error);
             fs::remove(folder / "utility_plugin/utility_plugin.tools.json", error);
             fs::remove(folder / "utility_plugin", error);
             fs::remove(folder, error);
@@ -31,7 +29,6 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     fs::create_directory(folder / "utility_plugin");
     fs::copy_file(pluginDirectory / "utility_plugin.dll", folder / "utility_plugin/utility_plugin.dll");
     fs::copy_file(pluginDirectory / "utility_plugin.tools.json", folder / "utility_plugin/utility_plugin.tools.json");
-    writePluginFixtureRevision(folder / "utility_plugin");
 
     PluginManager::loadBatch(folder.string());
     check(registry.toolCount() == baseline + 2, "Utility DLL did not publish two tools");
@@ -65,7 +62,6 @@ void runUtilityPluginTests(const std::filesystem::path& pluginDirectory) {
     }
     PluginManager::shutdownBatch();
     fs::remove(folder / "utility_plugin/utility_plugin.dll");
-    fs::remove(folder / "utility_plugin/.deployment");
     fs::remove(folder / "utility_plugin/utility_plugin.tools.json");
     fs::remove(folder / "utility_plugin");
     check(registry.toolCount() == baseline && !registry.isRegistered("clean") && !registry.isRegistered("help"),

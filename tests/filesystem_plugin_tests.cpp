@@ -1,6 +1,5 @@
 // Real DLL -> PluginManager -> API -> ToolRegistry -> filesystem, in a private sandbox.
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/RegisteredResource.hpp"
 #include "commands/command_result.hpp"
@@ -37,7 +36,7 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
             std::error_code error;
             fs::current_path(originalDirectory, error);
             // Only known fixture paths are removed. No recursive cleanup.
-            for (const auto* name : {"plugins/filesystem_plugin/filesystem_plugin.dll", "plugins/filesystem_plugin/filesystem_plugin.tools.json", "plugins/filesystem_plugin/.deployment", "sample.txt", "new folder", "nonempty/keep.txt", "nonempty", "plugins/filesystem_plugin", "plugins"})
+            for (const auto* name : {"plugins/filesystem_plugin/filesystem_plugin.dll", "plugins/filesystem_plugin/filesystem_plugin.tools.json", "sample.txt", "new folder", "nonempty/keep.txt", "nonempty", "plugins/filesystem_plugin", "plugins"})
                 fs::remove(path / name, error);
             fs::remove(path, error);
         }
@@ -48,7 +47,6 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
     const auto deployed = sandbox / "plugins/filesystem_plugin/filesystem_plugin.dll";
     fs::copy_file(pluginDirectory / "filesystem_plugin.dll", deployed);
     fs::copy_file(pluginDirectory / "filesystem_plugin.tools.json", deployed.parent_path() / "filesystem_plugin.tools.json");
-    writePluginFixtureRevision(deployed.parent_path());
     PluginManager::loadBatch((sandbox / "plugins").string());
     check(registry.toolCount() == baseline + 3, "Filesystem DLL did not register exactly three tools");
     check(!registry.isRegistered("cd") && !registry.isRegistered("pwd"), "Retired navigation tools registered");
@@ -101,7 +99,6 @@ void runFilesystemPluginTests(const std::filesystem::path& pluginDirectory) {
           invoke("ls").at("status") == "completed", "Reload retained old generation or lost the replacement resource");
     PluginManager::shutdownBatch();
     fs::remove(deployed);
-    fs::remove(deployed.parent_path() / ".deployment");
     fs::remove(deployed.parent_path() / "filesystem_plugin.tools.json");
     fs::remove(deployed.parent_path());
     check(registry.toolCount() == baseline && directoryResource().resource_id.empty(), "Removing filesystem plugin folder retained tools/resources");

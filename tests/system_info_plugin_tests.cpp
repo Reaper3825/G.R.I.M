@@ -1,5 +1,4 @@
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/HardwareInventoryJson.hpp"
@@ -73,7 +72,6 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
             detectionMode = 0;
             std::error_code error;
             fs::remove(folder / "system_info_plugin/system_info_plugin.dll", error);
-            fs::remove(folder / "system_info_plugin/.deployment", error);
             fs::remove(folder / "system_info_plugin/system_info_plugin.tools.json", error);
             fs::remove(folder / "system_info_plugin", error);
             fs::remove(folder, error);
@@ -108,7 +106,6 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     fs::create_directory(folder / "system_info_plugin");
     fs::copy_file(pluginDirectory / "system_info_plugin.dll", folder / "system_info_plugin/system_info_plugin.dll");
     fs::copy_file(pluginDirectory / "system_info_plugin.tools.json", folder / "system_info_plugin/system_info_plugin.tools.json");
-    writePluginFixtureRevision(folder / "system_info_plugin");
     const auto beforeLoad = detectionCalls();
     prepareDetection();
     PluginManager::loadBatch(folder.string());
@@ -234,7 +231,6 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
     const auto beforeRemoval = detectionCalls();
     PluginManager::shutdownBatch();
     fs::remove(folder / "system_info_plugin/system_info_plugin.dll");
-    fs::remove(folder / "system_info_plugin/.deployment");
     fs::remove(folder / "system_info_plugin/system_info_plugin.tools.json");
     fs::remove(folder / "system_info_plugin");
     check(registry.toolCount() == baseline && !registry.isRegistered("system_info") && detectionCalls() == beforeRemoval &&

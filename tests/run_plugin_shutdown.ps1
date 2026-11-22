@@ -60,7 +60,6 @@ function Write-FixtureManifest($folder, $stem, $provider, [switch]$Tools, [switc
     }
     @{schema_version = 2; api_version = $ApiVersion; provider = $provider; version = '1.0'; tools = $entries} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output "$folder/$stem.tools.json") -Encoding ascii
-    Set-Content -LiteralPath (Join-Path $output "$folder/.deployment") -Value fixture-revision -Encoding ascii
 }
 $fixtureSource = '"' + (Join-Path $workspace 'tests/fixtures/plugin_shutdown_fixture.cpp') + '"'
 foreach ($fixture in @('alpha', 'beta')) {

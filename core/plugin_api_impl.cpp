@@ -141,19 +141,6 @@ static GRIM::MMO::ToolDescriptor decodeManifestTool(const nlohmann::json& entry,
     return out;
 }
 
-static std::vector<GRIM::MMO::ToolDescriptor> readManifestTools(
-    const nlohmann::json& entries, const GRIM::MMO::ProviderDescriptor& identity,
-    GrimToolDispatch dispatch) {
-    if (!entries.is_array() || entries.size() > 256 || (!entries.empty() && !dispatch))
-        throw std::invalid_argument("Invalid tool manifest entries or missing dispatcher");
-    std::vector<GRIM::MMO::ToolDescriptor> tools;
-    tools.reserve(entries.size());
-    for (const auto& entry : entries) {
-        tools.push_back(decodeManifestTool(entry, identity.version.c_str()));
-    }
-    return tools;
-}
-
 // Provider-neutral bridge: copied descriptions only; implementation and state stay in the DLL.
 static GrimResult api_replace_resources(GrimPluginHandle self, const char* kind,
                                        const char* json, size_t size) noexcept {
@@ -413,7 +400,17 @@ ProviderBatch::Record ProviderBatch::stage(PluginModule plugin) {
     state.module = std::move(plugin.library);
     state.dispatch = plugin.dispatch;
     state.panelLease->owner = record->descriptor->instance;
-    Registry::prepareTools(*record, readManifestTools(plugin.tools, *record->descriptor, state.dispatch));
+
+    const auto& entries = plugin.tools;
+    if (!entries.is_array() || entries.size() > 256 || (!entries.empty() && !state.dispatch))
+        throw std::invalid_argument("Invalid tool manifest entries or missing dispatcher");
+    std::vector<GRIM::MMO::ToolDescriptor> tools;
+    tools.reserve(entries.size());
+    for (const auto& entry : entries) {
+        tools.push_back(decodeManifestTool(entry, record->descriptor->version.c_str()));
+    }
+    Registry::prepareTools(*record, std::move(tools));
+
     {
         std::lock_guard lock(registry.tools_.mutex_);
         registry.validateNativeCandidateLocked(*record);

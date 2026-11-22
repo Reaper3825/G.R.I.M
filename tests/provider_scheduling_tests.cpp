@@ -1,5 +1,4 @@
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "core/plugin_api_impl.hpp"
 #include "MMO/Core/Registries/ToolRegistry.hpp"
 #include "MMO/Core/Descriptors/RegisteredResource.hpp"
@@ -29,7 +28,7 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
         ~Cleanup(){
             PluginManager::shutdownBatch();SetEnvironmentVariableW(L"LOCALAPPDATA",previous.empty()?nullptr:previous.c_str());
             std::error_code e;
-            for(const auto* p:{"schedule_plugin/schedule_plugin.dll","schedule_plugin/schedule_plugin.tools.json","schedule_plugin/.deployment","schedule_plugin","GRIM/calendar/events.json", "GRIM/calendar/events.json.lock", "GRIM/calendar/events.json.tmp", "GRIM/calendar", "GRIM"}) fs::remove(root/p,e);
+            for(const auto* p:{"schedule_plugin/schedule_plugin.dll","schedule_plugin/schedule_plugin.tools.json","schedule_plugin","GRIM/calendar/events.json", "GRIM/calendar/events.json.lock", "GRIM/calendar/events.json.tmp", "GRIM/calendar", "GRIM"}) fs::remove(root/p,e);
             fs::remove(root,e);
         }
     } cleanup{root,previous};
@@ -37,7 +36,6 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     fs::create_directory(root / "schedule_plugin");
     fs::copy_file(scheduleDirectory/"schedule_plugin.dll",root/"schedule_plugin/schedule_plugin.dll");
     fs::copy_file(scheduleDirectory/"schedule_plugin.tools.json",root/"schedule_plugin/schedule_plugin.tools.json");
-    writePluginFixtureRevision(root / "schedule_plugin");
     auto& registry=GRIM::MMO::ToolRegistry::instance();const auto baseline=registry.toolCount();
     const auto resource=[&](const char* name,const char* id){
         for(const auto& group:GRIM::MMO::ProviderRegistry::instance().snapshot().providers)
@@ -97,7 +95,6 @@ void runProviderSchedulingTests(const std::filesystem::path& scheduleDirectory) 
     check(invoke("get",{{"id","persist"}}).at("item").at("delivery_status")=="dispatched","Reload dispatch not persisted");
     PluginManager::shutdownBatch();
     fs::remove(root/"schedule_plugin/schedule_plugin.dll");
-    fs::remove(root/"schedule_plugin/.deployment");
     fs::remove(root/"schedule_plugin/schedule_plugin.tools.json");
     fs::remove(root/"schedule_plugin");
     pumpFrame();

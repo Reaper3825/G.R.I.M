@@ -64,58 +64,41 @@ class PluginDeploymentTests(unittest.TestCase):
         self.assertEqual(deployed.read_bytes(), b"working plugin")
         self.assertEqual(list(deployed.parent.iterdir()), [deployed])
 
-    def test_output_already_in_deployment_folder_gets_marker(self):
+    def test_output_already_in_deployment_folder(self):
         source = self.folder / "fixture/fixture.dll"
         source.parent.mkdir()
         source.write_bytes(b"completed plugin")
         self.publish(source, self.folder)
         self.assertEqual(source.read_bytes(), b"completed plugin")
         self.assertEqual(list(self.folder.iterdir()), [source.parent])
-        marker = source.parent / ".deployment"
-        self.assertRegex(marker.read_text(), r"^[0-9a-f]{32}\n$")
-        revision = marker.read_text()
-        self.publish(source, self.folder)
-        self.assertEqual(marker.read_text(), revision)
-        marker.unlink()
-        self.publish(source, self.folder)
-        self.assertRegex(marker.read_text(), r"^[0-9a-f]{32}\n$")
+        self.assertFalse((source.parent / ".deployment").exists())
 
-    def test_manifest_and_private_dependency_publish_as_one_revision(self):
+    def test_publish_manifest_and_private_dependency(self):
         binary = self.folder / "fixture.dll"
         manifest = self.folder / "fixture.tools.json"
         dependency = self.folder / "helper.dll"
         destination = self.folder / "live"
         bundle = destination / "fixture"
-        marker = bundle / ".deployment"
         binary.write_bytes(b"completed plugin")
         manifest.write_text("{}")
         dependency.write_bytes(b"runtime library")
         options = (f"-DPLUGIN_MANIFEST={manifest}", f"-DPLUGIN_RUNTIME_DLLS={dependency}")
         self.publish(binary, destination, *options)
-        revision = marker.read_text()
-        self.assertNotEqual(revision, "pending\n")
         self.assertEqual((bundle / binary.name).read_bytes(), binary.read_bytes())
         self.assertEqual((bundle / manifest.name).read_bytes(), manifest.read_bytes())
         deployed_dependency = bundle / "dependencies" / dependency.name
         self.assertEqual(deployed_dependency.read_bytes(), dependency.read_bytes())
 
-        self.publish(binary, destination, *options)
-        self.assertEqual(marker.read_text(), revision)
         dependency.write_bytes(b"updated runtime library")
         self.publish(binary, destination, *options)
-        self.assertNotEqual(marker.read_text(), revision)
         self.assertEqual(deployed_dependency.read_bytes(), dependency.read_bytes())
 
         manifest.unlink()
-        revision = marker.read_text()
         self.publish(binary, destination, *options, success=False)
-        self.assertEqual(marker.read_text(), revision)
         self.assertEqual((bundle / manifest.name).read_text(), "{}")
 
         manifest.write_text("{}")
-        marker.write_text("pending\n")
         self.publish(binary, destination, f"-DPLUGIN_MANIFEST={manifest}")
-        self.assertNotEqual(marker.read_text(), "pending\n")
         self.assertFalse(deployed_dependency.exists())
 
     def test_host_platforms_include_complete_standalone_catalog(self):

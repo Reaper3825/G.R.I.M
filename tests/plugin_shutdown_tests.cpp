@@ -1,6 +1,5 @@
 // Host-only loader lifecycle test with tiny fixture DLLs and API service sinks.
 #include "core/plugin_manager.hpp"
-#include "plugin_deployment_fixture.hpp"
 #include "core/plugin_api_impl.hpp"
 #include <algorithm>
 #include <iostream>
@@ -124,13 +123,11 @@ int main(int argc, char** argv) try {
     const auto invalidSidecar = invalid.parent_path() / "invalid.tools.json";
     std::ofstream(invalidSidecar) << R"({"schema_version":2,"api_version":)" << GRIM_API_VERSION
         << R"(,"provider":"Invalid fixture","version":"1.0","tools":[]})";
-    writePluginFixtureRevision(invalid.parent_path());
     errors.clear();
     PluginManager::loadBatch(argv[2]);
     PluginManager::shutdownBatch();
     std::filesystem::remove(invalid);
     std::filesystem::remove(invalidSidecar);
-    std::filesystem::remove(invalid.parent_path() / ".deployment");
     std::filesystem::remove(invalid.parent_path());
     const auto rejection = std::find_if(errors.begin(), errors.end(), [](const std::string& error) {
         return error.find("Rejected invalid.dll: Cannot load native library") != std::string::npos;
