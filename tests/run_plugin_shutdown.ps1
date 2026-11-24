@@ -106,7 +106,9 @@ foreach ($variant in $variants.Keys) {
     Write-FixtureManifest ('replacement/' + $variant) 'alpha' 'Declared-alpha' -Tools -Extra:($variant -eq 'old') -Collision:($variant -eq 'collision') -ApiVersion $apiVersion
 }
 $testArgs = $common + '/DGRIM_BUILD_HOST'
-$testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$testArgs += @('tests/plugin_shutdown_tests.cpp','core/plugin_manager.cpp','core/plugin_api_impl.cpp',
+    'MMO/Core/Registries/ProviderRegistry.cpp','MMO/Core/Registries/ToolRegistry.cpp','MMO/Core/ToolResultJson.cpp') |
+    ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $apiArgs = $common + @('/DGRIM_BUILD_HOST', '/DGRIM_PLUGIN_BATCH_TESTS')

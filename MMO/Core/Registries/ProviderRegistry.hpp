@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 namespace PluginAPI { class ProviderBatch; }
+class PluginManager;
 
 namespace GRIM::MMO {
 
@@ -80,6 +81,7 @@ public:
 private:
     friend class ToolRegistry;
     friend class ::PluginAPI::ProviderBatch;
+    friend class ::PluginManager;
     explicit ProviderRegistry(ToolRegistry& tools) : tools_(tools) {}
 
     using Provider = std::shared_ptr<const ProviderDescriptor>;

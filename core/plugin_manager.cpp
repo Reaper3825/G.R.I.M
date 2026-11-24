@@ -28,7 +28,7 @@ std::filesystem::path toolManifestPath(std::filesystem::path library) {
 }
 
 #ifdef _WIN32
-class ScopedDllDirectory {
+ class ScopedDllDirectory {
 public:
     explicit ScopedDllDirectory(const std::filesystem::path& path) : path_(path) {
         if (!path_.is_absolute() || !std::filesystem::is_directory(path_))
@@ -139,11 +139,57 @@ PluginBatchResult PluginManager::loadBatch(const std::filesystem::path& folder) 
         return {Status::DiscoveryFailed, {}};
     }
 
-    lifecycle = Lifecycle::Starting;
+    using PluginAPI::ProviderBatch;
     std::vector<PluginLoadOutcome> outcomes;
+    std::vector<ProviderBatch::Record> prepared;
+    std::vector<std::size_t> preparedOutcomes;
+    outcomes.reserve(libraries.size());
+    prepared.reserve(libraries.size());
+    preparedOutcomes.reserve(libraries.size());
+
+    lifecycle = Lifecycle::Starting;
     try {
-        outcomes = PluginAPI::ProviderBatch::load(libraries, openPlugin);
+        for (const auto& library : libraries) {
+            PluginLoadOutcome outcome{library, PluginLoadStatus::InvalidBundle, {}};
+            ProviderBatch::Record record;
+            try {
+                auto plugin = openPlugin(library, outcome.status);
+                const auto init = plugin.init;
+                const auto shutdown = plugin.shutdown;
+                outcome.status = PluginLoadStatus::RegistrationRejected;
+                record = ProviderBatch::stage(std::move(plugin));
+                outcome.status = PluginLoadStatus::InitializationFailed;
+                ProviderBatch::initialize(record, init, shutdown);
+                preparedOutcomes.push_back(outcomes.size());
+                prepared.push_back(std::move(record));
+            } catch (const std::exception& error) {
+                if (record) ProviderBatch::stop({record});
+                outcome.detail = error.what();
+            } catch (...) {
+                if (record) ProviderBatch::stop({record});
+                outcome.detail = "Plugin raised an unknown exception";
+            }
+            outcomes.push_back(std::move(outcome));
+        }
+
+        GRIM::MMO::ProviderRegistry::instance().publishPrepared(prepared);
+        for (std::size_t i = 0; i < prepared.size(); ++i) {
+            auto& outcome = outcomes[preparedOutcomes[i]];
+            if (prepared[i]->published) {
+                outcome.status = PluginLoadStatus::Loaded;
+            } else {
+                ProviderBatch::stop({prepared[i]});
+                outcome.status = PluginLoadStatus::RegistrationRejected;
+                outcome.detail = "Duplicate tool ID or alias";
+            }
+        }
     } catch (...) {
+        try {
+            ProviderBatch::stop(prepared);
+        } catch (...) {
+            lifecycle = Lifecycle::Idle;
+            throw;
+        }
         lifecycle = Lifecycle::Idle;
         throw;
     }

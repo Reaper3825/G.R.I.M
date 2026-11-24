@@ -31,13 +31,16 @@ foreach ($fixture in @('alpha', 'beta', 'failed', 'legacy')) {
     $commands += @("cl @$fixture.rsp", 'if errorlevel 1 exit /b %errorlevel%')
 }
 $testArgs = $common + @('/DGRIM_BUILD_HOST', ('/D"GRIM_PLUGIN_CUDA_BIN_DIR=\"' + $toolkit.Replace('\', '/') + '\""'))
-$testArgs += @('tests\plugin_shutdown_tests.cpp', 'core\plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$testSources = @('tests/plugin_shutdown_tests.cpp', 'core/plugin_manager.cpp', 'core/plugin_api_impl.cpp',
+    'MMO/Core/Registries/ProviderRegistry.cpp', 'MMO/Core/Registries/ToolRegistry.cpp', 'MMO/Core/ToolResultJson.cpp') |
+    ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$testArgs += $testSources
 $testArgs += '/Fe:plugin_shutdown_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'tests.rsp') -Value $testArgs -Encoding ascii
 $commands += @('cl @tests.rsp', 'if errorlevel 1 exit /b %errorlevel%', 'plugin_shutdown_tests.exe fixtures rejected', 'if errorlevel 1 exit /b %errorlevel%')
 $commands += @('ren "toolkit bin" "hidden toolkit"', 'if errorlevel 1 exit /b %errorlevel%', 'plugin_shutdown_tests.exe fixtures rejected --missing-toolkit', 'if errorlevel 1 exit /b %errorlevel%')
 $cpuArgs = $common + '/DGRIM_BUILD_HOST'
-$cpuArgs += @('tests\plugin_shutdown_tests.cpp', 'core\plugin_manager.cpp') | ForEach-Object { '"' + (Join-Path $workspace $_) + '"' }
+$cpuArgs += $testSources
 $cpuArgs += '/Fe:plugin_shutdown_cpu_tests.exe'
 Set-Content -LiteralPath (Join-Path $output 'cpu-tests.rsp') -Value $cpuArgs -Encoding ascii
 # Exercise the same native import with only the plugin-local dependency directory.
@@ -53,5 +56,7 @@ try {
 } finally {
     Pop-Location
 }
-# This exact directory was created exclusively for this test invocation.
-Remove-Item -LiteralPath $output -Recurse -Force
+$resolvedOutput = (Resolve-Path -LiteralPath $output).Path
+$resolvedBuild = (Resolve-Path -LiteralPath (Join-Path $workspace '.codex-build')).Path
+if ((Split-Path -Parent $resolvedOutput) -ne $resolvedBuild) { throw "Unexpected test directory: $resolvedOutput" }
+Remove-Item -LiteralPath $resolvedOutput -Recurse -Force

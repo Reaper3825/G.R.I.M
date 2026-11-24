@@ -15,11 +15,8 @@ struct PluginModule {
     GrimToolDispatch dispatch = nullptr;
 };
 
-using OpenPlugin = PluginModule (*)(const std::filesystem::path&, PluginLoadStatus& failure);
-
 class ProviderBatch {
 public:
-    static std::vector<PluginLoadOutcome> load(const std::vector<std::filesystem::path>& libraries, OpenPlugin open);
     static std::size_t shutdown();
 
 #ifdef GRIM_PLUGIN_BATCH_TESTS
@@ -29,6 +26,7 @@ public:
 #endif
 
 private:
+    friend class ::PluginManager;
     using Registry = GRIM::MMO::ProviderRegistry;
     using Record = Registry::Record;
     static Record stage(PluginModule plugin);

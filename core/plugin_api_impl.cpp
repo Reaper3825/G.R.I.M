@@ -429,58 +429,6 @@ void ProviderBatch::initialize(const Record& record, decltype(&grim_plugin_init)
         throw std::runtime_error("Plugin initialization failed with result " + std::to_string(result));
 }
 
-std::vector<PluginLoadOutcome> ProviderBatch::load(const std::vector<std::filesystem::path>& libraries,
-                                                  OpenPlugin open) {
-    auto& registry = Registry::instance();
-    std::vector<PluginLoadOutcome> outcomes;
-    std::vector<Record> prepared;
-    std::vector<std::size_t> preparedOutcomes;
-    outcomes.reserve(libraries.size());
-    prepared.reserve(libraries.size());
-    preparedOutcomes.reserve(libraries.size());
-
-    try {
-        for (const auto& library : libraries) {
-            PluginLoadOutcome outcome{library, PluginLoadStatus::InvalidBundle, {}};
-            Record record;
-            try {
-                auto plugin = open(library, outcome.status);
-                const auto init = plugin.init;
-                const auto shutdown = plugin.shutdown;
-                outcome.status = PluginLoadStatus::RegistrationRejected;
-                record = stage(std::move(plugin));
-                outcome.status = PluginLoadStatus::InitializationFailed;
-                initialize(record, init, shutdown);
-                preparedOutcomes.push_back(outcomes.size());
-                prepared.push_back(std::move(record));
-            } catch (const std::exception& error) {
-                if (record) stop({record});
-                outcome.detail = error.what();
-            } catch (...) {
-                if (record) stop({record});
-                outcome.detail = "Plugin raised an unknown exception";
-            }
-            outcomes.push_back(std::move(outcome));
-        }
-
-        registry.publishPrepared(prepared);
-        for (std::size_t i = 0; i < prepared.size(); ++i) {
-            auto& outcome = outcomes[preparedOutcomes[i]];
-            if (prepared[i]->published) {
-                outcome.status = PluginLoadStatus::Loaded;
-            } else {
-                stop({prepared[i]});
-                outcome.status = PluginLoadStatus::RegistrationRejected;
-                outcome.detail = "Duplicate tool ID or alias";
-            }
-        }
-    } catch (...) {
-        stop(prepared);
-        throw;
-    }
-    return outcomes;
-}
-
 void ProviderBatch::stop(const std::vector<Record>& records) {
     auto& registry = Registry::instance();
     for (const auto& record : records) {

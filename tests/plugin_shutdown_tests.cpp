@@ -1,93 +1,52 @@
-// Host-only loader lifecycle test with tiny fixture DLLs and API service sinks.
+// Exercise the production loader and registry with native fixture DLLs.
 #include "core/plugin_manager.hpp"
 #include "core/plugin_api_impl.hpp"
+#include "core/plugin_notifications.hpp"
+#include "error_manager.hpp"
+#include "helpers/grim_input.hpp"
+#include "logger.hpp"
 #include <algorithm>
 #include <iostream>
-#include <set>
 #include <stdexcept>
 #include <vector>
-#include <memory>
-#include <unordered_map>
 #include <fstream>
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 namespace {
-std::set<std::string> active;
-std::vector<std::string> events;
+std::vector<std::string> shutdowns;
 std::vector<std::string> errors;
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-std::unordered_map<GrimPluginHandle, std::string> owners;
-void fixtureLog(GrimPluginHandle instance, GrimLogLevel, const char* name) {
-    check(owners.at(instance) == name, "Wrong API owner during shutdown");
-    check(active.count(name) == 1, "Plugin shutdown ran after its context was removed");
-    events.push_back(std::string("shutdown:") + name);
 }
+void logDebug(const std::string& tag, const std::string& message) {
+    if (tag == "Plugin") shutdowns.push_back(message);
 }
-void logDebug(const std::string&, const std::string&) {}
 void logError(const std::string&, const std::string& message) { errors.push_back(message); }
-namespace PluginAPI {
-const GrimPluginAPI& hostAPI() {
-    static const GrimPluginAPI api{.api_version = GRIM_API_VERSION, .log = fixtureLog};
-    return api;
-}
-struct FixtureModule {
-    PluginModule plugin;
-    GrimPluginHandle handle;
-};
-static std::vector<FixtureModule> modules;
 
-static void stopModule(FixtureModule& fixture) {
-    const auto& name = fixture.plugin.descriptor.name;
-    fixture.plugin.shutdown();
-    check(active.erase(name) == 1, "Cleanup used DLL filename instead of declared plugin identity");
-    events.push_back("cleanup:" + name);
-    owners.erase(fixture.handle);
+// These host services are outside the loader fixtures' scope.
+void publishPluginNotification(const std::string&, const std::string&) {}
+std::string ErrorManager::getUserMessage(const std::string& code) { return code; }
+namespace GRIMInput {
+std::pair<std::string, std::string> parseInput(const std::string&) { return {}; }
+}
+namespace GRIM::UI {
+void registerProviderPanelLease(GrimPluginHandle, const std::shared_ptr<ProviderPanelLease>&) {}
+void retireProviderPanels(const std::shared_ptr<ProviderPanelLease>&) {}
+PanelServiceRequest submitPanelRequest(GrimUIPanelOperation, const std::string&, uint64_t) {
+    throw std::logic_error("Shutdown fixtures have no native UI");
+}
 }
 
-std::vector<PluginLoadOutcome> ProviderBatch::load(const std::vector<std::filesystem::path>& libraries,
-                                                  OpenPlugin open) {
-    static GrimPluginHandle next = 1;
-    std::vector<PluginLoadOutcome> results;
-    for (const auto& library : libraries) {
-        PluginLoadOutcome outcome{library, PluginLoadStatus::InvalidBundle, {}};
-        try {
-            FixtureModule fixture{open(library, outcome.status), next++};
-            const auto& name = fixture.plugin.descriptor.name;
-            owners.emplace(fixture.handle, name);
-            check(active.insert(name).second, "Plugin loaded more than once");
-            if (fixture.plugin.init(&hostAPI(), fixture.handle) == GRIM_OK) {
-                outcome.status = PluginLoadStatus::Loaded;
-                modules.push_back(std::move(fixture));
-            } else {
-                stopModule(fixture);
-                outcome.status = PluginLoadStatus::InitializationFailed;
-                outcome.detail = "Plugin initialization failed";
-            }
-        } catch (const std::exception& error) {
-            outcome.detail = error.what();
-        }
-        results.push_back(std::move(outcome));
-    }
-    return results;
-}
-
-std::size_t ProviderBatch::shutdown() {
-    const auto count = modules.size();
-    while (!modules.empty()) {
-        stopModule(modules.back());
-        modules.pop_back();
-    }
-    return count;
-}
-
-}
 int main(int argc, char** argv) try {
+    auto& registry = GRIM::MMO::ProviderRegistry::instance();
     if (argc == 4 && std::string(argv[3]) == "--missing-toolkit") {
-        PluginManager::loadBatch(argv[1]);
-        PluginManager::shutdownBatch();
-        check(active.empty() && errors.size() == 2, "Missing toolkit did not reject both fixture loads");
+        const auto result = PluginManager::loadBatch(argv[1]);
+        check(result.plugins.size() == 2 && std::all_of(result.plugins.begin(), result.plugins.end(), [](const auto& plugin) {
+            return plugin.status == PluginLoadStatus::NativeLoadFailed;
+        }), "Missing toolkit did not reject both fixture loads");
+        check(PluginManager::shutdownBatch() == 0 && registry.snapshot().providers.empty() &&
+              shutdowns.empty() && errors.size() == 2, "Missing toolkit left a provider or omitted an error");
         for (const auto& error : errors)
             check(error.find("Plugin dependency directory must exist and be absolute:") != std::string::npos,
                   "Missing toolkit directory did not produce an explicit error");
@@ -95,23 +54,35 @@ int main(int argc, char** argv) try {
         return 0;
     }
     check(argc == 3, "Expected fixture and rejected-fixture directories");
-    PluginManager::loadBatch(argv[1]);
-    check(active.size() == 2, "Both fixture plugins must load");
-    PluginManager::shutdownBatch();
-    check(active.empty() && events.size() == 4, "Shutdown did not clean up every plugin");
-    PluginManager::shutdownBatch();
-    check(events.size() == 4, "Repeated shutdown called unloaded plugins");
-    PluginManager::loadBatch(argv[1]);
-    check(active.size() == 2, "Shutdown retained stale loaded-plugin entries");
-    PluginManager::shutdownBatch();
-    check(active.empty() && events.size() == 8, "Reloaded fixtures did not shut down");
+    const std::vector<std::string> expectedShutdowns{
+        "[Plugin: Declared-beta] Declared-beta", "[Plugin: Declared-alpha] Declared-alpha"};
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        shutdowns.clear();
+        const auto result = PluginManager::loadBatch(argv[1]);
+        const auto snapshot = registry.snapshot();
+        check(result.status == PluginBatchResult::Status::Completed && result.plugins.size() == 2 &&
+              snapshot.providers.size() == 2 && snapshot.providers[0].provider.name == "Declared-alpha" &&
+              snapshot.providers[1].provider.name == "Declared-beta", "Both declared fixture providers must load");
+        const auto native = registry.readyNativeProviders();
+        check(native.size() == 2, "Both fixture handles must be ready");
+        check(PluginManager::shutdownBatch() == 2 && registry.snapshot().providers.empty(),
+              "Shutdown did not remove both providers");
+        for (const auto& provider : native)
+            check(!registry.nativeProvider(provider->handle), "Shutdown retained a fixture handle");
+        check(shutdowns == expectedShutdowns, "Shutdown did not call both plugins in reverse load order with their API owners");
+        check(PluginManager::shutdownBatch() == 0 && shutdowns == expectedShutdowns,
+              "Repeated shutdown called unloaded plugins");
+    }
     check(errors.empty(), "Valid plugins reported load errors");
-    PluginManager::loadBatch(argv[2]);
-    check(active.empty() && owners.empty(), "Failed init or incompatible ABI retained an API instance");
-    check(events.size() == 10 && events.back() == "cleanup:Declared-failed", "Failed init was not cleaned up");
+    shutdowns.clear();
+    const auto rejected = PluginManager::loadBatch(argv[2]);
+    check(rejected.plugins.size() == 2 && rejected.plugins[0].status == PluginLoadStatus::InitializationFailed &&
+          rejected.plugins[1].status == PluginLoadStatus::InvalidBundle, "Expected init and ABI rejections");
+    check(registry.snapshot().providers.empty(), "A rejected provider was published");
+    check(shutdowns == std::vector<std::string>{"[Plugin: Declared-failed] Declared-failed"},
+          "Failed init did not run shutdown with its API owner");
     check(errors.size() == 2, "Failed init and incompatible ABI were not both rejected");
-    PluginManager::shutdownBatch();
-    check(events.size() == 10, "Rejected plugin retained a loaded handle");
+    check(PluginManager::shutdownBatch() == 0 && shutdowns.size() == 1, "Rejected plugin retained a loaded handle");
 
     const auto invalid = std::filesystem::path(argv[2]) / "invalid" / "invalid.dll";
     std::filesystem::create_directory(invalid.parent_path());
