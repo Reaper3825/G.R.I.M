@@ -135,9 +135,14 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
                                     "has_piper", "suggested_whisper_model"})
             check(!resource.state.at("data").contains(removed), "Resource exposed removed audio/voice/model fields");
     }
-    GRIM::WorldLab::LiveWorldSession live(ProviderRegistry::instance());
-    // Room paths are derived from provider names; resolve rather than assume their spelling.
-    live.command("go " + live.world().providerPath(GRIM::WorldLab::providerKey(initialResource.provider)));
+    auto& providers = ProviderRegistry::instance();
+    GRIM::WorldLab::LiveWorldSession* liveSession = nullptr;
+    auto feed = providers.subscribeProviderUpdates(providers.startupProviders(), [&](auto updates) {
+        liveSession->applyUpdates(std::move(updates));
+    });
+    GRIM::WorldLab::LiveWorldSession live(std::move(feed.initial));
+    liveSession = &live;
+    live.command("go " + live.providerPath(initialResource.provider.instance));
     const auto beforeInspection = detectionCalls();
     for (const auto& resource : initialResources) {
         live.command("inspect-resource " + resource.resource_id);
@@ -176,7 +181,7 @@ void runSystemInfoPluginTests(const std::filesystem::path& pluginDirectory) {
           resourcesFor("System Information Plugin").size() == 5,
           "system_info changed object identity or retained removed GPUs");
     const auto lastGoodResources = resourcesFor("System Information Plugin");
-    live.synchronize();
+    providers.dispatchProviderUpdates();
     check(live.observation().at("resources").size() == 5, "Live world retained removed device objects");
     detectionMode = 1;
     const auto failed = invoke();

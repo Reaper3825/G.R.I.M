@@ -1,6 +1,6 @@
 # Live navigation Goal generation
 
-Open World Lab's Live view to refresh `resources/models/games/live_navigation.json`,
+Open World Lab's Live view in a new host session to write `resources/models/games/live_navigation.json`,
 then run from the repository root:
 
 ```powershell
@@ -18,7 +18,7 @@ System Hub. The hub itself is excluded because arrival there is initially satisf
 Goal text uses the snapshot's display name, for example "go to the Voice room."
 Snapshot paths and provider identities are retained only in the authoring manifest;
 the generator does not change or reconstruct the exported paths.
-Provider additions/removals are reflected by rerunning against a fresh snapshot.
+After startup provider membership changes, rerun against the export from a new host session.
 No hardcoded room list or third-party Python dependencies are needed.
 
 Outputs are `goals.jsonl` (Goal-only ConceptBlocks), `course.json` (one Navigate

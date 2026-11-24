@@ -1,93 +1,56 @@
 # Live System World
 
-World Lab's **Live** button opens a persistent host-owned session. System Hub at `/` is permanent; every registered provider automatically gets a
-child room on startup and as providers load. With no providers, only the hub remains. It does not compile or launch TextWorld, a model, or
-a trainer. **World editor** returns to the authored world; entering Live again
-resumes the same live session. Hiding World Lab preserves that session too.
-Sessions currently last for the lifetime of the World Lab view; room identities and
-history are not persisted across application restarts.
+World Lab's **Live** button opens a host-owned session. System Hub at `/` has a
+child room for every provider committed by the startup plugin batch, including
+providers with no tools. The session builds the room map once. **World editor**
+returns to the authored world. Reopening Live resumes the same session.
 
-## Provider ownership
+## Startup and updates
 
-ToolRegistry publishes an explicit provider record and its tools under one mutex
-and revision. Plugin initialization stages metadata; commit publishes both,
-including providers with zero tools. Failed initialization or replacement leaves
-the old publication unchanged. Shutdown removes only the matching generation.
-The plugin ABI is unchanged. Built-in provider availability is derived from their
-tool registrations. Direct legacy plugin registrations without a lifecycle commit
-do not advertise an independently loaded provider.
+When Live first opens, the host supplies the startup providers and their latest
+tool and resource lists. It attaches update delivery under the same registry
+lock used to copy the initial contents. The lists contain descriptors only.
+The Live session owns its copies and has no registry dependency.
 
-The atomic snapshot contains copied descriptors, not handlers or DLL references.
-Provider identity is `(provider_type, provider_name)`; `provider_instance` guards
-the loaded generation. Late registrations must match the published generation and
-source path. Removing an individual tool does not unload its provider.
+The host coalesces committed changes by provider instance and delivers the
+latest changed collections on the UI thread. Tool metadata, usage statistics,
+and withdrawals flow through the same path as resource publication,
+replacement, and removal. Delivery continues while Live is hidden. The session
+uses the provider instance as its update ID. Retirement clears that instance's
+tools and resources. Its room and the player's location stay in place. A provider
+loaded after startup has no room in the current session.
 
-## Connections and navigation
+## Navigation and inspection
 
-World membership follows registered availability automatically. There is no manual
-Connect or Disconnect step. **Available actions** lists navigation and read-only
-tool inspection commands.
-Provider rooms are arranged radially around System Hub with spoke connections.
-The compact ring uses one quarter of the original radius and expands with provider count; topology
-changes redistribute the ring without changing room identities or player location.
-Only adjacent navigation is allowed: return to the hub before entering a sibling.
-Internal room IDs remain separate from navigation. Paths use provider names, e.g.
-`/builtin` and `/UI`. A trailing "Plugin" label (space, hyphen, or underscore
-separated, case-insensitive) is omitted from room names and paths. `go UI` uses
-the shortened name; `go UI Plugin` still accepts the registered name. Internal
-provider ownership and tool descriptors keep their registered identity.
-Path-unsafe characters become hyphens. Collisions receive an identity-derived
-suffix; paths stay reserved across unload/reload and never silently change owners.
-Ambiguous exact names require the listed path. Room IDs and paths remain stable
-through generation changes. Asset-library files do not
-create availability or implicitly add resource objects.
+The room paths use readable provider names, with a trailing `Plugin` label
+omitted and a numeric suffix added for path collisions. Use `go /UI` to enter a
+room and `back` to return to the hub before entering another room. Clicking a
+room previews its resources. **Available actions** lists navigation and
+inspection commands for the current location.
 
-Registry changes are reconciled on the UI thread before actions and while the
-view is visible. A replacement preserves the room and player location, and updates
-its tool catalog. Unload removes the connection. If that room is occupied, the
-player returns to System Hub with an explicit history event. A subsequent load automatically restores the provider room with its existing
-session room identity. Reconciliation on reopening handles changes made while the view was
-hidden. These operations preserve session identity, movement count and history.
+Use `tools` to list model tools in the room, `open tool_catalog` to browse tools
+across providers, and `inspect <tool_id>` to read a tool contract. Live session
+commands inspect tools without executing them.
 
-Resource state refreshes update the live projection silently, including panel
-geometry, visibility, and hardware capture timestamps. They do not append room
-snapshots to history or reset its scroll position. Resource additions, removals,
-and identity/name/operation changes in the current room produce concise per-object
-change entries; other rooms still update without unsolicited transcript entries.
-Unchanged publications produce no additional entries. An existing inspection
-remains valid through unrelated resource refreshes; changes to the inspected
-resource invalidate its current structured result while preserving past history.
+Use `inspect <object name or resource_id>` to read published resource state in
+the current room. Use `inspect-resource <resource_id>` for ambiguous names or
+tool-ID collisions. Resource tiles and inspection commands share a formatter.
+[System Information resources](SYSTEM_INFO_RESOURCES.md) shows the hardware
+readings and capture-status format.
 
-## Actions and scope
+State-only resource changes refresh the observation without adding transcript
+entries. Additions, removals, and identity changes in the current room add
+short entries. An inspection becomes stale when the inspected object changes
+or is removed. The session retains the recorded inspection in its history.
 
-Supported commands: `look`, `tools`, `go /builtin`, `back`, and
-`inspect <canonical_tool_id>`, `inspect <object name or resource_id>`, and
-`inspect-resource <resource_id>`. Resource inspection is restricted to the current
-provider room and reconciles current registry state first. Unique exact resource
-names are ASCII case insensitive; ambiguous names or tool-ID collisions require
-the explicit `inspect-resource` route. System Information resources produce
-readable name/fields/capture-status feedback, preserving their structured descriptor
-in `state.resource_inspection`. Resource tile previews use the same formatter.
-See [System Information resources](SYSTEM_INFO_RESOURCES.md) for examples.
-Tool inspection uses the current provider generation and
-only Loaded, Model-classified tools. Invalid or stale selections produce rejected
-action entries. Tool contracts are copied from ToolDescriptor, including argument
-schema, confirmation metadata, and bindings.
-
-This foundation projects registered resource objects and never executes provider
-tools. Inspection reads published state without triggering capture or mutation.
-It does not provide sandbox mutations or generate verified TextWorld witnesses.
-Those require explicit action adapters and policy checks. The existing
-compiled TextWorld backend remains the authored-world playtest path. The live
-canvas uses the existing document renderer in selection-only mode; its topology
-is owned by the live session, not by editor gestures or undo history.
+The first opening exports the fixed room list for offline navigation authoring.
+See [Live-world navigation](LIVE_WORLD_NAVIGATION.md) for its format.
 
 ## Validation
 
-`tests/run_live_world.ps1` builds and runs a focused host-only test executable.
-It covers navigation, stable provider paths, resource inspection, and persistent history.
-Plugin lifecycle fixtures additionally cover provider load, reload, and unload.
-`tests/run_ui_input_foundation.ps1 -WorldLab` exercises automatic room population and navigation
-controls, reconciliation after hiding, and repeated client stop, alongside the
-existing editor and asset tests.
-No GRIM application, model, trainer, or TextWorld container is required.
+- `tests/run_live_world.ps1` exercises startup rooms, provider-scoped updates,
+  navigation export, and resource inspection.
+- `tests/run_ui_input_foundation.ps1 -WorldLab` exercises the map, navigation
+  controls, resource grid, and delivery while the view is hidden.
+- `tests/run_plugin_shutdown.ps1 -BuildSystemInfoFixture` exercises startup
+  membership, tool metadata and withdrawal, and plugin resource delivery.

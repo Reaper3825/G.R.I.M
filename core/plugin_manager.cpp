@@ -142,10 +142,8 @@ PluginBatchResult PluginManager::loadBatch(const std::filesystem::path& folder) 
     using PluginAPI::ProviderBatch;
     std::vector<PluginLoadOutcome> outcomes;
     std::vector<ProviderBatch::Record> prepared;
-    std::vector<std::size_t> preparedOutcomes;
     outcomes.reserve(libraries.size());
     prepared.reserve(libraries.size());
-    preparedOutcomes.reserve(libraries.size());
 
     lifecycle = Lifecycle::Starting;
     try {
@@ -160,8 +158,8 @@ PluginBatchResult PluginManager::loadBatch(const std::filesystem::path& folder) 
                 record = ProviderBatch::stage(std::move(plugin));
                 outcome.status = PluginLoadStatus::InitializationFailed;
                 ProviderBatch::initialize(record, init, shutdown);
-                preparedOutcomes.push_back(outcomes.size());
                 prepared.push_back(std::move(record));
+                outcome.status = PluginLoadStatus::Loaded;
             } catch (const std::exception& error) {
                 if (record) ProviderBatch::stop({record});
                 outcome.detail = error.what();
@@ -172,17 +170,7 @@ PluginBatchResult PluginManager::loadBatch(const std::filesystem::path& folder) 
             outcomes.push_back(std::move(outcome));
         }
 
-        GRIM::MMO::ProviderRegistry::instance().publishPrepared(prepared);
-        for (std::size_t i = 0; i < prepared.size(); ++i) {
-            auto& outcome = outcomes[preparedOutcomes[i]];
-            if (prepared[i]->published) {
-                outcome.status = PluginLoadStatus::Loaded;
-            } else {
-                ProviderBatch::stop({prepared[i]});
-                outcome.status = PluginLoadStatus::RegistrationRejected;
-                outcome.detail = "Duplicate tool ID or alias";
-            }
-        }
+        GRIM::MMO::ProviderRegistry::instance().publishPrepared(prepared, /*startup=*/true);
     } catch (...) {
         try {
             ProviderBatch::stop(prepared);

@@ -56,8 +56,14 @@ UIWorldLabView::UIWorldLabView(std::filesystem::path recoveryPath, std::filesyst
         if(!apply())return;
         hide();
         if(!liveWorld_) {
-            liveWorld_=std::make_unique<UILiveWorldView>(gamesDirectory_/"live_navigation.json");
-            liveWorld_->onExit=[this]{liveWorld_->hide();liveWorldVisible_=false;};
+            auto& registry = GRIM::MMO::ProviderRegistry::instance();
+            auto updates = registry.subscribeProviderUpdates(registry.startupProviders(), [this](auto batch) {
+                liveWorld_->applyProviderUpdates(std::move(batch));
+            });
+            auto view = std::make_unique<UILiveWorldView>(std::move(updates.initial), gamesDirectory_ / "live_navigation.json");
+            view->onExit = [this] { liveWorld_->hide(); liveWorldVisible_ = false; };
+            liveWorld_ = std::move(view);
+            liveProviderUpdates_ = std::move(updates.subscription);
         }
         liveWorldVisible_=true;
     });});

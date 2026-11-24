@@ -1,5 +1,6 @@
 #pragma once
 #include "core/host_exports.hpp"
+#include "MMO/Core/Registries/ProviderRegistry.hpp"
 #include "ui_world_canvas.hpp"
 #include "ui/primitives/ui_panel.hpp"
 #include "ui/primitives/ui_button.hpp"
@@ -53,6 +54,7 @@ private:
     std::vector<std::string> doorKeys_;
     std::unique_ptr<UIWorldSession> session_;
     std::unique_ptr<UILiveWorldView> liveWorld_;
+    std::shared_ptr<GRIM::MMO::ProviderRegistry::UpdateSubscription> liveProviderUpdates_;
     std::unique_ptr<UIButton> liveButton_;
     bool liveWorldVisible_ = false;
     bool sessionVisible_ = false;

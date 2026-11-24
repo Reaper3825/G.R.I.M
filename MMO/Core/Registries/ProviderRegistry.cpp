@@ -7,6 +7,16 @@
 
 namespace GRIM::MMO {
 
+struct ProviderRegistry::UpdateSubscription {
+    struct Provider {
+        std::weak_ptr<ProviderRecord> record;
+        bool toolsChanged = false;
+        bool resourcesChanged = false;
+    };
+    UpdateSink sink;
+    std::map<std::string, Provider> providers;
+};
+
 ProviderRegistry::CallGate::ActiveCall::ActiveCall(CallGate& gate, Kind kind) : gate_(gate) {
     std::lock_guard lock(gate_.mutex);
     if (gate_.state == State::Ready ||
@@ -112,41 +122,43 @@ bool ProviderRegistry::publishResourceFixture(const ProviderDescriptor& provider
         retire(provider.name, provider.instance);
         throw;
     }
-    if (record->published) return true;
-    retire(provider.name, provider.instance);
-    return false;
+    return true;
 }
 
 #endif
 
-void ProviderRegistry::publishPrepared(const std::vector<Record>& records) {
+void ProviderRegistry::publishPrepared(const std::vector<Record>& records, bool startup) {
+    if (records.empty()) {
+        if (startup) {
+            std::lock_guard lock(tools_.mutex_);
+            startupProviders_.clear();
+        }
+        return;
+    }
+    std::vector<ProviderDescriptor> startupProviders;
+    if (startup) {
+        startupProviders.reserve(records.size());
+        for (const auto& record : records) startupProviders.push_back(*record->descriptor);
+    }
     std::vector<ToolRegistryListener*> listeners;
     std::vector<std::string> published;
-    std::vector<Record> accepted;
     {
         std::lock_guard lock(tools_.mutex_);
         auto nextTools = tools_.tool_index_;
-        auto nextAliases = tools_.alias_index_;
+        // Staging handles admission. Build the final indexes before making any record visible.
         for (const auto& record : records) {
-            auto candidateTools = nextTools;
-            bool collision = false;
             for (const auto& [id, tool] : record->tools) {
-                if (!candidateTools.emplace(id, tool.get()).second) {
-                    collision = true;
-                    break;
-                }
+                if (!nextTools.emplace(id, tool.get()).second)
+                    throw std::logic_error("Prepared provider tool ID conflicts at commit: " + id);
+                published.push_back(id);
             }
-            ToolRegistry::Aliases aliases;
-            if (collision || !ToolRegistry::buildAliases(candidateTools, aliases)) continue;
-            for (const auto& [id, tool] : record->tools) published.push_back(id);
-            accepted.push_back(record);
-            nextTools.swap(candidateTools);
-            nextAliases.swap(aliases);
         }
-        if (accepted.empty()) return;
+        ToolRegistry::Aliases nextAliases;
+        if (!ToolRegistry::buildAliases(nextTools, nextAliases))
+            throw std::logic_error("Prepared provider tool alias conflicts at commit");
         listeners = tools_.listeners_;
         bool resourcesChanged = false;
-        for (const auto& record : accepted) {
+        for (const auto& record : records) {
             record->published = true;
             if (record->native) {
                 auto& gate = record->native->gate;
@@ -158,6 +170,7 @@ void ProviderRegistry::publishPrepared(const std::vector<Record>& records) {
         if (resourcesChanged) ++resourceVersion_;
         tools_.tool_index_.swap(nextTools);
         tools_.alias_index_.swap(nextAliases);
+        if (startup) startupProviders_ = std::move(startupProviders);
         ++tools_.version_;
     }
     for (const auto& id : published) for (auto* listener : listeners) {
@@ -180,6 +193,7 @@ void ProviderRegistry::unpublishPrepared(const std::vector<Record>& records) {
         for (const auto& record : records) {
             if (!record->published) continue;
             record->published = false;
+            markProviderUpdatedLocked(*record, true, true);
             changed = true;
             for (const auto& [id, tool] : record->tools) tools_.tool_index_.erase(id);
             std::erase_if(tools_.alias_index_, [&](const auto& alias) {
@@ -195,30 +209,113 @@ void ProviderRegistry::unpublishPrepared(const std::vector<Record>& records) {
     }
 }
 
+std::vector<ToolDescriptor> ProviderRegistry::copyTools(const ProviderRecord& provider) {
+    std::vector<ToolDescriptor> result;
+    result.reserve(provider.tools.size());
+    for (const auto& [id, entry] : provider.tools) result.push_back(entry->descriptor);
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        return a.tool_id < b.tool_id;
+    });
+    return result;
+}
+
+std::vector<ResourceDescriptor> ProviderRegistry::copyResources(const ProviderRecord& provider) {
+    std::vector<ResourceDescriptor> result;
+    result.reserve(provider.resources.size());
+    for (const auto& [id, resource] : provider.resources) result.push_back(resource);
+    return result;
+}
+
 ProviderRegistrySnapshot ProviderRegistry::snapshot() const {
     std::lock_guard lock(tools_.mutex_);
     ProviderRegistrySnapshot result;
-    result.revision = tools_.version_;
-    result.resource_revision = resourceVersion_;
     for (const auto& [name, record] : records_) {
-        if (!record->published) continue;
-        ProviderSnapshot group;
-        group.provider = *record->descriptor;
-        for (const auto& [id, resource] : record->resources)
-            group.resources.push_back(resource);
-        for (const auto& [id, entry] : record->tools)
-            group.tools.push_back(entry->descriptor);
-        std::sort(group.tools.begin(), group.tools.end(), [](const auto& a, const auto& b) {
-            return a.tool_id < b.tool_id;
-        });
-        result.providers.push_back(std::move(group));
+        if (record->published)
+            result.providers.push_back({*record->descriptor, copyTools(*record), copyResources(*record)});
     }
     return result;
 }
 
-bool ProviderRegistry::hasChanged(const ProviderRegistrySnapshot& snapshot) const {
+std::vector<ProviderDescriptor> ProviderRegistry::startupProviders() const {
     std::lock_guard lock(tools_.mutex_);
-    return snapshot.revision != tools_.version_ || snapshot.resource_revision != resourceVersion_;
+    return startupProviders_;
+}
+
+ProviderRegistry::ProviderUpdates ProviderRegistry::subscribeProviderUpdates(
+    const std::vector<ProviderDescriptor>& providers, UpdateSink sink) {
+    auto subscription = std::make_shared<UpdateSubscription>();
+    subscription->sink = std::move(sink);
+    ProviderUpdates result{{}, subscription};
+    result.initial.reserve(providers.size());
+    std::lock_guard lock(tools_.mutex_);
+    for (const auto& provider : providers) {
+        ProviderSnapshot initial{provider};
+        const auto found = records_.find(provider.name);
+        const bool active = found != records_.end() && found->second->published &&
+            found->second->descriptor->instance == provider.instance;
+        if (active) {
+            const auto& record = found->second;
+            initial.tools = copyTools(*record);
+            initial.resources = copyResources(*record);
+            subscription->providers.try_emplace(provider.instance, UpdateSubscription::Provider{record});
+        }
+        result.initial.push_back(std::move(initial));
+    }
+    std::erase_if(updateSubscriptions_, [](const auto& entry) { return entry.expired(); });
+    updateSubscriptions_.push_back(subscription);
+    return result;
+}
+
+void ProviderRegistry::markProviderUpdatedLocked(const ProviderRecord& provider, bool tools, bool resources) {
+    for (const auto& entry : updateSubscriptions_) {
+        if (const auto subscription = entry.lock()) {
+            const auto tracked = subscription->providers.find(provider.descriptor->instance);
+            if (tracked == subscription->providers.end() || tracked->second.record.lock().get() != &provider)
+                continue;
+            tracked->second.toolsChanged |= tools;
+            tracked->second.resourcesChanged |= resources;
+            providerUpdatesPending_ = true;
+        }
+    }
+}
+
+void ProviderRegistry::dispatchProviderUpdates() {
+    if (!providerUpdatesPending_) return;
+    std::vector<std::pair<std::weak_ptr<UpdateSubscription>, std::vector<ProviderUpdate>>> deliveries;
+    {
+        std::lock_guard lock(tools_.mutex_);
+        std::erase_if(updateSubscriptions_, [](const auto& entry) { return entry.expired(); });
+        for (const auto& entry : updateSubscriptions_) {
+            const auto subscription = entry.lock();
+            if (!subscription) continue;
+            std::vector<ProviderUpdate> updates;
+            for (const auto& [id, provider] : subscription->providers) {
+                if (!provider.toolsChanged && !provider.resourcesChanged) continue;
+                const auto record = provider.record.lock();
+                const bool active = record && record->published;
+                ProviderUpdate update{id};
+                if (provider.toolsChanged)
+                    update.tools = active ? copyTools(*record) : std::vector<ToolDescriptor>{};
+                if (provider.resourcesChanged)
+                    update.resources = active ? copyResources(*record) : std::vector<ResourceDescriptor>{};
+                updates.push_back(std::move(update));
+            }
+            if (!updates.empty()) deliveries.emplace_back(entry, std::move(updates));
+        }
+        for (const auto& [entry, updates] : deliveries) {
+            if (const auto subscription = entry.lock()) {
+                for (const auto& update : updates) {
+                    auto& provider = subscription->providers.at(update.providerId);
+                    provider.toolsChanged = false;
+                    provider.resourcesChanged = false;
+                }
+            }
+        }
+        providerUpdatesPending_ = false;
+    }
+    for (auto& [entry, updates] : deliveries) {
+        if (const auto subscription = entry.lock()) subscription->sink(std::move(updates));
+    }
 }
 
 uint64_t ProviderRegistry::resourceVersion() const {
@@ -258,7 +355,10 @@ bool ProviderRegistry::publishResource(const std::string& instance, const Resour
     const auto existing = resources->find(resource.resource_id);
     if (existing != resources->end() && existing->second == resource) return true;
     resources->insert_or_assign(resource.resource_id, resource);
-    if (owner->published) ++resourceVersion_;
+    if (owner->published) {
+        ++resourceVersion_;
+        markProviderUpdatedLocked(*owner, false, true);
+    }
     return true;
 }
 
@@ -270,7 +370,10 @@ void ProviderRegistry::removeResource(const std::string& instance, const Resourc
     const auto existing = resources->find(resource.resource_id);
     if (existing == resources->end() || existing->second.runtime_id != resource.runtime_id) return;
     resources->erase(existing);
-    if (owner->published) ++resourceVersion_;
+    if (owner->published) {
+        ++resourceVersion_;
+        markProviderUpdatedLocked(*owner, false, true);
+    }
 }
 
 ProviderRegistry::Resources ProviderRegistry::makeResourceBatch(
@@ -301,7 +404,10 @@ bool ProviderRegistry::replaceResources(const ProviderDescriptor& provider, cons
     if (next.size() > 10000) throw std::invalid_argument("Provider resource limit exceeded");
     if (next != *current) {
         current->swap(next);
-        if (owner->published) ++resourceVersion_;
+        if (owner->published) {
+            ++resourceVersion_;
+            markProviderUpdatedLocked(*owner, false, true);
+        }
     }
     return true;
 }

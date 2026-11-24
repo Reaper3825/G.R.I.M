@@ -488,7 +488,6 @@ GrimPluginHandle ProviderBatch::loadFixture(const GRIM::MMO::ProviderDescriptor&
     try {
         initialize(record, nullptr, nullptr);
         Registry::instance().publishPrepared({record});
-        if (!record->published) throw std::runtime_error("Fixture registration rejected");
         return record->native->handle;
     } catch (...) {
         stop({record});

@@ -1,5 +1,6 @@
 #include "system_tick.hpp"
 #include "plugin_api_impl.hpp"
+#include "../MMO/Core/Registries/ProviderRegistry.hpp"
 
 #include "../helpers/key.hpp"
 #include "../helpers/mouse.hpp"
@@ -48,6 +49,7 @@ void tickApplicationFrame(const GRIMWindow& overlayWindow)
     // Global bindings above retain raw hardware input. UI gestures stop when
     // another application owns activation; they cannot restart from a held key.
     input.interactionCancelled = !PlatformWindow::isInputWindowActive(overlayWindow.hwnd);
+    MMO::ProviderRegistry::instance().dispatchProviderUpdates();
     UIRoot::get().update(input, kDeltaSeconds);
     UIRoot::get().updateOverlayInteraction(input);
     UIRoot::get().draw();

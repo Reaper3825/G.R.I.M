@@ -78,7 +78,7 @@ read published state without triggering detection. Names are ASCII case
 insensitive and must identify one resource in the current provider room.
 `inspect-resource cpu` remains the explicit object-ID route for ambiguous names
 or collisions with tool IDs. Tool catalog access does not grant remote resource
-access. Provider changes are reconciled before inspection.
+access. Inspection reads the most recent provider update delivered to the session.
 
 Inspection feedback and resource tile clicks use readable labels and units:
 

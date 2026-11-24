@@ -56,6 +56,7 @@ bool ToolRegistry::updateMetadata(const ToolDescriptor& descriptor, const Provid
         // Keep this registration identity so an in-flight call retains its stats.
         it->second->descriptor = std::move(updated.descriptor);
         alias_index_.swap(aliases);
+        providers_.markProviderUpdatedLocked(*providers_.records_.at(owner.name), true, false);
         ++version_;
     }
     for (auto* listener : listeners) listener->onToolUpdated(descriptor.tool_id);
@@ -74,6 +75,7 @@ bool ToolRegistry::unregisterTool(const std::string& id, const std::string& prov
         const auto& owner = providers_.records_.at(provider);
         tool_index_.erase(it);
         owner->tools.erase(id);
+        providers_.markProviderUpdatedLocked(*owner, true, false);
         for (auto alias = alias_index_.begin(); alias != alias_index_.end();) {
             if (alias->second == id) alias = alias_index_.erase(alias);
             else ++alias;
@@ -132,6 +134,7 @@ nlohmann::json ToolRegistry::invoke(const std::string& name, const std::string& 
             if (succeeded) ++stats.success_count;
             else ++stats.failure_count;
             stats.success_rate = static_cast<float>(stats.success_count) / (stats.success_count + stats.failure_count);
+            providers_.markProviderUpdatedLocked(*owner, true, false);
         }
     }
     return result;

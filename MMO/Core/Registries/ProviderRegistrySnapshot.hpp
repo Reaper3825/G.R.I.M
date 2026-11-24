@@ -4,6 +4,7 @@
 #include "../Descriptors/ToolDescriptor.hpp"
 #include <cstddef>
 #include <vector>
+#include <optional>
 
 namespace GRIM::MMO {
 struct ProviderSnapshot {
@@ -12,9 +13,14 @@ struct ProviderSnapshot {
     std::vector<ResourceDescriptor> resources;
 };
 
+// Present collections replace the provider's previous contents, including empty lists.
+struct ProviderUpdate {
+    std::string providerId;
+    std::optional<std::vector<ToolDescriptor>> tools;
+    std::optional<std::vector<ResourceDescriptor>> resources;
+};
+
 struct ProviderRegistrySnapshot {
-    uint64_t revision = 0;
-    uint64_t resource_revision = 0;
     std::vector<ProviderSnapshot> providers;
 
     std::size_t resourceCount() const {

@@ -68,6 +68,10 @@ void runPluginBatchTests(const std::filesystem::path& variants, const std::files
     check(result.plugins[6].detail.find("missing.tools.json") != std::string::npos, "Missing manifest rejection lacked context");
     check(observer.complete && registry.version() == before + 1, "Publication exposed an incomplete batch");
     check(registry.toolCount() == baseline + 2, "Rejected plugin published tools");
+    auto& providers = GRIM::MMO::ProviderRegistry::instance();
+    const auto startup = providers.startupProviders();
+    check(startup.size() == 2 && startup[1].name == "Batch beta",
+          "Startup roster omitted the tool-less provider or included a rejected provider");
     const auto instance = registry.getTool("Declared-alpha")->provider.instance;
     check(PluginManager::loadBatch(root).status == Status::AlreadyStarted, "Startup batch ran twice");
     PluginAPI::dispatchSystemTick(0, 0);
@@ -85,6 +89,22 @@ void runPluginBatchTests(const std::filesystem::path& variants, const std::files
     check(registry.getTool("Declared-alpha")->provider.instance != instance &&
           registry.invoke("Declared-alpha", "").at("message") == "new-result",
           "New host lifecycle retained a stale plugin instance");
+    std::vector<GRIM::MMO::ProviderUpdate> updates;
+    auto feed = providers.subscribeProviderUpdates(providers.startupProviders(), [&](auto batch) {
+        updates = std::move(batch);
+    });
+    auto tool = registry.getTool("Declared-alpha").value();
+    tool.description = "Updated fixture description";
+    check(registry.updateMetadata(tool), "Fixture tool metadata update failed");
+    providers.dispatchProviderUpdates();
+    check(updates.size() == 1 && updates.front().providerId == tool.provider.instance &&
+          updates.front().tools && updates.front().tools->front().description == tool.description &&
+          !updates.front().resources, "Tool metadata did not publish by provider ID");
+    check(registry.unregisterTool(tool.tool_id, tool.provider.name, tool.provider.instance),
+          "Fixture tool withdrawal failed");
+    providers.dispatchProviderUpdates();
+    check(updates.size() == 1 && updates.front().providerId == tool.provider.instance &&
+          updates.front().tools && updates.front().tools->empty(), "Tool withdrawal did not clear provider tools");
     PluginManager::shutdownBatch();
     for (const auto& entry : fs::directory_iterator(root)) {
         const auto folder = entry.path();

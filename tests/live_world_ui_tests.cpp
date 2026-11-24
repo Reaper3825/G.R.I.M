@@ -1,3 +1,4 @@
+#include "MMO/Core/Registries/ProviderRegistry.hpp"
 #include "ui/world_lab/ui_live_world_view.hpp"
 #include "ui/world_lab/textworld_client.hpp"
 #include "ui/input/ui_input_router.hpp"
@@ -16,12 +17,18 @@ void runLiveWorldUITests() {
     using namespace GRIM::MMO;
     auto& registry = ProviderRegistry::instance();
     const ProviderDescriptor provider{ToolProviderType::Plugin, "Live UI fixture", "first", "fixture.dll"};
-    const auto initialRooms = registry.snapshot().providers.size() + 1;
-    UILiveWorldView view;
+    check(registry.publishResourceFixture(provider), "UI fixture registration failed");
+    UILiveWorldView* live = nullptr;
+    auto feed = registry.subscribeProviderUpdates({provider}, [&](auto updates) {
+        live->applyProviderUpdates(std::move(updates));
+    });
+    UILiveWorldView view(std::move(feed.initial));
+    live = &view;
     auto& router = GRIM::UI::InputRouter::get();
     OverlayRenderer renderer;
     const PanelRect area{{0, 0}, {1000, 700}};
     auto frame = [&](const InputState& input) {
+        registry.dispatchProviderUpdates();
         router.beginFrame(); router.currentPanel = 91;
         view.update(input, 0, area, 91);
         renderedTestText.clear(); view.draw(renderer, area); router.endFrame();
@@ -31,11 +38,9 @@ void runLiveWorldUITests() {
         input.mousePressed[0] = input.mouseDown[0] = false; input.mouseReleased[0] = true; frame(input);
     };
     frame({});
-    check(view.session().world().document().entities.size() == initialRooms, "Live UI startup projection mismatch");
-    check(registry.publishResourceFixture(provider), "UI fixture registration failed");
-    frame({});
-    check(view.session().world().document().entities.size() == initialRooms + 1, "Published provider room did not appear automatically");
-    check(renderedTestText.find("Live UI fixture") != std::string::npos, "Automatic provider room not drawn");
+    const auto topology = view.session().document().json();
+    check(view.session().document().entities.size() == 2 &&
+          renderedTestText.find("Live UI fixture") != std::string::npos, "Startup provider room not drawn");
     const auto originalLabel = liveFixtureRoomLabel;
     const float dividerX = 10 + (area.size.x - 20 - 12) * .45f + 6;
     InputState resize;
@@ -61,7 +66,7 @@ void runLiveWorldUITests() {
     frame({});
     check(renderedTestText.find("Fixture app 0") == std::string::npos, "Unselected room leaked resources onto the map");
     click(liveFixtureRoomLabel.x + 2, liveFixtureRoomLabel.y + 2);
-    check(view.session().world().location() == "system_hub" &&
+    check(view.session().location() == "system_hub" &&
           renderedTestText.find("Live UI fixture  (60 resources)") != std::string::npos &&
           renderedTestText.find("Fixture app 0") != std::string::npos, "Room click failed to preview its resource grid");
     const auto originalTile = liveFixtureTileLabel;
@@ -103,7 +108,7 @@ void runLiveWorldUITests() {
               renderedTestText.find("> Resources changed") == std::string::npos,
               "Live refresh duplicated resource history or replaced the inspection preview");
     }
-    const auto path = view.session().world().providerPath(GRIM::WorldLab::providerKey(provider));
+    const auto path = view.session().providerPath(provider.instance);
     const auto actions = view.session().observation().at("admissible_commands").get<std::vector<std::string>>();
     const auto actionIndex = std::find(actions.begin(), actions.end(), "go " + path) - actions.begin();
     check(actionIndex < 7, "Navigation option outside visible test dropdown");
@@ -111,7 +116,7 @@ void runLiveWorldUITests() {
     check(renderedTestText.find("go /Live-UI-fixture") != std::string::npos,
         "Expanded action menu did not draw navigation options");
     click(100, 108 + static_cast<float>(actionIndex + 1) * 25 + 12);
-    check(view.session().world().location() != "system_hub", "Available action did not enter provider room");
+    check(view.session().location() != "system_hub", "Available action did not enter provider room");
     check(renderedTestText.find("Live UI fixture  (60 resources)") != std::string::npos, "Entered room grid missing");
     registry.removeResource(provider.instance, item);
     frame({});
@@ -120,9 +125,12 @@ void runLiveWorldUITests() {
     const auto history = view.session().history().size();
     view.hide();
     registry.retire(provider.name, provider.instance);
+    registry.dispatchProviderUpdates(); // Host delivery continues without any view frames.
+    check(view.session().document().json() == topology && view.session().location() != "system_hub" &&
+          view.session().resourceCount() == 0, "Hidden retirement changed the room or left stale resources");
     frame({});
-    check(view.session().world().location() == "system_hub" && view.session().world().document().entities.size() == initialRooms,
-        "Provider unload while hidden did not reconcile on return");
+    check(renderedTestText.find("Live UI fixture  (0 resources)") != std::string::npos,
+          "Resource grid was stale after a hidden update");
     check(view.session().history().size() > history && view.session().observation().at("session_id") == identity,
         "Live view lost session/history after hiding");
     view.hide();
@@ -138,5 +146,5 @@ void runLiveWorldUITests() {
         if (!response) std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     check(response && response->at("result").at("stopped") == true && !client.busy(), "Stop did not produce one completed response");
-    std::cout << "Live world UI automatic population, navigation, hidden unload and stop tests passed\n";
+    std::cout << "Live world UI startup rooms, navigation, hidden updates and stop tests passed\n";
 }

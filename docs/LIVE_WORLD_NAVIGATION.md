@@ -1,45 +1,28 @@
-# Live-world navigation read model
+# Live-world navigation export
 
-`LiveWorld::navigation()` returns a typed `LiveNavigationSnapshot` representing
-the reconciled live topology. The session uses it for hub descriptions and
-navigation command discovery. `navigationJson()` in
-`ui/world_lab/live_world_navigation.hpp` provides its versioned JSON representation.
-This read model is independent of TextWorld, authored world files, and capture.
+World Lab writes `gamesDirectory/live_navigation.json` when the Live session
+opens for the first time. The default location is
+`resources/models/games/live_navigation.json`. The file describes the room map
+built from the committed startup providers.
 
-World Lab supplies `gamesDirectory/live_navigation.json` to the live view's
-session. With the default games directory this is
-`resources/models/games/live_navigation.json`. The first opening of Live creates
-the file. While that live view is updating, provider registration, replacement,
-and unload are reconciled automatically and publish a fresh snapshot. No export
-button is required. This is a view-owned session, not a background registry service:
-when the view is inactive the file is the last observed snapshot and refreshes
-when the view resumes. No file is generated merely by running an offline script.
+The version-1 envelope contains the following fields.
 
-The version-1 envelope contains:
+- `format` is `grim-live-navigation-snapshot`.
+- `version` is `1`.
+- `session_id` identifies the Live session.
+- `hub_id` identifies System Hub.
+- `rooms` contains each room's `room_id`, `parent_id`, `display_name`, and
+  `path`. The hub has an empty `parent_id`. Provider rooms include the
+  provider's `type`, exact registration `name`, and startup `instance`.
 
-- `format`: `grim-live-navigation-snapshot`.
-- `version`: `1`.
-- `session_id`: identity of this live-world instance, not a persistent environment ID.
-- `hub_id`: the permanent hub's room ID.
-- `rooms`: all connected navigation rooms, including the hub. Each contains
-  `room_id`, `parent_id` (empty for the hub), `display_name`, and resolved `path`.
-  Provider rooms also contain `provider` with `type` (`builtin` or `plugin`),
-  exact registration `name`, and current generation `instance`.
+Offline consumers use `(provider.type, provider.name)` to identify a destination
+and use the exported paths to navigate. Room IDs and paths are resolved for the
+session. The file records startup membership. A provider can retire while its
+room remains in that session.
 
-Consumers should identify provider destinations by `(provider.type, provider.name)`.
-Room IDs and paths are resolved within the current session; do not reconstruct
-paths from provider names. Replacements retain the room but update generation
-metadata. Unloads remove the room from subsequent snapshots. The snapshot makes
-no promise that its providers are still connected when an offline consumer reads it.
+The session writes the file atomically once and shows any write error in the
+Live view. To regenerate the file, open a new Live session. Movement, tools,
+and resources are managed in memory.
 
-`LiveNavigationStore` owns persistence and can be omitted by other session users.
-It compares content before writing, so movement, tool listings, and resource state
-refreshes do not rewrite navigation metadata. Missing files are recreated. It uses
-the existing atomic JSON writer, preserving the previous complete file on failure.
-Errors are exposed to callers and displayed in the live view; retries are throttled
-to five seconds and use the latest snapshot. It exports no resource readings,
-tool contracts, handlers, or action history.
-
-Validation: `tests/run_live_world.ps1` exercises automatic publication, generation
-replacement, room removal, unchanged-file suppression, deleted-file recovery,
-and isolated persistence failure alongside the existing host lifecycle tests.
+The [navigation course generator](../scripts/textworld/NAVIGATION_GOALS.md)
+consumes this export.
